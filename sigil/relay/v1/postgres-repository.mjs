@@ -11,6 +11,33 @@ export class PostgresRepository {
     );
     return result.rows[0] ?? null;
   }
+  async listInbox(endpointId, since = '') {
+    const result = await this.pool.query(
+      `SELECT d.delivery_id, d.message_id, d.recipient_endpoint_id, d.state, d.attempts, d.queued_at,
+              e.protocol, e.message_type, e.body, e.context_refs, e.capabilities, e.correlation_id,
+              e.sender_endpoint_id, e.expires_at, e.created_at
+       FROM deliveries d JOIN envelopes e ON e.message_id = d.message_id
+       WHERE d.recipient_endpoint_id = $1 AND d.state = 'queued' AND ($2 = '' OR d.queued_at > $2)
+       ORDER BY d.queued_at, d.delivery_id`, [endpointId, since]
+    );
+    return result.rows;
+  }
+  async transitionDelivery(deliveryId, endpointId, state, fields = {}) {
+    return this.withTransaction(async (client) => {
+      const current = await client.query(
+        'SELECT * FROM deliveries WHERE delivery_id = $1 AND recipient_endpoint_id = $2 FOR UPDATE', [deliveryId, endpointId]
+      );
+      if (!current.rows[0]) throw Object.assign(new Error('Delivery not found'), { code: 'DELIVERY_UNAVAILABLE' });
+      const next = fields.next ?? { ...current.rows[0], state };
+      const result = await client.query(
+        `UPDATE deliveries SET state = $1, attempts = $2, updated_at = $3, delivered_at = $4,
+         acknowledged_at = $5, processing_at = $6, processed_at = $7, failure_reason = $8
+         WHERE delivery_id = $9 RETURNING *`,
+        [next.state, next.attempts ?? current.rows[0].attempts, next.updated_at ?? new Date().toISOString(), next.delivered_at ?? null, next.acknowledged_at ?? null, next.processing_at ?? null, next.processed_at ?? null, next.failure_reason ?? null, deliveryId]
+      );
+      return result.rows[0];
+    });
+  }
   async withTransaction(work) {
     const client = await this.pool.connect();
     try { await client.query('BEGIN'); const result = await work(client); await client.query('COMMIT'); return result; }
