@@ -58,6 +58,15 @@ test('migration and repository persist an envelope in live PostgreSQL', { skip: 
   assert.equal(persisted.rows[0].action_hash, 'sha256:live');
   const delivery = await pool.query('SELECT message_id, recipient_endpoint_id, state FROM deliveries WHERE message_id = $1', [ids.message]);
   assert.deepEqual(delivery.rows, [{ message_id: ids.message, recipient_endpoint_id: ids.claude, state: 'queued' }]);
+  const repository = new PostgresRepository({ pool });
+  const claimed = await repository.claimDelivery({ workerId: `worker_${suffix}`, now: new Date('2029-12-31T12:01:00Z') });
+  assert.equal(claimed.delivery_id.startsWith('del_'), true);
+  assert.equal(claimed.lease_until > claimed.updated_at, true);
+  const transitioned = await repository.saveDeliveryTransition(claimed.delivery_id, {
+    ...claimed, state: 'delivered', delivered_at: '2029-12-31T12:01:01.000Z', updated_at: '2029-12-31T12:01:01.000Z'
+  });
+  assert.equal(transitioned.state, 'delivered');
+  assert.equal(transitioned.lease_until, null);
   const idempotency = await pool.query('SELECT endpoint_id, message_id FROM idempotency_keys WHERE idempotency_key = $1', [ids.idempotency]);
   assert.deepEqual(idempotency.rows, [{ endpoint_id: ids.codex, message_id: ids.message }]);
   const audit = await pool.query('SELECT event_type, subject_id, actor_id FROM audit_events WHERE subject_id = $1', [ids.message]);

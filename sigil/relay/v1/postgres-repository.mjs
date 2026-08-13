@@ -45,6 +45,18 @@ export class PostgresRepository {
       return result.rows[0] ? { ...result.rows[0], worker_id: workerId ?? null } : null;
     });
   }
+  async saveDeliveryTransition(deliveryId, next) {
+    const result = await this.pool.query(
+      `UPDATE deliveries SET state = $1, attempts = $2, updated_at = $3, next_attempt_at = $4,
+       lease_until = NULL, delivered_at = $5, acknowledged_at = $6, processing_at = $7,
+       processed_at = $8, failure_reason = $9 WHERE delivery_id = $10 RETURNING *`,
+      [next.state, next.attempts ?? 0, next.updated_at, next.next_attempt_at ?? next.updated_at,
+        next.delivered_at ?? null, next.acknowledged_at ?? null, next.processing_at ?? null,
+        next.processed_at ?? null, next.failure_reason ?? null, deliveryId]
+    );
+    if (!result.rows[0]) throw Object.assign(new Error('Delivery not found'), { code: 'DELIVERY_UNAVAILABLE' });
+    return result.rows[0];
+  }
   async transitionDelivery(deliveryId, endpointId, state, fields = {}) {
     return this.withTransaction(async (client) => {
       const current = await client.query(
