@@ -60,6 +60,8 @@ test('migration and repository persist an envelope in live PostgreSQL', { skip: 
   assert.deepEqual(delivery.rows, [{ message_id: ids.message, recipient_endpoint_id: ids.claude, state: 'queued' }]);
   const idempotency = await pool.query('SELECT endpoint_id, message_id FROM idempotency_keys WHERE idempotency_key = $1', [ids.idempotency]);
   assert.deepEqual(idempotency.rows, [{ endpoint_id: ids.codex, message_id: ids.message }]);
+  const audit = await pool.query('SELECT event_type, subject_id, actor_id FROM audit_events WHERE subject_id = $1', [ids.message]);
+  assert.deepEqual(audit.rows, [{ event_type: 'envelope.accepted', subject_id: ids.message, actor_id: ids.codex }]);
 
   await assert.rejects(() => new PostgresRepository({ pool }).persistAcceptedEnvelope({
     envelope: { ...envelope, message_id: `rollback_${suffix}`, recipient: { endpoint_id: `missing_${suffix}` } }

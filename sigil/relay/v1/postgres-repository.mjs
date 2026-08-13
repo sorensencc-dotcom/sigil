@@ -69,6 +69,11 @@ export class PostgresRepository {
          VALUES ($1,$2,$3,$4,$5,$6)`,
         [row.envelope.idempotency_key, row.envelope.sender.endpoint_id, row.envelope.message_id, row.canonical_hash ?? row.action_hash ?? '', row.envelope.created_at, row.envelope.expires_at]
       );
+      await client.query(
+        `INSERT INTO audit_events (event_id, event_type, subject_id, actor_id, payload, created_at)
+         VALUES ($1, 'envelope.accepted', $2, $3, $4, $5)`,
+        [`audit_${crypto.randomUUID()}`, row.envelope.message_id, row.envelope.sender.endpoint_id, JSON.stringify({ recipient_endpoint_id: row.envelope.recipient?.endpoint_id ?? null }), row.envelope.created_at]
+      );
       return result.rows[0];
     });
   }
