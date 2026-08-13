@@ -30,3 +30,17 @@ export function acceptEnvelope(envelope, options = {}) {
     };
   }
 }
+
+export async function acceptEnvelopeAsync(envelope, options = {}) {
+  try {
+    const prior = options.lookupIdempotency
+      ? await options.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key)
+      : options.idempotency?.get(`${envelope.sender.endpoint_id}:${envelope.idempotency_key}`);
+    const result = validateEnvelope(envelope, { ...options, idempotency: prior ? new Map([[`${envelope.sender.endpoint_id}:${envelope.idempotency_key}`, prior]]) : options.idempotency });
+    if (prior) return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: prior.message_id, duplicate: true } };
+    await options.persist?.({ envelope, ...result });
+    return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: result.message_id, duplicate: false } };
+  } catch (error) {
+    return { status: statusByCode[error.code] ?? 400, body: { request_id: options.request_id ?? null, code: error.code ?? 'INVALID_ENVELOPE', message: error.message, details: error.details ?? {} } };
+  }
+}

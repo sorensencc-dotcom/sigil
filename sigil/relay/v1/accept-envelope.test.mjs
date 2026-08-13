@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { signedBytes } from './validate-envelope.mjs';
-import { acceptEnvelope } from './accept-envelope.mjs';
+import { acceptEnvelope, acceptEnvelopeAsync } from './accept-envelope.mjs';
 
 const fixture = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
 const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
@@ -37,4 +37,23 @@ test('same idempotency key returns original acceptance without a second write', 
   assert.equal(response.status, 202);
   assert.equal(response.body.duplicate, true);
   assert.equal(writes.length, 0);
+});
+
+test('async acceptance awaits durable persistence and uses repository idempotency lookup', async () => {
+  const events = [];
+  const response = await acceptEnvelopeAsync(envelope, {
+    ...options,
+    lookupIdempotency: async () => null,
+    persist: async () => { await new Promise((resolve) => setTimeout(resolve, 5)); events.push('persisted'); }
+  });
+  assert.equal(response.status, 202);
+  assert.deepEqual(events, ['persisted']);
+
+  const duplicate = await acceptEnvelopeAsync(envelope, {
+    ...options,
+    lookupIdempotency: async () => ({ message_id: 'msg_existing', canonical_hash: crypto.createHash('sha256').update(signedBytes(envelope)).digest('hex') }),
+    persist: () => { throw new Error('must not persist duplicate'); }
+  });
+  assert.equal(duplicate.body.message_id, 'msg_existing');
+  assert.equal(duplicate.body.duplicate, true);
 });

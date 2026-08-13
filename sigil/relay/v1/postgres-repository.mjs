@@ -4,6 +4,13 @@ import crypto from 'node:crypto';
 export class PostgresRepository {
   constructor({ pool = new pg.Pool(), schema = 'public' } = {}) { this.pool = pool; this.schema = schema; }
   async query(text, values = []) { return this.pool.query(text, values); }
+  async lookupIdempotency(endpointId, idempotencyKey) {
+    const result = await this.pool.query(
+      'SELECT message_id, canonical_hash FROM idempotency_keys WHERE endpoint_id = $1 AND idempotency_key = $2 AND expires_at > NOW()',
+      [endpointId, idempotencyKey]
+    );
+    return result.rows[0] ?? null;
+  }
   async withTransaction(work) {
     const client = await this.pool.connect();
     try { await client.query('BEGIN'); const result = await work(client); await client.query('COMMIT'); return result; }
