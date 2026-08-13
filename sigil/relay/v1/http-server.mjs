@@ -2,12 +2,14 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { acceptEnvelopeAsync } from './accept-envelope.mjs';
 import { transitionDelivery } from './delivery-state.mjs';
+import { createBearerAuthenticator } from './transport-auth.mjs';
 
-export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, now, stream } = {}) {
+export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now, stream } = {}) {
+  const authenticateRequest = authenticate ?? (tokenHashes ? createBearerAuthenticator(tokenHashes) : null);
   return http.createServer(async (request, response) => {
     const requestId = request.headers['x-sigil-request-id'] ?? crypto.randomUUID();
-    const principal = authenticate ? await authenticate(request) : null;
-    if (authenticate && !principal) {
+    const principal = authenticateRequest ? await authenticateRequest(request) : null;
+    if (authenticateRequest && !principal) {
       response.writeHead(401, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(JSON.stringify({ request_id: requestId, code: 'UNAUTHENTICATED', message: 'Authentication required', details: {} }));
     }
