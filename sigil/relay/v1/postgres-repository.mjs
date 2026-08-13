@@ -22,6 +22,11 @@ export class PostgresRepository {
     );
     return result.rows;
   }
+  async getDelivery(deliveryId, endpointId) {
+    const result = await this.pool.query('SELECT * FROM deliveries WHERE delivery_id = $1 AND recipient_endpoint_id = $2', [deliveryId, endpointId]);
+    if (!result.rows[0]) throw Object.assign(new Error('Delivery not found'), { code: 'DELIVERY_UNAVAILABLE' });
+    return result.rows[0];
+  }
   async transitionDelivery(deliveryId, endpointId, state, fields = {}) {
     return this.withTransaction(async (client) => {
       const current = await client.query(
