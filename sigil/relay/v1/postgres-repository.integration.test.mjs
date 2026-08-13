@@ -64,7 +64,7 @@ test('migration and repository persist an envelope in live PostgreSQL', { skip: 
   assert.equal(claimed.lease_until > claimed.updated_at, true);
   const transitioned = await repository.saveDeliveryTransition(claimed.delivery_id, {
     ...claimed, state: 'delivered', delivered_at: '2029-12-31T12:01:01.000Z', updated_at: '2029-12-31T12:01:01.000Z'
-  });
+  }, { workerId: `worker_${suffix}`, now: new Date('2029-12-31T12:01:01Z') });
   assert.equal(transitioned.state, 'delivered');
   assert.equal(transitioned.lease_until, null);
   const idempotency = await pool.query('SELECT endpoint_id, message_id FROM idempotency_keys WHERE idempotency_key = $1', [ids.idempotency]);

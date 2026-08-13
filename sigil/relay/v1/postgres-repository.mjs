@@ -37,24 +37,25 @@ export class PostgresRepository {
            ORDER BY next_attempt_at, queued_at, delivery_id
            FOR UPDATE SKIP LOCKED LIMIT 1
          )
-         UPDATE deliveries d SET lease_until = $2, updated_at = $1
+         UPDATE deliveries d SET lease_until = $2, lease_owner = $3, updated_at = $1
          FROM candidate c WHERE d.delivery_id = c.delivery_id
          RETURNING d.*`,
-        [timestamp, new Date(new Date(timestamp).getTime() + leaseSeconds * 1000).toISOString()]
+        [timestamp, new Date(new Date(timestamp).getTime() + leaseSeconds * 1000).toISOString(), workerId]
       );
       return result.rows[0] ? { ...result.rows[0], worker_id: workerId ?? null } : null;
     });
   }
-  async saveDeliveryTransition(deliveryId, next) {
+  async saveDeliveryTransition(deliveryId, next, { workerId, now = new Date() } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     const result = await this.pool.query(
       `UPDATE deliveries SET state = $1, attempts = $2, updated_at = $3, next_attempt_at = $4,
-       lease_until = NULL, delivered_at = $5, acknowledged_at = $6, processing_at = $7,
-       processed_at = $8, failure_reason = $9 WHERE delivery_id = $10 RETURNING *`,
+       lease_until = NULL, lease_owner = NULL, delivered_at = $5, acknowledged_at = $6, processing_at = $7,
+       processed_at = $8, failure_reason = $9 WHERE delivery_id = $10 AND lease_owner = $11 AND lease_until > $12 RETURNING *`,
       [next.state, next.attempts ?? 0, next.updated_at, next.next_attempt_at ?? next.updated_at,
         next.delivered_at ?? null, next.acknowledged_at ?? null, next.processing_at ?? null,
-        next.processed_at ?? null, next.failure_reason ?? null, deliveryId]
+        next.processed_at ?? null, next.failure_reason ?? null, deliveryId, workerId, timestamp]
     );
-    if (!result.rows[0]) throw Object.assign(new Error('Delivery not found'), { code: 'DELIVERY_UNAVAILABLE' });
+    if (!result.rows[0]) throw Object.assign(new Error('Delivery lease lost or expired'), { code: 'DELIVERY_LEASE_LOST' });
     return result.rows[0];
   }
   async transitionDelivery(deliveryId, endpointId, state, fields = {}) {

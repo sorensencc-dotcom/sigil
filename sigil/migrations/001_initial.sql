@@ -98,6 +98,7 @@ CREATE TABLE deliveries (
   updated_at TIMESTAMPTZ NOT NULL,
   next_attempt_at TIMESTAMPTZ NOT NULL,
   lease_until TIMESTAMPTZ,
+  lease_owner TEXT,
   delivered_at TIMESTAMPTZ,
   acknowledged_at TIMESTAMPTZ,
   processing_at TIMESTAMPTZ,
