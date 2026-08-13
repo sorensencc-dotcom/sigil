@@ -27,6 +27,24 @@ export class PostgresRepository {
     if (!result.rows[0]) throw Object.assign(new Error('Delivery not found'), { code: 'DELIVERY_UNAVAILABLE' });
     return result.rows[0];
   }
+  async claimDelivery({ workerId, leaseSeconds = 30, now = new Date() } = {}) {
+    return this.withTransaction(async (client) => {
+      const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+      const result = await client.query(
+        `WITH candidate AS (
+           SELECT delivery_id FROM deliveries
+           WHERE state = 'queued' AND next_attempt_at <= $1 AND (lease_until IS NULL OR lease_until <= $1)
+           ORDER BY next_attempt_at, queued_at, delivery_id
+           FOR UPDATE SKIP LOCKED LIMIT 1
+         )
+         UPDATE deliveries d SET lease_until = $2, updated_at = $1
+         FROM candidate c WHERE d.delivery_id = c.delivery_id
+         RETURNING d.*`,
+        [timestamp, new Date(new Date(timestamp).getTime() + leaseSeconds * 1000).toISOString()]
+      );
+      return result.rows[0] ? { ...result.rows[0], worker_id: workerId ?? null } : null;
+    });
+  }
   async transitionDelivery(deliveryId, endpointId, state, fields = {}) {
     return this.withTransaction(async (client) => {
       const current = await client.query(
@@ -59,8 +77,8 @@ export class PostgresRepository {
       const deliveryId = row.delivery_id ?? `del_${crypto.randomUUID()}`;
       if (row.envelope.recipient?.endpoint_id) {
         await client.query(
-          `INSERT INTO deliveries (delivery_id, message_id, recipient_endpoint_id, state, attempts, queued_at, updated_at)
-           VALUES ($1,$2,$3,'queued',0,$4,$4)`,
+          `INSERT INTO deliveries (delivery_id, message_id, recipient_endpoint_id, state, attempts, queued_at, updated_at, next_attempt_at)
+           VALUES ($1,$2,$3,'queued',0,$4,$4,$4)`,
           [deliveryId, row.envelope.message_id, row.envelope.recipient.endpoint_id, row.envelope.created_at]
         );
       }

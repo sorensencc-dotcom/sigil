@@ -96,6 +96,8 @@ CREATE TABLE deliveries (
   attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
   queued_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL,
+  next_attempt_at TIMESTAMPTZ NOT NULL,
+  lease_until TIMESTAMPTZ,
   delivered_at TIMESTAMPTZ,
   acknowledged_at TIMESTAMPTZ,
   processing_at TIMESTAMPTZ,
@@ -167,5 +169,6 @@ CREATE TABLE audit_events (
 
 CREATE INDEX envelopes_conversation_created_idx ON envelopes(conversation_id, created_at);
 CREATE INDEX deliveries_recipient_state_idx ON deliveries(recipient_endpoint_id, state);
+CREATE INDEX deliveries_claim_idx ON deliveries(state, next_attempt_at, lease_until);
 CREATE INDEX idempotency_expiry_idx ON idempotency_keys(expires_at);
 CREATE INDEX audit_subject_created_idx ON audit_events(subject_id, created_at);
