@@ -27,7 +27,6 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     }
     const deliveryMatch = request.url.match(/^\/v1\/deliveries\/([^/]+)\/(ack|processing)$/);
     if (request.method === 'POST' && deliveryMatch) {
-      if (!repository?.transitionDelivery) return response.writeHead(503).end();
       const [, deliveryId, action] = deliveryMatch;
       let body = {}; let raw = ''; for await (const chunk of request) raw += chunk;
       if (raw) { try { body = JSON.parse(raw); } catch { body = {}; } }
@@ -36,6 +35,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'Invalid processing state', details: {} }));
       }
+      if (!repository?.transitionDelivery || !repository?.getDelivery) return response.writeHead(503).end();
       try {
         const current = await repository.getDelivery(deliveryId, principal.endpoint_id);
         const next = transitionDelivery(current, target, { now, reason: body.reason ?? null });
