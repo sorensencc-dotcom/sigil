@@ -13,6 +13,10 @@ export class RelayClient {
   }
   async sendEnvelope(envelope, requestId = crypto.randomUUID()) { return this.request('/v1/envelopes', { method: 'POST', headers: { 'x-sigil-request-id': requestId }, body: JSON.stringify(envelope) }); }
   async pollInbox(since = '') { return this.request(`/v1/inbox?since=${encodeURIComponent(since)}`); }
+  async reconcileInbox(since = '') {
+    const page = await this.pollInbox(since);
+    return { items: page.items ?? [], nextSince: page.next_since ?? since };
+  }
   async acknowledge(deliveryId) { return this.request(`/v1/deliveries/${encodeURIComponent(deliveryId)}/ack`, { method: 'POST' }); }
   async reportProcessing(deliveryId, state, reason = null) { return this.request(`/v1/deliveries/${encodeURIComponent(deliveryId)}/processing`, { method: 'POST', body: JSON.stringify({ state, reason }) }); }
 }

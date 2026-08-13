@@ -4,7 +4,7 @@ import { RelayClient } from './relay-client.mjs';
 
 function fakeFetch() {
   const calls = [];
-  const fetchImpl = async (url, options) => { calls.push({ url, options }); return { ok: true, status: 200, async text() { return JSON.stringify({ ok: true }); } }; };
+  const fetchImpl = async (url, options) => { calls.push({ url, options }); return { ok: true, status: 200, async text() { return JSON.stringify(url.includes('/inbox') ? { items: [{ delivery_id: 'del_1' }], next_since: 'cursor_2' } : { ok: true }); } }; };
   return { calls, fetchImpl };
 }
 
@@ -17,4 +17,9 @@ test('client sends authenticated envelope and delivery calls', async () => {
 test('client exposes stable relay errors', async () => {
   const client = new RelayClient({ baseUrl: 'https://relay.test', token: 't', fetchImpl: async () => ({ ok: false, status: 403, async text() { return JSON.stringify({ code: 'CAPABILITY_DENIED', message: 'denied', details: { scope: 'x' } }); } }) });
   await assert.rejects(() => client.pollInbox(), (error) => error.code === 'CAPABILITY_DENIED' && error.status === 403);
+});
+
+test('client exposes cursor-based inbox reconciliation', async () => {
+  const client = new RelayClient({ baseUrl: 'https://relay.test', token: 't', fetchImpl: async () => ({ ok: true, status: 200, async text() { return JSON.stringify({ items: [{ delivery_id: 'del_2' }], next_since: 'cursor_3' }); } }) });
+  assert.deepEqual(await client.reconcileInbox('cursor_2'), { items: [{ delivery_id: 'del_2' }], nextSince: 'cursor_3' });
 });

@@ -22,8 +22,9 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       if (!repository?.listInbox) return response.writeHead(503).end();
       const since = new URL(request.url, 'http://sigil.local').searchParams.get('since') ?? '';
       const items = await repository.listInbox(principal.endpoint_id, since);
+      const nextSince = items.at(-1)?.queued_at ?? since;
       response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
-      return response.end(JSON.stringify({ request_id: requestId, code: 'OK', items }));
+      return response.end(JSON.stringify({ request_id: requestId, code: 'OK', items, next_since: nextSince }));
     }
     const deliveryMatch = request.url.match(/^\/v1\/deliveries\/([^/]+)\/(ack|processing)$/);
     if (request.method === 'POST' && deliveryMatch) {
