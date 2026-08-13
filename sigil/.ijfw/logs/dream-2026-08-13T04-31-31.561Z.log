@@ -1,0 +1,8 @@
+[2026-08-13T04:31:31.563Z] start: host=claude-code, reason=session_end, project=C:/dev/sigil
+[2026-08-13T04:31:31.579Z] journal: 1 entries across 1 sessions
+[2026-08-13T04:31:32.088Z] tier-promotion: working->episodic={"skipped":"session_id absent"} episodic->semantic={"promoted":0,"errors":[],"superseded":[]} working->procedural={"promoted":0,"errors":[]}
+[2026-08-13T04:31:32.093Z] staleness-wiring: no Episodic->Semantic supersessions this cycle -- skip
+[2026-08-13T04:31:32.146Z] wiki-compile: processed=0 pages=0 facts=0 budgetExhausted=false
+[2026-08-13T04:31:32.167Z] profile_derive: no signals -> no-op
+[2026-08-13T04:31:32.193Z] mark-completed: ok
+[2026-08-13T04:31:32.209Z] end: completed=5 failed=0

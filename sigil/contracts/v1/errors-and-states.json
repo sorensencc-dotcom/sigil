@@ -1,0 +1,44 @@
+{
+  "version": "sigil/1",
+  "errors": [
+    "INVALID_ENVELOPE",
+    "INVALID_SIGNATURE",
+    "UNKNOWN_ENDPOINT",
+    "ENDPOINT_REVOKED",
+    "ROUTE_NOT_AUTHORIZED",
+    "CAPABILITY_DENIED",
+    "APPROVAL_REQUIRED",
+    "APPROVAL_EXPIRED",
+    "CONTEXT_NOT_FOUND",
+    "CONTEXT_SCOPE_DENIED",
+    "CONTEXT_INTEGRITY_MISMATCH",
+    "DUPLICATE_MESSAGE",
+    "REPLAY_DETECTED",
+    "MESSAGE_EXPIRED",
+    "DELIVERY_UNAVAILABLE",
+    "RATE_LIMITED",
+    "QUOTA_EXCEEDED",
+    "VERSION_UNSUPPORTED",
+    "INVALID_STATE_TRANSITION"
+  ],
+  "delivery_states": [
+    "queued",
+    "delivered",
+    "acknowledged",
+    "processing",
+    "processed",
+    "processing_failed",
+    "delivery_rejected",
+    "dead_letter"
+  ],
+  "transitions": {
+    "queued": ["delivered", "delivery_rejected"],
+    "delivered": ["acknowledged", "delivery_rejected"],
+    "acknowledged": ["processing", "delivery_rejected"],
+    "processing": ["processed", "processing_failed"],
+    "processing_failed": ["processing", "dead_letter"],
+    "processed": [],
+    "delivery_rejected": [],
+    "dead_letter": []
+  }
+}

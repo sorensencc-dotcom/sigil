@@ -1,0 +1,23 @@
+{
+  "version": "v1",
+  "authentication": {
+    "transport": "TLS1.3",
+    "header": "Authorization: Bearer <endpoint-token>",
+    "request_header": "X-Sigil-Request-Id"
+  },
+  "routes": [
+    {"method":"POST","path":"/v1/endpoints","success":201,"errors":["INVALID_ENVELOPE","UNKNOWN_ENDPOINT","ROUTE_NOT_AUTHORIZED","DUPLICATE_MESSAGE"]},
+    {"method":"POST","path":"/v1/envelopes","success":202,"errors":["INVALID_ENVELOPE","INVALID_SIGNATURE","UNKNOWN_ENDPOINT","ENDPOINT_REVOKED","DUPLICATE_MESSAGE","REPLAY_DETECTED","MESSAGE_EXPIRED","APPROVAL_REQUIRED","ROUTE_NOT_AUTHORIZED","RATE_LIMITED","QUOTA_EXCEEDED","VERSION_UNSUPPORTED"]},
+    {"method":"GET","path":"/v1/inbox?since=<cursor>","success":200,"errors":["UNKNOWN_ENDPOINT","ENDPOINT_REVOKED"]},
+    {"method":"POST","path":"/v1/deliveries/{delivery_id}/ack","success":204,"errors":["UNKNOWN_ENDPOINT","DELIVERY_UNAVAILABLE"]},
+    {"method":"POST","path":"/v1/deliveries/{delivery_id}/processing","success":204,"errors":["INVALID_ENVELOPE","UNKNOWN_ENDPOINT","DELIVERY_UNAVAILABLE","INVALID_STATE_TRANSITION"]},
+    {"method":"POST","path":"/v1/approval-requests","success":202,"errors":["APPROVAL_REQUIRED","APPROVAL_EXPIRED","INVALID_SIGNATURE"]},
+    {"method":"POST","path":"/v1/decisions","success":201,"errors":["APPROVAL_EXPIRED","APPROVAL_REQUIRED","INVALID_SIGNATURE"]},
+    {"method":"POST","path":"/v1/grants","success":201,"errors":["CAPABILITY_DENIED","ROUTE_NOT_AUTHORIZED"]},
+    {"method":"POST","path":"/v1/revocations","success":201,"errors":["CAPABILITY_DENIED","ROUTE_NOT_AUTHORIZED"]},
+    {"method":"GET","path":"/v1/context/{ref_id}","success":200,"errors":["CONTEXT_NOT_FOUND","CONTEXT_SCOPE_DENIED","CONTEXT_INTEGRITY_MISMATCH"]},
+    {"method":"GET","path":"/v1/tasks/{task_id}","success":200,"errors":["ROUTE_NOT_AUTHORIZED"]},
+    {"method":"GET","path":"/v1/audit?conversation_id=<id>","success":200,"errors":["ROUTE_NOT_AUTHORIZED"]}
+  ],
+  "error_response": {"required":["request_id","code","message"],"details":"object"}
+}
