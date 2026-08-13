@@ -28,3 +28,25 @@ test('stream authenticates bearer token against endpoint hash', async () => {
   assert.equal(stream.notify('ep_claude', 'del_2'), true);
   socket.close(); await stream.close(); await new Promise((resolve) => httpServer.close(resolve));
 });
+
+test('stream authenticates browser-safe bearer subprotocol', async () => {
+  const httpServer = http.createServer();
+  const stream = createStreamServer({ server: httpServer, tokenHashes: new Map([[hashBearerToken('browser_secret'), 'ep_claude']]) });
+  await new Promise((resolve) => httpServer.listen(0, resolve));
+  const socket = new WebSocket(`ws://127.0.0.1:${httpServer.address().port}/v1/stream`, ['sigil-bearer.browser_secret']);
+  await new Promise((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); });
+  socket.close(); await stream.close(); await new Promise((resolve) => httpServer.close(resolve));
+});
+
+test('stream closes invalid and missing bearer tokens with policy violation', async () => {
+  const httpServer = http.createServer();
+  const stream = createStreamServer({ server: httpServer, tokenHashes: new Map([[hashBearerToken('valid'), 'ep_claude']]) });
+  await new Promise((resolve) => httpServer.listen(0, resolve));
+  for (const options of [{ headers: { authorization: 'Bearer invalid' } }, {}]) {
+    const socket = new WebSocket(`ws://127.0.0.1:${httpServer.address().port}/v1/stream`, options);
+    const close = await new Promise((resolve) => socket.once('close', (code, reason) => resolve({ code, reason: reason.toString() })));
+    assert.equal(close.code, 1008);
+    assert.equal(close.reason, 'unauthorized');
+  }
+  await stream.close(); await new Promise((resolve) => httpServer.close(resolve));
+});

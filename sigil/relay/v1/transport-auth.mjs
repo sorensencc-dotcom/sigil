@@ -7,8 +7,11 @@ function digest(token) {
 export function createBearerAuthenticator(tokenHashes) {
   const hashes = tokenHashes instanceof Map ? tokenHashes : new Map(Object.entries(tokenHashes ?? {}));
   return (request) => {
-    const value = request.headers?.authorization ?? request.headers?.['sec-websocket-protocol'];
-    const token = typeof value === 'string' && value.startsWith('Bearer ') ? value.slice(7) : null;
+    const authorization = request.headers?.authorization;
+    const protocols = request.headers?.['sec-websocket-protocol'];
+    const token = typeof authorization === 'string' && authorization.startsWith('Bearer ')
+      ? authorization.slice(7)
+      : typeof protocols === 'string' && protocols.split(',').map((item) => item.trim()).find((item) => item.startsWith('sigil-bearer.'))?.slice('sigil-bearer.'.length);
     if (!token) return null;
     const endpointId = hashes.get(digest(token));
     return endpointId ? { endpoint_id: endpointId } : null;
