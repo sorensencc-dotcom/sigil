@@ -4,6 +4,7 @@ import http from 'node:http';
 import { WebSocket } from 'ws';
 import { createStreamServer } from './stream-server.mjs';
 import { hashBearerToken } from './transport-auth.mjs';
+import { RelayClient } from '../../connectors/v1/relay-client.mjs';
 
 test('stream sends thin delivery notification to authenticated endpoint', async () => {
   const httpServer = http.createServer();
@@ -49,4 +50,31 @@ test('stream closes invalid and missing bearer tokens with policy violation', as
     assert.equal(close.reason, 'unauthorized');
   }
   await stream.close(); await new Promise((resolve) => httpServer.close(resolve));
+});
+
+test('reconnect recovers missed notification through inbox reconciliation', async () => {
+  const httpServer = http.createServer();
+  const stream = createStreamServer({ server: httpServer, authenticate: (request) => request.headers['x-endpoint-id'] });
+  await new Promise((resolve) => httpServer.listen(0, resolve));
+  const port = httpServer.address().port;
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/v1/stream`, { headers: { 'x-endpoint-id': 'ep_claude' } });
+  await new Promise((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); });
+  socket.close();
+  await new Promise((resolve) => socket.once('close', resolve));
+
+  assert.equal(stream.notify('ep_claude', 'del_missed'), false);
+  const client = new RelayClient({
+    baseUrl: `http://127.0.0.1:${port}`,
+    token: 'unused',
+    fetchImpl: async (url) => ({
+      ok: true, status: 200,
+      async text() { return JSON.stringify({ items: [{ delivery_id: 'del_missed' }], next_since: 'cursor_2' }); }
+    })
+  });
+  assert.deepEqual(await client.reconcileInbox('cursor_1'), {
+    items: [{ delivery_id: 'del_missed' }], nextSince: 'cursor_2'
+  });
+
+  await stream.close();
+  await new Promise((resolve) => httpServer.close(resolve));
 });

@@ -9,3 +9,7 @@ test('host adapter exposes only connector-backed operations', async () => {
   assert.deepEqual(calls, [['sendTask', 'task'], ['resolveContext', 'ref']]);
   assert.equal('privateKey' in adapter, false);
 });
+
+test('host adapter rejects an incomplete connector contract', () => {
+  assert.throws(() => createHostAdapter({ connector: {}, runtime: 'codex' }), /connector\.sendTask is required/);
+});

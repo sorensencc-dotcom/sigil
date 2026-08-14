@@ -34,8 +34,8 @@ export function acceptEnvelope(envelope, options = {}) {
 export async function acceptEnvelopeAsync(envelope, options = {}) {
   try {
     const prior = options.lookupIdempotency
-      ? await options.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key)
-      : options.idempotency?.get(`${envelope.sender.endpoint_id}:${envelope.idempotency_key}`);
+      ? await options.lookupIdempotency(envelope?.sender?.endpoint_id, envelope?.idempotency_key)
+      : options.idempotency?.get(`${envelope?.sender?.endpoint_id}:${envelope?.idempotency_key}`);
     const result = validateEnvelope(envelope, { ...options, idempotency: prior ? new Map([[`${envelope.sender.endpoint_id}:${envelope.idempotency_key}`, prior]]) : options.idempotency });
     if (prior) return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: prior.message_id, duplicate: true } };
     await options.persist?.({ envelope, ...result });

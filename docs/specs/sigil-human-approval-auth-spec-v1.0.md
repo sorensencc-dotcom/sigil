@@ -67,6 +67,8 @@ callbacks. Result tokens cannot be replayed or used as human credentials.
 
 ## Recovery and revocation
 
+Implementation note: the current bounded adapter verifies Ed25519 and ES256/P-256 registered public keys, decodes supported stored COSE_Key material, and verifies the WebAuthn assertion structure. Registration-time attestationObject parsing and credential enrollment remain required before production readiness.
+
 Human credentials may be revoked independently of endpoint keys. Recovery,
 credential enrollment, and credential revocation require an already authorized
 human administrator or an out-of-band Tier 1-controlled recovery process.

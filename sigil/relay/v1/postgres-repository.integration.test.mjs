@@ -73,6 +73,25 @@ test('migration and repository persist an envelope in live PostgreSQL', { skip: 
   }, { workerId: `worker_second_${suffix}`, now: new Date('2029-12-31T12:02:01Z') });
   assert.equal(transitioned.state, 'delivered');
   assert.equal(transitioned.lease_until, null);
+
+  const concurrentEnvelope = {
+    ...envelope,
+    message_id: `msg_concurrent_${suffix}`,
+    body: { task_id: `task_concurrent_${suffix}` },
+    idempotency_key: `send_concurrent_${suffix}`
+  };
+  await repository.persistAcceptedEnvelope({
+    envelope: concurrentEnvelope,
+    canonical_bytes: Buffer.from(`{"message_id":"${concurrentEnvelope.message_id}"}`),
+    action_hash: 'sha256:concurrent'
+  });
+  const concurrentNow = new Date('2029-12-31T12:03:00Z');
+  const [workerOneClaim, workerTwoClaim] = await Promise.all([
+    new PostgresRepository({ pool }).claimDelivery({ workerId: `worker_concurrent_one_${suffix}`, now: concurrentNow }),
+    new PostgresRepository({ pool }).claimDelivery({ workerId: `worker_concurrent_two_${suffix}`, now: concurrentNow })
+  ]);
+  assert.equal([workerOneClaim, workerTwoClaim].filter(Boolean).length, 1);
+  assert.equal([workerOneClaim, workerTwoClaim].filter((claim) => claim?.delivery_id === transitioned.delivery_id).length, 0);
   const idempotency = await pool.query('SELECT endpoint_id, message_id FROM idempotency_keys WHERE idempotency_key = $1', [ids.idempotency]);
   assert.deepEqual(idempotency.rows, [{ endpoint_id: ids.codex, message_id: ids.message }]);
   const audit = await pool.query('SELECT event_type, subject_id, actor_id FROM audit_events WHERE subject_id = $1', [ids.message]);

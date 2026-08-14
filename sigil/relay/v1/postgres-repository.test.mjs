@@ -32,3 +32,10 @@ test('repository rolls back and releases client on persistence failure', async (
   assert.ok(pool.calls.some((call) => call.text === 'ROLLBACK'));
   assert.equal(pool.calls.at(-1).text, 'RELEASE');
 });
+
+test('repository registers WebAuthn credential for active human', async () => {
+  const calls = [];
+  const pool = { async query(text, values) { calls.push({ text, values }); return { rows: [{ credential_id: 'cred_1', human_id: 'usr_1', type: 'webauthn', status: 'active' }] }; } };
+  const result = await new PostgresRepository({ pool }).registerHumanCredential({ humanId: 'usr_1', credentialId: 'cred_1', publicKey: Buffer.from('key') });
+  assert.equal(result.credential_id, 'cred_1'); assert.equal(calls.length, 1); assert.match(calls[0].text, /INSERT INTO human_credentials/);
+});

@@ -1,11 +1,9 @@
-export function createHostAdapter({ connector, runtime }) {
-  if (!connector) throw new Error('connector is required');
-  return Object.freeze({
-    runtime,
-    async sendTask(task) { return connector.sendTask(task); },
-    async checkInbox() { return connector.checkInbox(); },
-    async getResult(taskId) { return connector.getResult(taskId); },
-    async requestApproval(action) { return connector.requestApproval(action); },
-    async resolveContext(ref) { return connector.resolveContext(ref); }
-  });
+export function createHostAdapter({ connector, runtime, operations = ['sendTask', 'checkInbox', 'getResult', 'requestApproval', 'resolveContext'] }) {
+  if (!connector || typeof connector !== 'object') throw new Error('connector is required');
+  const adapter = { runtime };
+  for (const operation of operations) {
+    if (typeof connector[operation] !== 'function') throw new Error(`connector.${operation} is required`);
+    adapter[operation] = async (...args) => connector[operation](...args);
+  }
+  return Object.freeze(adapter);
 }

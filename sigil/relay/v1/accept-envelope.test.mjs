@@ -29,6 +29,12 @@ test('rejected envelope never persists', () => {
   assert.equal(writes.length, 0);
 });
 
+test('malformed envelope returns structured error before idempotency lookup', async () => {
+  const result = await acceptEnvelopeAsync({}, { lookupIdempotency: async () => null });
+  assert.equal(result.status, 400);
+  assert.equal(result.body.code, 'INVALID_ENVELOPE');
+});
+
 test('same idempotency key returns original acceptance without a second write', () => {
   const writes = [];
   const canonical_hash = crypto.createHash('sha256').update(signedBytes(envelope)).digest('hex');

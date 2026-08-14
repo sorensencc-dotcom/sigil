@@ -11,6 +11,28 @@ export class PostgresRepository {
     );
     return result.rows[0] ?? null;
   }
+  async registerHumanCredential({ humanId, credentialId, type = 'webauthn', publicKey, algorithm, coseKey, now = new Date() } = {}) {
+    if (type !== 'webauthn' || !humanId || !credentialId || !publicKey) throw Object.assign(new Error('Invalid WebAuthn credential'), { code: 'INVALID_ATTESTATION' });
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const result = await this.pool.query(
+      `INSERT INTO human_credentials (credential_id, human_id, type, public_key, status, valid_from, created_at)
+       SELECT $1, human_id, $2, $3, 'active', $4, $4 FROM humans WHERE human_id = $5 AND status = 'active'
+       RETURNING credential_id, human_id, type, status, valid_from, created_at`,
+      [credentialId, type, publicKey, timestamp, humanId]
+    );
+    if (!result.rows[0]) throw Object.assign(new Error('Human is not active or credential already exists'), { code: 'CREDENTIAL_UNAVAILABLE' });
+    return { ...result.rows[0], algorithm: algorithm ?? null, coseKey: coseKey ?? null };
+  }
+  async lookupHumanCredential(credentialId) {
+    const result = await this.pool.query(
+      `SELECT c.credential_id, c.human_id, c.type, c.public_key, c.status,
+              c.valid_from, c.valid_until, h.status AS human_status
+       FROM human_credentials c JOIN humans h ON h.human_id = c.human_id
+       WHERE c.credential_id = $1`, [credentialId]
+    );
+    const row = result.rows[0];
+    return row ? { credentialId: row.credential_id, humanId: row.human_id, type: row.type, publicKey: row.public_key, status: row.status, humanStatus: row.human_status, validFrom: row.valid_from, validUntil: row.valid_until } : null;
+  }
   async listInbox(endpointId, since = '') {
     const result = await this.pool.query(
       `SELECT d.delivery_id, d.message_id, d.recipient_endpoint_id, d.state, d.attempts, d.queued_at,

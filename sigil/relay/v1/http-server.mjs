@@ -3,9 +3,17 @@ import crypto from 'node:crypto';
 import { acceptEnvelopeAsync } from './accept-envelope.mjs';
 import { transitionDelivery } from './delivery-state.mjs';
 import { createBearerAuthenticator } from './transport-auth.mjs';
+import { createApprovalChallenge, coseKeyToPublicKey, parseAttestationObject, verifyWebAuthnApproval, verifyWebAuthnAssertion } from './approval-ceremony.mjs';
 
-export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now, stream } = {}) {
+async function readBody(request, maxBytes = 1024 * 1024) {
+  let raw = ''; let size = 0;
+  for await (const chunk of request) { size += Buffer.byteLength(chunk); if (size > maxBytes) throw Object.assign(new Error('Request body too large'), { code: 'REQUEST_TOO_LARGE' }); raw += chunk; }
+  return raw;
+}
+
+export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now, stream, relayOrigin, rpId, approvalChallenges = new Map(), lookupHumanCredential, verifyAssertion } = {}) {
   const authenticateRequest = authenticate ?? (tokenHashes ? createBearerAuthenticator(tokenHashes) : null);
+  const resolveHumanCredential = lookupHumanCredential ?? repository?.lookupHumanCredential?.bind(repository);
   return http.createServer(async (request, response) => {
     const requestId = request.headers['x-sigil-request-id'] ?? crypto.randomUUID();
     const principal = authenticateRequest ? await authenticateRequest(request) : null;
@@ -13,8 +21,61 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       response.writeHead(401, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(JSON.stringify({ request_id: requestId, code: 'UNAUTHENTICATED', message: 'Authentication required', details: {} }));
     }
+    if (request.method === 'POST' && request.url === '/v1/approval-challenges') {
+      let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      let body; try { body = JSON.parse(raw); } catch { body = null; }
+      if (!body?.action_hash || !body.callback_url || !relayOrigin || !principal?.endpoint_id) {
+        response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'APPROVAL_REQUIRED', message: 'Approval challenge fields are required', details: {} }));
+      }
+      try {
+        const challenge = createApprovalChallenge({ relayOrigin, actionHash: body.action_hash, endpointId: principal.endpoint_id, callbackUrl: body.callback_url });
+        approvalChallenges.set(challenge.id, challenge);
+        response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', challenge_id: challenge.id, webauthn_challenge: challenge.webauthnChallenge, approval_url: challenge.approvalUrl, expires_at: challenge.expiresAt }));
+      } catch (error) {
+        response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'APPROVAL_REQUIRED', message: error.message, details: {} }));
+      }
+    }
+    const assertionMatch = request.url.match(/^\/v1\/approval-challenges\/([^/]+)\/assertion$/);
+    if (request.method === 'POST' && assertionMatch) {
+      let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      let assertion; try { assertion = JSON.parse(raw); } catch { assertion = null; }
+      const challenge = approvalChallenges.get(assertionMatch[1]);
+      try {
+        const credential = await resolveHumanCredential?.(assertion?.credential_id, principal?.endpoint_id);
+        if (credential?.coseKey && !credential.publicKey) Object.assign(credential, coseKeyToPublicKey(credential.coseKey) ?? {});
+        const normalized = { ...assertion, credentialId: assertion?.credentialId ?? assertion?.credential_id };
+        const result = await verifyWebAuthnApproval({ challenge, assertion: normalized, relayOrigin, rpId, credential, verifyAssertion: verifyAssertion ?? (({ assertion: candidate, credential: registered }) => verifyWebAuthnAssertion({ ...candidate, challenge, relayOrigin, rpId, credential: registered })), now: now instanceof Date ? now.getTime() : Date.now() });
+        response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', ...result }));
+      } catch (error) {
+        response.writeHead(409, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'APPROVAL_REQUIRED', message: error.message, details: {} }));
+      }
+    }
+    if (request.method === 'POST' && request.url === '/v1/webauthn/credentials') {
+      let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      let body; try { body = JSON.parse(raw); } catch { body = null; }
+      const parsed = body?.attestation_object ? parseAttestationObject(body.attestation_object) : null;
+      if (!parsed || !principal?.human_id || typeof repository?.registerHumanCredential !== 'function') {
+        response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ATTESTATION', message: 'Valid attestation and credential repository are required', details: {} }));
+      }
+      try {
+        const credentialId = parsed.credentialId.toString('base64url');
+        if (body.credential_id && body.credential_id !== credentialId) throw Object.assign(new Error('Credential ID does not match attestation'), { code: 'INVALID_ATTESTATION' });
+        await repository.registerHumanCredential({ humanId: principal.human_id, credentialId, type: 'webauthn', algorithm: parsed.algorithm, publicKey: parsed.publicKey, coseKey: parsed.coseKey });
+        response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', credential_id: credentialId }));
+      } catch (error) {
+        response.writeHead(409, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'APPROVAL_REQUIRED', message: error.message, details: {} }));
+      }
+    }
     if (request.method === 'POST' && request.url === '/v1/envelopes') {
-      let raw = ''; for await (const chunk of request) raw += chunk;
+      let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       let envelope; try { envelope = JSON.parse(raw); } catch { response.writeHead(400, { 'content-type': 'application/json' }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'Invalid JSON', details: {} })); }
       const result = await acceptEnvelopeAsync(envelope, { registered: registry, idempotency, lookupIdempotency, request_id: requestId, persist: async (row) => { await persist?.(row); if (stream && envelope.recipient?.endpoint_id) stream.notify(envelope.recipient.endpoint_id, row.message_id); }, now });
       response.writeHead(result.status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
@@ -31,7 +92,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     const deliveryMatch = request.url.match(/^\/v1\/deliveries\/([^/]+)\/(ack|processing)$/);
     if (request.method === 'POST' && deliveryMatch) {
       const [, deliveryId, action] = deliveryMatch;
-      let body = {}; let raw = ''; for await (const chunk of request) raw += chunk;
+      let body = {}; let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       if (raw) { try { body = JSON.parse(raw); } catch { body = {}; } }
       const target = action === 'ack' ? 'acknowledged' : body.state;
       if (action === 'processing' && !['processing', 'processing_failed'].includes(target)) {
