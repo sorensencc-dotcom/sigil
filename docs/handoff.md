@@ -3,7 +3,7 @@
 **Date:** 2026-08-14
 **Repository:** `sorensencc-dotcom/sigil`
 **Branch:** `main`
-**Checkpoint:** working tree after `8481792`
+**Checkpoint:** `d44c527`
 
 ## Status
 
