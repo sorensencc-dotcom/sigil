@@ -27,6 +27,94 @@ test('HTTP relay accepts signed envelope and returns request ID', async () => {
   assert.equal(result.status, 202); assert.equal(result.body.request_id, 'req_http_1');
 });
 
+test('HTTP relay defaults to repository persistence with canonical acceptance data', async () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
+  envelope.created_at = '2026-08-13T12:00:00.000Z'; envelope.expires_at = '2026-08-14T00:00:00.000Z';
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
+  const persisted = [];
+  const repository = {
+    async lookupIdempotency() { return null; },
+    async persistAcceptedEnvelope(row) { persisted.push(row); return { message_id: row.envelope.message_id }; }
+  };
+  const server = createRelayServer({
+    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    repository, now: new Date('2026-08-13T12:01:00Z')
+  });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const result = await request(port, { method: 'POST', path: '/v1/envelopes', body: envelope });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(result.status, 202);
+  assert.equal(persisted.length, 1);
+  assert.deepEqual(persisted[0].canonical_bytes, signedBytes(envelope));
+  assert.equal(persisted[0].action_hash, persisted[0].canonical_hash);
+});
+
+test('HTTP relay does not notify when durable persistence fails', async () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
+  envelope.created_at = '2026-08-13T12:00:00.000Z'; envelope.expires_at = '2026-08-14T00:00:00.000Z';
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
+  const notifications = [];
+  const server = createRelayServer({
+    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    repository: { async lookupIdempotency() { return null; }, async persistAcceptedEnvelope() { throw new Error('database unavailable'); } },
+    stream: { notify(...args) { notifications.push(args); } }, now: new Date('2026-08-13T12:01:00Z')
+  });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const result = await request(port, { method: 'POST', path: '/v1/envelopes', body: envelope });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(result.status, 400);
+  assert.equal(result.body.message, 'database unavailable');
+  assert.deepEqual(notifications, []);
+});
+
+test('HTTP relay returns prior acceptance for duplicate idempotency retry', async () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
+  envelope.created_at = '2026-08-13T12:00:00.000Z'; envelope.expires_at = '2026-08-14T00:00:00.000Z';
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
+  const persisted = []; const notifications = []; const canonicalHash = crypto.createHash('sha256').update(signedBytes(envelope)).digest('hex');
+  const repository = {
+    async lookupIdempotency() { return persisted.length ? { message_id: envelope.message_id, canonical_hash: canonicalHash } : null; },
+    async persistAcceptedEnvelope(row) { persisted.push(row); return { message_id: row.envelope.message_id }; }
+  };
+  const server = createRelayServer({
+    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    repository, stream: { notify(...args) { notifications.push(args); } }, now: new Date('2026-08-13T12:01:00Z')
+  });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const first = await request(port, { method: 'POST', path: '/v1/envelopes', body: envelope });
+  const second = await request(port, { method: 'POST', path: '/v1/envelopes', body: envelope });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(first.status, 202); assert.equal(first.body.duplicate, false);
+  assert.equal(second.status, 202); assert.equal(second.body.duplicate, true);
+  assert.equal(second.body.message_id, first.body.message_id);
+  assert.equal(persisted.length, 1); assert.equal(notifications.length, 1);
+});
+
+test('HTTP relay rejects conflicting idempotency retry', async () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
+  envelope.created_at = '2026-08-13T12:00:00.000Z'; envelope.expires_at = '2026-08-14T00:00:00.000Z';
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
+  const originalHash = crypto.createHash('sha256').update(signedBytes(envelope)).digest('hex');
+  const repository = {
+    async lookupIdempotency() { return { message_id: envelope.message_id, canonical_hash: originalHash }; },
+    async persistAcceptedEnvelope() { throw new Error('must not persist conflicting retry'); }
+  };
+  const server = createRelayServer({
+    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    repository, now: new Date('2026-08-13T12:01:00Z')
+  });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const retry = { ...envelope, body: { ...envelope.body, changed: true } };
+  retry.signature = { ...retry.signature, value: crypto.sign(null, signedBytes(retry), privateKey).toString('base64url') };
+  const result = await request(port, { method: 'POST', path: '/v1/envelopes', body: retry });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(result.status, 409); assert.equal(result.body.code, 'DUPLICATE_MESSAGE');
+});
+
 test('HTTP relay notifies recipient stream after acceptance', async () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));

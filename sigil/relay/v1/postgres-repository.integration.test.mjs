@@ -20,6 +20,7 @@ test('migration and repository persist an envelope in live PostgreSQL', { skip: 
   };
 
   const migrationPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations/001_initial.sql');
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
   await pool.query(await fs.readFile(migrationPath, 'utf8'));
 
   await pool.query(`
