@@ -1,0 +1,29 @@
+README.md
+  s_4d5378553c6b81::t_a14e0c20ca5170 5-6
+package.json
+  s_4d5378553c6b81::t_ca7945926f4e39 11-15
+  s_4d5378553c6b81::t_ab306cd1a6c9e6 28-42
+  s_4d5378553c6b81::t_a14e0c20ca5170 1-10,16-27,43
+bin/sigil.mjs
+  s_4d5378553c6b81::t_a14e0c20ca5170 1-32
+.npmignore
+  s_4d5378553c6b81::t_4f8d280b17f5fc 1-5
+docs/getting-started.md
+  s_4d5378553c6b81::t_a14e0c20ca5170 1-106
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "df991254c353af5724e3283c788fede9d8e9c01b",
+  "prompts": {},
+  "sessions": {
+    "s_4d5378553c6b81": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a005b0-ab11-7f52-989d-e699d42e7a83",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
