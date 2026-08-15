@@ -12,10 +12,14 @@ import { parseArgs } from 'node:util';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
+import http from 'node:http';
+import { WebSocket } from 'ws';
+
 import { createIdentity, loadIdentity, saveIdentity, identityKeys } from './identity.mjs';
 import { loadRegistryFile, addEndpointToRegistry, toRegistryMap, toTokenHashes } from './registry-store.mjs';
 import { createMemoryRepository } from './memory-repository.mjs';
 import { createRelayServer } from '../relay/v1/http-server.mjs';
+import { createStreamServer } from '../relay/v1/stream-server.mjs';
 import { RelayClient } from '../connectors/v1/relay-client.mjs';
 import { LocalOutbox } from '../connectors/v1/local-outbox.mjs';
 
@@ -28,7 +32,7 @@ Commands:
   init <name> --owner <owner_id> [--registry path]        Create a local identity and register it
   relay up [--registry path] [--port N]                    Run a local relay (blocks; Ctrl+C to stop)
   send --identity path --relay-url url --to endpoint_id --to-owner owner_id --message "text" [--conversation id]
-  inbox --identity path --relay-url url [--watch] [--interval ms]
+  inbox --identity path --relay-url url [--watch] [--stream-url url] [--interval ms]
 
 Everything here runs on this machine. See docs/meta/sigil-cli-roadmap.md for what's missing for real multi-user use.`);
 }
@@ -54,18 +58,29 @@ async function cmdInit(argv) {
 }
 
 async function cmdRelayUp(argv) {
-  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' } } });
+  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' } } });
   const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
   const port = Number(opt(args, ['port']) ?? 0);
+  const streamPort = Number(opt(args, ['stream-port']) ?? (port ? port + 1 : 0));
   const data = loadRegistryFile(registryPath);
   if (!data.endpoints.length) throw new Error(`No endpoints in ${registryPath}. Run "sigil init <name> --owner <owner_id>" first.`);
   const registry = toRegistryMap(data);
   const tokenHashes = toTokenHashes(data);
   const repository = createMemoryRepository();
-  const server = createRelayServer({ registry, repository, tokenHashes });
+
+  // Stream server needs its own http.Server (createRelayServer builds one
+  // internally and doesn't accept an existing one), so push notifications
+  // run on a second port, separate from the main relay HTTP port.
+  const streamHttpServer = http.createServer();
+  const stream = createStreamServer({ server: streamHttpServer, tokenHashes });
+  await new Promise((resolve) => streamHttpServer.listen(streamPort, '127.0.0.1', resolve));
+  const streamAddress = streamHttpServer.address();
+
+  const server = createRelayServer({ registry, repository, tokenHashes, stream });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();
   console.log(`Sigil relay listening on http://127.0.0.1:${address.port}`);
+  console.log(`Sigil stream (push notify) on ws://127.0.0.1:${streamAddress.port}/v1/stream`);
   console.log(`Registered endpoints: ${[...registry.keys()].join(', ')}`);
   console.log('In-memory only -- state is lost when this process exits. Ctrl+C to stop.');
   await new Promise(() => {}); // keep the process alive
@@ -99,13 +114,14 @@ async function cmdSend(argv) {
 }
 
 async function cmdInbox(argv) {
-  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, watch: { type: 'boolean' }, interval: { type: 'string' } } });
+  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, watch: { type: 'boolean' }, interval: { type: 'string' } } });
   const identity = loadIdentity(opt(args, ['identity']));
   const relayUrl = opt(args, ['relay-url']);
   if (!relayUrl) throw new Error('usage: sigil inbox --identity path --relay-url url [--watch]');
   const relay = new RelayClient({ baseUrl: relayUrl, token: identity.relay_token });
   const watch = Boolean(args.values.watch);
   const intervalMs = Number(opt(args, ['interval']) ?? 2000);
+  const streamUrl = opt(args, ['stream-url']) ?? (() => { const url = new URL(relayUrl); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'; url.port = String((Number(url.port || (url.protocol === 'wss:' ? 443 : 80)) + 1)); url.pathname = '/v1/stream'; return url.toString(); })();
   let since = '';
   const poll = async () => {
     const page = await relay.reconcileInbox(since);
@@ -122,8 +138,20 @@ async function cmdInbox(argv) {
     if (!count) console.log('(inbox empty)');
     return;
   }
-  console.log(`Watching inbox for ${identity.endpoint_id} every ${intervalMs}ms. Ctrl+C to stop.`);
-  for (;;) { await poll(); await new Promise((resolve) => setTimeout(resolve, intervalMs)); }
+  console.log(`Watching inbox for ${identity.endpoint_id} via ${streamUrl}. Ctrl+C to stop.`);
+  let stopped = false; let socket; let reconnectDelay = 250; let fallbackTimer; let reconnectTimer;
+  const scheduleReconnect = () => { if (stopped || reconnectTimer) return; reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, reconnectDelay); reconnectDelay = Math.min(reconnectDelay * 2, 30_000); };
+  const connect = () => {
+    if (stopped) return;
+    socket = new WebSocket(streamUrl, { headers: { authorization: `Bearer ${identity.relay_token}` } });
+    socket.once('open', () => { reconnectDelay = 250; });
+    socket.on('message', async (raw) => { try { const event = JSON.parse(raw); if (event.type === 'delivered') await poll(); } catch (error) { console.error(`sigil: stream message failed: ${error.message}`); } });
+    socket.once('error', () => { try { socket.close(); } catch {} });
+    socket.once('close', scheduleReconnect);
+  };
+  fallbackTimer = setInterval(() => { poll().catch((error) => console.error(`sigil: fallback inbox poll failed: ${error.message}`)); }, 30_000);
+  connect();
+  await new Promise(() => {});
 }
 
 async function main() {

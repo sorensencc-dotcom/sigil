@@ -42,5 +42,8 @@
   "bugs": {
     "url": "https://github.com/sorensencc-dotcom/sigil/issues"
   },
-  "homepage": "https://github.com/sorensencc-dotcom/sigil#readme"
+  "homepage": "https://github.com/sorensencc-dotcom/sigil#readme",
+  "dependencies": {
+    "ws": "^8.21.3"
+  }
 }
