@@ -1,0 +1,23 @@
+docs/meta/sigil-session-handoff-2026-08-15.md
+  s_2afe06807554bb::t_13def97a842524 1-50
+docs/meta/sigil-codex-resume-instructions.md
+  s_2afe06807554bb::t_a311c516ff1e96 1-24
+docs/meta/sigil-cli-roadmap.md
+  s_2afe06807554bb::t_912cc791405c6e 1-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "caf91dd393b7c279d7aceb9f0166d0caadd20a4d",
+  "prompts": {},
+  "sessions": {
+    "s_2afe06807554bb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6294ff91-fde0-4654-bfc7-e05c971e527f",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
