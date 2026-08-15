@@ -34,6 +34,14 @@ only expected skip. `git diff --check` passes.
    Connector server/client and authenticated round-trip proof exist; real host
    runtime integrations remain.
 6. [ ] Expand to all 25 conformance items, failure injection, and staging gates.
+7. [ ] Implement approved plugin/connector/auth schema conformance migration.
+   Migration `001_initial.sql` does not yet represent the approved §9 objects
+   and fields: OIDC identities, human attributes/sessions, account links,
+   endpoint tokens, approval decisions, complete capability grants, audit
+   events, idempotency records, and recovery attempts. Design a forward-only
+   migration, repository boundary, rollback/recovery procedure, and adversarial
+   tests before claiming schema conformance. Treat this as a separate Tier
+   1-scale implementation action, not cleanup of migration 001.
 
 ## Evidence checklist
 
@@ -47,6 +55,8 @@ only expected skip. `git diff --check` passes.
 - [x] Connector HTTP client/server round trip
 - [x] Codex/Claude host-runtime bootstrap with explicit Claude local processor
 - [x] Contract fixture validator
+- [x] Relay-side envelope and acknowledgement idempotency focused tests
+- [ ] Migration 002 deployment validation
 - [ ] Real Codex host runtime
 - [ ] Real Claude host runtime
 - [ ] Full conformance, failure injection, staging, and Tier 1 approval

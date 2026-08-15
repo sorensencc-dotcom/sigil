@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { consumeApprovalResult, coseKeyToPublicKey, createApprovalChallenge, parseAttestationObject, verifyWebAuthnApproval, verifyWebAuthnSignature } from './approval-ceremony.mjs';
+import { consumeApprovalResult, coseKeyToPublicKey, createApprovalChallenge, parseAttestationObject, verifyPackedAttestation, verifyWebAuthnApproval, verifyWebAuthnSignature } from './approval-ceremony.mjs';
 import crypto from 'node:crypto';
 
 function cborMap(entries) {
@@ -19,6 +19,7 @@ function cborInt(value) {
 }
 
 function cborText(value) { const bytes = Buffer.from(value); return Buffer.concat([Buffer.from([0x60 + bytes.length]), bytes]); }
+function cborBytes(value) { return Buffer.concat([Buffer.from([0x58, value.length]), value]); }
 
 test('approval URL uses relay origin and binds challenge to action', () => {
   const challenge = createApprovalChallenge({ relayOrigin: 'https://relay.example', actionHash: 'sha256:abc', endpointId: 'ep_codex', callbackUrl: 'http://127.0.0.1:4567/callback' });
@@ -143,6 +144,21 @@ test('attestation parser extracts credential ID and COSE public key', () => {
   const parsed = parseAttestationObject(attestation);
   assert.equal(parsed.format, 'none'); assert.equal(parsed.credentialId.toString(), 'cred'); assert.equal(parsed.algorithm, 'EdDSA');
   assert.equal(parseAttestationObject(Buffer.from('bad').toString('base64url')), null);
+});
+
+test('packed attestation verifies authenticator data and client data signature', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const raw = publicKey.export({ format: 'der', type: 'spki' }).subarray(-32);
+  const cose = cborMap([[1, cborInt(1)], [3, cborInt(-8)], [-1, cborInt(6)], [-2, cborBytes(raw)]]);
+  const authData = Buffer.concat([crypto.randomBytes(32), Buffer.from([0x41, 0, 0, 0, 1]), crypto.randomBytes(16), Buffer.from([0, 4]), Buffer.from('cred'), cose]);
+  const clientDataJSON = Buffer.from(JSON.stringify({ type: 'webauthn.create', challenge: 'registration-challenge', origin: 'https://relay.example' }));
+  const signedData = Buffer.concat([authData, crypto.createHash('sha256').update(clientDataJSON).digest()]);
+  const signature = crypto.sign(null, signedData, privateKey);
+  const attStmt = cborMap([['alg', cborInt(-8)], ['sig', cborBytes(signature)]]);
+  const attestation = cborMap([['fmt', cborText('packed')], ['authData', cborBytes(authData)], ['attStmt', attStmt]]).toString('base64url');
+  const parsed = parseAttestationObject(attestation);
+  assert.equal(verifyPackedAttestation({ parsed, clientDataJSON: clientDataJSON.toString('base64url') }), true);
+  assert.equal(verifyPackedAttestation({ parsed, clientDataJSON: Buffer.from('forged').toString('base64url') }), false);
 });
 
 test('CBOR parser rejects truncated byte strings', () => {

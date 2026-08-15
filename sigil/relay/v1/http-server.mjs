@@ -4,7 +4,20 @@ import { acceptEnvelopeAsync } from './accept-envelope.mjs';
 import { transitionDelivery } from './delivery-state.mjs';
 import { createBearerAuthenticator } from './transport-auth.mjs';
 import { signedBytes } from './validate-envelope.mjs';
-import { createApprovalChallenge, coseKeyToPublicKey, parseAttestationObject, verifyWebAuthnApproval, verifyWebAuthnAssertion } from './approval-ceremony.mjs';
+import { createApprovalChallenge, coseKeyToPublicKey, parseAttestationObject, verifyPackedAttestation, verifyWebAuthnApproval, verifyWebAuthnAssertion } from './approval-ceremony.mjs';
+import { computeActionHash } from './action-hash.mjs';
+import { normalizeIssuer } from './issuer-normalization.mjs';
+import { assertAccountLinkCeremony, assertAllowedIssuer, boundedTokenExpiry } from './auth-policy.mjs';
+
+function normalizeIssuerOrRespond(rawIssuer, response, requestId) {
+  try {
+    return { issuer: normalizeIssuer(rawIssuer) };
+  } catch (error) {
+    response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+    response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'INVALID_ISSUER', message: error.message, details: {} }));
+    return { error: true };
+  }
+}
 
 async function readBody(request, maxBytes = 1024 * 1024) {
   let raw = ''; let size = 0;
@@ -12,7 +25,7 @@ async function readBody(request, maxBytes = 1024 * 1024) {
   return raw;
 }
 
-export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now, stream, relayOrigin, rpId, approvalChallenges = new Map(), lookupHumanCredential, verifyAssertion } = {}) {
+export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now, stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion } = {}) {
   const authenticateRequest = authenticate ?? (tokenHashes ? createBearerAuthenticator(tokenHashes) : null);
   const resolveHumanCredential = lookupHumanCredential ?? repository?.lookupHumanCredential?.bind(repository);
   const resolveIdempotency = lookupIdempotency ?? repository?.lookupIdempotency?.bind(repository);
@@ -26,16 +39,31 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       response.writeHead(401, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(JSON.stringify({ request_id: requestId, code: 'UNAUTHENTICATED', message: 'Authentication required', details: {} }));
     }
-    if (request.method === 'POST' && request.url === '/v1/approval-challenges') {
+      if (request.method === 'POST' && request.url === '/v1/approval-challenges') {
+      if (repository && (!repository.createApprovalChallenge || !repository.getApprovalChallenge || !repository.finalizeApprovalDecision)) return response.writeHead(503).end();
       let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       let body; try { body = JSON.parse(raw); } catch { body = null; }
-      if (!body?.action_hash || !body.callback_url || !relayOrigin || !principal?.endpoint_id) {
+      let actionHash = body?.action_hash;
+      if (body?.action) {
+        try { actionHash = computeActionHash({ ...body.action, endpoint_id: principal?.endpoint_id }); }
+        catch (error) { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'INVALID_ACTION', message: error.message, details: {} })); }
+        if (body.action_hash && body.action_hash !== actionHash) {
+          response.writeHead(409, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+          return response.end(JSON.stringify({ request_id: requestId, code: 'APPROVAL_REQUIRED', message: 'Action hash does not match canonical action', details: {} }));
+        }
+      }
+      if (!actionHash || !body?.callback_url || !relayOrigin || !principal?.endpoint_id) {
         response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'APPROVAL_REQUIRED', message: 'Approval challenge fields are required', details: {} }));
       }
+      if (approvalChallenges.size >= maxPendingApprovals) {
+        response.writeHead(429, { 'content-type': 'application/json', 'x-sigil-request-id': requestId, 'retry-after': '60' });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'RATE_LIMITED', message: 'Approval queue capacity reached', details: {} }));
+      }
       try {
-        const challenge = createApprovalChallenge({ relayOrigin, actionHash: body.action_hash, endpointId: principal.endpoint_id, callbackUrl: body.callback_url });
-        approvalChallenges.set(challenge.id, challenge);
+        const challenge = createApprovalChallenge({ relayOrigin, actionHash, endpointId: principal.endpoint_id, callbackUrl: body.callback_url });
+        if (repository?.createApprovalChallenge) await repository.createApprovalChallenge(challenge);
+        else approvalChallenges.set(challenge.id, challenge);
         response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'OK', challenge_id: challenge.id, webauthn_challenge: challenge.webauthnChallenge, approval_url: challenge.approvalUrl, expires_at: challenge.expiresAt }));
       } catch (error) {
@@ -47,12 +75,14 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     if (request.method === 'POST' && assertionMatch) {
       let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       let assertion; try { assertion = JSON.parse(raw); } catch { assertion = null; }
-      const challenge = approvalChallenges.get(assertionMatch[1]);
+      const challenge = repository?.getApprovalChallenge ? await repository.getApprovalChallenge(assertionMatch[1]) : approvalChallenges.get(assertionMatch[1]);
       try {
         const credential = await resolveHumanCredential?.(assertion?.credential_id, principal?.endpoint_id);
+        if (credential && credential.endpointId !== principal?.endpoint_id) throw Object.assign(new Error('WebAuthn credential is not registered to this endpoint'), { code: 'APPROVAL_REQUIRED' });
         if (credential?.coseKey && !credential.publicKey) Object.assign(credential, coseKeyToPublicKey(credential.coseKey) ?? {});
         const normalized = { ...assertion, credentialId: assertion?.credentialId ?? assertion?.credential_id };
         const result = await verifyWebAuthnApproval({ challenge, assertion: normalized, relayOrigin, rpId, credential, verifyAssertion: verifyAssertion ?? (({ assertion: candidate, credential: registered }) => verifyWebAuthnAssertion({ ...candidate, challenge, relayOrigin, rpId, credential: registered })), now: now instanceof Date ? now.getTime() : Date.now() });
+        if (repository?.finalizeApprovalDecision) await repository.finalizeApprovalDecision({ challengeId: challenge.id, humanId: result.actorId, credentialId: result.credentialId, endpointId: principal.endpoint_id, now });
         response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'OK', ...result }));
       } catch (error) {
@@ -71,7 +101,8 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       try {
         const credentialId = parsed.credentialId.toString('base64url');
         if (body.credential_id && body.credential_id !== credentialId) throw Object.assign(new Error('Credential ID does not match attestation'), { code: 'INVALID_ATTESTATION' });
-        await repository.registerHumanCredential({ humanId: principal.human_id, credentialId, type: 'webauthn', algorithm: parsed.algorithm, publicKey: parsed.publicKey, coseKey: parsed.coseKey });
+        if (parsed.format === 'packed' && !verifyPackedAttestation({ parsed, clientDataJSON: body.client_data_json })) throw Object.assign(new Error('Packed attestation signature verification failed'), { code: 'INVALID_ATTESTATION' });
+        await repository.registerHumanCredential({ humanId: principal.human_id, endpointId: principal.endpoint_id, credentialId, type: 'webauthn', algorithm: parsed.algorithm, publicKey: parsed.publicKey, coseKey: parsed.coseKey });
         response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'OK', credential_id: credentialId }));
       } catch (error) {
@@ -82,7 +113,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     if (request.method === 'POST' && request.url === '/v1/envelopes') {
       let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       let envelope; try { envelope = JSON.parse(raw); } catch { response.writeHead(400, { 'content-type': 'application/json' }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'Invalid JSON', details: {} })); }
-      const result = await acceptEnvelopeAsync(envelope, { registered: registry, idempotency, lookupIdempotency: resolveIdempotency, request_id: requestId, persist: async (row) => { await persistAccepted?.(row); if (stream && envelope.recipient?.endpoint_id) stream.notify(envelope.recipient.endpoint_id, row.message_id); }, now });
+      const result = await acceptEnvelopeAsync(envelope, { registered: registry, idempotency, lookupIdempotency: resolveIdempotency, request_id: requestId, persist: async (row) => { const persisted = await persistAccepted?.(row); if (stream && envelope.recipient?.endpoint_id && !persisted?.duplicate) stream.notify(envelope.recipient.endpoint_id, persisted?.message_id ?? row.message_id); return persisted; }, now });
       response.writeHead(result.status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(result.body ? JSON.stringify(result.body) : '');
     }
@@ -104,6 +135,16 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'Invalid processing state', details: {} }));
       }
+      if (action === 'ack' && repository?.acknowledgeDelivery) {
+        try {
+          await repository.acknowledgeDelivery({ deliveryId, endpointId: principal.endpoint_id, now });
+          response.writeHead(204, { 'x-sigil-request-id': requestId });
+          return response.end();
+        } catch (error) {
+          response.writeHead(409, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+          return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'DELIVERY_UNAVAILABLE', message: error.message, details: {} }));
+        }
+      }
       if (!repository?.transitionDelivery || !repository?.getDelivery) return response.writeHead(503).end();
       try {
         const current = await repository.getDelivery(deliveryId, principal.endpoint_id);
@@ -114,6 +155,247 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       } catch (error) {
         response.writeHead(409, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'DELIVERY_UNAVAILABLE', message: error.message, details: {} }));
+      }
+    }
+    if (request.method === 'POST' && request.url === '/v1/identities') {
+      if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
+      let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      let body; try { body = JSON.parse(raw); } catch { body = null; }
+      if (!body?.issuer || !body?.subject) { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'issuer and subject are required', details: {} })); }
+      const normalizedCreate = normalizeIssuerOrRespond(body.issuer, response, requestId);
+      if (normalizedCreate.error) return;
+      try { assertAllowedIssuer(normalizedCreate.issuer, oidcIssuerAllowList); } catch (error) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      if (!repository?.createOidcIdentity) return response.writeHead(503).end();
+      try {
+        const identity = await repository.createOidcIdentity({ issuer: normalizedCreate.issuer, subject: body.subject, humanId: principal.human_id, now });
+        await repository.recordAuditEvent?.({ eventType: 'oidc_identity.created', subjectId: `${normalizedCreate.issuer}|${body.subject}`, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'oidc_identity', objectId: body.subject, outcome: 'success', now });
+        response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', identity }));
+      } catch (error) {
+        response.writeHead(error.code === '23505' ? 409 : 400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code === '23505' ? 'IDENTITY_CONFLICT' : (error.code ?? 'IDENTITY_UNAVAILABLE'), message: error.message, details: {} }));
+      }
+    }
+    if (request.method === 'GET' && request.url.startsWith('/v1/identities') && !request.url.includes('/revoke')) {
+      if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
+      const params = new URL(request.url, 'http://sigil.local').searchParams;
+      const rawLookupIssuer = params.get('issuer'); const subject = params.get('subject');
+      if (!rawLookupIssuer || !subject) { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'issuer and subject query parameters are required', details: {} })); }
+      const normalizedLookup = normalizeIssuerOrRespond(rawLookupIssuer, response, requestId);
+      if (normalizedLookup.error) return;
+      try { assertAllowedIssuer(normalizedLookup.issuer, oidcIssuerAllowList); } catch (error) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      if (!repository?.lookupOidcIdentity) return response.writeHead(503).end();
+      const identity = await repository.lookupOidcIdentity(normalizedLookup.issuer, subject);
+      // Owner mismatch is reported the same as "not found" so a caller can't
+      // use this route to enumerate other humans' linked identities.
+      if (!identity || identity.human_id !== principal.human_id) {
+        response.writeHead(404, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'IDENTITY_UNAVAILABLE', message: 'OIDC identity not found', details: {} }));
+      }
+      response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+      return response.end(JSON.stringify({ request_id: requestId, code: 'OK', identity }));
+    }
+    if (request.method === 'POST' && request.url === '/v1/identities/revoke') {
+      if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
+      let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      let body; try { body = JSON.parse(raw); } catch { body = null; }
+      if (!body?.issuer || !body?.subject) { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'issuer and subject are required', details: {} })); }
+      const normalizedRevoke = normalizeIssuerOrRespond(body.issuer, response, requestId);
+      if (normalizedRevoke.error) return;
+      try { assertAllowedIssuer(normalizedRevoke.issuer, oidcIssuerAllowList); } catch (error) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      if (!repository?.lookupOidcIdentity || (!repository?.revokeOidcIdentity && !repository?.revokeOidcIdentityWithAudit)) return response.writeHead(503).end();
+      const owned = await repository.lookupOidcIdentity(normalizedRevoke.issuer, body.subject);
+      if (!owned || owned.human_id !== principal.human_id) {
+        response.writeHead(404, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'IDENTITY_UNAVAILABLE', message: 'OIDC identity not found', details: {} }));
+      }
+      try {
+        // Prefer the audit-atomic method when the repository supports it, so
+        // the revoke and its audit_events row commit or roll back together.
+        const revoked = repository.revokeOidcIdentityWithAudit
+          ? await repository.revokeOidcIdentityWithAudit(normalizedRevoke.issuer, body.subject, { now, actorHumanId: principal.human_id, endpointId: principal.endpoint_id })
+          : await (async () => {
+              const result = await repository.revokeOidcIdentity(normalizedRevoke.issuer, body.subject, { now });
+              if (!result.duplicate) await repository.recordAuditEvent?.({ eventType: 'oidc_identity.revoked', subjectId: `${normalizedRevoke.issuer}|${body.subject}`, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'oidc_identity', objectId: body.subject, outcome: 'success', now });
+              return result;
+            })();
+        response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', identity: revoked }));
+      } catch (error) {
+        response.writeHead(409, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'IDENTITY_UNAVAILABLE', message: error.message, details: {} }));
+      }
+    }
+    if (request.method === 'POST' && request.url === '/v1/account-links') {
+      if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
+      let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      let body; try { body = JSON.parse(raw); } catch { body = null; }
+      if (!body?.issuer || !body?.subject) { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'issuer and subject are required', details: {} })); }
+      const normalizedLink = normalizeIssuerOrRespond(body.issuer, response, requestId);
+      if (normalizedLink.error) return;
+      try { assertAllowedIssuer(normalizedLink.issuer, oidcIssuerAllowList); } catch (error) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      try { assertAccountLinkCeremony({ nonceHash: body.nonce_hash, stateHash: body.state_hash, issuedAt: body.issued_at, expiresAt: body.expires_at, now }); } catch (error) { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      if (!repository?.linkAccount) return response.writeHead(503).end();
+      try {
+        const linkId = `link_${crypto.randomUUID()}`;
+        const link = await repository.linkAccount({ linkId, humanId: principal.human_id, issuer: normalizedLink.issuer, subject: body.subject, nonceHash: body.nonce_hash, stateHash: body.state_hash, issuedAt: body.issued_at, expiresAt: body.expires_at, now });
+        await repository.recordAuditEvent?.({ eventType: 'account_link.created', subjectId: linkId, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'account_link', objectId: linkId, outcome: 'success', now });
+        response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', link }));
+      } catch (error) {
+        response.writeHead(error.code === '23503' ? 404 : 409, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code === '23503' ? 'IDENTITY_UNAVAILABLE' : (error.code ?? 'LINK_UNAVAILABLE'), message: error.message, details: {} }));
+      }
+    }
+    const unlinkMatch = request.url.match(/^\/v1\/account-links\/([^/]+)\/unlink$/);
+    if (request.method === 'POST' && unlinkMatch) {
+      if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
+      const [, linkId] = unlinkMatch;
+      if ((!repository?.unlinkAccount && !repository?.unlinkAccountWithAudit) || !repository?.query) return response.writeHead(503).end();
+      const owner = await repository.query('SELECT human_id FROM account_links WHERE link_id = $1', [linkId]);
+      if (!owner.rows[0] || owner.rows[0].human_id !== principal.human_id) {
+        response.writeHead(404, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'LINK_UNAVAILABLE', message: 'Account link not found', details: {} }));
+      }
+      try {
+        const unlinked = repository.unlinkAccountWithAudit
+          ? await repository.unlinkAccountWithAudit(linkId, { now, actorHumanId: principal.human_id, endpointId: principal.endpoint_id })
+          : await (async () => {
+              const result = await repository.unlinkAccount(linkId, { now });
+              if (!result.duplicate) await repository.recordAuditEvent?.({ eventType: 'account_link.unlinked', subjectId: linkId, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'account_link', objectId: linkId, outcome: 'success', now });
+              return result;
+            })();
+        response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', link: unlinked }));
+      } catch (error) {
+        response.writeHead(409, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'LINK_UNAVAILABLE', message: error.message, details: {} }));
+      }
+    }
+    const sessionRevokeMatch = request.url.match(/^\/v1\/sessions\/([^/]+)\/revoke$/);
+    if (request.method === 'POST' && sessionRevokeMatch) {
+      if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
+      const [, sessionId] = sessionRevokeMatch;
+      if ((!repository?.revokeHumanSession && !repository?.revokeHumanSessionWithAudit) || !repository?.query) return response.writeHead(503).end();
+      const owner = await repository.query('SELECT human_id FROM human_sessions WHERE session_id = $1', [sessionId]);
+      if (!owner.rows[0] || owner.rows[0].human_id !== principal.human_id) {
+        response.writeHead(404, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'SESSION_UNAVAILABLE', message: 'Session not found', details: {} }));
+      }
+      try {
+        const revoked = repository.revokeHumanSessionWithAudit
+          ? await repository.revokeHumanSessionWithAudit(sessionId, { now, actorHumanId: principal.human_id, endpointId: principal.endpoint_id })
+          : await (async () => {
+              const result = await repository.revokeHumanSession(sessionId, { now });
+              if (!result.duplicate) await repository.recordAuditEvent?.({ eventType: 'human_session.revoked', subjectId: sessionId, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'human_session', objectId: sessionId, outcome: 'success', now });
+              return result;
+            })();
+        response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', session: revoked }));
+      } catch (error) {
+        response.writeHead(409, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'SESSION_UNAVAILABLE', message: error.message, details: {} }));
+      }
+    }
+    if (request.method === 'POST' && request.url === '/v1/endpoint-tokens') {
+      if (!repository?.issueEndpointToken) return response.writeHead(503).end();
+      let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      let body = {}; if (raw) { try { body = JSON.parse(raw); } catch { body = {}; } }
+      try {
+        const tokenId = `tok_${crypto.randomUUID()}`;
+        const issued = await repository.issueEndpointToken({ tokenId, endpointId: principal.endpoint_id, expiresAt: boundedTokenExpiry({ now, expiresAt: body.expires_at }), now });
+        // Audit payload deliberately excludes `token` -- only the response
+        // body carries the plaintext secret, and only for this one call.
+        await repository.recordAuditEvent?.({ eventType: 'endpoint_token.issued', subjectId: tokenId, endpointId: principal.endpoint_id, objectType: 'endpoint_token', objectId: tokenId, outcome: 'success', now });
+        response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', token_id: issued.token_id, token: issued.token, expires_at: issued.expires_at }));
+      } catch (error) {
+        response.writeHead(409, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'TOKEN_UNAVAILABLE', message: error.message, details: {} }));
+      }
+    }
+    const tokenRotateMatch = request.url.match(/^\/v1\/endpoint-tokens\/([^/]+)\/rotate$/);
+    if (request.method === 'POST' && tokenRotateMatch) {
+      const [, oldTokenId] = tokenRotateMatch;
+      if (!repository?.rotateEndpointToken) return response.writeHead(503).end();
+      let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      let body = {}; if (raw) { try { body = JSON.parse(raw); } catch { body = {}; } }
+      try {
+        const newTokenId = `tok_${crypto.randomUUID()}`;
+        // rotateEndpointToken already writes its own audit_events row
+        // (endpoint_token.rotated), so this route does not emit a second one.
+        const rotated = await repository.rotateEndpointToken({ oldTokenId, newTokenId, endpointId: principal.endpoint_id, expiresAt: boundedTokenExpiry({ now, expiresAt: body.expires_at }), now });
+        response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', token_id: rotated.token_id, token: rotated.token, expires_at: rotated.expires_at }));
+      } catch (error) {
+        response.writeHead(409, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'TOKEN_UNAVAILABLE', message: error.message, details: {} }));
+      }
+    }
+    const tokenRevokeMatch = request.url.match(/^\/v1\/endpoint-tokens\/([^/]+)\/revoke$/);
+    if (request.method === 'POST' && tokenRevokeMatch) {
+      const [, tokenId] = tokenRevokeMatch;
+      if (!repository?.revokeEndpointToken) return response.writeHead(503).end();
+      let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      let body = {}; if (raw) { try { body = JSON.parse(raw); } catch { body = {}; } }
+      try {
+        // revokeEndpointToken already writes its own audit_events row
+        // (endpoint_token.revoked), so this route does not emit a second one.
+        const revoked = await repository.revokeEndpointToken(tokenId, { endpointId: principal.endpoint_id, reason: body.reason ?? null, now });
+        response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', token_id: revoked.token_id, status: revoked.status }));
+      } catch (error) {
+        response.writeHead(404, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'TOKEN_UNAVAILABLE', message: error.message, details: {} }));
+      }
+    }
+    if (request.method === 'POST' && request.url === '/v1/capability-grants') {
+      let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      let body; try { body = JSON.parse(raw); } catch { body = null; }
+      if (!body?.capability || !body?.scope || !body?.expires_at) { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'capability, scope, and expires_at are required', details: {} })); }
+      if (!repository?.createCapabilityGrant && !repository?.createCapabilityGrantWithAudit) return response.writeHead(503).end();
+      try {
+        const grantId = `grant_${crypto.randomUUID()}`;
+        const grantFields = { grantId, capability: body.capability, scope: body.scope, purpose: body.purpose ?? null, provenance: body.provenance ?? null, issuer: body.issuer ?? null, grantedTo: principal.endpoint_id, grantedBy: principal.human_id ?? principal.endpoint_id, expiresAt: body.expires_at, now };
+        const grant = repository.createCapabilityGrantWithAudit
+          ? await repository.createCapabilityGrantWithAudit({ ...grantFields, actorHumanId: principal.human_id ?? null, endpointId: principal.endpoint_id })
+          : await (async () => {
+              const result = await repository.createCapabilityGrant(grantFields);
+              await repository.recordAuditEvent?.({ eventType: 'capability_grant.created', subjectId: grantId, actorHumanId: principal.human_id ?? null, endpointId: principal.endpoint_id, objectType: 'capability_grant', objectId: grantId, outcome: 'success', now });
+              return result;
+            })();
+        response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', grant }));
+      } catch (error) {
+        response.writeHead(409, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'GRANT_UNAVAILABLE', message: error.message, details: {} }));
+      }
+    }
+    const grantRevokeMatch = request.url.match(/^\/v1\/capability-grants\/([^/]+)\/revoke$/);
+    if (request.method === 'POST' && grantRevokeMatch) {
+      const [, grantId] = grantRevokeMatch;
+      if ((!repository?.revokeCapabilityGrant && !repository?.revokeCapabilityGrantWithAudit) || !repository?.query) return response.writeHead(503).end();
+      let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      let body = {}; if (raw) { try { body = JSON.parse(raw); } catch { body = {}; } }
+      const owner = await repository.query('SELECT granted_to, granted_by FROM capability_grants WHERE grant_id = $1', [grantId]);
+      const grantRow = owner.rows[0];
+      if (!grantRow || (grantRow.granted_to !== principal.endpoint_id && (!principal.human_id || grantRow.granted_by !== principal.human_id))) {
+        response.writeHead(404, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'GRANT_UNAVAILABLE', message: 'Capability grant not found', details: {} }));
+      }
+      try {
+        const revoked = repository.revokeCapabilityGrantWithAudit
+          ? await repository.revokeCapabilityGrantWithAudit(grantId, { revokedBy: principal.human_id ?? principal.endpoint_id, reason: body.reason ?? null, now, actorHumanId: principal.human_id ?? null, endpointId: principal.endpoint_id })
+          : await (async () => {
+              const result = await repository.revokeCapabilityGrant(grantId, { revokedBy: principal.human_id ?? principal.endpoint_id, reason: body.reason ?? null, now });
+              if (!result.duplicate) await repository.recordAuditEvent?.({ eventType: 'capability_grant.revoked', subjectId: grantId, actorHumanId: principal.human_id ?? null, endpointId: principal.endpoint_id, objectType: 'capability_grant', objectId: grantId, outcome: 'success', reason: body.reason ?? null, now });
+              return result;
+            })();
+        response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', grant: revoked }));
+      } catch (error) {
+        response.writeHead(409, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'GRANT_UNAVAILABLE', message: error.message, details: {} }));
       }
     }
     response.writeHead(404, { 'content-type': 'application/json' });

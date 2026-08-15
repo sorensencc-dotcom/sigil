@@ -127,6 +127,55 @@ test('HTTP relay notifies recipient stream after acceptance', async () => {
   assert.deepEqual(notifications, [{ endpointId: 'ep_claude', messageId: 'msg_01JEXAMPLE' }]);
 });
 
+test('HTTP relay suppresses duplicate notification when persistence detects a concurrent race', async () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
+  envelope.created_at = '2026-08-13T12:00:00.000Z'; envelope.expires_at = '2026-08-14T00:00:00.000Z'; envelope.recipient.endpoint_id = 'ep_claude';
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
+  const notifications = [];
+  const repository = {
+    async lookupIdempotency() { return null; },
+    async persistAcceptedEnvelope() { return { message_id: 'msg_won_the_race', duplicate: true }; }
+  };
+  const server = createRelayServer({
+    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    repository, stream: { notify(...args) { notifications.push(args); } }, now: new Date('2026-08-13T12:01:00Z')
+  });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const result = await request(port, { method: 'POST', path: '/v1/envelopes', body: envelope });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(result.status, 202);
+  assert.equal(result.body.message_id, 'msg_won_the_race');
+  assert.equal(result.body.duplicate, true);
+  assert.deepEqual(notifications, []);
+});
+
+test('ack route uses persistent acknowledgeDelivery when the repository supports it, and replays idempotently', async () => {
+  const calls = [];
+  const repository = {
+    async acknowledgeDelivery({ deliveryId, endpointId }) {
+      calls.push([deliveryId, endpointId]);
+      return calls.length === 1 ? { duplicate: false, delivery: { state: 'acknowledged' } } : { duplicate: true, acknowledged_at: '2026-08-13T12:00:00Z' };
+    }
+  };
+  const server = createRelayServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_claude' }) });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const first = await request(port, { method: 'POST', path: '/v1/deliveries/del_1/ack' });
+  const replay = await request(port, { method: 'POST', path: '/v1/deliveries/del_1/ack' });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(first.status, 204); assert.equal(replay.status, 204);
+  assert.deepEqual(calls, [['del_1', 'ep_claude'], ['del_1', 'ep_claude']]);
+});
+
+test('ack route surfaces a conflicting acknowledgement as 409', async () => {
+  const repository = { async acknowledgeDelivery() { throw Object.assign(new Error('Delivery already acknowledged by a different endpoint'), { code: 'DELIVERY_UNAVAILABLE' }); } };
+  const server = createRelayServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_other' }) });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const result = await request(port, { method: 'POST', path: '/v1/deliveries/del_1/ack' });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(result.status, 409); assert.equal(result.body.code, 'DELIVERY_UNAVAILABLE');
+});
+
 test('authenticated inbox route returns only principal deliveries and acknowledges them', async () => {
   const calls = [];
   const repository = {
@@ -169,12 +218,30 @@ test('authenticated approval challenge route returns public metadata only', asyn
   assert.equal(rejected.status, 400); assert.equal(rejected.body.code, 'APPROVAL_REQUIRED');
 });
 
+test('approval challenge recomputes canonical action hash and rejects mismatches', async () => {
+  const challenges = new Map();
+  const server = createRelayServer({ relayOrigin: 'https://relay.example', approvalChallenges: challenges, authenticate: async () => ({ endpoint_id: 'ep_codex' }) });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const action = { action_type: 'tool.invoke', target: 'calendar:event-1', requested_capabilities: ['calendar/read'], arguments: {}, contract_version: 'sigil.connector/v1' };
+  const rejected = await request(port, { method: 'POST', path: '/v1/approval-challenges', body: { action, action_hash: 'sha256:wrong', callback_url: 'http://127.0.0.1:4567/callback' } });
+  const accepted = await request(port, { method: 'POST', path: '/v1/approval-challenges', body: { action, callback_url: 'http://127.0.0.1:4567/callback' } }); await new Promise((resolve) => server.close(resolve));
+  assert.equal(rejected.status, 409); assert.equal(accepted.status, 201); assert.match(challenges.get(accepted.body.challenge_id).actionHash, /^sha256:jcs-sigil-action-v1:/);
+});
+
+test('approval challenge route bounds pending approval queue', async () => {
+  const challenges = new Map([['existing', { used: false }]]);
+  const server = createRelayServer({ relayOrigin: 'https://relay.example', approvalChallenges: challenges, maxPendingApprovals: 1, authenticate: async () => ({ endpoint_id: 'ep_codex' }) });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const result = await request(port, { method: 'POST', path: '/v1/approval-challenges', body: { action_hash: 'sha256:abc', callback_url: 'http://127.0.0.1:4567/callback' } }); await new Promise((resolve) => server.close(resolve));
+  assert.equal(result.status, 429); assert.equal(result.body.code, 'RATE_LIMITED');
+});
+
 test('approval assertion route verifies credential server-side and is single-use', async () => {
   const challenges = new Map();
   const server = createRelayServer({
     relayOrigin: 'https://relay.example', rpId: 'relay.example', approvalChallenges: challenges,
     authenticate: async () => ({ endpoint_id: 'ep_codex' }),
-    lookupHumanCredential: async (credentialId) => ({ credentialId, humanId: 'usr_1', type: 'webauthn', status: 'active' }),
+    lookupHumanCredential: async (credentialId) => ({ credentialId, endpointId: 'ep_codex', humanId: 'usr_1', type: 'webauthn', status: 'active' }),
     verifyAssertion: async () => true
   });
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
@@ -191,7 +258,7 @@ test('approval assertion route verifies credential server-side and is single-use
 test('approval assertion route accepts a correctly signed default WebAuthn assertion', async () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const challenges = new Map();
-  const server = createRelayServer({ relayOrigin: 'https://relay.example', rpId: 'relay.example', approvalChallenges: challenges, authenticate: async () => ({ endpoint_id: 'ep_codex' }), lookupHumanCredential: async (credentialId) => ({ credentialId, humanId: 'usr_1', type: 'webauthn', status: 'active', publicKey }) });
+  const server = createRelayServer({ relayOrigin: 'https://relay.example', rpId: 'relay.example', approvalChallenges: challenges, authenticate: async () => ({ endpoint_id: 'ep_codex' }), lookupHumanCredential: async (credentialId) => ({ credentialId, endpointId: 'ep_codex', humanId: 'usr_1', type: 'webauthn', status: 'active', publicKey }) });
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
   const created = await request(port, { method: 'POST', path: '/v1/approval-challenges', body: { action_hash: 'sha256:abc', callback_url: 'http://127.0.0.1:4567/callback' } });
   const challenge = challenges.get(created.body.challenge_id);
@@ -207,7 +274,7 @@ test('approval assertion route accepts a correctly signed default WebAuthn asser
 test('approval assertion route accepts a correctly signed ES256 assertion', async () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
   const challenges = new Map();
-  const server = createRelayServer({ relayOrigin: 'https://relay.example', rpId: 'relay.example', approvalChallenges: challenges, authenticate: async () => ({ endpoint_id: 'ep_codex' }), lookupHumanCredential: async (credentialId) => ({ credentialId, humanId: 'usr_1', type: 'webauthn', algorithm: 'ES256', status: 'active', publicKey }) });
+  const server = createRelayServer({ relayOrigin: 'https://relay.example', rpId: 'relay.example', approvalChallenges: challenges, authenticate: async () => ({ endpoint_id: 'ep_codex' }), lookupHumanCredential: async (credentialId) => ({ credentialId, endpointId: 'ep_codex', humanId: 'usr_1', type: 'webauthn', algorithm: 'ES256', status: 'active', publicKey }) });
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
   const created = await request(port, { method: 'POST', path: '/v1/approval-challenges', body: { action_hash: 'sha256:abc', callback_url: 'http://127.0.0.1:4567/callback' } });
   const challenge = challenges.get(created.body.challenge_id);
@@ -222,7 +289,7 @@ test('approval assertion route accepts a correctly signed ES256 assertion', asyn
 
 test('approval assertion route rejects unsigned assertion without injected verifier', async () => {
   const challenges = new Map();
-  const server = createRelayServer({ relayOrigin: 'https://relay.example', rpId: 'relay.example', approvalChallenges: challenges, authenticate: async () => ({ endpoint_id: 'ep_codex' }), lookupHumanCredential: async (credentialId) => ({ credentialId, humanId: 'usr_1', type: 'webauthn', status: 'active', publicKey: 'not-a-key' }) });
+  const server = createRelayServer({ relayOrigin: 'https://relay.example', rpId: 'relay.example', approvalChallenges: challenges, authenticate: async () => ({ endpoint_id: 'ep_codex' }), lookupHumanCredential: async (credentialId) => ({ credentialId, endpointId: 'ep_codex', humanId: 'usr_1', type: 'webauthn', status: 'active', publicKey: 'not-a-key' }) });
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
   const created = await request(port, { method: 'POST', path: '/v1/approval-challenges', body: { action_hash: 'sha256:abc', callback_url: 'http://127.0.0.1:4567/callback' } });
   const challenge = challenges.get(created.body.challenge_id);

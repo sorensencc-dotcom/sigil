@@ -33,13 +33,19 @@ export function acceptEnvelope(envelope, options = {}) {
 
 export async function acceptEnvelopeAsync(envelope, options = {}) {
   try {
+    // Validate structure, expiry, route, signature, and canonical hash before
+    // touching the idempotency store. Invalid input must not probe its keys.
+    const result = validateEnvelope(envelope, { ...options, idempotency: new Map() });
     const prior = options.lookupIdempotency
-      ? await options.lookupIdempotency(envelope?.sender?.endpoint_id, envelope?.idempotency_key)
-      : options.idempotency?.get(`${envelope?.sender?.endpoint_id}:${envelope?.idempotency_key}`);
-    const result = validateEnvelope(envelope, { ...options, idempotency: prior ? new Map([[`${envelope.sender.endpoint_id}:${envelope.idempotency_key}`, prior]]) : options.idempotency });
+      ? await options.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key)
+      : options.idempotency?.get(`${envelope.sender.endpoint_id}:${envelope.idempotency_key}`);
+    if (prior && prior.canonical_hash !== result.canonical_hash) {
+      const error = Object.assign(new Error('Idempotency key conflicts with an existing body'), { code: 'DUPLICATE_MESSAGE' });
+      throw error;
+    }
     if (prior) return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: prior.message_id, duplicate: true } };
-    await options.persist?.({ envelope, ...result });
-    return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: result.message_id, duplicate: false } };
+    const persisted = await options.persist?.({ envelope, ...result });
+    return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: persisted?.message_id ?? result.message_id, duplicate: persisted?.duplicate ?? false } };
   } catch (error) {
     return { status: statusByCode[error.code] ?? 400, body: { request_id: options.request_id ?? null, code: error.code ?? 'INVALID_ENVELOPE', message: error.message, details: error.details ?? {} } };
   }

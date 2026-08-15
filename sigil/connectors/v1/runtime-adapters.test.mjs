@@ -11,9 +11,11 @@ function fakeConnector() {
   return connector;
 }
 
+const permissions = ['sigil.task/*', 'sigil.approval/request', 'sigil.core/read_shared_context'];
+
 test('Codex adapter exposes only Codex connector operations with fixed identity', async () => {
   const connector = fakeConnector();
-  const adapter = createCodexAdapter({ connector });
+  const adapter = createCodexAdapter({ connector, packagePermissions: permissions, connectorGrants: permissions });
   assert.equal(adapter.runtime, 'codex');
   assert.equal(await adapter.sendTask({ task_id: 't1' }), 'sendTask');
   assert.equal(await adapter.checkInbox(), 'checkInbox');
@@ -24,7 +26,7 @@ test('Codex adapter exposes only Codex connector operations with fixed identity'
 
 test('Claude adapter exposes processing/result operations but cannot send as Codex', async () => {
   const connector = fakeConnector();
-  const adapter = createClaudeAdapter({ connector });
+  const adapter = createClaudeAdapter({ connector, packagePermissions: permissions, connectorGrants: permissions });
   assert.equal(adapter.runtime, 'claude');
   assert.equal(await adapter.processTask({ message_id: 'm1' }), 'processTask');
   assert.equal(await adapter.submitResult({ task_id: 't1', status: 'processed' }), 'submitResult');

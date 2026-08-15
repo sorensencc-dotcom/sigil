@@ -11,15 +11,17 @@ function fetchImpl() {
   } });
 }
 
+const permissions = ['sigil.task/*', 'sigil.approval/request', 'sigil.core/read_shared_context'];
+
 test('Codex host runtime binds authenticated local connector with Codex-only operations', async () => {
-  const runtime = createCodexHostRuntime({ baseUrl: 'http://localhost', token: 'codex-token', fetchImpl: fetchImpl() });
+  const runtime = createCodexHostRuntime({ baseUrl: 'http://localhost', token: 'codex-token', fetchImpl: fetchImpl(), packagePermissions: permissions, connectorGrants: permissions });
   assert.equal(runtime.runtime, 'codex');
   assert.deepEqual(await runtime.sendTask({ envelope: { message_id: 'm1' } }), { accepted: true });
   assert.equal('processTask' in runtime, false);
 });
 
 test('Claude host runtime binds authenticated local connector with Claude-only operations', async () => {
-  const runtime = createClaudeHostRuntime({ baseUrl: 'http://localhost', token: 'claude-token', fetchImpl: fetchImpl(), processTask: async (task) => ({ task, status: 'processed' }) });
+  const runtime = createClaudeHostRuntime({ baseUrl: 'http://localhost', token: 'claude-token', fetchImpl: fetchImpl(), processTask: async (task) => ({ task, status: 'processed' }), packagePermissions: permissions, connectorGrants: permissions });
   assert.equal(runtime.runtime, 'claude');
   assert.deepEqual(await runtime.processTask({ message_id: 'm1' }), { task: { message_id: 'm1' }, status: 'processed' });
   assert.equal('sendTask' in runtime, false);

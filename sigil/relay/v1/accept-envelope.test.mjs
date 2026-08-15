@@ -35,6 +35,14 @@ test('malformed envelope returns structured error before idempotency lookup', as
   assert.equal(result.body.code, 'INVALID_ENVELOPE');
 });
 
+test('invalid signature is rejected before idempotency lookup', async () => {
+  let lookedUp = false;
+  const invalid = { ...envelope, signature: { ...envelope.signature, value: 'forged' } };
+  const result = await acceptEnvelopeAsync(invalid, { ...options, lookupIdempotency: async () => { lookedUp = true; return null; } });
+  assert.equal(result.body.code, 'INVALID_SIGNATURE');
+  assert.equal(lookedUp, false);
+});
+
 test('same idempotency key returns original acceptance without a second write', () => {
   const writes = [];
   const canonical_hash = crypto.createHash('sha256').update(signedBytes(envelope)).digest('hex');
@@ -62,4 +70,14 @@ test('async acceptance awaits durable persistence and uses repository idempotenc
   });
   assert.equal(duplicate.body.message_id, 'msg_existing');
   assert.equal(duplicate.body.duplicate, true);
+});
+
+test('a race detected by the persistence layer itself overrides the optimistic result', async () => {
+  const response = await acceptEnvelopeAsync(envelope, {
+    ...options,
+    lookupIdempotency: async () => null,
+    persist: async () => ({ message_id: 'msg_won_the_race', duplicate: true })
+  });
+  assert.equal(response.body.message_id, 'msg_won_the_race');
+  assert.equal(response.body.duplicate, true);
 });

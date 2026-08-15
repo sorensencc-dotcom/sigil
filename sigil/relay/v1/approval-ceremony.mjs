@@ -10,13 +10,17 @@ function readCbor(data, offset = 0) {
   if (major === 1) return { value: -1 - length, offset };
   if (major === 2) return { value: data.subarray(offset, offset + length), offset: offset + length };
   if (major === 3) return { value: data.subarray(offset, offset + length).toString('utf8'), offset: offset + length };
+  if (major === 4) { const value = []; for (let i = 0; i < length; i++) { const item = readCbor(data, offset); value.push(item.value); offset = item.offset; } return { value, offset }; }
   if (major === 5) { const value = new Map(); for (let i = 0; i < length; i++) { const key = readCbor(data, offset); const item = readCbor(data, key.offset); value.set(key.value, item.value); offset = item.offset; } return { value, offset }; }
   throw new Error('Unsupported CBOR type');
 }
 
 export function parseAttestationObject(attestationObject) {
   try {
-    const root = readCbor(Buffer.from(attestationObject, 'base64url')).value;
+    const encoded = Buffer.from(attestationObject, 'base64url');
+    const decodedRoot = readCbor(encoded);
+    const root = decodedRoot.value;
+    if (decodedRoot.offset !== encoded.length) return null;
     if (!(root instanceof Map) || !['none', 'packed'].includes(root.get('fmt')) || !Buffer.isBuffer(root.get('authData'))) return null;
     const authData = root.get('authData');
     if (authData.length < 55 || (authData[32] & 0x40) === 0) return null;
@@ -27,8 +31,30 @@ export function parseAttestationObject(attestationObject) {
     const coseKey = readCbor(authData, credentialEnd).value;
     const decoded = coseKeyToPublicKey(coseKey);
     if (!decoded) return null;
-    return { format: root.get('fmt'), credentialId, coseKey, ...decoded };
+    const attStmt = root.get('attStmt');
+    if (!(attStmt instanceof Map)) return null;
+    return { format: root.get('fmt'), credentialId, coseKey, authData, attStmt, ...decoded };
   } catch { return null; }
+}
+
+export function verifyPackedAttestation({ parsed, clientDataJSON } = {}) {
+  if (!parsed || parsed.format !== 'packed' || !parsed.authData || !parsed.attStmt || !clientDataJSON) return false;
+  try {
+    const alg = parsed.attStmt.get('alg');
+    const signature = parsed.attStmt.get('sig');
+    if (!Number.isInteger(alg) || !Buffer.isBuffer(signature)) return false;
+    const clientData = Buffer.from(clientDataJSON, 'base64url');
+    const signedData = Buffer.concat([parsed.authData, crypto.createHash('sha256').update(clientData).digest()]);
+    let publicKey = parsed.publicKey;
+    const x5c = parsed.attStmt.get('x5c');
+    if (x5c !== undefined) {
+      if (!Array.isArray(x5c) || x5c.length === 0 || !x5c.every((item) => Buffer.isBuffer(item))) return false;
+      publicKey = new crypto.X509Certificate(x5c[0]).publicKey;
+    }
+    const algorithm = alg === -8 ? null : alg === -7 ? 'sha256' : null;
+    if (algorithm === null && alg !== -8) return false;
+    return crypto.verify(algorithm, signedData, publicKey, signature);
+  } catch { return false; }
 }
 
 export function coseKeyToPublicKey(coseKey) {

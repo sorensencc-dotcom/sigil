@@ -19,9 +19,11 @@ test('migration and repository persist an envelope in live PostgreSQL', { skip: 
     task: `task_live_${suffix}`, idempotency: `send_live_${suffix}`
   };
 
-  const migrationPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations/001_initial.sql');
+  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
   await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
-  await pool.query(await fs.readFile(migrationPath, 'utf8'));
+  for (const file of ['001_initial.sql', '002_delivery_acknowledgement_idempotency.sql', '003_plugin_connector_auth.sql', '004_security_hardening.sql']) {
+    await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
+  }
 
   await pool.query(`
     INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'active', NOW());
@@ -45,7 +47,7 @@ test('migration and repository persist an envelope in live PostgreSQL', { skip: 
   const row = await new PostgresRepository({ pool }).persistAcceptedEnvelope({
     envelope, canonical_bytes: Buffer.from(`{"message_id":"${ids.message}"}`), action_hash: 'sha256:live'
   });
-  assert.deepEqual(row, { message_id: ids.message });
+  assert.deepEqual(row, { message_id: ids.message, duplicate: false });
 
   const persisted = await pool.query(
     'SELECT message_id, envelope_status, sender_endpoint_id, recipient_endpoint_id, canonical_bytes, action_hash FROM envelopes WHERE message_id = $1',
@@ -103,4 +105,119 @@ test('migration and repository persist an envelope in live PostgreSQL', { skip: 
   }));
   const rolledBack = await pool.query('SELECT 1 FROM envelopes WHERE message_id = $1', [`rollback_${suffix}`]);
   assert.equal(rolledBack.rowCount, 0);
+});
+
+test('concurrent duplicate envelope submissions race safely to exactly one acceptance', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const ids = {
+    human: `usr_${suffix}`, codex: `ep_codex_${suffix}`, claude: `ep_claude_${suffix}`,
+    key: `key_${suffix}`, conversation: `conv_${suffix}`, idempotency: `send_race_${suffix}`
+  };
+  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  for (const file of ['001_initial.sql', '002_delivery_acknowledgement_idempotency.sql', '003_plugin_connector_auth.sql', '004_security_hardening.sql']) {
+    await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
+  }
+  await pool.query(`
+    INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
+      VALUES ('${ids.codex}', '${ids.human}', 'codex', 'install_codex_${suffix}', 'Codex', 'active', NOW()),
+             ('${ids.claude}', '${ids.human}', 'claude', 'install_claude_${suffix}', 'Claude', 'active', NOW());
+    INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
+      VALUES ('${ids.key}', '${ids.codex}', 'Ed25519', decode('00', 'hex'), 'active', NOW());
+    INSERT INTO conversations (conversation_id, kind, created_by, created_at)
+      VALUES ('${ids.conversation}', 'direct', '${ids.human}', NOW());
+  `);
+
+  const baseEnvelope = {
+    conversation_id: ids.conversation, protocol: 'sigil/1', message_type: 'task.request',
+    sender: { endpoint_id: ids.codex, owner_id: ids.human }, recipient: { endpoint_id: ids.claude },
+    body: { task_id: `task_race_${suffix}` }, context_refs: [], capabilities: [], correlation_id: null,
+    idempotency_key: ids.idempotency, expires_at: '2030-01-01T00:00:00Z', created_at: '2029-12-31T12:00:00Z',
+    signature: { algorithm: 'Ed25519', key_id: ids.key, value: 'sig' }
+  };
+  // Two racers submit the same logical request (same idempotency key) with
+  // distinct message IDs, simulating a client that regenerates message_id on
+  // retry. Real overlapping transactions, not a mock.
+  const racers = [1, 2].map((n) => ({ ...baseEnvelope, message_id: `msg_race_${n}_${suffix}` }));
+  const results = await Promise.all(racers.map((envelope) => new PostgresRepository({ pool }).persistAcceptedEnvelope({
+    envelope, canonical_bytes: Buffer.from(`{"n":${envelope.message_id}}`), action_hash: `sha256:race_${envelope.message_id}`
+  })));
+
+  const winners = results.filter((r) => r.duplicate === false);
+  const losers = results.filter((r) => r.duplicate === true);
+  assert.equal(winners.length, 1, JSON.stringify(results));
+  assert.equal(losers.length, 1, JSON.stringify(results));
+  assert.equal(losers[0].message_id, winners[0].message_id);
+
+  const rows = await pool.query('SELECT message_id FROM envelopes WHERE conversation_id = $1', [ids.conversation]);
+  assert.equal(rows.rowCount, 1);
+  assert.equal(rows.rows[0].message_id, winners[0].message_id);
+  const keyRows = await pool.query('SELECT message_id FROM idempotency_keys WHERE idempotency_key = $1', [ids.idempotency]);
+  assert.equal(keyRows.rowCount, 1);
+});
+
+test('concurrent duplicate ack requests race safely to exactly one acknowledgement, and survive a fresh connection', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const ids = {
+    human: `usr_${suffix}`, codex: `ep_codex_${suffix}`, claude: `ep_claude_${suffix}`, other: `ep_other_${suffix}`,
+    key: `key_${suffix}`, conversation: `conv_${suffix}`, message: `msg_ack_race_${suffix}`, delivery: `del_ack_race_${suffix}`
+  };
+  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  for (const file of ['001_initial.sql', '002_delivery_acknowledgement_idempotency.sql', '003_plugin_connector_auth.sql', '004_security_hardening.sql']) {
+    await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
+  }
+  await pool.query(`
+    INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
+      VALUES ('${ids.codex}', '${ids.human}', 'codex', 'install_codex_${suffix}', 'Codex', 'active', NOW()),
+             ('${ids.claude}', '${ids.human}', 'claude', 'install_claude_${suffix}', 'Claude', 'active', NOW()),
+             ('${ids.other}', '${ids.human}', 'claude', 'install_other_${suffix}', 'Other', 'active', NOW());
+    INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
+      VALUES ('${ids.key}', '${ids.codex}', 'Ed25519', decode('00', 'hex'), 'active', NOW());
+    INSERT INTO conversations (conversation_id, kind, created_by, created_at)
+      VALUES ('${ids.conversation}', 'direct', '${ids.human}', NOW());
+    INSERT INTO envelopes (message_id, conversation_id, protocol, message_type, sender_endpoint_id, sender_owner_id,
+                           recipient_endpoint_id, body, context_refs, capabilities, idempotency_key, expires_at,
+                           created_at, signature_algorithm, signature_key_id, signature_value, canonical_bytes)
+      VALUES ('${ids.message}', '${ids.conversation}', 'sigil/1', 'task.request', '${ids.codex}', '${ids.human}',
+              '${ids.claude}', '{}', '[]', '{}', 'send_${suffix}', '2030-01-01T00:00:00Z', '2029-12-31T12:00:00Z',
+              'Ed25519', '${ids.key}', 'sig', decode('00', 'hex'));
+    INSERT INTO deliveries (delivery_id, message_id, recipient_endpoint_id, state, attempts, queued_at, updated_at, next_attempt_at)
+      VALUES ('${ids.delivery}', '${ids.message}', '${ids.claude}', 'delivered', 0, NOW(), NOW(), NOW());
+  `);
+
+  // Ten concurrent acks for the same delivery from the rightful endpoint:
+  // real overlapping transactions racing the same PK insert.
+  const attempts = Array.from({ length: 10 }, () => new PostgresRepository({ pool }).acknowledgeDelivery({ deliveryId: ids.delivery, endpointId: ids.claude, now: new Date('2029-12-31T12:00:00Z') }));
+  const results = await Promise.all(attempts);
+  assert.equal(results.filter((r) => r.duplicate === false).length, 1, JSON.stringify(results));
+  assert.equal(results.filter((r) => r.duplicate === true).length, 9, JSON.stringify(results));
+
+  const deliveryRow = await pool.query('SELECT state FROM deliveries WHERE delivery_id = $1', [ids.delivery]);
+  assert.equal(deliveryRow.rows[0].state, 'acknowledged');
+  const receiptRows = await pool.query('SELECT endpoint_id FROM delivery_acknowledgements WHERE delivery_id = $1', [ids.delivery]);
+  assert.equal(receiptRows.rowCount, 1);
+  assert.equal(receiptRows.rows[0].endpoint_id, ids.claude);
+
+  // A conflicting ack from a different endpoint must fail, not silently win.
+  await assert.rejects(
+    () => new PostgresRepository({ pool }).acknowledgeDelivery({ deliveryId: ids.delivery, endpointId: ids.other, now: new Date('2029-12-31T12:01:00Z') }),
+    { code: 'DELIVERY_UNAVAILABLE' }
+  );
+
+  // Restart safety: a brand-new pool/connection (simulating a fresh relay
+  // process) still sees the persisted receipt and replays idempotently.
+  const freshPool = new pg.Pool({ connectionString });
+  try {
+    const replay = await new PostgresRepository({ pool: freshPool }).acknowledgeDelivery({ deliveryId: ids.delivery, endpointId: ids.claude, now: new Date('2029-12-31T12:02:00Z') });
+    assert.equal(replay.duplicate, true);
+  } finally {
+    await freshPool.end();
+  }
 });
