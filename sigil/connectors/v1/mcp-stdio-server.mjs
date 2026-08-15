@@ -22,7 +22,9 @@ export function createMcpHandler(runtime) {
       const tool = TOOLS.find(([name]) => name === message.params?.name);
       if (!tool) return error(message.id, -32602, 'Unknown Sigil tool');
       if (typeof runtime[tool[2]] !== 'function') return error(message.id, -32001, `${tool[2]} is unavailable for ${runtime.runtime}`);
-      try { return reply(message.id, { content: [{ type: 'text', text: JSON.stringify(await runtime[tool[2]](message.params?.arguments ?? {})) }] }); }
+      const args = message.params?.arguments ?? {};
+      const input = tool[2] === 'checkInbox' ? (args.since ?? '') : tool[2] === 'getResult' ? (args.task_id ?? args) : args;
+      try { return reply(message.id, { content: [{ type: 'text', text: JSON.stringify(await runtime[tool[2]](input)) }] }); }
       catch (cause) { return error(message.id, -32000, cause.message); }
     }
     if (message.id !== undefined) return error(message.id, -32601, 'Method not found');

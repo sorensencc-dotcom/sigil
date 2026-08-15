@@ -42,6 +42,8 @@ Remove-Item Env:SIGIL_TEST_DATABASE_URL
 
 The live gate applies migrations `001`–`004` and runs schema-resetting suites sequentially. It covers migration constraints, durable approvals and audit transactions, identity/session/grant persistence, envelope idempotency, and acknowledgement races.
 
+The live end-to-end receipt is separate from that gate. `node sigil/scripts/live-claude-worker-receipt.mjs` verifies real Codex-signed HTTP submission, MCP dispatch, connector HTTP processing, a real Claude worker subprocess, and result-envelope read-back. Its persistence layer is intentionally in-memory, so it does not replace the PostgreSQL gate or prove restart durability.
+
 ## Host MCP integration
 
 The shared MCP bridge is `sigil/connectors/v1/mcp-stdio-server.mjs`. It exposes only these tools:
@@ -82,6 +84,8 @@ $env:SIGIL_CLAUDE_PROCESS_ARGS = '["C:\\path\\to\\claude-worker.mjs"]'
 The worker receives one JSON task on stdin and must emit one JSON result on stdout. Exit zero on success; exit nonzero on failure. Logs belong on stderr. The adapter enforces a 30-second timeout and 1 MiB combined output limit, and rejects invalid JSON or failed processes.
 
 Without `SIGIL_CLAUDE_PROCESS_COMMAND`, Claude processing fails closed with `PROCESSING_UNAVAILABLE`.
+
+The included worker attempts the Anthropic API only when `SIGIL_WORKER_ENABLE_LIVE_API=1`. If the API is unavailable, including billing failure, it records the error and performs local fallback processing. This fallback proves the subprocess contract, not model output. No API key is required for the default local path.
 
 ## Capability boundary
 

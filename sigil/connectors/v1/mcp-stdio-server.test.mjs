@@ -19,3 +19,15 @@ test('stdio MCP handler rejects unavailable runtime operations', async () => {
   try { await handler({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'sigil_send_task', arguments: {} } }); } finally { process.stdout.write = original; }
   assert.equal(writes[0].error.code, -32001);
 });
+
+test('stdio MCP handler unwraps scalar inbox and result arguments', async () => {
+  const calls = [];
+  const handler = createMcpHandler({ runtime: 'codex', checkInbox: async (since) => { calls.push(['inbox', since]); return { items: [] }; }, getResult: async (taskId) => { calls.push(['result', taskId]); return { taskId }; } });
+  const original = process.stdout.write;
+  process.stdout.write = () => true;
+  try {
+    await handler({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'sigil_check_inbox', arguments: { since: 'cursor-1' } } });
+    await handler({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'sigil_get_result', arguments: { task_id: 'task-1' } } });
+  } finally { process.stdout.write = original; }
+  assert.deepEqual(calls, [['inbox', 'cursor-1'], ['result', 'task-1']]);
+});
