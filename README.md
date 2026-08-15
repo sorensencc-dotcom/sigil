@@ -4,7 +4,7 @@ Governed task relay and host connector for Codex and Claude runtimes.
 
 Start here: [Getting started](docs/getting-started.md). It covers installation, environment configuration, host registration, verification, and troubleshooting.
 
-For another machine, install directly from GitHub with `npm install --global github:sorensencc-dotcom/sigil`; no local `C:\dev\sigil-repo` checkout is required.
+For another machine, install directly from GitHub with `npm install --global github:sorensencc-dotcom/sigil`; no local `C:\dev\sigil-repo` checkout is required. The package is not currently published to npm.
 
 Claude task execution supports either an Anthropic API key or an authenticated Claude Code subscription/login; see [the worker setup](docs/getting-started.md#claude-task-worker).
 

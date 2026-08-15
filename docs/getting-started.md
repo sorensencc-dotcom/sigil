@@ -31,13 +31,7 @@ npm install --global github:sorensencc-dotcom/sigil
 sigil --help
 ```
 
-If your organization publishes `@sigil/connector` to npm, the equivalent registry install is:
-
-```powershell
-npm install --global @sigil/connector
-```
-
-The GitHub form is the supported distribution path until an npm release is published. Do not use `npm install --global .` unless your current directory is the Sigil checkout.
+The package is not currently published to the public npm registry, so `npm install --global @sigil/connector` will return `E404`. The GitHub form is the supported distribution path for now. Do not use `npm install --global .` unless your current directory is the Sigil checkout.
 
 ## Configure the connector environment
 
