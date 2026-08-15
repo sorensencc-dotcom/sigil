@@ -22,6 +22,23 @@ npm test
 
 The package has no install-time network dependency. `npm install` installs the CLI and validates package metadata.
 
+## Install on another machine
+
+The repository does not need to exist on the target machine. Install the published GitHub package directly:
+
+```powershell
+npm install --global github:sorensencc-dotcom/sigil
+sigil --help
+```
+
+If your organization publishes `@sigil/connector` to npm, the equivalent registry install is:
+
+```powershell
+npm install --global @sigil/connector
+```
+
+The GitHub form is the supported distribution path until an npm release is published. Do not use `npm install --global .` unless your current directory is the Sigil checkout.
+
 ## Configure the connector environment
 
 Set these values in the shell that launches the host. Keep tokens out of Git and out of `.mcp.json`:
@@ -65,6 +82,19 @@ The process speaks MCP JSON-RPC over stdin/stdout. Do not write logs to stdout; 
 ### Claude
 
 The repository includes `.mcp.json`. Open the repository in Claude Code and use that configuration. Its variable references resolve from the host environment above.
+
+For a machine using the globally installed CLI, add this server to the host’s MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "sigil": {
+      "command": "sigil",
+      "args": ["mcp"]
+    }
+  }
+}
+```
 
 ### Codex
 
