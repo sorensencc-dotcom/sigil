@@ -70,6 +70,17 @@ $env:SIGIL_CLAUDE_PROCESS_ARGS = '["C:\\path\\to\\sigil\\sigil\\scripts\\claude-
 
 The CLI worker invokes `claude -p ... --output-format json`. Claude Code handles subscription or Console authentication; Sigil does not copy or manage those credentials. An API key is not required on this path.
 
+Codex/ChatGPT subscription or Codex login works the same way:
+
+```powershell
+$env:SIGIL_RUNTIME = "codex"
+$env:SIGIL_CLAUDE_PROCESS_COMMAND = "node"
+$env:SIGIL_CLAUDE_PROCESS_ARGS = '["C:\\path\\to\\sigil\\sigil\\scripts\\codex-cli-worker.mjs"]'
+codex login
+```
+
+The Codex worker invokes `codex exec --ephemeral --skip-git-repo-check ...` using the existing Codex/ChatGPT authentication. No OpenAI API key is required. The environment variable names retain the shared Claude-process adapter contract; a later release can add runtime-specific aliases without changing the wire protocol.
+
 Without the Claude worker setting, task processing fails closed. The worker receives one JSON task on stdin and returns one JSON result on stdout.
 
 ## Start the MCP bridge

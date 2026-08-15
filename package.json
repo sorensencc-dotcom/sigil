@@ -14,6 +14,7 @@
     "sigil/migrations/*.sql",
     "sigil/scripts/claude-worker.mjs",
     "sigil/scripts/claude-cli-worker.mjs",
+    "sigil/scripts/codex-cli-worker.mjs",
     "README.md",
     "docs/"
   ],
