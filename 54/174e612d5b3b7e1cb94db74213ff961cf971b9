@@ -1,0 +1,25 @@
+README.md
+  s_4d5378553c6b81::t_d68d3b0ba58770 9-10
+docs/getting-started.md
+  s_4d5378553c6b81::t_d68d3b0ba58770 61-72
+sigil/scripts/claude-cli-worker.mjs
+  s_4d5378553c6b81::t_d68d3b0ba58770 1-23
+package.json
+  s_4d5378553c6b81::t_8008c682a9f4c5 16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "54174e612d5b3b7e1cb94db74213ff961cf971b9",
+  "prompts": {},
+  "sessions": {
+    "s_4d5378553c6b81": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a005b0-ab11-7f52-989d-e699d42e7a83",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
