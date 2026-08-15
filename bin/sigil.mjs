@@ -47,4 +47,9 @@ if (command !== 'mcp') {
 }
 
 const { runtimeFromEnvironment, startMcpStdioServer } = await import('../sigil/connectors/v1/mcp-stdio-server.mjs');
-startMcpStdioServer(runtimeFromEnvironment());
+try {
+  startMcpStdioServer(runtimeFromEnvironment());
+} catch (error) {
+  console.error(`Unable to start Sigil MCP: ${error.message}\n\nSet the connector environment in this PowerShell session, then retry:\n  $env:SIGIL_CONNECTOR_URL = "http://127.0.0.1:8787"\n  $env:SIGIL_CONNECTOR_TOKEN = "<endpoint-token>"\n  sigil mcp`);
+  process.exit(1);
+}
