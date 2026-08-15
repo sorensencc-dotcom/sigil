@@ -58,6 +58,18 @@ $env:SIGIL_CLAUDE_PROCESS_COMMAND = "node"
 $env:SIGIL_CLAUDE_PROCESS_ARGS = '["C:\\path\\to\\claude-worker.mjs"]'
 ```
 
+To use an existing Claude Code subscription or Claude Code login instead of an Anthropic API key, install and authenticate Claude Code, then use the included CLI worker:
+
+```powershell
+npm install --global @anthropic-ai/claude-code
+claude
+$env:SIGIL_RUNTIME = "claude"
+$env:SIGIL_CLAUDE_PROCESS_COMMAND = "node"
+$env:SIGIL_CLAUDE_PROCESS_ARGS = '["C:\\path\\to\\sigil\\sigil\\scripts\\claude-cli-worker.mjs"]'
+```
+
+The CLI worker invokes `claude -p ... --output-format json`. Claude Code handles subscription or Console authentication; Sigil does not copy or manage those credentials. An API key is not required on this path.
+
 Without the Claude worker setting, task processing fails closed. The worker receives one JSON task on stdin and returns one JSON result on stdout.
 
 ## Start the MCP bridge

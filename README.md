@@ -6,6 +6,8 @@ Start here: [Getting started](docs/getting-started.md). It covers installation, 
 
 For another machine, install directly from GitHub with `npm install --global github:sorensencc-dotcom/sigil`; no local `C:\dev\sigil-repo` checkout is required.
 
+Claude task execution supports either an Anthropic API key or an authenticated Claude Code subscription/login; see [the worker setup](docs/getting-started.md#claude-task-worker).
+
 Sigil keeps host capabilities behind an authenticated local connector, validates signed envelopes before durable idempotency handling, and records delivery, approval, and processing state in PostgreSQL.
 
 ## Current status

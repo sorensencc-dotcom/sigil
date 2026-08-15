@@ -13,6 +13,7 @@
     "sigil/contracts/v1/*.json",
     "sigil/migrations/*.sql",
     "sigil/scripts/claude-worker.mjs",
+    "sigil/scripts/claude-cli-worker.mjs",
     "README.md",
     "docs/"
   ],
