@@ -39,3 +39,25 @@ test('rejects conflicting idempotency retry', () => {
   const idempotency = new Map([[key, { canonical_hash: 'different' }]]);
   assert.throws(() => validateEnvelope(candidate, { ...options, idempotency }), (error) => error.code === 'DUPLICATE_MESSAGE');
 });
+
+test('accepts a retiring key during grace and rejects it after retirement', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const old = { key_id: 'key_old', public_key: publicKey, status: 'retiring', valid_from: '2026-08-01T00:00:00Z', valid_until: '2026-08-20T00:00:00Z' };
+  const candidate = { ...base, created_at: '2026-08-15T00:00:00Z', expires_at: '2026-08-16T00:00:00Z', signature: { ...base.signature, key_id: old.key_id } };
+  candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
+  const registered = new Map([['ep_codex', { ...endpoint, keys: [old] }]]);
+  assert.equal(validateEnvelope(candidate, { ...options, registered, now: new Date('2026-08-15T00:00:00Z') }).accepted, true);
+  assert.throws(() => validateEnvelope(candidate, { ...options, registered, now: new Date('2026-08-20T00:00:00Z') }), (error) => error.code === 'INVALID_SIGNATURE');
+});
+
+test('requires an authorizer to approve broadcast membership', () => {
+  const candidate = { ...base, recipient: undefined, signature: { ...base.signature }, broadcast_scope: { kind: 'conversation_members', conversation_id: base.conversation_id } };
+  candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
+  assert.throws(() => validateEnvelope(candidate, { ...options, broadcastAuthorizer: () => false }), (error) => error.code === 'ROUTE_NOT_AUTHORIZED');
+  assert.equal(validateEnvelope(candidate, { ...options, broadcastAuthorizer: () => true }).accepted, true);
+});
+
+test('rejects high-risk delivery without an approved action hash', () => {
+  assert.throws(() => validateEnvelope(base, { ...options, requiresApproval: () => true }), (error) => error.code === 'APPROVAL_REQUIRED');
+  assert.equal(validateEnvelope(base, { ...options, requiresApproval: () => true, approvedActionHashes: new Set([`sha256:${crypto.createHash('sha256').update(signedBytes(base)).digest('hex')}`]) }).accepted, true);
+});

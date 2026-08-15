@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { validateConnectorRequest } from './connector-contract.mjs';
 import { verifyPluginManifest } from './plugin-manifest.mjs';
 import { capabilityForOperation } from './capability-policy.mjs';
+import { resolveContext } from './context-resolver.mjs';
 
 const routes = new Map([
   ['POST /v1/tasks', 'sendTask'], ['GET /v1/inbox', 'checkInbox'], ['GET /v1/results', 'getResult'],
@@ -20,25 +21,26 @@ function reply(response, status, body) {
   response.writeHead(status, { 'content-type': 'application/json' }); response.end(JSON.stringify(body));
 }
 
-export function createConnectorServer({ connector, token, manifest, publisherKeys, revokedPublisherKeys = new Set(), allowedCallers = [], maxInFlight = 32, maxRequestsPerWindow = 120, rateWindowMs = 60_000 } = {}) {
+export function createConnectorServer({ connector, token, manifest, publisherKeys, revokedPublisherKeys = new Set(), allowedCallers = [], maxInFlight = 32, maxRequestsPerWindow = 120, rateWindowMs = 60_000, contextRoot, contextGrants = [], resolveCaller } = {}) {
   if (!connector || !token) throw new Error('connector and token are required');
   if (!Number.isInteger(maxInFlight) || maxInFlight < 1 || !Number.isInteger(maxRequestsPerWindow) || maxRequestsPerWindow < 1 || !Number.isInteger(rateWindowMs) || rateWindowMs < 1) throw new Error('invalid connector abuse limits');
   const verifiedManifest = manifest ? verifyPluginManifest(manifest, { publisherKeys, revokedPublisherKeys }) : null;
   const callerAllowList = new Set(allowedCallers);
   const idempotency = new Map();
   let inFlight = 0;
-  let windowStarted = Date.now();
-  let windowRequests = 0;
+  const callerWindows = new Map();
   const server = http.createServer(async (request, response) => {
     const expected = `Bearer ${token}`;
     if (request.headers.authorization !== expected) return reply(response, 401, { code: 'UNAUTHENTICATED', message: 'Authentication required' });
     const now = Date.now();
-    if (now - windowStarted >= rateWindowMs) { windowStarted = now; windowRequests = 0; }
+    const caller = resolveCaller ? await resolveCaller(request) : token;
+    const window = callerWindows.get(caller) ?? { started: now, requests: 0 };
+    if (now - window.started >= rateWindowMs) { window.started = now; window.requests = 0; }
     if (inFlight >= maxInFlight) return reply(response, 503, { code: 'BACKPRESSURE', message: 'Connector capacity is temporarily exhausted' });
-    if (windowRequests >= maxRequestsPerWindow) return reply(response, 429, { code: 'RATE_LIMITED', message: 'Connector request rate limit exceeded' });
-    windowRequests += 1; inFlight += 1;
+    if (window.requests >= maxRequestsPerWindow) return reply(response, 429, { code: 'RATE_LIMITED', message: 'Connector request rate limit exceeded' });
+    window.requests += 1; callerWindows.set(caller, window); if (callerWindows.size > 1000) for (const [key, value] of callerWindows) { if (now - value.started >= rateWindowMs) callerWindows.delete(key); } inFlight += 1;
     const operation = routes.get(`${request.method} ${new URL(request.url, 'http://localhost').pathname}`);
-    if (!operation || typeof connector[operation] !== 'function') return reply(response, 404, { code: 'CONTEXT_NOT_FOUND', message: 'Route not found' });
+    if (!operation || (operation !== 'resolveContext' || !contextRoot) && typeof connector[operation] !== 'function') return reply(response, 404, { code: 'CONTEXT_NOT_FOUND', message: 'Route not found' });
     try {
       const url = new URL(request.url, 'http://localhost');
       let input = {};
@@ -57,7 +59,9 @@ export function createConnectorServer({ connector, token, manifest, publisherKey
         if (prior && prior.fingerprint !== fingerprint) throw Object.assign(new Error('Idempotency key conflicts with prior request'), { code: 'IDEMPOTENCY_CONFLICT' });
         if (prior) return reply(response, prior.status, prior.body);
       }
-      const result = operation === 'checkInbox' ? await connector.checkInbox(input) : operation === 'getResult' ? await connector.getResult(input.task_id ?? input) : await connector[operation](input);
+      const result = operation === 'resolveContext' && contextRoot
+        ? await resolveContext(input, { root: contextRoot, grants: contextGrants, caller })
+        : operation === 'checkInbox' ? await connector.checkInbox(input) : operation === 'getResult' ? await connector.getResult(input.task_id ?? input) : await connector[operation](input);
       const body = { code: 'OK', result };
       if (idempotencyKey) idempotency.set(idempotencyKey, { fingerprint, status: 200, body });
       return reply(response, 200, body);

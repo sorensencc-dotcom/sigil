@@ -4,6 +4,9 @@ import http from 'node:http';
 import { createConnectorServer } from './connector-server.mjs';
 import crypto from 'node:crypto';
 import { canonicalManifest } from './plugin-manifest.mjs';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 function request(port, token, { method, path, body, headers = {}, metadata = true } = {}) {
   const contractHeaders = metadata ? { 'x-sigil-request-id': 'request-1234', 'x-sigil-contract': 'sigil.connector/v1', 'x-sigil-caller': 'test-host', 'x-sigil-capability-scope': 'sigil.task/*' } : {};
@@ -70,6 +73,15 @@ test('connector server applies rate and in-flight capacity limits', async () => 
   assert.equal(capacity.status, 503); assert.equal(capacity.body.code, 'BACKPRESSURE'); assert.equal(limited.status, 429); assert.equal(limited.body.code, 'RATE_LIMITED');
 });
 
+test('connector rate limits are isolated per caller', async () => {
+  let calls = 0;
+  const app = createConnectorServer({ connector: { async sendTask() { calls += 1; return { accepted: true }; } }, token: 'local-secret', resolveCaller: (request) => request.headers['x-sigil-caller'], maxRequestsPerWindow: 1, rateWindowMs: 60_000 }); await app.listen(); const port = app.address().port;
+  const first = await request(port, 'local-secret', { method: 'POST', path: '/v1/tasks', body: {}, headers: { 'x-sigil-caller': 'codex-host' } });
+  const throttled = await request(port, 'local-secret', { method: 'POST', path: '/v1/tasks', body: {}, headers: { 'x-sigil-caller': 'codex-host' } });
+  const isolated = await request(port, 'local-secret', { method: 'POST', path: '/v1/tasks', body: {}, headers: { 'x-sigil-caller': 'claude-host' } }); await app.close();
+  assert.equal(first.status, 200); assert.equal(throttled.status, 429); assert.equal(isolated.status, 200); assert.equal(calls, 2);
+});
+
 test('connector server enforces verified package identity and caller allow-list', async () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const manifest = { package_id: 'sigil.codex.connector', contract: 'sigil.connector/v1', host: 'codex', permissions: ['sigil.task/*'], executable_digest: 'a'.repeat(64), publisher_key_id: 'publisher-1' };
@@ -79,4 +91,14 @@ test('connector server enforces verified package identity and caller allow-list'
   const deniedPackage = await request(port, 'local-secret', { method: 'POST', path: '/v1/tasks', body: {}, headers: { 'x-sigil-caller': 'codex-host', 'x-sigil-package-id': 'sigil.claude.connector' } });
   const allowed = await request(port, 'local-secret', { method: 'POST', path: '/v1/tasks', body: {}, headers: { 'x-sigil-caller': 'codex-host', 'x-sigil-package-id': manifest.package_id } }); await app.close();
   assert.equal(deniedCaller.status, 403); assert.equal(deniedCaller.body.code, 'CALLER_NOT_ALLOWED'); assert.equal(deniedPackage.status, 403); assert.equal(deniedPackage.body.code, 'PACKAGE_ID_MISMATCH'); assert.equal(allowed.status, 200);
+});
+
+test('connector HTTP context route enforces grant, path, and integrity boundaries', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sigil-http-context-')); await fs.mkdir(path.join(root, 'src')); await fs.writeFile(path.join(root, 'src/a.txt'), 'safe');
+  const integrity = `sha256:${crypto.createHash('sha256').update('safe').digest('hex')}`;
+  const app = createConnectorServer({ connector: {}, token: 'local-secret', resolveCaller: () => 'ep_claude', contextRoot: root, contextGrants: [{ subject: 'ep_claude', capability: 'sigil.core/read_shared_context', scope: 'scope:project/p1', expires_at: '2030-01-01T00:00:00Z' }] }); await app.listen(); const port = app.address().port;
+  const base = { ref_id: 'ctx_1', kind: 'file_bundle', access: 'explicit_grant', subject: 'ep_claude', scope: 'scope:project/p1/context/r1', paths: ['src/a.txt'], integrity };
+  const allowed = await request(port, 'local-secret', { method: 'POST', path: '/v1/context', body: base, headers: { 'x-sigil-capability-scope': 'sigil.core/read_shared_context' } });
+  const denied = await request(port, 'local-secret', { method: 'POST', path: '/v1/context', body: { ...base, paths: ['../secret'] }, headers: { 'x-sigil-capability-scope': 'sigil.core/read_shared_context' } }); await app.close();
+  assert.equal(allowed.status, 200); assert.equal(denied.status, 400); assert.equal(denied.body.code, 'CONTEXT_PATH_DENIED');
 });
