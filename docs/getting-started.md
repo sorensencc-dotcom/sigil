@@ -35,6 +35,14 @@ The package is not currently published to the public npm registry, so `npm insta
 
 ## Configure the connector environment
 
+Initialize a local Codex endpoint configuration:
+
+```powershell
+sigil init codex --owner usr_soren
+```
+
+This creates `%USERPROFILE%\.sigil\config.json` with a generated endpoint identity and token. The endpoint still must be registered with a running Sigil relay; local initialization alone does not make the relay trust it.
+
 Set these values in the shell that launches the host. Keep tokens out of Git and out of `.mcp.json`:
 
 ```powershell

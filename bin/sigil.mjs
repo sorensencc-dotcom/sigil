@@ -1,7 +1,27 @@
 #!/usr/bin/env node
 
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 const command = process.argv[2];
 const claudeConfig = JSON.stringify({ mcpServers: { sigil: { command: 'sigil', args: ['mcp'] } } }, null, 2);
+const configPath = path.join(os.homedir(), '.sigil', 'config.json');
+
+function loadConfig() {
+  try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch { return {}; }
+}
+
+function applyConfig(config) {
+  for (const [key, value] of Object.entries({
+    SIGIL_CONNECTOR_URL: config.connector_url,
+    SIGIL_CONNECTOR_TOKEN: config.connector_token,
+    SIGIL_RUNTIME: config.runtime,
+    SIGIL_PACKAGE_PERMISSIONS: config.package_permissions?.join(','),
+    SIGIL_CONNECTOR_GRANTS: config.connector_grants?.join(',')
+  })) if (!process.env[key] && value) process.env[key] = value;
+}
 
 if (command === '--help' || command === '-h' || !command) {
   console.log(`Sigil connector CLI
@@ -13,6 +33,8 @@ Usage:
                          Register Sigil in Codex MCP configuration
   sigil configure --claude
                          Print Claude MCP configuration JSON
+  sigil init codex --owner <owner-id>
+                         Create local Codex endpoint configuration
   sigil --help           Show this help
 
 Required environment for "sigil mcp":
@@ -41,6 +63,24 @@ if (command === 'configure') {
   process.exit(0);
 }
 
+if (command === 'init') {
+  const runtime = process.argv[3];
+  const ownerIndex = process.argv.indexOf('--owner');
+  const owner = ownerIndex >= 0 ? process.argv[ownerIndex + 1] : null;
+  if (runtime !== 'codex' || !owner) { console.error('Usage: sigil init codex --owner <owner-id>'); process.exit(1); }
+  const config = {
+    version: 1, runtime, owner_id: owner, endpoint_id: `ep_${crypto.randomUUID()}`,
+    installation_id: `install_${crypto.randomUUID()}`, connector_url: 'http://127.0.0.1:8787',
+    connector_token: crypto.randomBytes(32).toString('base64url'),
+    package_permissions: ['sigil.task/*', 'sigil.approval/request', 'sigil.core/read_shared_context'],
+    connector_grants: ['sigil.task/*', 'sigil.approval/request', 'sigil.core/read_shared_context']
+  };
+  fs.mkdirSync(path.dirname(configPath), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  console.log(`Initialized ${runtime} endpoint for ${owner}.\nConfig: ${configPath}\n\nNext steps:\n  1. Register endpoint ${config.endpoint_id} with your Sigil relay.\n  2. Start the connector at ${config.connector_url}.\n  3. Run: sigil configure --codex\n  4. Run: sigil mcp`);
+  process.exit(0);
+}
+
 if (command !== 'mcp') {
   console.error(`Unknown command: ${command}. Run "sigil --help".`);
   process.exit(1);
@@ -48,6 +88,7 @@ if (command !== 'mcp') {
 
 const { runtimeFromEnvironment, startMcpStdioServer } = await import('../sigil/connectors/v1/mcp-stdio-server.mjs');
 try {
+  applyConfig(loadConfig());
   startMcpStdioServer(runtimeFromEnvironment());
 } catch (error) {
   console.error(`Unable to start Sigil MCP: ${error.message}\n\nSet the connector environment in this PowerShell session, then retry:\n  $env:SIGIL_CONNECTOR_URL = "http://127.0.0.1:8787"\n  $env:SIGIL_CONNECTOR_TOKEN = "<endpoint-token>"\n  sigil mcp`);
