@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "sigil": {
+      "command": "node",
+      "args": ["sigil/connectors/v1/mcp-stdio-server.mjs"],
+      "env": {
+        "SIGIL_RUNTIME": "claude",
+        "SIGIL_CONNECTOR_URL": "${SIGIL_CONNECTOR_URL}",
+        "SIGIL_CONNECTOR_TOKEN": "${SIGIL_CONNECTOR_TOKEN}",
+        "SIGIL_PACKAGE_PERMISSIONS": "${SIGIL_PACKAGE_PERMISSIONS}",
+        "SIGIL_CONNECTOR_GRANTS": "${SIGIL_CONNECTOR_GRANTS}"
+      }
+    }
+  }
+}
