@@ -2,6 +2,8 @@
 
 Governed task relay and host connector for Codex and Claude runtimes.
 
+Start here: [Getting started](docs/getting-started.md). It covers installation, environment configuration, host registration, verification, and troubleshooting.
+
 Sigil keeps host capabilities behind an authenticated local connector, validates signed envelopes before durable idempotency handling, and records delivery, approval, and processing state in PostgreSQL.
 
 ## Current status

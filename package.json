@@ -1,0 +1,43 @@
+{
+  "name": "@sigil/connector",
+  "version": "0.1.0",
+  "description": "Governed task relay connector for Codex and Claude hosts",
+  "type": "module",
+  "bin": {
+    "sigil": "bin/sigil.mjs"
+  },
+  "files": [
+    "bin/",
+    "sigil/connectors/v1/*.mjs",
+    "sigil/relay/v1/*.mjs",
+    "sigil/contracts/v1/*.json",
+    "sigil/migrations/*.sql",
+    "sigil/scripts/claude-worker.mjs",
+    "README.md",
+    "docs/"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test",
+    "test:live": "node sigil/scripts/live-db-tests.mjs",
+    "receipt:claude": "node sigil/scripts/live-claude-worker-receipt.mjs",
+    "pack:check": "npm pack --dry-run"
+  },
+  "license": "MIT",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sorensencc-dotcom/sigil.git"
+  },
+  "keywords": [],
+  "author": "",
+  "bugs": {
+    "url": "https://github.com/sorensencc-dotcom/sigil/issues"
+  },
+  "homepage": "https://github.com/sorensencc-dotcom/sigil#readme"
+}
