@@ -1,5 +1,6 @@
 import readline from 'node:readline';
 import { createCodexHostRuntime, createClaudeHostRuntime } from './host-runtimes.mjs';
+import { createClaudeProcessTask } from './claude-process-adapter.mjs';
 
 const TOOLS = [
   ['sigil_send_task', 'Send a signed task through Sigil.', 'sendTask'],
@@ -39,8 +40,8 @@ export function runtimeFromEnvironment(env = process.env, overrides = {}) {
   const common = { baseUrl: env.SIGIL_CONNECTOR_URL, token: env.SIGIL_CONNECTOR_TOKEN, packagePermissions: (env.SIGIL_PACKAGE_PERMISSIONS ?? '').split(',').filter(Boolean), connectorGrants: (env.SIGIL_CONNECTOR_GRANTS ?? '').split(',').filter(Boolean) };
   if (!common.baseUrl || !common.token) throw new Error('SIGIL_CONNECTOR_URL and SIGIL_CONNECTOR_TOKEN are required');
   if ((env.SIGIL_RUNTIME ?? 'codex') === 'claude') {
-    const processTask = overrides.processTask ?? (async () => {
-      throw Object.assign(new Error('Claude task processing is not configured; provide processTask to the host adapter'), { code: 'PROCESSING_UNAVAILABLE' });
+    const processTask = overrides.processTask ?? (env.SIGIL_CLAUDE_PROCESS_COMMAND ? createClaudeProcessTask({ command: env.SIGIL_CLAUDE_PROCESS_COMMAND, args: env.SIGIL_CLAUDE_PROCESS_ARGS ? JSON.parse(env.SIGIL_CLAUDE_PROCESS_ARGS) : [] }) : async () => {
+      throw Object.assign(new Error('Claude task processing is not configured; set SIGIL_CLAUDE_PROCESS_COMMAND'), { code: 'PROCESSING_UNAVAILABLE' });
     });
     return createClaudeHostRuntime({ ...common, ...overrides, processTask });
   }
