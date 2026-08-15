@@ -79,9 +79,17 @@ The process speaks MCP JSON-RPC over stdin/stdout. Do not write logs to stdout; 
 
 ## Register with hosts
 
+Installation does not silently modify host configuration. Run the explicit configure command after installation:
+
+```powershell
+sigil configure
+```
+
 ### Claude
 
 The repository includes `.mcp.json`. Open the repository in Claude Code and use that configuration. Its variable references resolve from the host environment above.
+
+For a globally installed CLI, run `sigil configure --claude` and copy the printed JSON into Claude’s MCP configuration.
 
 For a machine using the globally installed CLI, add this server to the host’s MCP configuration:
 
@@ -103,6 +111,12 @@ Register the same bridge with Codex:
 ```powershell
 codex mcp add sigil --env SIGIL_RUNTIME=codex -- sigil mcp
 codex mcp get sigil
+```
+
+Or let the CLI perform that registration:
+
+```powershell
+sigil configure --codex
 ```
 
 Do not pass token values to `codex mcp add`; let the MCP process inherit them from its environment.
