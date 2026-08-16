@@ -1,0 +1,22 @@
+sigil/cli/memory-repository.mjs
+  s_8dd1ad151f659e::t_787f28415e7905 84-85
+  s_8dd1ad151f659e::t_84cb6978abd020 7-15
+sigil/cli/memory-repository.test.mjs
+  s_8dd1ad151f659e::t_ad6b21405b7e45 42-61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "819b7e4a84d1a7ee7919c33ec326364437c7e861",
+  "prompts": {},
+  "sessions": {
+    "s_8dd1ad151f659e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "51061bde-6290-4632-b90c-09117e55b1be",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
