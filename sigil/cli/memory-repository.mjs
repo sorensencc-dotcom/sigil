@@ -4,6 +4,12 @@
 // only in this process -- restarting `sigil relay up` loses history.
 import { transitionDelivery } from '../relay/v1/delivery-state.mjs';
 
+const SEEDED_CAPABILITIES = new Set([
+  'sigil.core/read_shared_context', 'sigil.core/broadcast_message',
+  'sigil.task/submit', 'sigil.task/read_inbox', 'sigil.task/read_result', 'sigil.task/process', 'sigil.task/submit_result',
+  'sigil.approval/request'
+]);
+
 export function createMemoryRepository() {
   const envelopes = new Map();
   const deliveries = new Map();
@@ -68,6 +74,9 @@ export function createMemoryRepository() {
     async transitionDelivery(deliveryId, _endpointId, _target, { next }) {
       deliveries.set(deliveryId, next);
       return next;
+    },
+    async lookupCapabilityRegistration(capability) {
+      return SEEDED_CAPABILITIES.has(capability) ? { capability, namespace: capability.split('/')[0], risk_tier: 'standard' } : null;
     }
   };
 }

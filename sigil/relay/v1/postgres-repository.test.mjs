@@ -160,3 +160,21 @@ test('lookupAcceptedMessageId is scoped to (sender_endpoint_id, message_id), nev
   assert.deepEqual(calls[0].values, ['ep_codex', 'msg_1', 'accepted']);
   assert.deepEqual(result, { message_id: 'msg_1', idempotency_key: 'idempotency_1' });
 });
+
+test('lookupCapabilityRegistration returns the registered row for a known capability', async () => {
+  const calls = [];
+  const pool = { async query(text, values) { calls.push({ text, values }); return { rows: [{ capability: 'sigil.task/submit', namespace: 'sigil.task', risk_tier: 'standard' }] }; } };
+  const repository = new PostgresRepository({ pool });
+  const registration = await repository.lookupCapabilityRegistration('sigil.task/submit');
+  assert.ok(registration);
+  assert.equal(registration.capability, 'sigil.task/submit');
+  assert.equal(registration.namespace, 'sigil.task');
+  assert.equal(registration.risk_tier, 'standard');
+});
+
+test('lookupCapabilityRegistration returns null for an unregistered capability', async () => {
+  const pool = { calls: [], async connect() { throw new Error('should not open a transaction for a plain lookup'); }, async query(text, values) { this.calls.push({ text, values }); return { rows: [] }; } };
+  const repository = new PostgresRepository({ pool });
+  const registration = await repository.lookupCapabilityRegistration('made.up/capability');
+  assert.equal(registration, null);
+});

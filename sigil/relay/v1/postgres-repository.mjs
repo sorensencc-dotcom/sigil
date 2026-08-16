@@ -28,6 +28,10 @@ export class PostgresRepository {
     );
     return result.rows[0] ?? null;
   }
+  async lookupCapabilityRegistration(capability, client = this.pool) {
+    const result = await client.query('SELECT capability, namespace, risk_tier FROM capability_registry WHERE capability = $1', [capability]);
+    return result.rows[0] ?? null;
+  }
   async registerHumanCredential({ humanId, endpointId, credentialId, type = 'webauthn', publicKey, algorithm, coseKey, now = new Date() } = {}) {
     if (type !== 'webauthn' || !humanId || !endpointId || !credentialId || !publicKey) throw Object.assign(new Error('Endpoint-bound WebAuthn credential is required'), { code: 'INVALID_ATTESTATION' });
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
