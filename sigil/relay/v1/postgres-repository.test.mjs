@@ -149,3 +149,14 @@ test('repository registers WebAuthn credential for active human', async () => {
   const result = await new PostgresRepository({ pool }).registerHumanCredential({ humanId: 'usr_1', endpointId: 'ep_codex', credentialId: 'cred_1', publicKey: Buffer.from('key') });
   assert.equal(result.credential_id, 'cred_1'); assert.equal(calls.length, 1); assert.match(calls[0].text, /INSERT INTO human_credentials/);
 });
+
+test('lookupAcceptedMessageId is scoped to (sender_endpoint_id, message_id), never a bare message_id lookup', async () => {
+  const calls = [];
+  const pool = { async query(text, values) { calls.push({ text, values }); return { rows: [{ message_id: 'msg_1', idempotency_key: 'idempotency_1' }] }; } };
+  const result = await new PostgresRepository({ pool }).lookupAcceptedMessageId('ep_codex', 'msg_1');
+  assert.match(calls[0].text, /sender_endpoint_id\s*=\s*\$1/);
+  assert.match(calls[0].text, /message_id\s*=\s*\$2/);
+  assert.match(calls[0].text, /envelope_status\s*=\s*\$3/);
+  assert.deepEqual(calls[0].values, ['ep_codex', 'msg_1', 'accepted']);
+  assert.deepEqual(result, { message_id: 'msg_1', idempotency_key: 'idempotency_1' });
+});

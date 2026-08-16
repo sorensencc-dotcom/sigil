@@ -24,6 +24,14 @@ export function createMemoryRepository() {
       }
       return null;
     },
+    async lookupAcceptedMessageId(senderEndpointId, messageId) {
+      for (const row of envelopes.values()) {
+        if (row.envelope.sender.endpoint_id === senderEndpointId && row.envelope.message_id === messageId) {
+          return { message_id: row.envelope.message_id, idempotency_key: row.envelope.idempotency_key };
+        }
+      }
+      return null;
+    },
     async persistAcceptedEnvelope(row) {
       envelopes.set(row.message_id, row);
       idempotency.set(`${row.envelope.sender.endpoint_id}:${row.envelope.idempotency_key}`, { message_id: row.message_id, canonical_hash: row.canonical_hash });

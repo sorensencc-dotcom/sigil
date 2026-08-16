@@ -21,6 +21,13 @@ export class PostgresRepository {
     );
     return result.rows[0] ?? null;
   }
+  async lookupAcceptedMessageId(senderEndpointId, messageId, client = this.pool) {
+    const result = await client.query(
+      'SELECT message_id, idempotency_key FROM envelopes WHERE sender_endpoint_id = $1 AND message_id = $2 AND envelope_status = $3',
+      [senderEndpointId, messageId, 'accepted']
+    );
+    return result.rows[0] ?? null;
+  }
   async registerHumanCredential({ humanId, endpointId, credentialId, type = 'webauthn', publicKey, algorithm, coseKey, now = new Date() } = {}) {
     if (type !== 'webauthn' || !humanId || !endpointId || !credentialId || !publicKey) throw Object.assign(new Error('Endpoint-bound WebAuthn credential is required'), { code: 'INVALID_ATTESTATION' });
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
