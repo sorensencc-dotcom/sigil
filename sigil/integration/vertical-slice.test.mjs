@@ -55,3 +55,27 @@ test('replay of an already-accepted message under a new idempotency_key is rejec
   assert.equal(second.status, 409);
   assert.equal(second.body.code, 'REPLAY_DETECTED');
 });
+
+test('grant -> send succeeds -> revoke -> resend denied (§18 #10)', async () => {
+  const { acceptEnvelopeAsync } = await import('../relay/v1/accept-envelope.mjs');
+  const { createMemoryRepository } = await import('../cli/memory-repository.mjs');
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const sender = { owner_id: 'usr_revoke', endpoint_id: 'ep_revoke', key_id: 'key_revoke', kind: 'agent' };
+  const registered = new Map([['ep_revoke', { ...sender, status: 'active', public_key: keys.publicKey }]]);
+  const repository = createMemoryRepository();
+  const template = JSON.parse(fs.readFileSync(new URL('../contracts/v1/envelope.example.json', import.meta.url)));
+  const conversationId = 'conv_revoke';
+  const grant = await repository.createCapabilityGrant({ grantId: 'grant_1', capability: 'sigil.task/submit', scope: `scope:conversation/${conversationId}`, grantedTo: 'ep_revoke', expiresAt: '2026-08-17T00:00:00Z', now: new Date('2026-08-16T12:00:00Z') });
+  const envelope1 = { ...template, message_id: 'msg_revoke_1', conversation_id: conversationId, sender, recipient: sender, capabilities: ['sigil.task/submit'], body: { task_id: 'task_r1', instruction: 'x' }, created_at: '2026-08-16T12:00:00Z', expires_at: '2026-08-16T13:00:00Z', signature: { algorithm: 'Ed25519', key_id: sender.key_id, value: '' } };
+  envelope1.signature.value = crypto.sign(null, signedBytes(envelope1), keys.privateKey).toString('base64url');
+  const first = await acceptEnvelopeAsync(envelope1, { registered, repository, now: new Date('2026-08-16T12:00:30Z') });
+  assert.equal(first.status, 202);
+
+  await repository.revokeCapabilityGrant(grant.grant_id, { now: new Date('2026-08-16T12:01:00Z') });
+
+  const envelope2 = { ...template, message_id: 'msg_revoke_2', conversation_id: conversationId, sender, recipient: sender, capabilities: ['sigil.task/submit'], idempotency_key: 'send_revoke_2', body: { task_id: 'task_r2', instruction: 'y' }, created_at: '2026-08-16T12:02:00Z', expires_at: '2026-08-16T13:02:00Z', signature: { algorithm: 'Ed25519', key_id: sender.key_id, value: '' } };
+  envelope2.signature.value = crypto.sign(null, signedBytes(envelope2), keys.privateKey).toString('base64url');
+  const second = await acceptEnvelopeAsync(envelope2, { registered, repository, now: new Date('2026-08-16T12:02:30Z') });
+  assert.equal(second.status, 403);
+  assert.equal(second.body.code, 'CAPABILITY_DENIED');
+});
