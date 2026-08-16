@@ -32,6 +32,10 @@ export function createMemoryRepository() {
       rateWindows.set(key, count);
       return { count, allowed: count <= limit };
     },
+    async countOpenDeliveries(recipientEndpointId) {
+      const terminal = new Set(['acknowledged', 'processed', 'delivery_rejected', 'dead_letter']);
+      return [...deliveries.values()].filter((d) => d.recipient_endpoint_id === recipientEndpointId && !terminal.has(d.state)).length;
+    },
     async lookupIdempotency(endpointId, idempotencyKey) {
       return idempotency.get(`${endpointId}:${idempotencyKey}`) ?? null;
     },

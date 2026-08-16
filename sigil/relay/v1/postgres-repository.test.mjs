@@ -33,6 +33,18 @@ test('repository rolls back and releases client on persistence failure', async (
   assert.equal(pool.calls.at(-1).text, 'RELEASE');
 });
 
+test('countOpenDeliveries excludes terminal delivery states', async () => {
+  const pool = fakePool();
+  const repository = new PostgresRepository({ pool });
+  await repository.withTransaction((client) => repository.countOpenDeliveries('ep_claude', client));
+  const query = pool.calls.find((call) => call.text?.includes('SELECT'));
+  assert.match(query.text, /NOT IN/);
+  assert.match(query.text, /acknowledged/);
+  assert.match(query.text, /processed/);
+  assert.match(query.text, /delivery_rejected/);
+  assert.match(query.text, /dead_letter/);
+});
+
 test('concurrent duplicate submission surfaces the winning acceptance instead of throwing', async () => {
   const calls = [];
   const client = {

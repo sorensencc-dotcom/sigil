@@ -167,6 +167,17 @@ export class PostgresRepository {
   async withTransaction(work) {
     return withTransaction(this.pool, work);
   }
+  // Recipient inbox-depth limit (design §18 #23): derived live from
+  // non-terminal deliveries rows rather than a separate counter, so it
+  // never drifts from the actual outstanding queue.
+  async countOpenDeliveries(recipientEndpointId, client) {
+    const result = await client.query(
+      `SELECT count(*) FROM deliveries WHERE recipient_endpoint_id = $1
+       AND state NOT IN ('acknowledged', 'processed', 'delivery_rejected', 'dead_letter')`,
+      [recipientEndpointId]
+    );
+    return Number(result.rows[0].count);
+  }
   async reserveRateLimit(scopeKind, scopeId, windowStart, limit, client) {
     const result = await client.query(
       `INSERT INTO quota_usage (scope_kind, scope_id, window_start, count) VALUES ($1, $2, $3, 1)

@@ -1,5 +1,5 @@
 import { validateEnvelope, reject, signedBytes } from './validate-envelope.mjs';
-import { resolveRateLimits } from './relay-config.mjs';
+import { resolveRateLimits, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
 
 const statusByCode = Object.freeze({
   INVALID_ENVELOPE: 400,
@@ -78,6 +78,17 @@ async function acceptWithRepository(envelope, options) {
     ]) {
       const reservation = await repository.reserveRateLimit(scopeKind, scopeId, windowStart, limits[scopeKind], client);
       if (!reservation.allowed) throw reject('RATE_LIMITED', `${scopeKind} rate limit exceeded`, { scope_kind: scopeKind, scope_id: scopeId, limit: limits[scopeKind] });
+    }
+    // Recipient inbox-depth limit (design §18 #23): a DEPTH limit on
+    // currently-outstanding deliveries, not a rate limit -- independent of
+    // and in addition to the sender-side reservations above. Derived live
+    // from countOpenDeliveries rather than a separate counter, so it can
+    // never drift from the actual queue. Only checked when there's a
+    // concrete recipient; broadcast envelopes have no single inbox to bound.
+    if (envelope.recipient?.endpoint_id) {
+      const depthLimit = options.inboxDepthLimit ?? DEFAULT_INBOX_DEPTH_LIMIT;
+      const openCount = await repository.countOpenDeliveries(envelope.recipient.endpoint_id, client);
+      if (openCount >= depthLimit) throw reject('QUOTA_EXCEEDED', 'Recipient inbox depth limit reached', { recipient_endpoint_id: envelope.recipient.endpoint_id, limit: depthLimit });
     }
     const result = validateEnvelope(envelope, { ...options, idempotency: new Map(), capabilityGrants });
     const prior = await repository.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key, client);

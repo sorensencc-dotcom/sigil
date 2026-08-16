@@ -93,6 +93,7 @@ function fakeTransactionalRepository({ taskRequests = new Map(), envelopes = new
     async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
     async lookupActiveCapabilityGrants() { return []; },
     async reserveRateLimit() { return { count: 1, allowed: true }; },
+    async countOpenDeliveries() { return 0; },
     async persistAcceptedEnvelope(row) { envelopes.set(row.envelope.message_id, row); return { message_id: row.envelope.message_id, duplicate: false }; },
   };
 }
@@ -203,4 +204,14 @@ test('exceeding the per-endpoint rate limit rejects with RATE_LIMITED and does n
   const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
   assert.equal(result.status, 429);
   assert.equal(result.body.code, 'RATE_LIMITED');
+});
+
+test('exceeding recipient inbox depth rejects with QUOTA_EXCEEDED and does not persist', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'hi' } });
+  const repository = { ...fakeTransactionalRepositoryWithMessages(), async reserveRateLimit() { return { count: 1, allowed: true }; }, async countOpenDeliveries() { return 500; } };
+  const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
+  assert.equal(result.status, 429);
+  assert.equal(result.body.code, 'QUOTA_EXCEEDED');
 });

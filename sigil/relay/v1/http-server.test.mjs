@@ -40,6 +40,7 @@ test('HTTP relay defaults to repository persistence with canonical acceptance da
     async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
     async lookupActiveCapabilityGrants() { return []; },
     async reserveRateLimit() { return { count: 1, allowed: true }; },
+    async countOpenDeliveries() { return 0; },
     async persistAcceptedEnvelope(row) { persisted.push(row); return { message_id: row.envelope.message_id }; }
   };
   const server = createRelayServer({
@@ -63,7 +64,7 @@ test('HTTP relay does not notify when durable persistence fails', async () => {
   const notifications = [];
   const server = createRelayServer({
     registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
-    repository: { async withTransaction(fn) { return fn(null); }, async lookupIdempotency() { return null; }, async lookupAcceptedMessageId() { return null; }, async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; }, async lookupActiveCapabilityGrants() { return []; }, async reserveRateLimit() { return { count: 1, allowed: true }; }, async persistAcceptedEnvelope() { throw new Error('database unavailable'); } },
+    repository: { async withTransaction(fn) { return fn(null); }, async lookupIdempotency() { return null; }, async lookupAcceptedMessageId() { return null; }, async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; }, async lookupActiveCapabilityGrants() { return []; }, async reserveRateLimit() { return { count: 1, allowed: true }; }, async countOpenDeliveries() { return 0; }, async persistAcceptedEnvelope() { throw new Error('database unavailable'); } },
     stream: { notify(...args) { notifications.push(args); } }, now: new Date('2026-08-13T12:01:00Z')
   });
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
@@ -87,6 +88,7 @@ test('HTTP relay returns prior acceptance for duplicate idempotency retry', asyn
     async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
     async lookupActiveCapabilityGrants() { return []; },
     async reserveRateLimit() { return { count: 1, allowed: true }; },
+    async countOpenDeliveries() { return 0; },
     async persistAcceptedEnvelope(row) { persisted.push(row); return { message_id: row.envelope.message_id }; }
   };
   const server = createRelayServer({
@@ -116,6 +118,7 @@ test('HTTP relay rejects conflicting idempotency retry', async () => {
     async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
     async lookupActiveCapabilityGrants() { return []; },
     async reserveRateLimit() { return { count: 1, allowed: true }; },
+    async countOpenDeliveries() { return 0; },
     async persistAcceptedEnvelope() { throw new Error('must not persist conflicting retry'); }
   };
   const server = createRelayServer({
@@ -142,6 +145,7 @@ test('HTTP relay notifies recipient stream after acceptance', async () => {
     async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
     async lookupActiveCapabilityGrants() { return []; },
     async reserveRateLimit() { return { count: 1, allowed: true }; },
+    async countOpenDeliveries() { return 0; },
     async persistAcceptedEnvelope(row) { return { message_id: row.envelope.message_id, duplicate: false }; }
   };
   const server = createRelayServer({ registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]), repository, stream, now: new Date('2026-08-13T12:01:00Z') });
@@ -164,6 +168,7 @@ test('HTTP relay suppresses duplicate notification when persistence detects a co
     async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
     async lookupActiveCapabilityGrants() { return []; },
     async reserveRateLimit() { return { count: 1, allowed: true }; },
+    async countOpenDeliveries() { return 0; },
     async persistAcceptedEnvelope() { return { message_id: 'msg_won_the_race', duplicate: true }; }
   };
   const server = createRelayServer({
