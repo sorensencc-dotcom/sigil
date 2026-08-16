@@ -50,11 +50,17 @@ export async function waitForOneInboxMessage({ relay, identity, streamUrl, timeo
       // Empty cursor is intentional: ack state, not a cursor advanced past
       // other page items, determines what the next invocation receives.
       const page = await relay.reconcileInbox('');
+      // A timeout or signal can settle `wait` (fail()) while this request was
+      // in flight -- stopped is now true. Printing/acking after that would
+      // consume a message the caller already believes was never delivered.
+      if (stopped) return false;
       const item = page.items?.[0];
       if (!item) return false;
       const output = formatInboxItem(item);
-      print(output);
+      await print(output);
+      if (stopped) return false;
       if (item.delivery_id) await relay.acknowledge(item.delivery_id);
+      if (stopped) return false;
       finish();
       return true;
     } catch (error) {

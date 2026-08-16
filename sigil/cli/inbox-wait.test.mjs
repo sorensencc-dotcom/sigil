@@ -88,6 +88,33 @@ test('SIGTERM rejects with exit code 143 and acknowledges nothing', async () => 
   assert.deepEqual(acknowledged, []);
 });
 
+test('SIGINT during an in-flight reconcile does not print or acknowledge the item it returns', async () => {
+  const acknowledged = [];
+  const output = [];
+  const signalSource = new EventEmitter();
+  let releaseReconcile;
+  const reconcileStarted = new Promise((resolve) => {
+    releaseReconcile = () => resolve();
+  });
+  const relay = {
+    async reconcileInbox() {
+      // Let the test fire SIGINT while this call is still pending.
+      await reconcileStarted;
+      return { items: [item('late')] };
+    },
+    async acknowledge(id) { acknowledged.push(id); },
+  };
+  const pending = assert.rejects(
+    waitForOneInboxMessage({ relay, identity: { relay_token: 'token' }, streamUrl: 'ws://stream', WebSocketImpl: IdleSocket, signalSource, print: (line) => output.push(line) }),
+    (error) => error instanceof InboxWaitError && error.exitCode === INBOX_WAIT_EXIT_CODES.SIGINT,
+  );
+  signalSource.emit('SIGINT');
+  releaseReconcile();
+  await pending;
+  assert.deepEqual(acknowledged, []);
+  assert.deepEqual(output, []);
+});
+
 test('cleanup removes signal listeners so they do not leak across invocations', async () => {
   const signalSource = new EventEmitter();
   await waitForOneInboxMessage({

@@ -15,6 +15,16 @@ shown for repair rather than silently retried. Exit codes 130/143 mean the
 process was interrupted (SIGINT/SIGTERM) mid-wait -- nothing was acknowledged,
 safe to re-arm.
 
+For a host without reliable process-completion re-arming, use `--loop`:
+
+```text
+sigil inbox --wait --loop --identity <identity> --relay-url <relay> --stream-url <stream>
+```
+
+This keeps re-arming after timeout, but does not provide one process-exit
+notification per message. Use one-shot `--wait` when host notifications are
+available; use `--loop` when continuous inbox presence matters more.
+
 This is an adapter convention. Relay protocol behavior does not depend on a
 host noticing process completion. The local `sigil relay up` command uses an
 in-memory repository; messages and acknowledgements disappear when that

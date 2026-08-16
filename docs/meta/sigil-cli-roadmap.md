@@ -7,7 +7,7 @@ A CLI at `sigil/cli/sigil.mjs`, four commands:
 - `sigil init <name> --owner <owner_id>` — generates an Ed25519 keypair + relay/connector tokens, saves them to `.sigil/<name>.identity.json`, and registers the public identity in `.sigil/registry.json`.
 - `sigil relay up --registry <path> --port <n>` — runs a real `relay/v1/http-server.mjs` in the foreground, backed by an in-memory store (`sigil/cli/memory-repository.mjs`).
 - `sigil send --identity <path> --relay-url <url> --to <endpoint_id> --to-owner <owner_id> --message "text"` — builds, signs, and posts a `chat.message` envelope.
-- `sigil inbox --identity <path> --relay-url <url> [--watch|--wait]` — polls or listens for inbox messages, prints messages, and acknowledges delivery. `--wait` consumes exactly one message and exits; timeout is exit code 2, auth failure 3, connection failure 4, and malformed delivery 5.
+- `sigil inbox --identity <path> --relay-url <url> [--watch|--wait] [--loop]` — polls or listens for inbox messages, prints messages, and acknowledges delivery. `--wait` consumes exactly one message and exits; `--wait --loop` keeps re-arming after timeouts. Timeout is exit code 2, auth failure 3, connection failure 4, and malformed delivery 5.
 
 Verified end to end tonight: two identities (`ep_claude`, `ep_codex`) registered against one relay, `send` from one, `inbox` on the other, and back. Real signature verification, real HTTP, real envelope validation — no mocks in that path.
 
