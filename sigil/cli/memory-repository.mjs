@@ -7,9 +7,26 @@ import { transitionDelivery } from '../relay/v1/delivery-state.mjs';
 export function createMemoryRepository() {
   const envelopes = new Map();
   const deliveries = new Map();
+  const idempotency = new Map();
   return {
+    // Single-process, no real client/connection -- the transaction wrapper
+    // exists so acceptEnvelopeAsync's repository-aware path works unchanged
+    // against this repository too (design §12 dual-repository equivalence).
+    async withTransaction(fn) { return fn(null); },
+    async lookupIdempotency(endpointId, idempotencyKey) {
+      return idempotency.get(`${endpointId}:${idempotencyKey}`) ?? null;
+    },
+    async lookupTaskRequest(taskId, conversationId) {
+      for (const row of envelopes.values()) {
+        if (row.envelope.conversation_id === conversationId && row.envelope.message_type === 'task.request' && row.envelope.body?.task_id === taskId) {
+          return { message_id: row.envelope.message_id };
+        }
+      }
+      return null;
+    },
     async persistAcceptedEnvelope(row) {
       envelopes.set(row.message_id, row);
+      idempotency.set(`${row.envelope.sender.endpoint_id}:${row.envelope.idempotency_key}`, { message_id: row.message_id, canonical_hash: row.canonical_hash });
       if (row.envelope.recipient?.endpoint_id) {
         const deliveryId = `del_${row.message_id}`;
         deliveries.set(deliveryId, {

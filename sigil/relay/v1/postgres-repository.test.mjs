@@ -128,6 +128,21 @@ test('acknowledgeDelivery rejects a delivery that cannot reach acknowledged', as
   );
 });
 
+test('lookupTaskRequest returns the accepted task.request row for the conversation', async () => {
+  const calls = [];
+  const pool = { async query(text, values) { calls.push({ text, values }); return { rows: [{ message_id: 'msg_original' }] }; } };
+  const result = await new PostgresRepository({ pool }).lookupTaskRequest('task_1', 'conv_1');
+  assert.deepEqual(result, { message_id: 'msg_original' });
+  assert.match(calls[0].text, /message_type = 'task\.request'/);
+  assert.deepEqual(calls[0].values, ['conv_1', 'task_1']);
+});
+
+test('lookupTaskRequest returns null when no accepted task.request matches', async () => {
+  const pool = { async query() { return { rows: [] }; } };
+  const result = await new PostgresRepository({ pool }).lookupTaskRequest('task_missing', 'conv_1');
+  assert.equal(result, null);
+});
+
 test('repository registers WebAuthn credential for active human', async () => {
   const calls = [];
   const pool = { async query(text, values) { calls.push({ text, values }); return { rows: [{ credential_id: 'cred_1', human_id: 'usr_1', type: 'webauthn', status: 'active' }] }; } };

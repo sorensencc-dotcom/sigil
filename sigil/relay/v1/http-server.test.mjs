@@ -34,6 +34,7 @@ test('HTTP relay defaults to repository persistence with canonical acceptance da
   envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
   const persisted = [];
   const repository = {
+    async withTransaction(fn) { return fn(null); },
     async lookupIdempotency() { return null; },
     async persistAcceptedEnvelope(row) { persisted.push(row); return { message_id: row.envelope.message_id }; }
   };
@@ -58,7 +59,7 @@ test('HTTP relay does not notify when durable persistence fails', async () => {
   const notifications = [];
   const server = createRelayServer({
     registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
-    repository: { async lookupIdempotency() { return null; }, async persistAcceptedEnvelope() { throw new Error('database unavailable'); } },
+    repository: { async withTransaction(fn) { return fn(null); }, async lookupIdempotency() { return null; }, async persistAcceptedEnvelope() { throw new Error('database unavailable'); } },
     stream: { notify(...args) { notifications.push(args); } }, now: new Date('2026-08-13T12:01:00Z')
   });
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
@@ -76,6 +77,7 @@ test('HTTP relay returns prior acceptance for duplicate idempotency retry', asyn
   envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
   const persisted = []; const notifications = []; const canonicalHash = crypto.createHash('sha256').update(signedBytes(envelope)).digest('hex');
   const repository = {
+    async withTransaction(fn) { return fn(null); },
     async lookupIdempotency() { return persisted.length ? { message_id: envelope.message_id, canonical_hash: canonicalHash } : null; },
     async persistAcceptedEnvelope(row) { persisted.push(row); return { message_id: row.envelope.message_id }; }
   };
@@ -100,6 +102,7 @@ test('HTTP relay rejects conflicting idempotency retry', async () => {
   envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
   const originalHash = crypto.createHash('sha256').update(signedBytes(envelope)).digest('hex');
   const repository = {
+    async withTransaction(fn) { return fn(null); },
     async lookupIdempotency() { return { message_id: envelope.message_id, canonical_hash: originalHash }; },
     async persistAcceptedEnvelope() { throw new Error('must not persist conflicting retry'); }
   };
@@ -120,7 +123,12 @@ test('HTTP relay notifies recipient stream after acceptance', async () => {
   const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
   envelope.created_at = '2026-08-13T12:00:00.000Z'; envelope.expires_at = '2026-08-14T00:00:00.000Z'; envelope.recipient.endpoint_id = 'ep_claude'; envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
   const notifications = []; const stream = { notify: (endpointId, messageId) => { notifications.push({ endpointId, messageId }); return true; } };
-  const server = createRelayServer({ registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]), persist: () => {}, stream, now: new Date('2026-08-13T12:01:00Z') });
+  const repository = {
+    async withTransaction(fn) { return fn(null); },
+    async lookupIdempotency() { return null; },
+    async persistAcceptedEnvelope(row) { return { message_id: row.envelope.message_id, duplicate: false }; }
+  };
+  const server = createRelayServer({ registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]), repository, stream, now: new Date('2026-08-13T12:01:00Z') });
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
   await new Promise((resolve, reject) => { const request = http.request({ port, method: 'POST', path: '/v1/envelopes' }, (response) => { response.resume(); response.on('end', resolve); }); request.on('error', reject); request.end(JSON.stringify(envelope)); });
   await new Promise((resolve) => server.close(resolve));
@@ -134,6 +142,7 @@ test('HTTP relay suppresses duplicate notification when persistence detects a co
   envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
   const notifications = [];
   const repository = {
+    async withTransaction(fn) { return fn(null); },
     async lookupIdempotency() { return null; },
     async persistAcceptedEnvelope() { return { message_id: 'msg_won_the_race', duplicate: true }; }
   };

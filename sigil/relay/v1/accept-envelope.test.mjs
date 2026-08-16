@@ -81,3 +81,59 @@ test('a race detected by the persistence layer itself overrides the optimistic r
   assert.equal(response.body.message_id, 'msg_won_the_race');
   assert.equal(response.body.duplicate, true);
 });
+
+function fakeTransactionalRepository({ taskRequests = new Map(), envelopes = new Map() } = {}) {
+  const calls = [];
+  return {
+    calls,
+    async withTransaction(fn) { calls.push('BEGIN'); const result = await fn({ id: 'client-1' }); calls.push('COMMIT'); return result; },
+    async lookupTaskRequest(taskId, conversationId, client) { calls.push({ op: 'lookupTaskRequest', taskId, conversationId, client }); return taskRequests.get(`${conversationId}:${taskId}`) ?? null; },
+    async lookupIdempotency() { return null; },
+    async persistAcceptedEnvelope(row) { envelopes.set(row.envelope.message_id, row); return { message_id: row.envelope.message_id, duplicate: false }; },
+  };
+}
+
+function makeEnvelope({ keys, messageType, body, conversationId = 'conv_1' }) {
+  const envelope = {
+    protocol: 'sigil/1', message_id: `msg_${crypto.randomUUID()}`, conversation_id: conversationId,
+    message_type: messageType, sender: { endpoint_id: 'ep_claude', owner_id: 'usr_claude' }, recipient: { endpoint_id: 'ep_codex', owner_id: 'usr_codex' },
+    body, context_refs: [], capabilities: [], correlation_id: null, idempotency_key: `send_${crypto.randomUUID()}`,
+    created_at: '2026-08-16T12:00:00Z', expires_at: '2026-08-16T13:00:00Z',
+    signature: { algorithm: 'Ed25519', key_id: 'key_claude', value: '' }
+  };
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), keys.privateKey).toString('base64url');
+  return envelope;
+}
+
+test('task.result referencing an unaccepted task_id is rejected with INVALID_ENVELOPE', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const envelope = makeEnvelope({ keys, messageType: 'task.result', body: { task_id: 'task_never_sent', status: 'completed', summary: 'x' } });
+  const repository = fakeTransactionalRepository();
+  const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
+  assert.equal(result.status, 400);
+  assert.equal(result.body.code, 'INVALID_ENVELOPE');
+  assert.equal(result.body.details.field, 'task_id');
+  assert.equal(result.body.details.reason, 'no visible task.request');
+});
+
+test('task.result referencing an accepted task_id in the same conversation is accepted', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const envelope = makeEnvelope({ keys, messageType: 'task.result', body: { task_id: 'task_1', status: 'completed', summary: 'x' } });
+  const repository = fakeTransactionalRepository({ taskRequests: new Map([['conv_1:task_1', { message_id: 'msg_original' }]]) });
+  const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
+  assert.equal(result.status, 202);
+  assert.equal(repository.calls.some((call) => call === 'BEGIN'), true);
+  assert.equal(repository.calls.some((call) => call === 'COMMIT'), true);
+});
+
+test('non-task envelopes skip the cross-reference lookup entirely', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'hi' } });
+  const repository = fakeTransactionalRepository();
+  const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
+  assert.equal(result.status, 202);
+  assert.equal(repository.calls.some((call) => call?.op === 'lookupTaskRequest'), false);
+});

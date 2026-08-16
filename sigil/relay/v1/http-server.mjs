@@ -3,7 +3,6 @@ import crypto from 'node:crypto';
 import { acceptEnvelopeAsync } from './accept-envelope.mjs';
 import { transitionDelivery } from './delivery-state.mjs';
 import { createBearerAuthenticator } from './transport-auth.mjs';
-import { signedBytes } from './validate-envelope.mjs';
 import { createApprovalChallenge, coseKeyToPublicKey, parseAttestationObject, verifyPackedAttestation, verifyWebAuthnApproval, verifyWebAuthnAssertion } from './approval-ceremony.mjs';
 import { computeActionHash } from './action-hash.mjs';
 import { normalizeIssuer } from './issuer-normalization.mjs';
@@ -28,10 +27,6 @@ async function readBody(request, maxBytes = 1024 * 1024) {
 export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now, stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion } = {}) {
   const authenticateRequest = authenticate ?? (tokenHashes ? createBearerAuthenticator(tokenHashes) : null);
   const resolveHumanCredential = lookupHumanCredential ?? repository?.lookupHumanCredential?.bind(repository);
-  const resolveIdempotency = lookupIdempotency ?? repository?.lookupIdempotency?.bind(repository);
-  const persistAccepted = persist ?? (repository?.persistAcceptedEnvelope
-    ? async (row) => repository.persistAcceptedEnvelope({ ...row, canonical_bytes: signedBytes(row.envelope), action_hash: row.canonical_hash })
-    : undefined);
   return http.createServer(async (request, response) => {
     const requestId = request.headers['x-sigil-request-id'] ?? crypto.randomUUID();
     const principal = authenticateRequest ? await authenticateRequest(request) : null;
@@ -113,7 +108,12 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     if (request.method === 'POST' && request.url === '/v1/envelopes') {
       let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       let envelope; try { envelope = JSON.parse(raw); } catch { response.writeHead(400, { 'content-type': 'application/json' }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'Invalid JSON', details: {} })); }
-      const result = await acceptEnvelopeAsync(envelope, { registered: registry, idempotency, lookupIdempotency: resolveIdempotency, request_id: requestId, persist: async (row) => { const persisted = await persistAccepted?.(row); if (stream && envelope.recipient?.endpoint_id && !persisted?.duplicate) stream.notify(envelope.recipient.endpoint_id, persisted?.message_id ?? row.message_id); return persisted; }, now });
+      const result = await acceptEnvelopeAsync(envelope, {
+        registered: registry, request_id: requestId, now, repository,
+        onPersisted: async ({ envelope: accepted, persisted }) => {
+          if (stream && accepted.recipient?.endpoint_id && !persisted?.duplicate) stream.notify(accepted.recipient.endpoint_id, persisted.message_id);
+        }
+      });
       response.writeHead(result.status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(result.body ? JSON.stringify(result.body) : '');
     }
