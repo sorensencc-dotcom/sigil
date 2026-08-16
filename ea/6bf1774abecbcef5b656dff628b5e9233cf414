@@ -1,0 +1,36 @@
+docs/meta/sigil-cli-roadmap.md
+  s_f6aa48b2d59f04::t_89910c21bf46d0 10
+docs/meta/sigil-host-inbox-wait-convention.md
+  s_f6aa48b2d59f04::t_89910c21bf46d0 18-27
+sigil/cli/sigil.mjs
+  s_f6aa48b2d59f04::t_42469ab488ae3d 26,39,128,137,139,152-160
+sigil/cli/inbox-wait.mjs
+  s_bed36bc834b400::t_9997e0c94efbbc 60
+  s_bed36bc834b400::t_013cd230f653a6 53-56,61,63
+sigil/cli/inbox-wait.test.mjs
+  s_bed36bc834b400::t_587512311f9965 91-117
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "ea6bf1774abecbcef5b656dff628b5e9233cf414",
+  "prompts": {},
+  "sessions": {
+    "s_bed36bc834b400": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f2b61664-db06-4322-a0b2-7f2788dcbb07",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_f6aa48b2d59f04": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a007da-4822-7db0-998d-6f48eda7e830",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
