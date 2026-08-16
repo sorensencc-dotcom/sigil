@@ -33,3 +33,25 @@ test('Codex -> relay -> Claude -> relay -> Codex vertical slice', () => {
   queue.transition('del_task_1', 'processed');
   assert.equal(queue.get('del_task_1').state, 'processed');
 });
+
+test('replay of an already-accepted message under a new idempotency_key is rejected (§18 #13)', async () => {
+  const { acceptEnvelopeAsync } = await import('../relay/v1/accept-envelope.mjs');
+  const { createMemoryRepository } = await import('../cli/memory-repository.mjs');
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const sender = { owner_id: 'usr_replay', endpoint_id: 'ep_replay', key_id: 'key_replay', kind: 'agent' };
+  const registered = new Map([['ep_replay', { ...sender, status: 'active', public_key: keys.publicKey }]]);
+  const repository = createMemoryRepository();
+  const template = JSON.parse(fs.readFileSync(new URL('../contracts/v1/envelope.example.json', import.meta.url)));
+  // Note: signature.key_id must be overridden to match the registered
+  // endpoint's key_id ('key_replay') -- the template's default key_id
+  // ('key_01JEXAMPLE') would otherwise fail signature-key lookup.
+  const envelope = { ...template, message_id: 'msg_replay_1', conversation_id: 'conv_replay', sender, recipient: sender, message_type: 'chat.message', body: { text: 'hi' }, created_at: '2026-08-16T12:00:00Z', expires_at: '2026-08-16T13:00:00Z', signature: { algorithm: 'Ed25519', key_id: sender.key_id, value: '' } };
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), keys.privateKey).toString('base64url');
+  const first = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:00:30Z') });
+  assert.equal(first.status, 202);
+  const replayed = { ...envelope, idempotency_key: 'a-different-idempotency-key' };
+  replayed.signature.value = crypto.sign(null, signedBytes(replayed), keys.privateKey).toString('base64url');
+  const second = await acceptEnvelopeAsync(replayed, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
+  assert.equal(second.status, 409);
+  assert.equal(second.body.code, 'REPLAY_DETECTED');
+});

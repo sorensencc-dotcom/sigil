@@ -89,6 +89,7 @@ function fakeTransactionalRepository({ taskRequests = new Map(), envelopes = new
     async withTransaction(fn) { calls.push('BEGIN'); const result = await fn({ id: 'client-1' }); calls.push('COMMIT'); return result; },
     async lookupTaskRequest(taskId, conversationId, client) { calls.push({ op: 'lookupTaskRequest', taskId, conversationId, client }); return taskRequests.get(`${conversationId}:${taskId}`) ?? null; },
     async lookupIdempotency() { return null; },
+    async lookupAcceptedMessageId() { return null; },
     async persistAcceptedEnvelope(row) { envelopes.set(row.envelope.message_id, row); return { message_id: row.envelope.message_id, duplicate: false }; },
   };
 }
@@ -136,4 +137,57 @@ test('non-task envelopes skip the cross-reference lookup entirely', async () => 
   const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
   assert.equal(result.status, 202);
   assert.equal(repository.calls.some((call) => call?.op === 'lookupTaskRequest'), false);
+});
+
+function fakeTransactionalRepositoryWithMessages({ messageIds = new Map(), envelopes = new Map() } = {}) {
+  const base = fakeTransactionalRepository({ envelopes });
+  return {
+    ...base,
+    async lookupAcceptedMessageId(senderEndpointId, messageId) { return messageIds.get(`${senderEndpointId}:${messageId}`) ?? null; },
+  };
+}
+
+test('replay: same message_id previously accepted, resubmitted under a different idempotency_key -> REPLAY_DETECTED', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'hi' } });
+  const repository = fakeTransactionalRepositoryWithMessages({ messageIds: new Map([[`ep_claude:${envelope.message_id}`, { message_id: envelope.message_id, idempotency_key: 'a-different-key' }]]) });
+  const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
+  assert.equal(result.status, 409);
+  assert.equal(result.body.code, 'REPLAY_DETECTED');
+});
+
+test('replay: same message_id + same idempotency_key is an ordinary duplicate, not a replay', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'hi' } });
+  const repository = fakeTransactionalRepositoryWithMessages({ messageIds: new Map([[`ep_claude:${envelope.message_id}`, { message_id: envelope.message_id, idempotency_key: envelope.idempotency_key }]]) });
+  const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
+  // Same idempotency_key -> falls through to the existing lookupIdempotency
+  // duplicate path (not exercised by this fake's lookupIdempotency, which
+  // returns null) -- the key assertion here is that it is NOT REPLAY_DETECTED.
+  assert.notEqual(result.body.code, 'REPLAY_DETECTED');
+});
+
+test('first-time expired message with no prior accepted record -> MESSAGE_EXPIRED, not REPLAY_DETECTED', async () => {
+  // NOTE: deviates from the brief's literal timestamps. validateEnvelope
+  // (untouched by this task) has no "now > expires_at" real-time expiry
+  // check -- its only MESSAGE_EXPIRED path is the invalid-lifetime check
+  // (expires_at <= created_at). The brief's original timestamps (created_at
+  // 12h before now) trip the clock-skew check first (created must be within
+  // 5 minutes of now), producing INVALID_ENVELOPE, not MESSAGE_EXPIRED. Kept
+  // created_at within clock-skew tolerance and used expires_at <= created_at
+  // to reach the real MESSAGE_EXPIRED path, preserving the test's intent:
+  // no prior accepted record -> falls through to validateEnvelope's own
+  // error, not misclassified as REPLAY_DETECTED.
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'hi' } });
+  envelope.created_at = '2026-08-16T11:58:00Z';
+  envelope.expires_at = '2026-08-16T11:58:00Z';
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), keys.privateKey).toString('base64url');
+  const repository = fakeTransactionalRepositoryWithMessages();
+  const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:00:00Z') });
+  assert.equal(result.status, 422);
+  assert.equal(result.body.code, 'MESSAGE_EXPIRED');
 });

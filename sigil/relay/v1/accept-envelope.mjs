@@ -41,6 +41,17 @@ export function acceptEnvelope(envelope, options = {}) {
 async function acceptWithRepository(envelope, options) {
   const { repository, now = new Date() } = options;
   return repository.withTransaction(async (client) => {
+    // Replay check (design §6, §18 #13): the scoped (sender_endpoint_id,
+    // message_id) lookup happens first, before validateEnvelope's own
+    // expiry check can run. A prior accepted record under a *different*
+    // idempotency_key is a replay -- classified and rejected immediately,
+    // skipping expiry entirely. Same idempotency_key falls through to the
+    // ordinary duplicate path below (handled by validateEnvelope + the
+    // lookupIdempotency check that follows).
+    const priorMessage = await repository.lookupAcceptedMessageId(envelope.sender.endpoint_id, envelope.message_id, client);
+    if (priorMessage && priorMessage.idempotency_key !== envelope.idempotency_key) {
+      throw reject('REPLAY_DETECTED', 'message_id was already accepted under a different idempotency_key');
+    }
     const result = validateEnvelope(envelope, { ...options, idempotency: new Map() });
     const prior = await repository.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key, client);
     if (prior && prior.canonical_hash !== result.canonical_hash) throw reject('DUPLICATE_MESSAGE', 'Idempotency key conflicts with an existing body');
