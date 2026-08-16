@@ -1,0 +1,34 @@
+sigil/cli/config-resolver.test.mjs
+  s_f6aa48b2d59f04::t_36fe7381af6547 1-61
+sigil/cli/config-resolver.mjs
+  s_bed36bc834b400::t_520f6448463215 1-32
+sigil/cli/sigil.mjs
+  s_bed36bc834b400::t_74ab59b94d7a40 97-101,105-106
+  s_bed36bc834b400::t_e25c23198dc104 25-27
+  s_bed36bc834b400::t_e703cf5ce93877 37-42
+  s_bed36bc834b400::t_a7e7cc00b51118 127-132,136
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "31fc3786fefc51920ab3837f849327f260295e0e",
+  "prompts": {},
+  "sessions": {
+    "s_bed36bc834b400": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f2b61664-db06-4322-a0b2-7f2788dcbb07",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_f6aa48b2d59f04": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a007da-4822-7db0-998d-6f48eda7e830",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
