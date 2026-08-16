@@ -1,16 +1,13 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { isAncestorScope } from '../../relay/v1/scope.mjs';
 
 const KINDS = new Set(['conversation_thread', 'git_commit', 'artifact', 'file_bundle', 'structured_data']);
 
 function fail(code, message) { throw Object.assign(new Error(message), { code }); }
 
-export function scopeCovers(grantScope, referenceScope) {
-  if (typeof grantScope !== 'string' || typeof referenceScope !== 'string') return false;
-  const grant = grantScope.split('/'); const reference = referenceScope.split('/');
-  return grant.length <= reference.length && grant.every((part, index) => part === reference[index]);
-}
+export const scopeCovers = isAncestorScope;
 
 function grantAllows(reference, grants, now, caller) {
   return grants.some((grant) => grant?.capability === 'sigil.core/read_shared_context'
