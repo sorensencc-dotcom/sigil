@@ -1,4 +1,5 @@
 import { validateEnvelope, reject, signedBytes } from './validate-envelope.mjs';
+import { resolveRateLimits } from './relay-config.mjs';
 
 const statusByCode = Object.freeze({
   INVALID_ENVELOPE: 400,
@@ -61,6 +62,23 @@ async function acceptWithRepository(envelope, options) {
       if (!registered_) throw reject('CAPABILITY_DENIED', `Capability is not registered: ${capability}`, { capability });
     }
     const capabilityGrants = await repository.lookupActiveCapabilityGrants(envelope.sender.endpoint_id, now, client);
+    // Rate-limit reservation (design §8, §18 #23): independent of envelope
+    // content validity -- a flooding sender should be capped even if
+    // individual envelopes are otherwise well-formed -- so this runs before
+    // validateEnvelope. Runs inside the same transaction as everything else:
+    // a RATE_LIMITED throw rolls the whole transaction back, including the
+    // reserveRateLimit INSERT/UPDATE, so an over-limit request never
+    // consumes its reservation.
+    const limits = resolveRateLimits(options.rateLimits);
+    const windowStart = new Date(Math.floor(now.getTime() / 60_000) * 60_000).toISOString();
+    for (const [scopeKind, scopeId] of [
+      ['endpoint', envelope.sender.endpoint_id],
+      ['owner', envelope.sender.owner_id],
+      ['conversation', envelope.conversation_id],
+    ]) {
+      const reservation = await repository.reserveRateLimit(scopeKind, scopeId, windowStart, limits[scopeKind], client);
+      if (!reservation.allowed) throw reject('RATE_LIMITED', `${scopeKind} rate limit exceeded`, { scope_kind: scopeKind, scope_id: scopeId, limit: limits[scopeKind] });
+    }
     const result = validateEnvelope(envelope, { ...options, idempotency: new Map(), capabilityGrants });
     const prior = await repository.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key, client);
     if (prior && prior.canonical_hash !== result.canonical_hash) throw reject('DUPLICATE_MESSAGE', 'Idempotency key conflicts with an existing body');

@@ -167,6 +167,16 @@ export class PostgresRepository {
   async withTransaction(work) {
     return withTransaction(this.pool, work);
   }
+  async reserveRateLimit(scopeKind, scopeId, windowStart, limit, client) {
+    const result = await client.query(
+      `INSERT INTO quota_usage (scope_kind, scope_id, window_start, count) VALUES ($1, $2, $3, 1)
+       ON CONFLICT (scope_kind, scope_id, window_start) DO UPDATE SET count = quota_usage.count + 1
+       RETURNING count`,
+      [scopeKind, scopeId, windowStart]
+    );
+    const count = result.rows[0].count;
+    return { count, allowed: count <= limit };
+  }
   async persistAcceptedEnvelope(row, client) {
     if (client) return this.#insertAcceptedEnvelope(row, client);
     try {

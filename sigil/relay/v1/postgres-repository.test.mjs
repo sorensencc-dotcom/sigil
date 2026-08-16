@@ -189,3 +189,26 @@ test('lookupCapabilityRegistration returns null for an unregistered capability',
   const registration = await repository.lookupCapabilityRegistration('made.up/capability');
   assert.equal(registration, null);
 });
+
+test('reserveRateLimit atomically increments the window counter and reports allowed/denied', async () => {
+  const rows = new Map();
+  const client = {
+    async query(text, values) {
+      if (text.startsWith('INSERT')) {
+        const key = `${values[0]}:${values[1]}:${values[2]}`;
+        const next = (rows.get(key) ?? 0) + 1;
+        rows.set(key, next);
+        return { rows: [{ count: next }] };
+      }
+      return { rows: [] };
+    }
+  };
+  const repository = new PostgresRepository({ pool: {} });
+  const first = await repository.reserveRateLimit('endpoint', 'ep_1', '2026-08-16T12:00:00.000Z', 2, client);
+  const second = await repository.reserveRateLimit('endpoint', 'ep_1', '2026-08-16T12:00:00.000Z', 2, client);
+  const third = await repository.reserveRateLimit('endpoint', 'ep_1', '2026-08-16T12:00:00.000Z', 2, client);
+  assert.equal(first.allowed, true);
+  assert.equal(second.allowed, true);
+  assert.equal(third.allowed, false);
+  assert.equal(third.count, 3);
+});

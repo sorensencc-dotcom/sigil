@@ -20,11 +20,18 @@ export function createMemoryRepository() {
   const deliveries = new Map();
   const idempotency = new Map();
   const grants = [];
+  const rateWindows = new Map();
   return {
     // Single-process, no real client/connection -- the transaction wrapper
     // exists so acceptEnvelopeAsync's repository-aware path works unchanged
     // against this repository too (design §12 dual-repository equivalence).
     async withTransaction(fn) { return fn(null); },
+    async reserveRateLimit(scopeKind, scopeId, windowStart, limit) {
+      const key = `${scopeKind}:${scopeId}:${windowStart}`;
+      const count = (rateWindows.get(key) ?? 0) + 1;
+      rateWindows.set(key, count);
+      return { count, allowed: count <= limit };
+    },
     async lookupIdempotency(endpointId, idempotencyKey) {
       return idempotency.get(`${endpointId}:${idempotencyKey}`) ?? null;
     },
