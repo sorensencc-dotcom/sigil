@@ -1,0 +1,23 @@
+sigil/relay/v1/scope.test.mjs
+  s_8dd1ad151f659e::t_7b8708e615cf8f 1-30
+sigil/relay/v1/scope.mjs
+  s_8dd1ad151f659e::t_2311bfbd1e5bb9 1-11
+sigil/connectors/v1/context-resolver.mjs
+  s_8dd1ad151f659e::t_584914e53901c7 4,10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "7c78ec44ab9c2951bc4eee3ddbc627c8fe8a69af",
+  "prompts": {},
+  "sessions": {
+    "s_8dd1ad151f659e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "51061bde-6290-4632-b90c-09117e55b1be",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
