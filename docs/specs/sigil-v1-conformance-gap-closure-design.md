@@ -121,6 +121,36 @@ change (methods that are transaction-participants take a `client` param;
 methods that aren't stay pool-based) applied uniformly, not a per-call
 opt-in.
 
+**`withTransaction` helper (implementation guidance) —** rather than
+each call site manually acquiring/releasing a client and remembering to
+roll back on every error path, wrap the pattern once in
+`sigil/relay/v1/with-transaction.mjs`:
+
+```javascript
+export async function withTransaction(pool, fn) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+```
+
+`acceptEnvelopeAsync` and every other multi-step transactional flow in
+this design (rejection-audit fallback in §9, receipt emission in §10)
+call `withTransaction(pool, async (client) => { ... })` rather than
+open-coding connect/begin/commit/rollback/release — this is what
+actually guarantees the `finally { client.release() }` runs on every
+exit path, including the unexpected-error case that's easiest to leak a
+connection on if hand-rolled per call site.
+
 ## 4. D — Real JCS canonicalization (do first)
 
 Replace the hand-rolled `canonicalize()` in `validate-envelope.mjs:5-8`
@@ -482,11 +512,23 @@ read receipts:
   heartbeat timeout would have made that visible immediately instead of
   requiring a manual cross-check.
 
-  **Defaults (human review, blocker 2 — previously unspecified):**
-  heartbeat interval 15s, timeout after 3 consecutive missed heartbeats
-  (45s of silence). Both are configuration, not hardcoded, same pattern
-  as §8's quota limits — these are starting defaults for local/
-  single-host use, not tuned for a hosted-relay deployment.
+  **Defaults (approved):** heartbeat interval 15s, timeout after 3
+  consecutive missed heartbeats (45s of silence). Both are
+  configuration, not hardcoded, same pattern as §8's quota limits —
+  these are starting defaults for local/single-host use, not tuned for
+  a hosted-relay deployment.
+
+  **Framing (implementation guidance) —** heartbeats use
+  **application-level JSON frames**, not native WebSocket control
+  frames (opcode `0x9`/`0xa` ping/pong): `{"type": "ping", "timestamp":
+  "..."}` from connector to relay, `{"type": "pong", "timestamp":
+  "..."}` in reply, over the same message channel `stream-server.mjs`
+  already uses for `delivery.receipt` and inbox-notify events — not a
+  separate control-frame path. Reason: browser WebSocket clients (a
+  future connector target per protocol §19.1's Chat SDK/Open Chat
+  Widget) don't expose raw control-frame ping/pong events to
+  application code, so a JSON frame is the only framing that's
+  inspectable identically on both Node.js and browser connectors.
 - **CLI surface:** `sigil send --wait-for-receipt` blocks until the
   first receipt arrives (mirrors the existing `inbox --wait` pattern in
   `sigil/cli/inbox-wait.mjs`), printing `sent → delivered → acknowledged`
@@ -570,19 +612,42 @@ lifecycle, display-name collision rejected, JCS reordered-key
 signature verification, sender receipt on ack, heartbeat timeout
 visibility).
 
-## 13. Open items for reviewer
+**Migration idempotency (implementation guidance) —** every migration
+this design adds (`005_rate_quota.sql`, `006_audit_conversation_binding.sql`,
+`007_capability_registry.sql` for §7's registry table, plus the
+`endpoint_acknowledgements` and `display_name` uniqueness migrations
+from §11) is written idempotently — `CREATE TABLE IF NOT EXISTS`,
+`ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS` — consistent
+with a repeatable-apply migration runner rather than a strictly
+once-only one. Each migration's corresponding schema/behavior is tested
+against **both** the live-PostgreSQL harness (`postgres-repository
+.integration.test.mjs` pattern, gated on `SIGIL_TEST_DATABASE_URL` per
+existing convention) **and** `memory-repository.mjs` (the in-memory
+store the local CLI's `relay up` uses) — the two repository
+implementations must agree on behavior (capability check, replay
+lookup, quota/depth accounting, audit conversation binding) or the CLI
+dev path silently diverges from the production-shaped path, which is
+close to what caused tonight's actual confusion (different runtime
+state between two nominally-equivalent repositories).
 
-- Confirm the `node:crypto` vs `@noble/ed25519` probe result before D
-  is implemented (§4) — this gates whether a new dependency is added at
-  all.
-- Confirm rate-limit defaults (§8, endpoint/owner/conversation) and
-  inbox-depth default (§8, recipient) are acceptable as "generous,
-  reviewable later" rather than needing real capacity planning now.
-- Confirm heartbeat interval/timeout defaults (§10: 15s/45s) are
-  reasonable starting points for local/single-host use.
-- Confirm the capability-registry seed set (§7 — `sigil.core/*` from
-  protocol §10) is complete before the fail-closed check ships, since
-  anything not seeded becomes immediately unusable.
+## 13. Open items — resolved
+
+All four prior open items are now decided:
+
+- **`node:crypto` vs `@noble/ed25519`:** run the §4 probe test first, as
+  designed. If `node:crypto.verify(null, bytes, key, sig)` satisfies all
+  signature vectors (standard Ed25519 PEM/DER), stay on `node:crypto`
+  and update the decisions doc accordingly — do not add the dependency
+  preemptively.
+- **Rate-limit / inbox-depth defaults (§8):** approved as endpoint
+  100/min, owner 500/min, conversation 200/min, recipient inbox depth
+  500 outstanding (unacknowledged/undelivered) items.
+- **Heartbeat defaults (§10):** approved as specified — 15s interval,
+  45s (3 missed) timeout.
+- **Capability registry seed (§7):** the protocol §10 seed set
+  (`sigil.core/*`, `sigil.task/*`, `sigil.approval/*`) is complete for
+  v1 — no additional namespaces to seed before the fail-closed check
+  ships.
 
 ## 14. Round 2 review resolution (Codex, 2026-08-16)
 
@@ -637,3 +702,22 @@ unregistered capabilities (§7); acknowledgement upsert semantics,
 revocation independence, and viewer-key auth path (§11); task
 request/result visibility/ordering under concurrent delivery (§5); JCS
 package pin + single-implementation completion gate (§4).
+
+## 16. Round 4 — implementation guidance + open items resolved (human, 2026-08-16)
+
+All open items decided (§13). Three pieces of implementation guidance
+locked in for the executing agent:
+
+1. **`withTransaction` helper** (§3) — standardizes connect/BEGIN/
+   fn/COMMIT/ROLLBACK/release so the single-client requirement from
+   blocker 4 can't be defeated by a hand-rolled call site that forgets
+   to release on an error path.
+2. **Heartbeat framing** (§10) — JSON application frames, not native
+   WS control frames, so browser-based future connectors (§19.1) can
+   inspect them identically to Node connectors.
+3. **Migration idempotency + dual-repository testing** (§12) —
+   `IF NOT EXISTS` throughout, every new migration's behavior verified
+   against both `postgres-repository` and `memory-repository.mjs` so
+   the CLI dev path and the production path can't silently diverge.
+
+No further open items. Spec is ready for writing-plans.
