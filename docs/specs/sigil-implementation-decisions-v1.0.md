@@ -136,3 +136,12 @@ not a special case in the relay protocol.
 - Bearer-token issuance/rotation: registration returns a one-time endpoint-scoped token over the authenticated bootstrap channel; rotation requires a request signed by the current endpoint key or approved recovery flow, invalidates the old token immediately, and audits the transition. Tokens are stored only in host-native secure storage and are never logged or returned after creation.
 - Rate/quota limit numbers (§14 requires them; this doc doesn't set thresholds).
 - Dead-letter queue mechanics for `processing_failed` (§9) — table shape only, no reaper policy yet.
+
+## Amendment 2026-08-16 — Ed25519: stay on node:crypto
+
+Probe (`sigil/relay/v1/ed25519-probe.test.mjs`) confirmed `node:crypto.verify(null, bytes, key, sig)`
+correctly implements Ed25519 per RFC 8032, round-trips through
+PEM re-import (the exact path `registry-store.mjs` uses), and correctly
+rejects tampered signatures. No gap found against the decision doc's intent.
+`@noble/ed25519` is **not added** as a dependency; `node:crypto` remains the
+conforming Ed25519 implementation for both signing and verification.
