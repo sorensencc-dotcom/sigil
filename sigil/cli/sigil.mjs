@@ -24,6 +24,7 @@ import { RelayClient } from '../connectors/v1/relay-client.mjs';
 import { LocalOutbox } from '../connectors/v1/local-outbox.mjs';
 import { loadConfigFile, resolveConfig } from './config-resolver.mjs';
 import { formatInboxItem, INBOX_WAIT_EXIT_CODES, waitForOneInboxMessage } from './inbox-wait.mjs';
+import { appendInboxLedger, readInboxLedger } from './ledger.mjs';
 
 const DEFAULT_CLI_CONFIG = path.join('.sigil', 'config.json');
 
@@ -36,7 +37,7 @@ Commands:
   init <name> --owner <owner_id> [--registry path]        Create a local identity and register it
   relay up [--registry path] [--port N]                    Run a local relay (blocks; Ctrl+C to stop)
   send [--identity path] [--relay-url url] --to endpoint_id --to-owner owner_id --message "text" [--conversation id]
-  inbox [--identity path] [--relay-url url] [--watch|--wait] [--loop] [--stream-url url] [--interval ms] [--timeout ms]
+  inbox [--identity path] [--relay-url url] [--watch|--wait] [--loop] [--stream-url url] [--interval ms] [--timeout ms] [--local] [--ledger path]
 
 send/inbox resolve --identity/--relay-url/--stream-url from, in order: the flag, then
 SIGIL_IDENTITY/SIGIL_RELAY_URL/SIGIL_STREAM_URL env vars, then .sigil/config.json
@@ -48,6 +49,15 @@ Everything here runs on this machine. See docs/meta/sigil-cli-roadmap.md for wha
 function opt(args, flags, fallback) {
   for (const flag of flags) if (args.values[flag] !== undefined) return args.values[flag];
   return fallback;
+}
+
+function flushPrint(line) {
+  return new Promise((resolve, reject) => {
+    process.stdout.write(line + '\n', (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
 }
 
 async function cmdInit(argv) {
@@ -98,13 +108,13 @@ async function cmdSend(argv) {
   const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, to: { type: 'string' }, 'to-owner': { type: 'string' }, message: { type: 'string' }, conversation: { type: 'string' }, config: { type: 'string' } } });
   const config = loadConfigFile(opt(args, ['config']) ?? DEFAULT_CLI_CONFIG);
   const resolved = resolveConfig({ flags: { relayUrl: opt(args, ['relay-url']), identity: opt(args, ['identity']) }, config });
+  if (!resolved.identityPath) throw new Error('usage: sigil send --identity path --relay-url url --to endpoint_id --to-owner owner_id --message "text" (or set SIGIL_IDENTITY / default_identity in .sigil/config.json)');
   const identity = loadIdentity(resolved.identityPath);
   const relayUrl = resolved.relayUrl;
   const to = opt(args, ['to']);
   const toOwner = opt(args, ['to-owner']);
   const message = opt(args, ['message']);
-  if (!resolved.identityPath) throw new Error('usage: sigil send --identity path --relay-url url --to endpoint_id --to-owner owner_id --message "text" (or set SIGIL_IDENTITY / default_identity in .sigil/config.json)');
-  if (!to || !toOwner || !message) throw new Error('usage: sigil send --identity path --relay-url url --to endpoint_id --to-owner owner_id --message "text"');
+  if (!relayUrl || !to || !toOwner || !message) throw new Error('usage: sigil send --identity path --relay-url url --to endpoint_id --to-owner owner_id --message "text"');
   const keys = identityKeys(identity);
   const outbox = new LocalOutbox({ privateKey: keys.privateKey, endpoint: { owner_id: identity.owner_id, endpoint_id: identity.endpoint_id, key_id: identity.key_id, kind: identity.kind } });
   const now = new Date();
@@ -125,11 +135,25 @@ async function cmdSend(argv) {
 }
 
 async function cmdInbox(argv) {
-  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, watch: { type: 'boolean' }, wait: { type: 'boolean' }, loop: { type: 'boolean' }, interval: { type: 'string' }, timeout: { type: 'string' }, config: { type: 'string' } } });
+  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, watch: { type: 'boolean' }, wait: { type: 'boolean' }, loop: { type: 'boolean' }, local: { type: 'boolean' }, ledger: { type: 'string' }, interval: { type: 'string' }, timeout: { type: 'string' }, config: { type: 'string' } } });
   const config = loadConfigFile(opt(args, ['config']) ?? DEFAULT_CLI_CONFIG);
   const resolved = resolveConfig({ flags: { relayUrl: opt(args, ['relay-url']), streamUrl: opt(args, ['stream-url']), identity: opt(args, ['identity']) }, config });
   if (!resolved.identityPath) throw new Error('usage: sigil inbox --identity path --relay-url url [--watch] (or set SIGIL_IDENTITY / default_identity in .sigil/config.json)');
   const identity = loadIdentity(resolved.identityPath);
+  const ledgerPath = opt(args, ['ledger']) ?? path.join(path.dirname(resolved.identityPath), 'inbox.jsonl');
+
+  if (Boolean(args.values.local)) {
+    const records = await readInboxLedger(ledgerPath);
+    if (!records.length) {
+      console.log('(local inbox empty)');
+    } else {
+      for (const record of records) {
+        console.log(formatInboxItem(record));
+      }
+    }
+    return;
+  }
+
   const relayUrl = resolved.relayUrl;
   const relay = new RelayClient({ baseUrl: relayUrl, token: identity.relay_token });
   const watch = Boolean(args.values.watch);
@@ -142,7 +166,14 @@ async function cmdInbox(argv) {
   const poll = async () => {
     const page = await relay.reconcileInbox(since);
     for (const item of page.items) {
-      console.log(formatInboxItem(item));
+      if (ledgerPath) {
+        await appendInboxLedger(ledgerPath, {
+          received_at: new Date().toISOString(),
+          delivery_id: item.delivery_id,
+          envelope: item.envelope ?? item,
+        });
+      }
+      await flushPrint(formatInboxItem(item));
       if (item.delivery_id) await relay.acknowledge(item.delivery_id);
     }
     since = page.nextSince ?? since;
@@ -152,7 +183,7 @@ async function cmdInbox(argv) {
     const timeoutMs = Number(opt(args, ['timeout']) ?? 300_000);
     do {
       try {
-        await waitForOneInboxMessage({ relay, identity, streamUrl, timeoutMs });
+        await waitForOneInboxMessage({ relay, identity, streamUrl, timeoutMs, print: flushPrint, ledgerPath });
       } catch (error) {
         if (!loop || error.exitCode !== INBOX_WAIT_EXIT_CODES.TIMEOUT) throw error;
         await new Promise((resolve) => setTimeout(resolve, 250));

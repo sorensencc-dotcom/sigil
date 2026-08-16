@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
 import { EventEmitter } from 'node:events';
 import { INBOX_WAIT_EXIT_CODES, InboxWaitError, waitForOneInboxMessage } from './inbox-wait.mjs';
+import { readInboxLedger } from './ledger.mjs';
 
 function item(id) {
   return { delivery_id: `delivery_${id}`, envelope: {
@@ -32,6 +36,31 @@ test('wait consumes exactly one item and leaves the next item for the next invoc
   assert.equal(output.length, 2);
   assert.match(output[0], /one/);
   assert.match(output[1], /two/);
+});
+
+test('wait records consumed message into local ledger before acknowledgment', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sigil-wait-ledger-'));
+  const ledgerPath = path.join(tmpDir, 'inbox.jsonl');
+  const queue = [item('ledger_test')];
+  const acknowledged = [];
+  const relay = {
+    async reconcileInbox() { return { items: queue.slice() }; },
+    async acknowledge(deliveryId) { acknowledged.push(deliveryId); queue.shift(); },
+  };
+  const output = [];
+
+  await waitForOneInboxMessage({
+    relay, identity: { relay_token: 'token' }, streamUrl: 'ws://stream',
+    WebSocketImpl: IdleSocket, print: (line) => output.push(line), ledgerPath,
+  });
+
+  assert.deepEqual(acknowledged, ['delivery_ledger_test']);
+  const records = await readInboxLedger(ledgerPath);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].delivery_id, 'delivery_ledger_test');
+  assert.equal(records[0].envelope.body.text, 'ledger_test');
+
+  await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
 test('wait timeout exits with code 2 and acknowledges nothing', async () => {

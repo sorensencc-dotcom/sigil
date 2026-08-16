@@ -1,4 +1,5 @@
 import { WebSocket as DefaultWebSocket } from 'ws';
+import { appendInboxLedger } from './ledger.mjs';
 
 export const INBOX_WAIT_EXIT_CODES = Object.freeze({ TIMEOUT: 2, AUTH: 3, CONNECTION: 4, MALFORMED: 5, SIGINT: 130, SIGTERM: 143 });
 
@@ -21,7 +22,7 @@ export function formatInboxItem(item) {
   return `[${envelope.created_at}] ${envelope.sender.endpoint_id} -> ${envelope.recipient?.endpoint_id ?? '(broadcast)'} (${envelope.message_type}): ${JSON.stringify(envelope.body)}`;
 }
 
-export async function waitForOneInboxMessage({ relay, identity, streamUrl, timeoutMs = 300_000, WebSocketImpl = DefaultWebSocket, print = console.log, signalSource = process } = {}) {
+export async function waitForOneInboxMessage({ relay, identity, streamUrl, timeoutMs = 300_000, WebSocketImpl = DefaultWebSocket, print = console.log, signalSource = process, ledgerPath } = {}) {
   if (!relay || !identity?.relay_token || !streamUrl) throw new Error('relay, identity, and streamUrl are required');
   let socket; let stopped = false; let reconnectTimer; let fallbackTimer; let timeoutTimer; let reconnectDelay = 250; let polling = false;
   let resolveWait; let rejectWait;
@@ -57,6 +58,13 @@ export async function waitForOneInboxMessage({ relay, identity, streamUrl, timeo
       const item = page.items?.[0];
       if (!item) return false;
       const output = formatInboxItem(item);
+      if (ledgerPath) {
+        await appendInboxLedger(ledgerPath, {
+          received_at: new Date().toISOString(),
+          delivery_id: item.delivery_id,
+          envelope: item.envelope ?? item,
+        });
+      }
       await print(output);
       if (stopped) return false;
       if (item.delivery_id) await relay.acknowledge(item.delivery_id);
