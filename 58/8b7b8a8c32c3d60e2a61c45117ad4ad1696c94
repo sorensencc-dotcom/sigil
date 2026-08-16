@@ -1,0 +1,19 @@
+docs/specs/sigil-implementation-decisions-v1.0.md
+  s_8dd1ad151f659e::t_aec590ed4e1797 142-147
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "588b7b8a8c32c3d60e2a61c45117ad4ad1696c94",
+  "prompts": {},
+  "sessions": {
+    "s_8dd1ad151f659e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "51061bde-6290-4632-b90c-09117e55b1be",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
