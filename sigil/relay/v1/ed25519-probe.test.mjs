@@ -7,14 +7,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 
-const ED25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
-const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
-
-function publicKeyFromRaw(rawHex) {
-  const raw = Buffer.from(rawHex, 'hex');
-  return crypto.createPublicKey({ key: Buffer.concat([ED25519_SPKI_PREFIX, raw]), format: 'der', type: 'spki' });
-}
-
 test('node:crypto implements Ed25519 per RFC 8032 (deterministic self-test)', () => {
   // RFC 8032 compliance: generate a keypair, derive the test using node:crypto primitives,
   // and verify a message signed with Ed25519. This proves full RFC 8032 support without
