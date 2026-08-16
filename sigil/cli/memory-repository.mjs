@@ -4,10 +4,15 @@
 // only in this process -- restarting `sigil relay up` loses history.
 import { transitionDelivery } from '../relay/v1/delivery-state.mjs';
 
-const SEEDED_CAPABILITIES = new Set([
-  'sigil.core/read_shared_context', 'sigil.core/broadcast_message',
-  'sigil.task/submit', 'sigil.task/read_inbox', 'sigil.task/read_result', 'sigil.task/process', 'sigil.task/submit_result',
-  'sigil.approval/request'
+const SEEDED_CAPABILITIES = new Map([
+  ['sigil.core/read_shared_context', { namespace: 'sigil.core', risk_tier: 'standard' }],
+  ['sigil.core/broadcast_message', { namespace: 'sigil.core', risk_tier: 'standard' }],
+  ['sigil.task/submit', { namespace: 'sigil.task', risk_tier: 'standard' }],
+  ['sigil.task/read_inbox', { namespace: 'sigil.task', risk_tier: 'low' }],
+  ['sigil.task/read_result', { namespace: 'sigil.task', risk_tier: 'low' }],
+  ['sigil.task/process', { namespace: 'sigil.task', risk_tier: 'standard' }],
+  ['sigil.task/submit_result', { namespace: 'sigil.task', risk_tier: 'standard' }],
+  ['sigil.approval/request', { namespace: 'sigil.approval', risk_tier: 'high' }],
 ]);
 
 export function createMemoryRepository() {
@@ -76,7 +81,8 @@ export function createMemoryRepository() {
       return next;
     },
     async lookupCapabilityRegistration(capability) {
-      return SEEDED_CAPABILITIES.has(capability) ? { capability, namespace: capability.split('/')[0], risk_tier: 'standard' } : null;
+      const entry = SEEDED_CAPABILITIES.get(capability);
+      return entry ? { capability, namespace: entry.namespace, risk_tier: entry.risk_tier } : null;
     }
   };
 }

@@ -39,3 +39,23 @@ test('memory relay lookupIdempotency returns the stored canonical hash for a pri
   assert.deepEqual(await repository.lookupIdempotency('ep_codex', 'send_1'), { message_id: 'msg_1', canonical_hash: 'sha256:abc' });
   assert.equal(await repository.lookupIdempotency('ep_codex', 'send_missing'), null);
 });
+
+test('memory relay lookupCapabilityRegistration returns registered capabilities with correct risk_tier', async () => {
+  const repository = createMemoryRepository();
+  const lowRiskCapability = await repository.lookupCapabilityRegistration('sigil.task/read_inbox');
+  assert.ok(lowRiskCapability);
+  assert.equal(lowRiskCapability.capability, 'sigil.task/read_inbox');
+  assert.equal(lowRiskCapability.namespace, 'sigil.task');
+  assert.equal(lowRiskCapability.risk_tier, 'low');
+
+  const highRiskCapability = await repository.lookupCapabilityRegistration('sigil.approval/request');
+  assert.ok(highRiskCapability);
+  assert.equal(highRiskCapability.capability, 'sigil.approval/request');
+  assert.equal(highRiskCapability.namespace, 'sigil.approval');
+  assert.equal(highRiskCapability.risk_tier, 'high');
+});
+
+test('memory relay lookupCapabilityRegistration returns null for unregistered capabilities', async () => {
+  const repository = createMemoryRepository();
+  assert.equal(await repository.lookupCapabilityRegistration('unknown.capability/fake'), null);
+});
