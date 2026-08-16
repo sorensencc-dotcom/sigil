@@ -9,7 +9,9 @@
 
 Audit of the current implementation against the 25-item §18 conformance
 profile found 15 IMPLEMENTED, and a set of gaps requiring work. This design
-closes 8 of them:
+closes 8 of them, plus one design gap surfaced during review (workstream H,
+§10) that's not a §18 item but is load-bearing for trusting any of the
+others in practice:
 
 | Item | Requirement |
 |---|---|
@@ -21,17 +23,29 @@ closes 8 of them:
 | #21 | Task request/result body field and type validation |
 | #22 | Sender owner mismatch, display-name collision, unverified endpoint presentation |
 | #23 | Rate/quota limits preventing one endpoint from exhausting another's inbox |
+| H | Sender-side delivery receipts + connector/relay heartbeat (not a §18 item — see §10) |
 
 (Original audit listed 9 candidate gaps; #18/#24, key rotation, are already
 IMPLEMENTED — confirmed by `validate-envelope.mjs:38-43` and
 `validate-envelope.test.mjs:43-51` — and are excluded here.)
 
 Out of scope: WebAuthn/OIDC/account-link code, connector host-runtime
-adapters, npm packaging. None of the 8 items require touching them.
+adapters, npm packaging, and a durable/supervised relay process
+(PostgreSQL-backed persistence + automatic restart/health monitoring for
+`sigil relay up` itself) — real gap, surfaced by an actual incident during
+this design's review cycle (in-memory relay died and lost queued state),
+but it's an ops/process-supervision concern independent of the 8+1 items
+here. Tracked as a separate backlog item, not this spec.
 
 ## 2. Build order
 
-**D → F → B → A → C → E → G**
+**D → F → B → A → C → E → H → G**
+
+H is placed after E and before G: it reuses E's delivery-state
+instrumentation (receipts fire off the same transitions E now audits) so
+it needs E's transaction boundaries in place first; it's independent of
+G (owner/display-name integrity), which stays last as the lowest-risk,
+most isolated workstream.
 
 Canonicalization (D) changes the bytes every signature, action hash, and
 approval binding is computed over. Every other workstream either hashes
@@ -322,7 +336,59 @@ rejection whose audit row write itself fails and is logged to
 stderr/dead-letter, not a rejection that's silently unaudited under
 normal operation).
 
-## 10. G — Owner / display-name integrity
+## 10. H — Sender-side delivery receipts + heartbeat
+
+Not a §18 item; surfaced during this design's own review cycle
+(2026-08-16) when a sent message's fate was unknowable from the sender
+side without a manual out-of-band check. Protocol §9 already defines
+delivery states (`accepted → queued → delivered → acknowledged →
+processing → processed`), but every transition past `accepted` is only
+visible to the *recipient* — the relay never tells the *sender* their
+message moved. Borrows three concepts from FIX (used in financial
+trading for the same reliability problem) and one from chat-SDK-style
+read receipts:
+
+- **Two-stage ack (FIX order-ack → execution-report):** `sigil send`
+  already gets a synchronous `202 Accepted` at send time (relay
+  durably persisted it — this is the existing "sent properly"
+  guarantee, unchanged). New: the relay additionally pushes a
+  `delivery.receipt` notification back to the **sender's own**
+  stream/inbox — not the recipient's — every time that message's
+  delivery record transitions (`delivered`, `acknowledged`, `processed`,
+  `processing_failed`, `dead_letter`). Reuses the existing
+  `stream-server.mjs` push mechanism (`sigil/relay/v1/stream-server.mjs`),
+  just adds the sender as a second notify target alongside the
+  recipient, keyed off the same delivery-state transition E already
+  instruments and audits.
+- **Delivery/read receipts (Open Chat Widget / chat-SDK convention):**
+  the receipt payload is intentionally small (`{ message_id,
+  delivery_id, state, at }`) — a status update, not a resend of the
+  message body — matching how chat-SDK read receipts are a lightweight
+  side-channel event, not a duplicate of the original message.
+- **Session heartbeat (FIX Heartbeat/TestRequest):** the connector
+  (both CLI and future host adapters) sends a periodic ping to the relay
+  over the existing WebSocket stream connection; if the relay misses N
+  consecutive heartbeats, the connector surfaces "relay unreachable"
+  locally instead of silently returning an empty inbox that's
+  indistinguishable from "nothing new." This directly addresses
+  tonight's incident: the relay died and restarted with no in-flight
+  notification to either connector that state had been lost — a
+  heartbeat timeout would have made that visible immediately instead of
+  requiring a manual cross-check.
+- **CLI surface:** `sigil send --wait-for-receipt` blocks until the
+  first receipt arrives (mirrors the existing `inbox --wait` pattern in
+  `sigil/cli/inbox-wait.mjs`), printing `sent → delivered → acknowledged`
+  progressively instead of only the initial `Sent.` line.
+
+**Explicitly not in scope for H:** FIX-style sequence-numbered
+gap-fill/resend (`MsgSeqNum` + `ResendRequest`). That's a real hardening
+step for a *future* profile — detecting "I'm missing messages N..M" from
+a persistent per-conversation sequence counter — but it's a bigger
+change to the envelope/conversation model than this spec's scope, and
+`message_id` + `idempotency_key` already give duplicate/replay safety
+(§6) without it. Noted as a backlog candidate, not built here.
+
+## 11. G — Owner / display-name integrity
 
 - **Display-name collision:** normalized (case-folded, whitespace-
   trimmed) uniqueness constraint on `(owner_id, normalized_display_name)`
@@ -358,7 +424,7 @@ normal operation).
   make first contact visible — but the *record* that it happened lives
   in the relay, not solely in a connector-local UI state.
 
-## 11. Testing summary
+## 12. Testing summary
 
 Each workstream: unit tests colocated per existing convention
 (`*.test.mjs` next to source). Plus one addition per workstream to
@@ -366,19 +432,22 @@ Each workstream: unit tests colocated per existing convention
 scenario end-to-end (revoked-grant denial, replay-vs-duplicate
 distinction, quota rollback-on-reject, audit query returns full
 lifecycle, display-name collision rejected, JCS reordered-key
-signature verification).
+signature verification, sender receipt on ack, heartbeat timeout
+visibility).
 
-## 12. Open items for reviewer
+## 13. Open items for reviewer
 
 - Confirm the `node:crypto` vs `@noble/ed25519` probe result before D
   is implemented (§4) — this gates whether a new dependency is added at
   all.
 - Confirm quota default limits (§8) are acceptable as "generous,
   reviewable later" rather than needing real capacity planning now.
-- Confirm `endpoint_acknowledgements` (§10) is the right shape for
+- Confirm `endpoint_acknowledgements` (§11) is the right shape for
   per-viewer trust state, versus something simpler for v1.
+- Confirm heartbeat interval/timeout defaults for H (§10) — not yet
+  specified numerically, needs a concrete default before implementation.
 
-## 13. Round 2 review resolution (Codex, 2026-08-16)
+## 14. Round 2 review resolution (Codex, 2026-08-16)
 
 Four blockers raised, all addressed above:
 
