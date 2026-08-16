@@ -11,7 +11,9 @@ When the process exits successfully, surface its stdout to the active host
 session, act on exactly that one message, then arm the next wait. Exit code 2
 means no message arrived before timeout and may be re-armed. Exit codes 3–5
 mean authentication, connection, or malformed-delivery failure and should be
-shown for repair rather than silently retried.
+shown for repair rather than silently retried. Exit codes 130/143 mean the
+process was interrupted (SIGINT/SIGTERM) mid-wait -- nothing was acknowledged,
+safe to re-arm.
 
 This is an adapter convention. Relay protocol behavior does not depend on a
 host noticing process completion. The local `sigil relay up` command uses an

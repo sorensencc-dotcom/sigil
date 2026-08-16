@@ -1,6 +1,6 @@
 import { WebSocket as DefaultWebSocket } from 'ws';
 
-export const INBOX_WAIT_EXIT_CODES = Object.freeze({ TIMEOUT: 2, AUTH: 3, CONNECTION: 4, MALFORMED: 5 });
+export const INBOX_WAIT_EXIT_CODES = Object.freeze({ TIMEOUT: 2, AUTH: 3, CONNECTION: 4, MALFORMED: 5, SIGINT: 130, SIGTERM: 143 });
 
 export class InboxWaitError extends Error {
   constructor(message, exitCode, options = {}) { super(message, options); this.name = 'InboxWaitError'; this.exitCode = exitCode; }
@@ -21,7 +21,7 @@ export function formatInboxItem(item) {
   return `[${envelope.created_at}] ${envelope.sender.endpoint_id} -> ${envelope.recipient?.endpoint_id ?? '(broadcast)'} (${envelope.message_type}): ${JSON.stringify(envelope.body)}`;
 }
 
-export async function waitForOneInboxMessage({ relay, identity, streamUrl, timeoutMs = 300_000, WebSocketImpl = DefaultWebSocket, print = console.log } = {}) {
+export async function waitForOneInboxMessage({ relay, identity, streamUrl, timeoutMs = 300_000, WebSocketImpl = DefaultWebSocket, print = console.log, signalSource = process } = {}) {
   if (!relay || !identity?.relay_token || !streamUrl) throw new Error('relay, identity, and streamUrl are required');
   let socket; let stopped = false; let reconnectTimer; let fallbackTimer; let timeoutTimer; let reconnectDelay = 250; let polling = false;
   let resolveWait; let rejectWait;
@@ -29,7 +29,18 @@ export async function waitForOneInboxMessage({ relay, identity, streamUrl, timeo
   // Attach a handler immediately because timeout/socket callbacks can settle
   // the promise before the async control path reaches its final await.
   wait.catch(() => {});
-  const cleanup = () => { stopped = true; clearTimeout(reconnectTimer); clearInterval(fallbackTimer); clearTimeout(timeoutTimer); try { socket?.close(); socket?.terminate?.(); } catch {} };
+  // SIGINT/SIGTERM must not acknowledge anything -- fail() only rejects and
+  // cleans up, it never touches the relay, so a signal mid-wait is always safe.
+  const onSigint = () => fail(new InboxWaitError('Interrupted', INBOX_WAIT_EXIT_CODES.SIGINT));
+  const onSigterm = () => fail(new InboxWaitError('Terminated', INBOX_WAIT_EXIT_CODES.SIGTERM));
+  signalSource.once('SIGINT', onSigint);
+  signalSource.once('SIGTERM', onSigterm);
+  const cleanup = () => {
+    stopped = true;
+    clearTimeout(reconnectTimer); clearInterval(fallbackTimer); clearTimeout(timeoutTimer);
+    signalSource.removeListener('SIGINT', onSigint); signalSource.removeListener('SIGTERM', onSigterm);
+    try { socket?.close(); socket?.terminate?.(); } catch {}
+  };
   const fail = (error) => { cleanup(); rejectWait(error); };
   const finish = () => { cleanup(); resolveWait(); };
   const poll = async () => {

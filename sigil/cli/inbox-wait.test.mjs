@@ -57,3 +57,43 @@ test('wait does not acknowledge malformed delivered items', async () => {
   );
   assert.deepEqual(acknowledged, []);
 });
+
+test('SIGINT rejects with exit code 130 and acknowledges nothing', async () => {
+  const acknowledged = [];
+  const signalSource = new EventEmitter();
+  const pending = assert.rejects(
+    waitForOneInboxMessage({
+      relay: { async reconcileInbox() { return { items: [] }; }, async acknowledge(id) { acknowledged.push(id); } },
+      identity: { relay_token: 'token' }, streamUrl: 'ws://stream', WebSocketImpl: IdleSocket, signalSource,
+    }),
+    (error) => error instanceof InboxWaitError && error.exitCode === INBOX_WAIT_EXIT_CODES.SIGINT,
+  );
+  signalSource.emit('SIGINT');
+  await pending;
+  assert.deepEqual(acknowledged, []);
+});
+
+test('SIGTERM rejects with exit code 143 and acknowledges nothing', async () => {
+  const acknowledged = [];
+  const signalSource = new EventEmitter();
+  const pending = assert.rejects(
+    waitForOneInboxMessage({
+      relay: { async reconcileInbox() { return { items: [] }; }, async acknowledge(id) { acknowledged.push(id); } },
+      identity: { relay_token: 'token' }, streamUrl: 'ws://stream', WebSocketImpl: IdleSocket, signalSource,
+    }),
+    (error) => error instanceof InboxWaitError && error.exitCode === INBOX_WAIT_EXIT_CODES.SIGTERM,
+  );
+  signalSource.emit('SIGTERM');
+  await pending;
+  assert.deepEqual(acknowledged, []);
+});
+
+test('cleanup removes signal listeners so they do not leak across invocations', async () => {
+  const signalSource = new EventEmitter();
+  await waitForOneInboxMessage({
+    relay: { async reconcileInbox() { return { items: [item('one')] }; }, async acknowledge() {} },
+    identity: { relay_token: 'token' }, streamUrl: 'ws://stream', WebSocketImpl: IdleSocket, signalSource, print: () => {},
+  });
+  assert.equal(signalSource.listenerCount('SIGINT'), 0);
+  assert.equal(signalSource.listenerCount('SIGTERM'), 0);
+});
