@@ -51,6 +51,14 @@ sigil inbox --wait --identity <path> --relay-url <url> [--stream-url <url>] [--t
    message per invocation" safe: `acknowledgeDelivery` already scopes to a single
    `delivery_id`, and `listInbox` already filters to `state === 'delivered'`, so unacked
    items simply persist for the next call — no new relay/repository code needed.)
+   **Cursor requirement:** `--wait` must call `reconcileInbox('')` every time — an empty
+   cursor, never advanced to `page.nextSince`. Ack state (not the cursor) is what
+   determines what the next invocation sees; advancing the cursor past the consumed
+   item's `queued_at` would silently skip any other unconsumed items still in that same
+   page (`listInbox`'s filter is `queued_at > since`, so a cursor sitting exactly on or
+   after a skipped item's timestamp hides it forever). This is a distinct code path from
+   `--watch`'s `poll()`, which legitimately advances `since` because it drains and acks
+   every item in the page, not just the first.
 3. If step 1 finds nothing, open the WebSocket stream (same `connect()`/reconnect-backoff
    logic already in `cmdInbox --watch`) and wait for a `delivered` event, then repeat step
    1's poll (the event just tells us to re-poll; the poll is what's authoritative).

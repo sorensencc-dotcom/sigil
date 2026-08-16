@@ -1,0 +1,83 @@
+import { WebSocket as DefaultWebSocket } from 'ws';
+
+export const INBOX_WAIT_EXIT_CODES = Object.freeze({ TIMEOUT: 2, AUTH: 3, CONNECTION: 4, MALFORMED: 5 });
+
+export class InboxWaitError extends Error {
+  constructor(message, exitCode, options = {}) { super(message, options); this.name = 'InboxWaitError'; this.exitCode = exitCode; }
+}
+
+function classifyRelayError(error) {
+  if (error?.status === 401 || error?.code === 'AUTHENTICATION_REQUIRED' || error?.code === 'AUTH_REQUIRED') {
+    return new InboxWaitError(error.message || 'Authentication required', INBOX_WAIT_EXIT_CODES.AUTH, { cause: error });
+  }
+  return new InboxWaitError(error?.message || 'Relay connection failed', INBOX_WAIT_EXIT_CODES.CONNECTION, { cause: error });
+}
+
+export function formatInboxItem(item) {
+  const envelope = item?.envelope ?? item;
+  if (!envelope || typeof envelope !== 'object' || typeof envelope.created_at !== 'string' ||
+      typeof envelope.sender?.endpoint_id !== 'string' || typeof envelope.message_type !== 'string' ||
+      !('body' in envelope)) throw new InboxWaitError('Malformed delivered message', INBOX_WAIT_EXIT_CODES.MALFORMED);
+  return `[${envelope.created_at}] ${envelope.sender.endpoint_id} -> ${envelope.recipient?.endpoint_id ?? '(broadcast)'} (${envelope.message_type}): ${JSON.stringify(envelope.body)}`;
+}
+
+export async function waitForOneInboxMessage({ relay, identity, streamUrl, timeoutMs = 300_000, WebSocketImpl = DefaultWebSocket, print = console.log } = {}) {
+  if (!relay || !identity?.relay_token || !streamUrl) throw new Error('relay, identity, and streamUrl are required');
+  let socket; let stopped = false; let reconnectTimer; let fallbackTimer; let timeoutTimer; let reconnectDelay = 250; let polling = false;
+  let resolveWait; let rejectWait;
+  const wait = new Promise((resolve, reject) => { resolveWait = resolve; rejectWait = reject; });
+  // Attach a handler immediately because timeout/socket callbacks can settle
+  // the promise before the async control path reaches its final await.
+  wait.catch(() => {});
+  const cleanup = () => { stopped = true; clearTimeout(reconnectTimer); clearInterval(fallbackTimer); clearTimeout(timeoutTimer); try { socket?.close(); socket?.terminate?.(); } catch {} };
+  const fail = (error) => { cleanup(); rejectWait(error); };
+  const finish = () => { cleanup(); resolveWait(); };
+  const poll = async () => {
+    if (stopped || polling) return false;
+    polling = true;
+    try {
+      // Empty cursor is intentional: ack state, not a cursor advanced past
+      // other page items, determines what the next invocation receives.
+      const page = await relay.reconcileInbox('');
+      const item = page.items?.[0];
+      if (!item) return false;
+      const output = formatInboxItem(item);
+      print(output);
+      if (item.delivery_id) await relay.acknowledge(item.delivery_id);
+      finish();
+      return true;
+    } catch (error) {
+      fail(error instanceof InboxWaitError ? error : classifyRelayError(error));
+      return false;
+    } finally { polling = false; }
+  };
+  const scheduleReconnect = () => {
+    if (stopped || reconnectTimer) return;
+    reconnectTimer = setTimeout(() => { reconnectTimer = undefined; connect(); }, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
+  };
+  const connect = () => {
+    if (stopped) return;
+    try {
+      socket = new WebSocketImpl(streamUrl, { headers: { authorization: `Bearer ${identity.relay_token}` } });
+      let opened = false;
+      socket.once('open', () => { opened = true; reconnectDelay = 250; });
+      socket.on('message', (raw) => {
+        try { const event = JSON.parse(raw); if (event.type === 'delivered') poll(); }
+        catch (error) { fail(new InboxWaitError(`Malformed stream event: ${error.message}`, INBOX_WAIT_EXIT_CODES.MALFORMED, { cause: error })); }
+      });
+      socket.once('unexpected-response', (_request, response) => {
+        if (response.statusCode === 401) fail(new InboxWaitError('Authentication required', INBOX_WAIT_EXIT_CODES.AUTH));
+        else fail(new InboxWaitError(`Stream connection failed: HTTP ${response.statusCode}`, INBOX_WAIT_EXIT_CODES.CONNECTION));
+      });
+      socket.once('error', (error) => { try { socket.close(); } catch {}; if (!stopped && !opened) fail(new InboxWaitError(error?.message || 'Stream connection failed', INBOX_WAIT_EXIT_CODES.CONNECTION, { cause: error })); else if (!stopped) scheduleReconnect(); });
+      socket.once('close', () => { if (!stopped) scheduleReconnect(); });
+    } catch (error) { fail(classifyRelayError(error)); }
+  };
+  timeoutTimer = setTimeout(() => fail(new InboxWaitError('Inbox wait timed out', INBOX_WAIT_EXIT_CODES.TIMEOUT)), timeoutMs);
+  if (await poll()) return;
+  if (stopped) { await wait; return; }
+  fallbackTimer = setInterval(() => { poll(); }, 30_000);
+  connect();
+  await wait;
+}

@@ -23,6 +23,7 @@ import { createStreamServer } from '../relay/v1/stream-server.mjs';
 import { RelayClient } from '../connectors/v1/relay-client.mjs';
 import { LocalOutbox } from '../connectors/v1/local-outbox.mjs';
 import { loadConfigFile, resolveConfig } from './config-resolver.mjs';
+import { formatInboxItem, waitForOneInboxMessage } from './inbox-wait.mjs';
 
 const DEFAULT_CLI_CONFIG = path.join('.sigil', 'config.json');
 
@@ -35,7 +36,7 @@ Commands:
   init <name> --owner <owner_id> [--registry path]        Create a local identity and register it
   relay up [--registry path] [--port N]                    Run a local relay (blocks; Ctrl+C to stop)
   send [--identity path] [--relay-url url] --to endpoint_id --to-owner owner_id --message "text" [--conversation id]
-  inbox [--identity path] [--relay-url url] [--watch] [--stream-url url] [--interval ms]
+  inbox [--identity path] [--relay-url url] [--watch|--wait] [--stream-url url] [--interval ms] [--timeout ms]
 
 send/inbox resolve --identity/--relay-url/--stream-url from, in order: the flag, then
 SIGIL_IDENTITY/SIGIL_RELAY_URL/SIGIL_STREAM_URL env vars, then .sigil/config.json
@@ -124,7 +125,7 @@ async function cmdSend(argv) {
 }
 
 async function cmdInbox(argv) {
-  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, watch: { type: 'boolean' }, interval: { type: 'string' }, config: { type: 'string' } } });
+  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, watch: { type: 'boolean' }, wait: { type: 'boolean' }, interval: { type: 'string' }, timeout: { type: 'string' }, config: { type: 'string' } } });
   const config = loadConfigFile(opt(args, ['config']) ?? DEFAULT_CLI_CONFIG);
   const resolved = resolveConfig({ flags: { relayUrl: opt(args, ['relay-url']), streamUrl: opt(args, ['stream-url']), identity: opt(args, ['identity']) }, config });
   if (!resolved.identityPath) throw new Error('usage: sigil inbox --identity path --relay-url url [--watch] (or set SIGIL_IDENTITY / default_identity in .sigil/config.json)');
@@ -132,19 +133,23 @@ async function cmdInbox(argv) {
   const relayUrl = resolved.relayUrl;
   const relay = new RelayClient({ baseUrl: relayUrl, token: identity.relay_token });
   const watch = Boolean(args.values.watch);
-  const intervalMs = Number(opt(args, ['interval']) ?? 2000);
+  const wait = Boolean(args.values.wait);
+  if (watch && wait) throw new Error('use either --watch or --wait, not both');
   const streamUrl = resolved.streamUrl ?? (() => { const url = new URL(relayUrl); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'; url.port = String((Number(url.port || (url.protocol === 'wss:' ? 443 : 80)) + 1)); url.pathname = '/v1/stream'; return url.toString(); })();
   let since = '';
   const poll = async () => {
     const page = await relay.reconcileInbox(since);
     for (const item of page.items) {
-      const env = item.envelope ?? item;
-      console.log(`[${env.created_at}] ${env.sender.endpoint_id} -> ${env.recipient?.endpoint_id ?? '(broadcast)'} (${env.message_type}): ${JSON.stringify(env.body)}`);
+      console.log(formatInboxItem(item));
       if (item.delivery_id) await relay.acknowledge(item.delivery_id);
     }
     since = page.nextSince ?? since;
     return page.items.length;
   };
+  if (wait) {
+    await waitForOneInboxMessage({ relay, identity, streamUrl, timeoutMs: Number(opt(args, ['timeout']) ?? 300_000) });
+    return;
+  }
   if (!watch) {
     const count = await poll();
     if (!count) console.log('(inbox empty)');
@@ -176,7 +181,7 @@ async function main() {
     else usage();
   } catch (error) {
     console.error(`sigil: ${error.message}`);
-    process.exitCode = 1;
+    process.exitCode = Number.isInteger(error.exitCode) ? error.exitCode : 1;
   }
 }
 
