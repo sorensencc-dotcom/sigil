@@ -2,6 +2,7 @@ import pg from 'pg';
 import crypto from 'node:crypto';
 import { canTransition } from './delivery-state.mjs';
 import { assertAssurance } from './auth-policy.mjs';
+import { withTransaction } from './with-transaction.mjs';
 
 export class PostgresRepository {
   constructor({ pool = new pg.Pool(), schema = 'public' } = {}) { this.pool = pool; this.schema = schema; }
@@ -134,10 +135,7 @@ export class PostgresRepository {
     });
   }
   async withTransaction(work) {
-    const client = await this.pool.connect();
-    try { await client.query('BEGIN'); const result = await work(client); await client.query('COMMIT'); return result; }
-    catch (error) { await client.query('ROLLBACK'); throw error; }
-    finally { client.release(); }
+    return withTransaction(this.pool, work);
   }
   async persistAcceptedEnvelope(row) {
     try {
