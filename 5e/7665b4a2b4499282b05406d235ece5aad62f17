@@ -1,0 +1,44 @@
+sigil/relay/v1/accept-envelope.mjs
+  s_8dd1ad151f659e::t_56f36a2925b40d 19-22,31,35-51,57-61,63-65,71,76
+  s_8dd1ad151f659e::t_d609457bdb1db1 52-56
+  s_8dd1ad151f659e::t_34c534c6309efb 1
+sigil/cli/memory-repository.mjs
+  s_8dd1ad151f659e::t_72d2a5b7274b9a 10,12-26,29
+sigil/relay/v1/accept-envelope.test.mjs
+  s_8dd1ad151f659e::t_ac2f4bb91f0fba 84-139
+sigil/relay/v1/postgres-repository.test.mjs
+  s_8dd1ad151f659e::t_955e889afc27a9 131-145
+sigil/cli/memory-repository.test.mjs
+  s_8dd1ad151f659e::t_e3cd30f8c6963c 7
+  s_8dd1ad151f659e::t_b1d44b97368757 26
+  s_8dd1ad151f659e::t_2f7b1a8385dc26 15-25,27-41
+sigil/relay/v1/http-server.mjs
+  s_8dd1ad151f659e::t_243eafe8ec8e5b 111-116
+sigil/relay/v1/http-server.test.mjs
+  s_8dd1ad151f659e::t_9974366088abf8 105
+  s_8dd1ad151f659e::t_2ae28f97d3ecaf 126-131
+  s_8dd1ad151f659e::t_7ea5be97a1d49b 145
+  s_8dd1ad151f659e::t_17aa27e50a6516 37
+  s_8dd1ad151f659e::t_366ba87811e5bd 62
+  s_8dd1ad151f659e::t_26df9dc8053cf7 80
+sigil/relay/v1/postgres-repository.mjs
+  s_8dd1ad151f659e::t_0929e9b0fb39af 147-148,150,159
+  s_8dd1ad151f659e::t_8aa10e4feeb4d0 160-166,168-170,172-183
+  s_8dd1ad151f659e::t_bb05000b7b54fb 10-11,17-23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "5e7665b4a2b4499282b05406d235ece5aad62f17",
+  "prompts": {},
+  "sessions": {
+    "s_8dd1ad151f659e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "51061bde-6290-4632-b90c-09117e55b1be",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
