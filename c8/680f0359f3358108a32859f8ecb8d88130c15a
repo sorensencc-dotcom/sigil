@@ -1,0 +1,27 @@
+sigil/migrations/005_message_lookup_index.sql
+  s_8dd1ad151f659e::t_fcd568b6214674 1-7
+sigil/relay/v1/postgres-repository.test.mjs
+  s_8dd1ad151f659e::t_9c64a991f9ad9d 152-153,162
+  s_8dd1ad151f659e::t_1be04cb45533f2 159-160
+  s_8dd1ad151f659e::t_4c198bb1812ba5 154-158,161
+sigil/relay/v1/postgres-repository.mjs
+  s_8dd1ad151f659e::t_a82bf498a98537 24-30
+sigil/cli/memory-repository.mjs
+  s_8dd1ad151f659e::t_96df1b204808cf 27-34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "c8680f0359f3358108a32859f8ecb8d88130c15a",
+  "prompts": {},
+  "sessions": {
+    "s_8dd1ad151f659e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "51061bde-6290-4632-b90c-09117e55b1be",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
