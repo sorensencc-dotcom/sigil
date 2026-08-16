@@ -60,12 +60,24 @@ loaded by the caller (`acceptEnvelopeAsync` in `accept-envelope.mjs`)
 *inside* a single repository transaction, passed into `validateEnvelope`
 as already-resolved maps/sets (same shape as the existing `idempotency`
 param), and the resulting accept decision is persisted in that same
-transaction. This closes the lookup-then-persist race Codex flagged: the
-grant snapshot and the persisted envelope commit atomically, so a
-revocation racing an in-flight envelope either lands before the
-transaction starts (envelope rejected) or after it commits (envelope
-already accepted under the grant that was valid at accept time — correct,
-not a race).
+transaction.
+
+**Isolation (revised per Codex review round 2):** default READ COMMITTED
+does not make the above atomic on its own — a grant `SELECT` can read
+committed data, a concurrent `revoke` can commit afterward, and the
+envelope `INSERT` can still commit using the now-stale snapshot, because
+plain reads take no lock. The transaction explicitly takes
+`SELECT ... FOR UPDATE` on every `capability_grants` row it relies on to
+authorize the envelope's requested capabilities, *before* deciding
+accept/deny. `revokeCapabilityGrant`'s `UPDATE` on that same row acquires
+the same row-level lock, so the two transactions serialize on that row
+via ordinary Postgres MVCC locking: whichever started its row-lock wait
+first wins, and the other blocks until it commits — a revoke either
+completes before the accept transaction's lock is granted (accept then
+sees `revoked` and denies) or after it commits (accept legitimately used
+the grant that was still active when it acquired the lock). No
+`SERIALIZABLE` isolation level or app-level version column is needed;
+the explicit row lock is the guarantee.
 
 `message_id` uniqueness (workstream B) is additionally enforced as a
 **database unique constraint** on `(sender_endpoint_id, message_id)` in
@@ -134,45 +146,95 @@ caller per §3).
 
 ## 6. B — Replay detection
 
-Three distinct outcomes, precisely defined:
+**Revised per Codex review round 2** — the original wording let
+`expires_at <= now` alone trigger `REPLAY_DETECTED`, which cannot
+distinguish a first-ever expired submission (never accepted, ordinary
+`MESSAGE_EXPIRED`) from a genuine resurrection of a previously-accepted
+envelope. The distinguishing signal is *whether `message_id` was ever
+previously accepted*, not the envelope's current expiry state. Four
+outcomes, precisely defined, checked in this order:
 
-- **Duplicate:** same `(sender.endpoint_id, idempotency_key)` seen
-  again, same canonical body hash. Safe retry — existing behavior,
-  unchanged (`accept-envelope.mjs:42-46`).
-- **Conflicting idempotency reuse:** same `(sender.endpoint_id,
-  idempotency_key)`, different canonical hash. Existing behavior,
-  unchanged (`DUPLICATE_MESSAGE` with conflict, `validate-envelope.mjs:61`).
-- **Replay (new):** an envelope whose `message_id` already exists in the
-  DB under a *different* `idempotency_key`, OR whose `created_at` /
-  `expires_at` show it was already past `expires_at` at the moment of
-  receipt (an old signed envelope resubmitted after its own validity
-  window closed, not a live retry). Throws `REPLAY_DETECTED`, distinct
-  status already reserved in `accept-envelope.mjs:14`.
+1. **First-time expired:** `message_id` has no prior accepted record,
+   and `expires_at <= now` at receipt. `MESSAGE_EXPIRED` — existing
+   check, unchanged (`validate-envelope.mjs:52`).
+2. **Duplicate:** `(sender.endpoint_id, idempotency_key)` seen again,
+   same canonical body hash. Safe retry — existing behavior, unchanged
+   (`accept-envelope.mjs:42-46`).
+3. **Conflicting idempotency reuse:** same `(sender.endpoint_id,
+   idempotency_key)`, different canonical hash. Existing behavior,
+   unchanged (`DUPLICATE_MESSAGE`, `validate-envelope.mjs:61`).
+4. **Replay:** `message_id` *does* have a prior accepted record (any
+   state — delivered, acknowledged, processed, expired-since-acceptance,
+   whatever), and this submission uses a *different* `idempotency_key`
+   than the one it was originally accepted under. This is the only
+   condition that produces `REPLAY_DETECTED` — a signed envelope that
+   was already live in the system, resubmitted as if new. Current
+   expiry state of the resubmission is irrelevant to this classification
+   (a replay of an envelope that's now also expired is still a replay,
+   not `MESSAGE_EXPIRED`).
 
-Enforcement: the `(sender_endpoint_id, message_id)` unique constraint
-from §3 makes the "different idempotency_key, same message_id" case a
-constraint violation on insert; the caller catches that specific
-constraint-violation error and re-raises `REPLAY_DETECTED` (not a generic
-500). The expired-resubmission case is a plain comparison against `now`
-before the insert is attempted at all — no race, no DB round trip needed
-for that branch.
+Enforcement: `message_id` lookup happens first, inside the accept
+transaction, before the expiry check — `lookupAcceptedMessageId(message_id)`
+against the same repository. If found with a different `idempotency_key`,
+raise `REPLAY_DETECTED` immediately and skip the expiry/duplicate checks
+entirely. If not found, fall through to the existing expiry check, then
+the existing idempotency-key duplicate/conflict check. The
+`(sender_endpoint_id, message_id)` unique index from §3 remains as a
+defense-in-depth constraint (belt-and-suspenders against a race between
+the lookup and the insert within the same transaction), but the lookup
+itself — not a caught constraint-violation — is the primary
+classification path, since the lookup must run before the expiry check
+regardless.
 
 New test: submit a validly-signed envelope, let it get accepted, then
 resubmit the identical signed envelope bytes with a manually-changed
 `idempotency_key` — must get `REPLAY_DETECTED`, not `DUPLICATE_MESSAGE`
-and not silent acceptance as a new message.
+and not silent acceptance as a new message. Second new test: submit an
+envelope whose `expires_at` is already in the past and whose
+`message_id` has never been seen before — must get `MESSAGE_EXPIRED`,
+not `REPLAY_DETECTED`.
 
 ## 7. A — Capability enforcement at accept
 
 New repository method `lookupActiveCapabilityGrants(endpointId, now)` —
 returns all grants for the endpoint that are unexpired and unrevoked as
-of the transaction snapshot (§3). `validateEnvelope` gains a
-`capabilityGrants` param (array of `{capability, scope}`); for each
-capability in `envelope.capabilities`, requires a grant whose
-`capability` matches and whose `scope` is an ancestor of the action's
-target scope per the §12 scope grammar (reuse/extract the scope-ancestor
-check already implicit in `context-resolver.mjs` rather than
-reimplementing it). Missing coverage for any requested capability throws
+of the transaction snapshot, row-locked per §3 (`SELECT ... FOR UPDATE`).
+`validateEnvelope` gains a `capabilityGrants` param (array of
+`{capability, scope}`); for each capability in `envelope.capabilities`,
+requires a grant whose `capability` matches and whose `scope` is an
+ancestor of the **target scope**.
+
+**Target scope derivation (Codex review round 2, point 3) —** the
+envelope carries only capability *names* (strings); nothing in the wire
+format states a target scope directly, so this design fixes the
+derivation rule explicitly rather than leaving it implicit:
+
+- If the capability is `sigil.core/read_shared_context`, the target
+  scope is the `scope` field of each entry in `envelope.context_refs`
+  (§12 already puts `scope` on every context reference) — the grant
+  must cover *every* referenced scope, checked per-reference, not just
+  one.
+- For every other capability, the target scope is
+  `scope:conversation/<conversation_id>` derived from the envelope's own
+  `conversation_id` field. This covers `task.request`/`task.result`/
+  `chat.message` capabilities (`sigil.task/submit`,
+  `sigil.core/broadcast_message`, etc.), which act on the conversation
+  they're sent into, not on a separately-declared target.
+
+**Ancestor matcher:** scopes are `/`-delimited segment paths
+(`scope:<kind>/<id>[/<kind>/<id>]...`). Grant scope `G` is an ancestor of
+target scope `T` iff `T`'s segments start with all of `G`'s segments,
+compared segment-by-segment (not string-prefix) — e.g.
+`scope:project/proj_123` is an ancestor of
+`scope:project/proj_123/thread/thread_456` but NOT of
+`scope:project/proj_1234` (string-prefix would wrongly match the
+latter). Extract this as a shared `isAncestorScope(grantScope,
+targetScope)` helper in `sigil/relay/v1/scope.mjs`, used by both this
+workstream and `context-resolver.mjs`'s existing (currently
+connector-local, not relay-shared) scope check — de-duplicating rather
+than reimplementing it a second time.
+
+Missing coverage for any requested capability's target scope throws
 `CAPABILITY_DENIED`.
 
 This closes #8 (escalation rejected at accept, inside the same
@@ -226,13 +288,39 @@ workstream extends that existing pattern to `delivery-state.mjs`
 transitions, which currently write no audit row at all, and to the new
 capability/replay/quota rejection paths from workstreams A/B/C).
 
+**Schema (Codex review round 2, point 4) —** `audit_events` currently
+has no `conversation_id` column; several existing rows (identity/token/
+grant events) legitimately have no conversation context at all. Add a
+nullable `conversation_id TEXT REFERENCES conversations(conversation_id)`
+column via migration `006_audit_conversation_binding.sql`, populated
+whenever the audited action has one (envelope accept/reject, delivery
+transitions, capability grant/revoke where the grant's scope resolves to
+a conversation) and left `NULL` for account/identity-level events that
+have no conversation.
+
 New route: `GET /v1/audit?conversation_id=<id>` — returns audit events
-scoped to a conversation, authorized against the requester's
+where `conversation_id` matches, authorized against the requester's
 conversation membership (reuse the membership check already used for
-broadcast authorization, `validate-envelope.mjs:56`). This is the
-"authorized conversation audit query" Codex flagged as underspecified;
-it is conversation-scoped only in v1 (no cross-conversation or global
-audit query), consistent with §10.1's conversation-authority model.
+broadcast authorization, `validate-envelope.mjs:56`). Conversation-scoped
+only in v1 (no cross-conversation or global audit query), consistent
+with §10.1's conversation-authority model.
+
+**Rejection-audit durability (Codex review round 2, point 4) —** an
+audit row for a *rejected* envelope (capability denied, replay detected,
+quota exceeded) cannot be written inside the same transaction that
+rejects and rolls back — the audit row would roll back with it. Rejection
+audits are written in a **separate, immediately-following transaction**:
+the accept transaction runs, and if it throws a rejection error, the
+caller (`acceptEnvelopeAsync`) catches it, opens a new short transaction
+solely to insert the audit row (event type e.g.
+`envelope.rejected`, reason = the rejection code), commits it
+independently, and only then returns the rejection response to the
+caller. This guarantees the audit trail survives regardless of the main
+transaction's outcome, at the cost of the audit write not being atomic
+with the rejection decision itself (acceptable: worst case is a
+rejection whose audit row write itself fails and is logged to
+stderr/dead-letter, not a rejection that's silently unaudited under
+normal operation).
 
 ## 10. G — Owner / display-name integrity
 
@@ -246,14 +334,29 @@ audit query), consistent with §10.1's conversation-authority model.
   explicit and viewer-relative, not a heuristic like key age. v1
   implementation: an endpoint carries a `first_contact_ack: boolean` per
   *viewer* (a small `endpoint_acknowledgements(viewer_owner_id,
-  endpoint_id)` table), set only when that viewer's connector has shown
-  them the full `endpoint_id`/owner/runtime/key-fingerprint inspection
-  view required by §6 and they've proceeded. Until acknowledged by a
-  given viewer, that viewer's connector marks the endpoint `unverified`
-  in any UI-facing response. This is deliberately per-viewer state, not
-  a global "verified" flag on the endpoint itself, matching §6's
-  requirement that it's the connector's job to make first contact
-  visible, not the protocol's job to certify trust.
+  endpoint_id, acknowledged_at)` table), set only when that viewer's
+  connector has shown them the full `endpoint_id`/owner/runtime/
+  key-fingerprint inspection view required by §6 and they've proceeded.
+  Until acknowledged by a given viewer, that viewer's connector marks the
+  endpoint `unverified` in any UI-facing response.
+
+  **Explicit mutation API (Codex review round 2, secondary point) —** a
+  connector showing a UI cannot itself establish relay state by fiat; the
+  acknowledgement must be a real authenticated relay mutation, not a
+  client-local flag. New route: `POST /v1/endpoint-acknowledgements`,
+  authenticated as the viewer's own endpoint (same bearer-token
+  authentication as every other route), body `{ acknowledged_endpoint_id
+  }`. The relay records `(viewer_owner_id, acknowledged_endpoint_id,
+  now)` derived from the *authenticated caller's* `owner_id` — a caller
+  cannot acknowledge on behalf of another owner — and writes an audit
+  event (`endpoint_acknowledgement.created`) in the same transaction.
+  `GET` responses that include endpoint identity (inbox listings,
+  conversation membership) join against this table to set the
+  `unverified` flag for the requesting viewer. This is deliberately
+  per-viewer relay state, not a global "verified" flag on the endpoint
+  itself, matching §6's requirement that it's the connector's job to
+  make first contact visible — but the *record* that it happened lives
+  in the relay, not solely in a connector-local UI state.
 
 ## 11. Testing summary
 
@@ -274,3 +377,27 @@ signature verification).
   reviewable later" rather than needing real capacity planning now.
 - Confirm `endpoint_acknowledgements` (§10) is the right shape for
   per-viewer trust state, versus something simpler for v1.
+
+## 13. Round 2 review resolution (Codex, 2026-08-16)
+
+Four blockers raised, all addressed above:
+
+1. §3 transaction isolation — resolved via explicit `SELECT ... FOR
+   UPDATE` row locking on relied-upon `capability_grants` rows (§3),
+   not `SERIALIZABLE` or a version column.
+2. §6 expired-vs-replay ambiguity — resolved by making "was `message_id`
+   previously accepted" the sole classifier, checked before the expiry
+   comparison, not derived from `expires_at` at all (§6).
+3. §7 capability target-scope — resolved with an explicit derivation
+   rule (context_refs' own scope for `read_shared_context`,
+   `scope:conversation/<conversation_id>` otherwise) and a shared
+   segment-exact ancestor matcher (§7).
+4. §9 audit conversation binding + rejection durability — resolved with
+   a new nullable `conversation_id` column and a separate
+   immediately-following transaction for rejection audits so they
+   survive the main transaction's rollback (§9).
+
+Secondary point (endpoint_acknowledgements needs a real authenticated
+API, not connector-local UI state) — resolved with a new
+`POST /v1/endpoint-acknowledgements` route, authenticated and audited
+(§10).
