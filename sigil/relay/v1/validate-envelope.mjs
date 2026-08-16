@@ -1,17 +1,12 @@
 import crypto from 'node:crypto';
+import { canonicalJsonBytes } from './jcs.mjs';
 
 const MAX_LIFETIME_MS = 24 * 60 * 60 * 1000;
-
-function canonicalize(value) {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalize).join(',')}]`;
-  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalize(value[key])}`).join(',')}}`;
-}
 
 export function signedBytes(envelope) {
   const unsigned = { ...envelope };
   delete unsigned.signature;
-  return Buffer.from(canonicalize(unsigned), 'utf8');
+  return canonicalJsonBytes(unsigned);
 }
 
 export function reject(code, message, details = {}) {

@@ -61,3 +61,24 @@ test('rejects high-risk delivery without an approved action hash', () => {
   assert.throws(() => validateEnvelope(base, { ...options, requiresApproval: () => true }), (error) => error.code === 'APPROVAL_REQUIRED');
   assert.equal(validateEnvelope(base, { ...options, requiresApproval: () => true, approvedActionHashes: new Set([`sha256:${crypto.createHash('sha256').update(signedBytes(base)).digest('hex')}`]) }).accepted, true);
 });
+
+function reverseKeys(value) {
+  if (Array.isArray(value)) return value.map(reverseKeys);
+  if (value && typeof value === 'object') {
+    const reversed = {};
+    for (const key of Object.keys(value).reverse()) reversed[key] = reverseKeys(value[key]);
+    return reversed;
+  }
+  return value;
+}
+
+test('signature verifies across reordered keys and alternate transport encodings (§18 #14)', () => {
+  const candidate = structuredClone(base);
+  candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
+  // Reorder every nesting level's keys, then re-serialize with different
+  // whitespace -- simulates a different HTTP client/JSON library re-encoding
+  // the same logical envelope in transit.
+  const reordered = JSON.parse(JSON.stringify(reverseKeys(candidate), null, 2));
+  assert.deepEqual(signedBytes(reordered), signedBytes(candidate));
+  assert.equal(validateEnvelope(reordered, options).accepted, true);
+});

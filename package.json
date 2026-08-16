@@ -44,6 +44,7 @@
   },
   "homepage": "https://github.com/sorensencc-dotcom/sigil#readme",
   "dependencies": {
+    "canonicalize": "2.0.0",
     "ws": "^8.21.3"
   }
 }
