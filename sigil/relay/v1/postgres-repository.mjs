@@ -161,6 +161,12 @@ export class PostgresRepository {
          WHERE delivery_id = $9 RETURNING *`,
         [next.state, next.attempts ?? current.rows[0].attempts, next.updated_at ?? new Date().toISOString(), next.delivered_at ?? null, next.acknowledged_at ?? null, next.processing_at ?? null, next.processed_at ?? null, next.failure_reason ?? null, deliveryId]
       );
+      await client.query(
+        `INSERT INTO audit_events (event_id, event_type, subject_id, endpoint_id, conversation_id, payload, reason, created_at)
+         SELECT $1, $2, $3, $4, e.conversation_id, '{}', $5, $6
+         FROM deliveries d JOIN envelopes e ON e.message_id = d.message_id WHERE d.delivery_id = $3`,
+        [`audit_${crypto.randomUUID()}`, `delivery.${next.state}`, deliveryId, endpointId, next.failure_reason ?? null, next.updated_at ?? new Date().toISOString()]
+      );
       return result.rows[0];
     });
   }
@@ -220,9 +226,9 @@ export class PostgresRepository {
       [row.envelope.idempotency_key, row.envelope.sender.endpoint_id, row.envelope.message_id, row.canonical_hash ?? row.action_hash ?? '', row.envelope.created_at, row.envelope.expires_at]
     );
     await client.query(
-      `INSERT INTO audit_events (event_id, event_type, subject_id, actor_id, payload, created_at)
-       VALUES ($1, 'envelope.accepted', $2, $3, $4, $5)`,
-      [`audit_${crypto.randomUUID()}`, row.envelope.message_id, row.envelope.sender.endpoint_id, JSON.stringify({ recipient_endpoint_id: row.envelope.recipient?.endpoint_id ?? null }), row.envelope.created_at]
+      `INSERT INTO audit_events (event_id, event_type, subject_id, actor_id, conversation_id, payload, created_at)
+       VALUES ($1, 'envelope.accepted', $2, $3, $4, $5, $6)`,
+      [`audit_${crypto.randomUUID()}`, row.envelope.message_id, row.envelope.sender.endpoint_id, row.envelope.conversation_id, JSON.stringify({ recipient_endpoint_id: row.envelope.recipient?.endpoint_id ?? null }), row.envelope.created_at]
     );
     return { message_id: result.rows[0].message_id, duplicate: false };
   }
@@ -252,6 +258,12 @@ export class PostgresRepository {
       const result = await client.query(
         `UPDATE deliveries SET state = 'acknowledged', updated_at = $1, acknowledged_at = $1 WHERE delivery_id = $2 RETURNING *`,
         [timestamp, deliveryId]
+      );
+      await client.query(
+        `INSERT INTO audit_events (event_id, event_type, subject_id, endpoint_id, conversation_id, payload, created_at)
+         SELECT $1, $2, $3, $4, e.conversation_id, '{}', $5
+         FROM deliveries d JOIN envelopes e ON e.message_id = d.message_id WHERE d.delivery_id = $3`,
+        [`audit_${crypto.randomUUID()}`, 'delivery.acknowledged', deliveryId, endpointId, timestamp]
       );
       return { delivery_id: deliveryId, duplicate: false, delivery: result.rows[0] };
     });

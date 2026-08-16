@@ -45,6 +45,30 @@ test('countOpenDeliveries excludes terminal delivery states', async () => {
   assert.match(query.text, /dead_letter/);
 });
 
+test('persistAcceptedEnvelope writes an audit row with conversation_id bound', async () => {
+  const pool = fakePool();
+  const row = await new PostgresRepository({ pool }).persistAcceptedEnvelope({ envelope, canonical_bytes: Buffer.from('c'), action_hash: 'sha256:x' });
+  const audit = pool.calls.find((call) => call.text?.includes('INSERT INTO audit_events'));
+  assert.match(audit.text, /conversation_id/);
+  assert.equal(audit.values.includes('conv_1'), true);
+});
+
+test('acknowledgeDelivery writes a delivery.acknowledged audit row in the same transaction', async () => {
+  const pool = fakeAckPool();
+  const repository = new PostgresRepository({ pool });
+  await repository.acknowledgeDelivery({ deliveryId: 'del_1', endpointId: 'ep_claude', now: new Date('2026-08-16T12:00:00Z') });
+  const audit = pool.calls.find((call) => call.text?.includes('INSERT INTO audit_events') && call.values?.includes('delivery.acknowledged'));
+  assert.ok(audit);
+});
+
+test('transitionDelivery writes a delivery.<state> audit row in the same transaction', async () => {
+  const pool = fakePool();
+  const repository = new PostgresRepository({ pool });
+  await repository.transitionDelivery('del_1', 'ep_claude', 'processed', { next: { state: 'processed', updated_at: '2026-08-16T12:00:00Z' } });
+  const audit = pool.calls.find((call) => call.text?.includes('INSERT INTO audit_events') && call.values?.includes('delivery.processed'));
+  assert.ok(audit);
+});
+
 test('concurrent duplicate submission surfaces the winning acceptance instead of throwing', async () => {
   const calls = [];
   const client = {
