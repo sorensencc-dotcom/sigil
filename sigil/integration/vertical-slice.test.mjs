@@ -79,3 +79,27 @@ test('grant -> send succeeds -> revoke -> resend denied (§18 #10)', async () =>
   assert.equal(second.status, 403);
   assert.equal(second.body.code, 'CAPABILITY_DENIED');
 });
+
+test('a RATE_LIMITED rejection never consumes its own reservation (rollback-on-reject) (§18 #23)', async () => {
+  const { acceptEnvelopeAsync } = await import('../relay/v1/accept-envelope.mjs');
+  const { createMemoryRepository } = await import('../cli/memory-repository.mjs');
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const sender = { owner_id: 'usr_quota', endpoint_id: 'ep_quota', key_id: 'key_quota', kind: 'agent' };
+  const registered = new Map([['ep_quota', { ...sender, status: 'active', public_key: keys.publicKey }]]);
+  const repository = createMemoryRepository();
+  const template = JSON.parse(fs.readFileSync(new URL('../contracts/v1/envelope.example.json', import.meta.url)));
+  const send = async (n) => {
+    const envelope = { ...template, message_id: `msg_quota_${n}`, conversation_id: 'conv_quota', sender, recipient: sender, idempotency_key: `send_quota_${n}`, body: { task_id: `task_q${n}`, instruction: 'x' }, created_at: '2026-08-16T12:00:00Z', expires_at: '2026-08-16T13:00:00Z', signature: { algorithm: 'Ed25519', key_id: sender.key_id, value: '' } };
+    envelope.signature.value = crypto.sign(null, signedBytes(envelope), keys.privateKey).toString('base64url');
+    return acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:00:00Z'), rateLimits: { endpoint: 2 } });
+  };
+  assert.equal((await send(1)).status, 202);
+  assert.equal((await send(2)).status, 202);
+  const third = await send(3);
+  assert.equal(third.status, 429);
+  assert.equal(third.body.code, 'RATE_LIMITED');
+  // A 4th send in the SAME window must see the count still at 2 (rejected #3
+  // never incremented past what #1/#2 already reserved) -- not 3 or 4.
+  const fourthOverLimit = await send(4);
+  assert.equal(fourthOverLimit.status, 429);
+});
