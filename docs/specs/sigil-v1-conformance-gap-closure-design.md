@@ -101,12 +101,44 @@ fails on the constraint and is caught and translated to
 `DUPLICATE_MESSAGE`/`REPLAY_DETECTED` by the caller, not prevented by a
 pre-check that can itself race.
 
+**Single transaction-bound client (human review, blocker 4) —**
+`FOR UPDATE` and constraint-driven serialization above are only
+meaningful if every read and write inside the accept transaction runs on
+the *same* database client/connection. A connection-pool repository
+method that internally checks out a fresh connection per call (a real
+risk in this codebase's repository pattern, where methods like
+`lookupActiveCapabilityGrants`, `lookupAcceptedMessageId`, and the
+envelope insert are separate calls) would silently defeat every
+guarantee in this section — a `SELECT ... FOR UPDATE` on one connection
+does not block a write on a different connection outside that row lock's
+transaction. Requirement: `acceptEnvelopeAsync` acquires one client from
+the pool (`pool.connect()` / equivalent) at the top of the transaction,
+and every repository method it calls during that transaction — grant
+lookup, message_id lookup, quota reservation (§8), the envelope insert
+itself — takes that client as an explicit parameter and issues its
+queries on it, not on the ambient pool. This is a repository-interface
+change (methods that are transaction-participants take a `client` param;
+methods that aren't stay pool-based) applied uniformly, not a per-call
+opt-in.
+
 ## 4. D — Real JCS canonicalization (do first)
 
 Replace the hand-rolled `canonicalize()` in `validate-envelope.mjs:5-8`
 and the separate one in `action-hash.mjs` with the `canonicalize` npm
 package (RFC 8785), per the Tier-1-locked
 `sigil-implementation-decisions-v1.0.md`.
+
+**Pin and enforce single implementation (human review, hardening) —**
+pin an exact version of `canonicalize` in `package.json` (no caret
+range past the audited major/minor). Grep the full `sigil/` tree for
+every hand-rolled canonicalization/JCS-shaped function before this
+workstream is considered done — at minimum `validate-envelope.mjs:5-8`
+and `action-hash.mjs`'s local `canonicalize()`, and any equivalent in
+`sigil/contracts/v1/validate-contracts.mjs` if one exists there. Every
+one of them is replaced with the same imported function; a lingering
+second implementation anywhere is exactly the kind of silent drift this
+workstream exists to close, so this is a completion gate, not a
+suggestion.
 
 Before adding `@noble/ed25519`: write a probe test confirming whether
 `node:crypto`'s `crypto.verify(null, bytes, key, sig)` (already in use at
@@ -158,6 +190,22 @@ Invoked from `validateEnvelope`'s caller when `message_type` is
 `validateEnvelope`; the cross-reference part runs in the transactional
 caller per §3).
 
+**Ordering/visibility under concurrent delivery (human review,
+hardening) —** "visible" for the cross-reference check means *accepted
+and persisted at the relay* (exists in the transactional store as of
+the lookup, per §3's transaction-bound client), not "delivered to" or
+"acknowledged by" the recipient. This is deliberately the weakest bar
+that's still checkable synchronously inside the accept transaction
+without waiting on the recipient's delivery pipeline — a `task.result`
+can be accepted the instant its `task.request` is durably accepted,
+even if that request hasn't been pulled off the recipient's inbox yet.
+Concurrent case: multiple `task.result`s referencing the same `task_id`
+are all individually valid (each is a status update — `in_progress` then
+`completed`, or a retried/corrected result) and are not deduplicated or
+constrained beyond the existing per-envelope idempotency/replay rules in
+§6; ordering between them for a reader is by `created_at`, not enforced
+by the relay.
+
 ## 6. B — Replay detection
 
 **Revised per Codex review round 2** — the original wording let
@@ -187,18 +235,29 @@ outcomes, precisely defined, checked in this order:
    (a replay of an envelope that's now also expired is still a replay,
    not `MESSAGE_EXPIRED`).
 
-Enforcement: `message_id` lookup happens first, inside the accept
-transaction, before the expiry check — `lookupAcceptedMessageId(message_id)`
-against the same repository. If found with a different `idempotency_key`,
-raise `REPLAY_DETECTED` immediately and skip the expiry/duplicate checks
-entirely. If not found, fall through to the existing expiry check, then
-the existing idempotency-key duplicate/conflict check. The
-`(sender_endpoint_id, message_id)` unique index from §3 remains as a
-defense-in-depth constraint (belt-and-suspenders against a race between
-the lookup and the insert within the same transaction), but the lookup
-itself — not a caught constraint-violation — is the primary
-classification path, since the lookup must run before the expiry check
-regardless.
+**Scoping (human review, blocker 3) —** the prior-record lookup MUST be
+scoped to `(sender.endpoint_id, message_id)`, matching the unique index
+from §3 exactly — never a bare `message_id` lookup. `message_id` is
+generated client-side (`msg_<uuid>` per the CLI) and is not guaranteed
+globally unique across unrelated endpoints; a global lookup could match
+a different endpoint's unrelated message with a colliding ID and
+misclassify legitimate traffic as replay. `lookupAcceptedMessageId`
+takes both `senderEndpointId` and `messageId` and its query/index use
+both columns together.
+
+Enforcement: the scoped lookup happens first, inside the accept
+transaction, before the expiry check —
+`lookupAcceptedMessageId(senderEndpointId, messageId)` against the same
+repository, on the same transaction-bound client (§3). If found with a
+different `idempotency_key`, raise `REPLAY_DETECTED` immediately and
+skip the expiry/duplicate checks entirely. If not found, fall through to
+the existing expiry check, then the existing idempotency-key duplicate/
+conflict check. The `(sender_endpoint_id, message_id)` unique index from
+§3 remains as a defense-in-depth constraint (belt-and-suspenders against
+a race between the lookup and the insert within the same transaction),
+but the lookup itself — not a caught constraint-violation — is the
+primary classification path, since the lookup must run before the
+expiry check regardless.
 
 New test: submit a validly-signed envelope, let it get accepted, then
 resubmit the identical signed envelope bytes with a manually-changed
@@ -209,6 +268,22 @@ envelope whose `expires_at` is already in the past and whose
 not `REPLAY_DETECTED`.
 
 ## 7. A — Capability enforcement at accept
+
+**Capability registry, fail closed (human review, hardening) —** before
+target-scope derivation runs at all, every capability named in
+`envelope.capabilities` is checked against a capability registry: the
+fixed `sigil.core/*` set from protocol §10 plus any extension
+namespaces an administrator has explicitly registered (definitions,
+scopes, risk policy — same requirement protocol §10 already states for
+namespace registration, just not previously enforced in code). A
+capability not found in the registry is rejected outright with
+`CAPABILITY_DENIED` before scope matching — it does NOT fall through to
+the "conversation scope" default below. Unregistered-namespace rejection
+and unregistered-but-`sigil.core`-shaped-name rejection are the same
+code path; the registry is authoritative, not just a namespace-prefix
+check. New table `capability_registry(capability, namespace, risk_tier,
+registered_by, registered_at)`, seeded with the `sigil.core/*` set from
+§10 as part of this workstream's migration.
 
 New repository method `lookupActiveCapabilityGrants(endpointId, now)` —
 returns all grants for the endpoint that are unexpired and unrevoked as
@@ -276,15 +351,37 @@ Separate caps, not one combined number (Codex's point 4):
   above, so a sender under its own quota can still be blocked from
   flooding a slow-draining recipient.
 
-New table (migration `005_rate_quota.sql`): `quota_usage(scope_kind,
-scope_id, window_start, count)` with `scope_kind` in `endpoint | owner |
-conversation | recipient_inbox`. Reservation is atomic: `INSERT ...
-ON CONFLICT (scope_kind, scope_id, window_start) DO UPDATE SET count =
-count + 1 RETURNING count`, checked against the configured limit *before*
-the envelope-accept transaction commits; if over limit, the transaction
-rolls back (no reservation consumed) and `QUOTA_EXCEEDED` /
-`RATE_LIMITED` is returned. This gives correct rollback semantics
-(Codex's point 4) — a rejected envelope never consumes quota.
+**Two different models, not one (human review, blocker 1) —** the
+original design used a single rolling-window `quota_usage` counter for
+all four scopes. That's correct for the first three (endpoint/owner/
+conversation are genuine **rate** limits — "how many envelopes in the
+last N seconds," monotonically counted per window, never decremented)
+but wrong for the fourth: recipient-inbox is a **depth** limit —
+"how many items are *currently* outstanding" — and depth must go down
+when an item is acknowledged/processed/rejected, not just up. A rolling
+counter with no decrement path would eventually latch permanently over
+limit for any moderately active recipient.
+
+- **Rate limits (endpoint/owner/conversation):** unchanged from the
+  original design. New table (migration `005_rate_quota.sql`):
+  `quota_usage(scope_kind, scope_id, window_start, count)` with
+  `scope_kind` in `endpoint | owner | conversation`. Reservation is
+  atomic: `INSERT ... ON CONFLICT (scope_kind, scope_id, window_start)
+  DO UPDATE SET count = count + 1 RETURNING count`, on the transaction's
+  bound client (§3), checked against the configured limit *before* the
+  envelope-accept transaction commits; over limit → transaction rolls
+  back (reservation never consumed) → `RATE_LIMITED`.
+- **Inbox depth (recipient):** derived from delivery rows, not a
+  separate counter table — `SELECT count(*) FROM deliveries WHERE
+  recipient_endpoint_id = $1 AND state NOT IN ('acknowledged',
+  'processed', 'delivery_rejected', 'dead_letter')`, evaluated inside
+  the same accept transaction (on the same client, locked consistently
+  with the delivery-row insert this envelope would create) before
+  committing. Over the configured depth limit → transaction rolls back
+  → `QUOTA_EXCEEDED`. Depth naturally decreases as workstream E's
+  delivery-state transitions move rows into the excluded terminal
+  states — no separate decrement logic to keep in sync with delivery
+  state, since it's the same rows E already governs.
 
 Limits are configuration, not hardcoded, with generous defaults
 documented as "not tuned for production."
@@ -319,22 +416,31 @@ broadcast authorization, `validate-envelope.mjs:56`). Conversation-scoped
 only in v1 (no cross-conversation or global audit query), consistent
 with §10.1's conversation-authority model.
 
-**Rejection-audit durability (Codex review round 2, point 4) —** an
-audit row for a *rejected* envelope (capability denied, replay detected,
-quota exceeded) cannot be written inside the same transaction that
-rejects and rolls back — the audit row would roll back with it. Rejection
-audits are written in a **separate, immediately-following transaction**:
-the accept transaction runs, and if it throws a rejection error, the
-caller (`acceptEnvelopeAsync`) catches it, opens a new short transaction
-solely to insert the audit row (event type e.g.
-`envelope.rejected`, reason = the rejection code), commits it
-independently, and only then returns the rejection response to the
-caller. This guarantees the audit trail survives regardless of the main
-transaction's outcome, at the cost of the audit write not being atomic
-with the rejection decision itself (acceptable: worst case is a
-rejection whose audit row write itself fails and is logged to
-stderr/dead-letter, not a rejection that's silently unaudited under
-normal operation).
+**Rejection-audit durability (Codex review round 2, point 4; refined per
+human review, blocker 5) —** an audit row for a *rejected* envelope
+(capability denied, replay detected, quota exceeded) cannot be written
+inside the same transaction that rejects and rolls back — the audit row
+would roll back with it. Rejection audits are written in a **separate,
+immediately-following transaction** on a fresh client (not the rolled-
+back one). That second transaction can also fail — a prior review round
+left this undefined; it's resolved as an explicit two-tier fallback,
+not open-ended retry:
+
+1. Attempt the rejection-audit insert once, on a fresh transaction.
+2. On failure, retry exactly once with a short fixed delay (handles a
+   transient connection hiccup, not a sustained outage).
+3. If the retry also fails, write the same event to a local append-only
+   fallback log (a file or a lightweight outbox table with no foreign
+   keys / minimal write requirements, so it can't itself fail the same
+   way) and increment a metric/counter for "rejection audits degraded
+   to fallback." This step is explicitly documented as **best-effort**
+   — it is not further retried inline, and it does not block or fail
+   the rejection response to the caller.
+
+This is a firm, bounded contract (one retry, then a fallback path that's
+allowed to be best-effort) rather than an unbounded or unspecified
+retry loop — the rejection response to the sender is never delayed
+waiting on audit durability past step 2.
 
 ## 10. H — Sender-side delivery receipts + heartbeat
 
@@ -375,6 +481,12 @@ read receipts:
   notification to either connector that state had been lost — a
   heartbeat timeout would have made that visible immediately instead of
   requiring a manual cross-check.
+
+  **Defaults (human review, blocker 2 — previously unspecified):**
+  heartbeat interval 15s, timeout after 3 consecutive missed heartbeats
+  (45s of silence). Both are configuration, not hardcoded, same pattern
+  as §8's quota limits — these are starting defaults for local/
+  single-host use, not tuned for a hosted-relay deployment.
 - **CLI surface:** `sigil send --wait-for-receipt` blocks until the
   first receipt arrives (mirrors the existing `inbox --wait` pattern in
   `sigil/cli/inbox-wait.mjs`), printing `sent → delivered → acknowledged`
@@ -424,6 +536,29 @@ change to the envelope/conversation model than this spec's scope, and
   make first contact visible — but the *record* that it happened lives
   in the relay, not solely in a connector-local UI state.
 
+  **Uniqueness/upsert, revocation, and viewer-key authorization (human
+  review, hardening) —** `endpoint_acknowledgements` has a primary key
+  of `(viewer_owner_id, acknowledged_endpoint_id)`; a repeat
+  acknowledgement of the same endpoint by the same viewer is an
+  `INSERT ... ON CONFLICT (viewer_owner_id, acknowledged_endpoint_id) DO
+  UPDATE SET acknowledged_at = now`, not a new row and not a conflict
+  error — re-acknowledging (e.g. after a key rotation, §17.1) is
+  expected, ordinary usage. **Revocation:** acknowledgement means "this
+  viewer has seen this endpoint's identity," not "this endpoint is
+  currently trustworthy" — it is never treated as ongoing validation.
+  Endpoint `status` (`active | suspended | revoked | decommissioned`,
+  §6) is checked independently and live on every use, same as today; a
+  revoked endpoint stays revoked regardless of any prior acknowledgement
+  row, and an acknowledgement is never auto-cleared on revocation (the
+  historical "I did see this identity" fact stays true even after the
+  endpoint is later revoked — that's a separate, still-accurate audit
+  fact). **Viewer-key authorization:** "authenticated as the viewer's
+  own endpoint" above means the route's bearer-token principal's
+  `owner_id` — the same authentication path every other route in
+  `http-server.mjs` already uses (`createBearerAuthenticator`,
+  `transport-auth.mjs`) — not a separate credential or key type; no new
+  authentication mechanism is introduced for this route.
+
 ## 12. Testing summary
 
 Each workstream: unit tests colocated per existing convention
@@ -440,12 +575,14 @@ visibility).
 - Confirm the `node:crypto` vs `@noble/ed25519` probe result before D
   is implemented (§4) — this gates whether a new dependency is added at
   all.
-- Confirm quota default limits (§8) are acceptable as "generous,
+- Confirm rate-limit defaults (§8, endpoint/owner/conversation) and
+  inbox-depth default (§8, recipient) are acceptable as "generous,
   reviewable later" rather than needing real capacity planning now.
-- Confirm `endpoint_acknowledgements` (§11) is the right shape for
-  per-viewer trust state, versus something simpler for v1.
-- Confirm heartbeat interval/timeout defaults for H (§10) — not yet
-  specified numerically, needs a concrete default before implementation.
+- Confirm heartbeat interval/timeout defaults (§10: 15s/45s) are
+  reasonable starting points for local/single-host use.
+- Confirm the capability-registry seed set (§7 — `sigil.core/*` from
+  protocol §10) is complete before the fail-closed check ships, since
+  anything not seeded becomes immediately unusable.
 
 ## 14. Round 2 review resolution (Codex, 2026-08-16)
 
@@ -469,4 +606,34 @@ Four blockers raised, all addressed above:
 Secondary point (endpoint_acknowledgements needs a real authenticated
 API, not connector-local UI state) — resolved with a new
 `POST /v1/endpoint-acknowledgements` route, authenticated and audited
-(§10).
+(§11).
+
+## 15. Round 3 review resolution (human, 2026-08-16)
+
+Five blockers raised, all addressed above:
+
+1. §8 quota model wrong for inbox depth — resolved by splitting rate
+   limits (rolling-window counter, endpoint/owner/conversation) from
+   inbox depth (derived live from non-terminal delivery rows,
+   recipient), instead of one counter model for all four scopes (§8).
+2. H heartbeat defaults unspecified / build-order-testing inconsistency
+   — heartbeat defaults now concrete (15s interval, 45s/3-miss timeout,
+   §10); build order (§2) and testing summary (§12) already included H
+   consistently as of this revision.
+3. §6 replay lookup not endpoint-scoped — resolved: lookup is now
+   explicitly `(sender.endpoint_id, message_id)`, matching the §3
+   unique index, never a bare `message_id` lookup (§6).
+4. Transaction-bound client requirement — resolved: §3 now states every
+   repository method participating in the accept transaction (grant
+   lookup, message_id lookup, quota/depth check, envelope insert) must
+   take and use the same client, not the ambient pool, or `FOR UPDATE`
+   is meaningless (§3).
+5. Rejection-audit durability underspecified — resolved with a bounded
+   contract: one retry, then an explicitly best-effort fallback log,
+   never blocking the rejection response (§9).
+
+Hardening items, all addressed: capability registry + fail-closed for
+unregistered capabilities (§7); acknowledgement upsert semantics,
+revocation independence, and viewer-key auth path (§11); task
+request/result visibility/ordering under concurrent delivery (§5); JCS
+package pin + single-implementation completion gate (§4).
