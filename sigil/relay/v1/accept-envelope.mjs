@@ -52,7 +52,16 @@ async function acceptWithRepository(envelope, options) {
     if (priorMessage && priorMessage.idempotency_key !== envelope.idempotency_key) {
       throw reject('REPLAY_DETECTED', 'message_id was already accepted under a different idempotency_key');
     }
-    const result = validateEnvelope(envelope, { ...options, idempotency: new Map() });
+    // Capability registry fail-closed check (design §7): a capability not
+    // found in the registry is rejected outright here, before target-scope
+    // matching even runs -- it does NOT fall through to the
+    // conversation-scope default inside validateEnvelope.
+    for (const capability of envelope.capabilities ?? []) {
+      const registered_ = await repository.lookupCapabilityRegistration(capability, client);
+      if (!registered_) throw reject('CAPABILITY_DENIED', `Capability is not registered: ${capability}`, { capability });
+    }
+    const capabilityGrants = await repository.lookupActiveCapabilityGrants(envelope.sender.endpoint_id, now, client);
+    const result = validateEnvelope(envelope, { ...options, idempotency: new Map(), capabilityGrants });
     const prior = await repository.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key, client);
     if (prior && prior.canonical_hash !== result.canonical_hash) throw reject('DUPLICATE_MESSAGE', 'Idempotency key conflicts with an existing body');
     if (prior) return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: prior.message_id, duplicate: true } };

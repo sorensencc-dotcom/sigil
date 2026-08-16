@@ -19,6 +19,7 @@ export function createMemoryRepository() {
   const envelopes = new Map();
   const deliveries = new Map();
   const idempotency = new Map();
+  const grants = [];
   return {
     // Single-process, no real client/connection -- the transaction wrapper
     // exists so acceptEnvelopeAsync's repository-aware path works unchanged
@@ -83,6 +84,24 @@ export function createMemoryRepository() {
     async lookupCapabilityRegistration(capability) {
       const entry = SEEDED_CAPABILITIES.get(capability);
       return entry ? { capability, namespace: entry.namespace, risk_tier: entry.risk_tier } : null;
+    },
+    // No real row locking possible/needed in a single-process in-memory
+    // store -- withTransaction is already a no-op here (see above).
+    async lookupActiveCapabilityGrants(endpointId, now) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).getTime();
+      return grants.filter((g) => g.granted_to === endpointId && !g.revoked_at && new Date(g.expires_at).getTime() > timestamp).map((g) => ({ capability: g.capability, scope: g.scope }));
+    },
+    async createCapabilityGrant({ grantId, capability, scope, grantedTo, expiresAt, now = new Date() }) {
+      const grant = { grant_id: grantId, capability, scope, granted_to: grantedTo, expires_at: expiresAt, revoked_at: null, granted_at: (now instanceof Date ? now : new Date(now)).toISOString() };
+      grants.push(grant);
+      return grant;
+    },
+    async revokeCapabilityGrant(grantId, { now = new Date() } = {}) {
+      const grant = grants.find((g) => g.grant_id === grantId);
+      if (!grant) throw Object.assign(new Error('Capability grant not found'), { code: 'GRANT_UNAVAILABLE' });
+      if (grant.revoked_at) return { ...grant, duplicate: true };
+      grant.revoked_at = (now instanceof Date ? now : new Date(now)).toISOString();
+      return { ...grant, duplicate: false };
     }
   };
 }

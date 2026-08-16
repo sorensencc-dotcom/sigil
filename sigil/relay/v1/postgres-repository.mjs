@@ -32,6 +32,18 @@ export class PostgresRepository {
     const result = await client.query('SELECT capability, namespace, risk_tier FROM capability_registry WHERE capability = $1', [capability]);
     return result.rows[0] ?? null;
   }
+  // No `client = this.pool` default here, unlike the other lookups above --
+  // design §3 requires this one to always run on the transaction's client
+  // since it takes a row lock; a lock taken on a throwaway pool connection
+  // outside the transaction would be meaningless and immediately released.
+  async lookupActiveCapabilityGrants(endpointId, now, client) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const result = await client.query(
+      'SELECT capability, scope FROM capability_grants WHERE granted_to = $1 AND expires_at > $2 AND revoked_at IS NULL FOR UPDATE',
+      [endpointId, timestamp]
+    );
+    return result.rows;
+  }
   async registerHumanCredential({ humanId, endpointId, credentialId, type = 'webauthn', publicKey, algorithm, coseKey, now = new Date() } = {}) {
     if (type !== 'webauthn' || !humanId || !endpointId || !credentialId || !publicKey) throw Object.assign(new Error('Endpoint-bound WebAuthn credential is required'), { code: 'INVALID_ATTESTATION' });
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();

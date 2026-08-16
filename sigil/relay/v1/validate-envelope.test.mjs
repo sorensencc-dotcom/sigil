@@ -95,3 +95,29 @@ test('rejects a task.result envelope with an invalid status', () => {
   candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
   assert.throws(() => validateEnvelope(candidate, options), (error) => error.code === 'INVALID_ENVELOPE' && error.details?.field === 'status');
 });
+
+test('rejects a capability with no covering grant', () => {
+  const candidate = structuredClone(base);
+  candidate.capabilities = ['sigil.task/submit'];
+  candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
+  assert.throws(() => validateEnvelope(candidate, { ...options, capabilityGrants: [] }), (error) => error.code === 'CAPABILITY_DENIED');
+});
+
+test('accepts a capability covered by an ancestor-scope grant on the conversation', () => {
+  const candidate = structuredClone(base);
+  candidate.capabilities = ['sigil.task/submit'];
+  candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
+  const grants = [{ capability: 'sigil.task/submit', scope: `scope:conversation/${candidate.conversation_id}` }];
+  assert.equal(validateEnvelope(candidate, { ...options, capabilityGrants: grants }).accepted, true);
+});
+
+test('read_shared_context requires coverage for every referenced context scope', () => {
+  const candidate = structuredClone(base);
+  candidate.capabilities = ['sigil.core/read_shared_context'];
+  candidate.context_refs = [{ ref_id: 'ctx_1', scope: 'scope:project/proj_1' }, { ref_id: 'ctx_2', scope: 'scope:project/proj_2' }];
+  candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
+  const partialGrants = [{ capability: 'sigil.core/read_shared_context', scope: 'scope:project/proj_1' }];
+  assert.throws(() => validateEnvelope(candidate, { ...options, capabilityGrants: partialGrants }), (error) => error.code === 'CAPABILITY_DENIED');
+  const fullGrants = [{ capability: 'sigil.core/read_shared_context', scope: 'scope:project' }];
+  assert.equal(validateEnvelope(candidate, { ...options, capabilityGrants: fullGrants }).accepted, true);
+});

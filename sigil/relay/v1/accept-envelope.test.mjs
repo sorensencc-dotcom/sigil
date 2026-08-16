@@ -90,6 +90,8 @@ function fakeTransactionalRepository({ taskRequests = new Map(), envelopes = new
     async lookupTaskRequest(taskId, conversationId, client) { calls.push({ op: 'lookupTaskRequest', taskId, conversationId, client }); return taskRequests.get(`${conversationId}:${taskId}`) ?? null; },
     async lookupIdempotency() { return null; },
     async lookupAcceptedMessageId() { return null; },
+    async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
+    async lookupActiveCapabilityGrants() { return []; },
     async persistAcceptedEnvelope(row) { envelopes.set(row.envelope.message_id, row); return { message_id: row.envelope.message_id, duplicate: false }; },
   };
 }

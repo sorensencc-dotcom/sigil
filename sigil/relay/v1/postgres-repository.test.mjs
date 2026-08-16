@@ -172,6 +172,17 @@ test('lookupCapabilityRegistration returns the registered row for a known capabi
   assert.equal(registration.risk_tier, 'standard');
 });
 
+test('lookupActiveCapabilityGrants row-locks the grants it returns', async () => {
+  const pool = fakePool();
+  const repository = new PostgresRepository({ pool });
+  await repository.withTransaction((client) => repository.lookupActiveCapabilityGrants('ep_codex', new Date('2026-08-16T00:00:00Z'), client));
+  const query = pool.calls.find((call) => call.text?.includes('SELECT'));
+  assert.match(query.text, /FOR UPDATE/);
+  assert.match(query.text, /granted_to\s*=\s*\$1/);
+  assert.match(query.text, /revoked_at IS NULL/);
+  assert.match(query.text, /expires_at\s*>\s*\$2/);
+});
+
 test('lookupCapabilityRegistration returns null for an unregistered capability', async () => {
   const pool = { calls: [], async connect() { throw new Error('should not open a transaction for a plain lookup'); }, async query(text, values) { this.calls.push({ text, values }); return { rows: [] }; } };
   const repository = new PostgresRepository({ pool });
