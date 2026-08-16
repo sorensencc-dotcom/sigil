@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 import { canonicalJsonBytes } from './jcs.mjs';
+import { validateTaskRequestBody } from '../../contracts/v1/task-request-schema.mjs';
+import { validateTaskResultBody } from '../../contracts/v1/task-result-schema.mjs';
 
 const MAX_LIFETIME_MS = 24 * 60 * 60 * 1000;
 
@@ -50,6 +52,8 @@ export function validateEnvelope(envelope, { now = new Date(), registered = new 
   if (hasRecipient === hasBroadcast) throw reject('INVALID_ENVELOPE', 'Exactly one recipient or broadcast scope is required');
   if (hasBroadcast && (typeof broadcastAuthorizer !== 'function' || !broadcastAuthorizer(envelope.broadcast_scope, envelope))) throw reject('ROUTE_NOT_AUTHORIZED', 'Broadcast scope is not authorized for this conversation');
   if (!Array.isArray(envelope.context_refs) || !Array.isArray(envelope.capabilities)) throw reject('INVALID_ENVELOPE', 'context_refs and capabilities must be arrays');
+  if (envelope.message_type === 'task.request') validateTaskRequestBody(envelope.body);
+  if (envelope.message_type === 'task.result') validateTaskResultBody(envelope.body);
   const prior = idempotency.get(`${envelope.sender.endpoint_id}:${envelope.idempotency_key}`);
   const canonicalHash = crypto.createHash('sha256').update(signedBytes(envelope)).digest('hex');
   if (typeof requiresApproval === 'function' && requiresApproval(envelope) && !approvedActionHashes.has(canonicalHash) && !approvedActionHashes.has(`sha256:${canonicalHash}`)) throw reject('APPROVAL_REQUIRED', 'A valid decision record is required before delivery');

@@ -82,3 +82,16 @@ test('signature verifies across reordered keys and alternate transport encodings
   assert.deepEqual(signedBytes(reordered), signedBytes(candidate));
   assert.equal(validateEnvelope(reordered, options).accepted, true);
 });
+
+test('rejects a task.request envelope with an invalid body', () => {
+  const candidate = structuredClone(base);
+  delete candidate.body.instruction;
+  candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
+  assert.throws(() => validateEnvelope(candidate, options), (error) => error.code === 'INVALID_ENVELOPE' && error.details?.field === 'instruction');
+});
+
+test('rejects a task.result envelope with an invalid status', () => {
+  const candidate = { ...base, message_type: 'task.result', body: { task_id: 'task_1', status: 'nope', summary: 'x' } };
+  candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
+  assert.throws(() => validateEnvelope(candidate, options), (error) => error.code === 'INVALID_ENVELOPE' && error.details?.field === 'status');
+});
