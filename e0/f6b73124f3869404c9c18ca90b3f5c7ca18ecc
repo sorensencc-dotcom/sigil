@@ -1,0 +1,45 @@
+sigil/relay/v1/postgres-repository.integration.test.mjs
+  s_c2faf5c68b8a4c::t_b9be8cb5d33d9d 51-54,66-67
+sigil/cli/inbox-wait.mjs
+  s_c2faf5c68b8a4c::t_06600a70a0d804 92
+sigil/cli/send-with-receipt.test.mjs
+  s_c2faf5c68b8a4c::t_e0c6a0b2a0d204 1-38,40-64,66-68,70-71,74-77,79
+  s_c2faf5c68b8a4c::t_f2dcbca11e7390 39
+  s_c2faf5c68b8a4c::t_b552523286ca85 65,69,72-73,78
+sigil/cli/sigil.mjs
+  s_c2faf5c68b8a4c::t_3f5427e744eb8b 134-141
+  s_c2faf5c68b8a4c::t_ba561fb8a9c017 21
+sigil/relay/v1/postgres-repository.test.mjs
+  s_c2faf5c68b8a4c::t_be01c70af6a01f 19-25
+sigil/relay/v1/postgres-repository.mjs
+  s_c2faf5c68b8a4c::t_0937cf08e8590f 259
+sigil/relay/v1/http-server.test.mjs
+  s_c2faf5c68b8a4c::t_aad50229c8a99c 257-315
+sigil/cli/send-with-receipt.mjs
+  s_c2faf5c68b8a4c::t_ff9550e39f3979 1-9,15-46,51-58
+  s_c2faf5c68b8a4c::t_1038d019830340 10-14
+  s_c2faf5c68b8a4c::t_e63d9938defe19 47-50
+sigil/cli/inbox-wait.test.mjs
+  s_c2faf5c68b8a4c::t_819325278f9936 29-38
+  s_c2faf5c68b8a4c::t_99227264f06e19 22-28
+  s_c2faf5c68b8a4c::t_4ea4020b99490f 180-186,188-198
+  s_c2faf5c68b8a4c::t_1a79bbd915ad48 187
+  s_c2faf5c68b8a4c::t_c04db4a3f1fd60 171,176-177
+  s_c2faf5c68b8a4c::t_5b7be4037e0cfb 164-170,172-175,178-179
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "e0f6b73124f3869404c9c18ca90b3f5c7ca18ecc",
+  "prompts": {},
+  "sessions": {
+    "s_c2faf5c68b8a4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f4721667-6a4f-48e8-b32c-a563d8dcf589",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
