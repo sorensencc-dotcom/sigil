@@ -12,13 +12,16 @@ Sigil keeps host capabilities behind an authenticated local connector, validates
 
 ## Current status
 
-The repository has focused and live validation, but is not a production deployment package. The latest live PostgreSQL gate passed 29 tests with zero failures against PostgreSQL 16. The normal suite passes 187 tests with 29 expected PostgreSQL skips when no live database is configured.
+The repository has focused and live validation, but is not a production deployment package. The latest live PostgreSQL gate passed 29 tests with zero failures against PostgreSQL 16. The standard unit and integration suite passes 286 tests with 29 expected PostgreSQL skips when no live database is configured.
 
 ## Repository map
 
-- `sigil/relay/v1/` — signed envelope validation, relay routes, delivery state, approvals, and PostgreSQL repositories.
+- `bin/` — executable entrypoint for the `sigil` CLI.
+- `sigil/cli/` — CLI commands (`init`, `relay up`, `send`, `inbox`), durable local inbox ledger (`.sigil/inbox.jsonl`), and config resolution.
+- `sigil/contracts/v1/` — protocol schemas (`task-request-schema`, `task-result-schema`), envelope fixtures, and RFC 8785 JCS canonicalization.
+- `sigil/relay/v1/` — signed envelope validation, replay classification, rate limiting, capability registry, relay routes, delivery state, approvals, and PostgreSQL repositories.
 - `sigil/connectors/v1/` — authenticated local connector, Codex/Claude adapters, context resolution, and MCP stdio bridge.
-- `sigil/migrations/` — ordered PostgreSQL migrations `001` through `004`.
+- `sigil/migrations/` — ordered PostgreSQL migrations `001` through `010`.
 - `sigil/scripts/live-db-tests.mjs` — sequential live database gate; suites reset the `public` schema.
 - `.mcp.json` — repo-scoped Claude MCP registration.
 
@@ -28,25 +31,44 @@ The repository has focused and live validation, but is not a production deployme
 - PostgreSQL 16 for live validation
 - A registered Sigil endpoint token and matching connector grants
 
-There is no root `package.json`; run Node commands from this repository using paths under `sigil/`.
+## CLI Usage
+
+The package provides the `sigil` command (`bin/sigil.mjs`):
+
+```powershell
+# Initialize local identity and endpoint configuration (.sigil/)
+sigil init
+
+# Start a local relay instance
+sigil relay up
+
+# Send a signed task envelope to an agent runtime
+sigil send claude "Analyze test suite coverage"
+
+# Inspect queued inbox messages, wait for incoming envelopes, or view local durable ledger
+sigil inbox
+sigil inbox --wait
+sigil inbox --local
+```
 
 ## Run tests
 
 Run the non-live suite:
 
 ```powershell
-node --test
+npm test
+# or: node --test
 ```
 
 Run the live PostgreSQL gate against a fresh database. Use a fresh database because migrations and suites reset schema state:
 
 ```powershell
 $env:SIGIL_TEST_DATABASE_URL = "postgres://sigil:<password>@127.0.0.1:55432/sigil"
-node sigil/scripts/live-db-tests.mjs
+npm run test:live
 Remove-Item Env:SIGIL_TEST_DATABASE_URL
 ```
 
-The live gate applies migrations `001`–`004` and runs schema-resetting suites sequentially. It covers migration constraints, durable approvals and audit transactions, identity/session/grant persistence, envelope idempotency, and acknowledgement races.
+The live gate applies migrations `001`–`010` and runs schema-resetting suites sequentially. It covers migration constraints, durable approvals and audit transactions, identity/session/grant persistence, envelope idempotency, capability verification, rate quotas, normalized display-name collisions, and acknowledgement races.
 
 The live end-to-end receipt is separate from that gate. `node sigil/scripts/live-claude-worker-receipt.mjs` verifies real Codex-signed HTTP submission, MCP dispatch, connector HTTP processing, a real Claude worker subprocess, and result-envelope read-back. Its persistence layer is intentionally in-memory, so it does not replace the PostgreSQL gate or prove restart durability.
 
