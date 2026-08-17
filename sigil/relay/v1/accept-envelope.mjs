@@ -1,5 +1,12 @@
 import { validateEnvelope, reject, signedBytes } from './validate-envelope.mjs';
 import { resolveRateLimits, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
+import { writeRejectionAudit } from './rejection-audit.mjs';
+
+// Rejection codes that represent a real, attributable security-relevant
+// rejection worth auditing (design §9, round 3 blocker 5). A malformed-JSON
+// INVALID_ENVELOPE before signature verification has no meaningful
+// sender/conversation_id to audit against, so it's deliberately excluded.
+const AUDITED_REJECTION_CODES = new Set(['CAPABILITY_DENIED', 'REPLAY_DETECTED', 'RATE_LIMITED', 'QUOTA_EXCEEDED']);
 
 const statusByCode = Object.freeze({
   INVALID_ENVELOPE: 400,
@@ -105,7 +112,18 @@ async function acceptWithRepository(envelope, options) {
     const persisted = await repository.persistAcceptedEnvelope({ envelope, ...result, canonical_bytes: signedBytes(envelope), action_hash: result.canonical_hash }, client);
     if (options.onPersisted) await options.onPersisted({ envelope, persisted });
     return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: persisted?.message_id ?? result.message_id, duplicate: persisted?.duplicate ?? false } };
-  }).catch((error) => toResponse(options, error));
+  }).catch(async (error) => {
+    const response = toResponse(options, error);
+    if (AUDITED_REJECTION_CODES.has(error.code) && repository.recordAuditEvent) {
+      await writeRejectionAudit({
+        repository,
+        event: { eventType: `envelope.rejected.${error.code.toLowerCase()}`, subjectId: envelope.message_id, endpointId: envelope.sender?.endpoint_id, outcome: 'rejected', reason: error.message, now },
+        fallbackLog: options.rejectionAuditFallbackLog,
+        degradedCounter: options.rejectionAuditDegradedCounter,
+      });
+    }
+    return response;
+  });
 }
 
 export async function acceptEnvelopeAsync(envelope, options = {}) {

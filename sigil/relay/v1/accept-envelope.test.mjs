@@ -215,3 +215,17 @@ test('exceeding recipient inbox depth rejects with QUOTA_EXCEEDED and does not p
   assert.equal(result.status, 429);
   assert.equal(result.body.code, 'QUOTA_EXCEEDED');
 });
+
+test('a CAPABILITY_DENIED rejection triggers a best-effort rejection audit', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'hi' } });
+  envelope.capabilities = ['sigil.task/submit'];
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), keys.privateKey).toString('base64url');
+  const auditCalls = [];
+  const repository = { ...fakeTransactionalRepositoryWithMessages(), async lookupCapabilityRegistration() { return null; }, async recordAuditEvent(event) { auditCalls.push(event); return { event_id: 'audit_1' }; } };
+  const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
+  assert.equal(result.status, 403);
+  assert.equal(auditCalls.length, 1);
+  assert.equal(auditCalls[0].eventType, 'envelope.rejected.capability_denied');
+});
