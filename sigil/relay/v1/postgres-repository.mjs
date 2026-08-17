@@ -32,6 +32,13 @@ export class PostgresRepository {
     const result = await client.query('SELECT capability, namespace, risk_tier FROM capability_registry WHERE capability = $1', [capability]);
     return result.rows[0] ?? null;
   }
+  // Resolves the message's sender endpoint so delivery-state transitions can
+  // push a delivery.receipt to the sender via stream.notifyReceipt, without
+  // the caller needing to carry the sender endpoint id itself (design §10).
+  async lookupMessageSender(messageId, client = this.pool) {
+    const result = await client.query('SELECT sender_endpoint_id FROM envelopes WHERE message_id = $1', [messageId]);
+    return result.rows[0] ? { endpoint_id: result.rows[0].sender_endpoint_id } : null;
+  }
   // No `client = this.pool` default here, unlike the other lookups above --
   // design §3 requires this one to always run on the transaction's client
   // since it takes a row lock; a lock taken on a throwaway pool connection

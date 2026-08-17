@@ -164,6 +164,28 @@ test('acknowledgeDelivery rejects a delivery that cannot reach acknowledged', as
   );
 });
 
+test('acknowledgeDelivery resolves the message sender for receipt notification', async () => {
+  const pool = fakeAckPool();
+  const repository = new PostgresRepository({ pool });
+  const result = await repository.acknowledgeDelivery({ deliveryId: 'del_1', endpointId: 'ep_claude', now: new Date('2026-08-16T12:00:00Z') });
+  assert.ok('delivery' in result);
+});
+
+test('lookupMessageSender resolves the sender endpoint for a message id', async () => {
+  const calls = [];
+  const pool = { async query(text, values) { calls.push({ text, values }); return { rows: [{ sender_endpoint_id: 'ep_codex' }] }; } };
+  const result = await new PostgresRepository({ pool }).lookupMessageSender('msg_1');
+  assert.deepEqual(result, { endpoint_id: 'ep_codex' });
+  assert.match(calls[0].text, /FROM envelopes WHERE message_id = \$1/);
+  assert.deepEqual(calls[0].values, ['msg_1']);
+});
+
+test('lookupMessageSender returns null for an unknown message id', async () => {
+  const pool = { async query() { return { rows: [] }; } };
+  const result = await new PostgresRepository({ pool }).lookupMessageSender('msg_missing');
+  assert.equal(result, null);
+});
+
 test('lookupTaskRequest returns the accepted task.request row for the conversation', async () => {
   const calls = [];
   const pool = { async query(text, values) { calls.push({ text, values }); return { rows: [{ message_id: 'msg_original' }] }; } };

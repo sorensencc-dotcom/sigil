@@ -19,6 +19,27 @@ test('stream sends thin delivery notification to authenticated endpoint', async 
   socket.close(); await stream.close(); await new Promise((resolve) => httpServer.close(resolve));
 });
 
+test('notifyReceipt pushes a small delivery.receipt payload to the SENDER, not the recipient', async () => {
+  const httpServer = http.createServer();
+  const stream = createStreamServer({ server: httpServer, authenticate: (request) => request.headers['x-endpoint-id'] });
+  await new Promise((resolve) => httpServer.listen(0, resolve));
+  const port = httpServer.address().port;
+  const senderSocket = new WebSocket(`ws://127.0.0.1:${port}/v1/stream`, { headers: { 'x-endpoint-id': 'ep_codex' } });
+  const recipientSocket = new WebSocket(`ws://127.0.0.1:${port}/v1/stream`, { headers: { 'x-endpoint-id': 'ep_claude' } });
+  const senderMessage = new Promise((resolve) => senderSocket.once('message', (data) => resolve(JSON.parse(data))));
+  let recipientReceivedMessage = false;
+  recipientSocket.once('message', () => { recipientReceivedMessage = true; });
+  await Promise.all([
+    new Promise((resolve) => senderSocket.once('open', resolve)),
+    new Promise((resolve) => recipientSocket.once('open', resolve))
+  ]);
+  const receipt = { message_id: 'msg_1', delivery_id: 'del_1', state: 'acknowledged', at: '2026-08-16T12:00:00Z' };
+  assert.equal(stream.notifyReceipt('ep_codex', receipt), true);
+  assert.deepEqual(await senderMessage, { type: 'delivery.receipt', ...receipt });
+  assert.equal(recipientReceivedMessage, false);
+  senderSocket.close(); recipientSocket.close(); await stream.close(); await new Promise((resolve) => httpServer.close(resolve));
+});
+
 test('stream authenticates bearer token against endpoint hash', async () => {
   const httpServer = http.createServer();
   const stream = createStreamServer({ server: httpServer, tokenHashes: new Map([[hashBearerToken('stream_secret'), 'ep_claude']]) });

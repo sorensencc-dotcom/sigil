@@ -96,6 +96,10 @@ export function createMemoryRepository() {
       const entry = SEEDED_CAPABILITIES.get(capability);
       return entry ? { capability, namespace: entry.namespace, risk_tier: entry.risk_tier } : null;
     },
+    async lookupMessageSender(messageId) {
+      const row = envelopes.get(messageId);
+      return row ? { endpoint_id: row.envelope.sender.endpoint_id } : null;
+    },
     // No real row locking possible/needed in a single-process in-memory
     // store -- withTransaction is already a no-op here (see above).
     async lookupActiveCapabilityGrants(endpointId, now) {

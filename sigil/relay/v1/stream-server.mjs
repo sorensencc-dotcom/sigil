@@ -19,6 +19,12 @@ export function createStreamServer({ server, authenticate, tokenHashes } = {}) {
       socket.send(JSON.stringify({ type: 'delivered', delivery_id: deliveryId }));
       return true;
     },
+    notifyReceipt(endpointId, receipt) {
+      const socket = clients.get(endpointId);
+      if (!socket || socket.readyState !== 1) return false;
+      socket.send(JSON.stringify({ type: 'delivery.receipt', ...receipt }));
+      return true;
+    },
     close() { return new Promise((resolve) => wss.close(resolve)); }
   };
 }
