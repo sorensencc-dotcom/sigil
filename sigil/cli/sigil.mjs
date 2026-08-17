@@ -36,7 +36,7 @@ function usage() {
 Commands:
   init <name> --owner <owner_id> [--registry path]        Create a local identity and register it
   relay up [--registry path] [--port N]                    Run a local relay (blocks; Ctrl+C to stop)
-  send [--identity path] [--relay-url url] --to endpoint_id --to-owner owner_id --message "text" [--conversation id]
+  send [--identity path] [--relay-url url] [--stream-url url] [--wait-for-receipt] --to endpoint_id --to-owner owner_id --message "text" [--conversation id]
   inbox [--identity path] [--relay-url url] [--watch|--wait] [--loop] [--stream-url url] [--interval ms] [--timeout ms] [--local] [--ledger path]
 
 send/inbox resolve --identity/--relay-url/--stream-url from, in order: the flag, then
@@ -105,9 +105,9 @@ async function cmdRelayUp(argv) {
 }
 
 async function cmdSend(argv) {
-  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, to: { type: 'string' }, 'to-owner': { type: 'string' }, message: { type: 'string' }, conversation: { type: 'string' }, config: { type: 'string' } } });
+  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, 'wait-for-receipt': { type: 'boolean' }, to: { type: 'string' }, 'to-owner': { type: 'string' }, message: { type: 'string' }, conversation: { type: 'string' }, config: { type: 'string' } } });
   const config = loadConfigFile(opt(args, ['config']) ?? DEFAULT_CLI_CONFIG);
-  const resolved = resolveConfig({ flags: { relayUrl: opt(args, ['relay-url']), identity: opt(args, ['identity']) }, config });
+  const resolved = resolveConfig({ flags: { relayUrl: opt(args, ['relay-url']), streamUrl: opt(args, ['stream-url']), identity: opt(args, ['identity']) }, config });
   if (!resolved.identityPath) throw new Error('usage: sigil send --identity path --relay-url url --to endpoint_id --to-owner owner_id --message "text" (or set SIGIL_IDENTITY / default_identity in .sigil/config.json)');
   const identity = loadIdentity(resolved.identityPath);
   const relayUrl = resolved.relayUrl;
@@ -132,6 +132,10 @@ async function cmdSend(argv) {
   const relay = new RelayClient({ baseUrl: relayUrl, token: identity.relay_token });
   const result = await relay.sendEnvelope(queued.envelope);
   console.log(`Sent. message_id=${result.message_id} conversation_id=${conversationId} duplicate=${result.duplicate}`);
+  if (args.values['wait-for-receipt']) {
+    const streamUrl = resolved.streamUrl ?? (() => { const url = new URL(relayUrl); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'; url.port = String(Number(url.port || 80) + 1); url.pathname = '/v1/stream'; return url.toString(); })();
+    await new Promise((resolve) => { const socket = new WebSocket(streamUrl, { headers: { authorization: `Bearer ${identity.relay_token}` } }); const seen = new Set(); const timer = setTimeout(() => { try { socket.close(); } catch {} resolve(); }, 60_000); socket.on('message', (raw) => { let event; try { event = JSON.parse(raw); } catch { return; } if (event.type !== 'delivery.receipt' || event.message_id !== result.message_id || seen.has(event.state)) return; seen.add(event.state); console.log(`  -> ${event.state} (${event.at})`); if (['acknowledged', 'processed', 'processing_failed', 'dead_letter'].includes(event.state)) { clearTimeout(timer); socket.close(); resolve(); } }); socket.once('error', () => { clearTimeout(timer); resolve(); }); });
+  }
 }
 
 async function cmdInbox(argv) {

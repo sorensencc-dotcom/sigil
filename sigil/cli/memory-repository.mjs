@@ -4,12 +4,61 @@
 // only in this process -- restarting `sigil relay up` loses history.
 import { transitionDelivery } from '../relay/v1/delivery-state.mjs';
 
+const SEEDED_CAPABILITIES = new Map([
+  ['sigil.core/read_shared_context', { namespace: 'sigil.core', risk_tier: 'standard' }],
+  ['sigil.core/broadcast_message', { namespace: 'sigil.core', risk_tier: 'standard' }],
+  ['sigil.task/submit', { namespace: 'sigil.task', risk_tier: 'standard' }],
+  ['sigil.task/read_inbox', { namespace: 'sigil.task', risk_tier: 'low' }],
+  ['sigil.task/read_result', { namespace: 'sigil.task', risk_tier: 'low' }],
+  ['sigil.task/process', { namespace: 'sigil.task', risk_tier: 'standard' }],
+  ['sigil.task/submit_result', { namespace: 'sigil.task', risk_tier: 'standard' }],
+  ['sigil.approval/request', { namespace: 'sigil.approval', risk_tier: 'high' }],
+]);
+
 export function createMemoryRepository() {
   const envelopes = new Map();
   const deliveries = new Map();
+  const idempotency = new Map();
+  const grants = [];
+  const rateWindows = new Map();
+  const acknowledgements = new Map();
   return {
+    // Single-process, no real client/connection -- the transaction wrapper
+    // exists so acceptEnvelopeAsync's repository-aware path works unchanged
+    // against this repository too (design §12 dual-repository equivalence).
+    async withTransaction(fn) { return fn(null); },
+    async reserveRateLimit(scopeKind, scopeId, windowStart, limit) {
+      const key = `${scopeKind}:${scopeId}:${windowStart}`;
+      const count = (rateWindows.get(key) ?? 0) + 1;
+      rateWindows.set(key, count);
+      return { count, allowed: count <= limit };
+    },
+    async countOpenDeliveries(recipientEndpointId) {
+      const terminal = new Set(['acknowledged', 'processed', 'delivery_rejected', 'dead_letter']);
+      return [...deliveries.values()].filter((d) => d.recipient_endpoint_id === recipientEndpointId && !terminal.has(d.state)).length;
+    },
+    async lookupIdempotency(endpointId, idempotencyKey) {
+      return idempotency.get(`${endpointId}:${idempotencyKey}`) ?? null;
+    },
+    async lookupTaskRequest(taskId, conversationId) {
+      for (const row of envelopes.values()) {
+        if (row.envelope.conversation_id === conversationId && row.envelope.message_type === 'task.request' && row.envelope.body?.task_id === taskId) {
+          return { message_id: row.envelope.message_id };
+        }
+      }
+      return null;
+    },
+    async lookupAcceptedMessageId(senderEndpointId, messageId) {
+      for (const row of envelopes.values()) {
+        if (row.envelope.sender.endpoint_id === senderEndpointId && row.envelope.message_id === messageId) {
+          return { message_id: row.envelope.message_id, idempotency_key: row.envelope.idempotency_key };
+        }
+      }
+      return null;
+    },
     async persistAcceptedEnvelope(row) {
       envelopes.set(row.message_id, row);
+      idempotency.set(`${row.envelope.sender.endpoint_id}:${row.envelope.idempotency_key}`, { message_id: row.message_id, canonical_hash: row.canonical_hash });
       if (row.envelope.recipient?.endpoint_id) {
         const deliveryId = `del_${row.message_id}`;
         deliveries.set(deliveryId, {
@@ -23,10 +72,15 @@ export function createMemoryRepository() {
       }
       return { message_id: row.message_id, duplicate: false };
     },
-    async listInbox(endpointId, since = '') {
+    async listInbox(endpointId, since = '', viewerOwnerId = null) {
       return [...deliveries.values()]
         .filter((d) => d.recipient_endpoint_id === endpointId && d.state === 'delivered' && d.queued_at > since)
-        .map((d) => ({ delivery_id: d.delivery_id, message_id: d.message_id, envelope: envelopes.get(d.message_id).envelope, queued_at: d.queued_at }));
+        .map((d) => { const envelope = envelopes.get(d.message_id).envelope; return { delivery_id: d.delivery_id, message_id: d.message_id, envelope, queued_at: d.queued_at, sender_unverified: !viewerOwnerId || !acknowledgements.has(`${viewerOwnerId}:${envelope.sender.endpoint_id}`) }; });
+    },
+    async acknowledgeEndpoint({ viewerOwnerId, acknowledgedEndpointId, now = new Date() }) {
+      const record = { viewer_owner_id: viewerOwnerId, acknowledged_endpoint_id: acknowledgedEndpointId, acknowledged_at: (now instanceof Date ? now : new Date(now)).toISOString() };
+      acknowledgements.set(`${viewerOwnerId}:${acknowledgedEndpointId}`, record);
+      return record;
     },
     async acknowledgeDelivery({ deliveryId, endpointId, now }) {
       const current = deliveries.get(deliveryId);
@@ -43,6 +97,32 @@ export function createMemoryRepository() {
     async transitionDelivery(deliveryId, _endpointId, _target, { next }) {
       deliveries.set(deliveryId, next);
       return next;
+    },
+    async lookupCapabilityRegistration(capability) {
+      const entry = SEEDED_CAPABILITIES.get(capability);
+      return entry ? { capability, namespace: entry.namespace, risk_tier: entry.risk_tier } : null;
+    },
+    async lookupMessageSender(messageId) {
+      const row = envelopes.get(messageId);
+      return row ? { endpoint_id: row.envelope.sender.endpoint_id } : null;
+    },
+    // No real row locking possible/needed in a single-process in-memory
+    // store -- withTransaction is already a no-op here (see above).
+    async lookupActiveCapabilityGrants(endpointId, now) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).getTime();
+      return grants.filter((g) => g.granted_to === endpointId && !g.revoked_at && new Date(g.expires_at).getTime() > timestamp).map((g) => ({ capability: g.capability, scope: g.scope }));
+    },
+    async createCapabilityGrant({ grantId, capability, scope, grantedTo, expiresAt, now = new Date() }) {
+      const grant = { grant_id: grantId, capability, scope, granted_to: grantedTo, expires_at: expiresAt, revoked_at: null, granted_at: (now instanceof Date ? now : new Date(now)).toISOString() };
+      grants.push(grant);
+      return grant;
+    },
+    async revokeCapabilityGrant(grantId, { now = new Date() } = {}) {
+      const grant = grants.find((g) => g.grant_id === grantId);
+      if (!grant) throw Object.assign(new Error('Capability grant not found'), { code: 'GRANT_UNAVAILABLE' });
+      if (grant.revoked_at) return { ...grant, duplicate: true };
+      grant.revoked_at = (now instanceof Date ? now : new Date(now)).toISOString();
+      return { ...grant, duplicate: false };
     }
   };
 }

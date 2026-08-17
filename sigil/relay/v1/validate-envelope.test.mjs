@@ -61,3 +61,63 @@ test('rejects high-risk delivery without an approved action hash', () => {
   assert.throws(() => validateEnvelope(base, { ...options, requiresApproval: () => true }), (error) => error.code === 'APPROVAL_REQUIRED');
   assert.equal(validateEnvelope(base, { ...options, requiresApproval: () => true, approvedActionHashes: new Set([`sha256:${crypto.createHash('sha256').update(signedBytes(base)).digest('hex')}`]) }).accepted, true);
 });
+
+function reverseKeys(value) {
+  if (Array.isArray(value)) return value.map(reverseKeys);
+  if (value && typeof value === 'object') {
+    const reversed = {};
+    for (const key of Object.keys(value).reverse()) reversed[key] = reverseKeys(value[key]);
+    return reversed;
+  }
+  return value;
+}
+
+test('signature verifies across reordered keys and alternate transport encodings (§18 #14)', () => {
+  const candidate = structuredClone(base);
+  candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
+  // Reorder every nesting level's keys, then re-serialize with different
+  // whitespace -- simulates a different HTTP client/JSON library re-encoding
+  // the same logical envelope in transit.
+  const reordered = JSON.parse(JSON.stringify(reverseKeys(candidate), null, 2));
+  assert.deepEqual(signedBytes(reordered), signedBytes(candidate));
+  assert.equal(validateEnvelope(reordered, options).accepted, true);
+});
+
+test('rejects a task.request envelope with an invalid body', () => {
+  const candidate = structuredClone(base);
+  delete candidate.body.instruction;
+  candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
+  assert.throws(() => validateEnvelope(candidate, options), (error) => error.code === 'INVALID_ENVELOPE' && error.details?.field === 'instruction');
+});
+
+test('rejects a task.result envelope with an invalid status', () => {
+  const candidate = { ...base, message_type: 'task.result', body: { task_id: 'task_1', status: 'nope', summary: 'x' } };
+  candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
+  assert.throws(() => validateEnvelope(candidate, options), (error) => error.code === 'INVALID_ENVELOPE' && error.details?.field === 'status');
+});
+
+test('rejects a capability with no covering grant', () => {
+  const candidate = structuredClone(base);
+  candidate.capabilities = ['sigil.task/submit'];
+  candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
+  assert.throws(() => validateEnvelope(candidate, { ...options, capabilityGrants: [] }), (error) => error.code === 'CAPABILITY_DENIED');
+});
+
+test('accepts a capability covered by an ancestor-scope grant on the conversation', () => {
+  const candidate = structuredClone(base);
+  candidate.capabilities = ['sigil.task/submit'];
+  candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
+  const grants = [{ capability: 'sigil.task/submit', scope: `scope:conversation/${candidate.conversation_id}` }];
+  assert.equal(validateEnvelope(candidate, { ...options, capabilityGrants: grants }).accepted, true);
+});
+
+test('read_shared_context requires coverage for every referenced context scope', () => {
+  const candidate = structuredClone(base);
+  candidate.capabilities = ['sigil.core/read_shared_context'];
+  candidate.context_refs = [{ ref_id: 'ctx_1', scope: 'scope:project/proj_1' }, { ref_id: 'ctx_2', scope: 'scope:project/proj_2' }];
+  candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
+  const partialGrants = [{ capability: 'sigil.core/read_shared_context', scope: 'scope:project/proj_1' }];
+  assert.throws(() => validateEnvelope(candidate, { ...options, capabilityGrants: partialGrants }), (error) => error.code === 'CAPABILITY_DENIED');
+  const fullGrants = [{ capability: 'sigil.core/read_shared_context', scope: 'scope:project' }];
+  assert.equal(validateEnvelope(candidate, { ...options, capabilityGrants: fullGrants }).accepted, true);
+});

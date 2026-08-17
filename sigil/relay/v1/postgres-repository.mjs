@@ -2,16 +2,54 @@ import pg from 'pg';
 import crypto from 'node:crypto';
 import { canTransition } from './delivery-state.mjs';
 import { assertAssurance } from './auth-policy.mjs';
+import { withTransaction } from './with-transaction.mjs';
 
 export class PostgresRepository {
   constructor({ pool = new pg.Pool(), schema = 'public' } = {}) { this.pool = pool; this.schema = schema; }
   async query(text, values = []) { return this.pool.query(text, values); }
-  async lookupIdempotency(endpointId, idempotencyKey) {
-    const result = await this.pool.query(
+  async lookupIdempotency(endpointId, idempotencyKey, client = this.pool) {
+    const result = await client.query(
       'SELECT message_id, canonical_hash FROM idempotency_keys WHERE endpoint_id = $1 AND idempotency_key = $2 AND expires_at > NOW()',
       [endpointId, idempotencyKey]
     );
     return result.rows[0] ?? null;
+  }
+  async lookupTaskRequest(taskId, conversationId, client = this.pool) {
+    const result = await client.query(
+      `SELECT message_id FROM envelopes WHERE conversation_id = $1 AND message_type = 'task.request' AND body->>'task_id' = $2 AND envelope_status = 'accepted' LIMIT 1`,
+      [conversationId, taskId]
+    );
+    return result.rows[0] ?? null;
+  }
+  async lookupAcceptedMessageId(senderEndpointId, messageId, client = this.pool) {
+    const result = await client.query(
+      'SELECT message_id, idempotency_key FROM envelopes WHERE sender_endpoint_id = $1 AND message_id = $2 AND envelope_status = $3',
+      [senderEndpointId, messageId, 'accepted']
+    );
+    return result.rows[0] ?? null;
+  }
+  async lookupCapabilityRegistration(capability, client = this.pool) {
+    const result = await client.query('SELECT capability, namespace, risk_tier FROM capability_registry WHERE capability = $1', [capability]);
+    return result.rows[0] ?? null;
+  }
+  // Resolves the message's sender endpoint so delivery-state transitions can
+  // push a delivery.receipt to the sender via stream.notifyReceipt, without
+  // the caller needing to carry the sender endpoint id itself (design §10).
+  async lookupMessageSender(messageId, client = this.pool) {
+    const result = await client.query('SELECT sender_endpoint_id FROM envelopes WHERE message_id = $1', [messageId]);
+    return result.rows[0] ? { endpoint_id: result.rows[0].sender_endpoint_id } : null;
+  }
+  // No `client = this.pool` default here, unlike the other lookups above --
+  // design §3 requires this one to always run on the transaction's client
+  // since it takes a row lock; a lock taken on a throwaway pool connection
+  // outside the transaction would be meaningless and immediately released.
+  async lookupActiveCapabilityGrants(endpointId, now, client) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const result = await client.query(
+      'SELECT capability, scope FROM capability_grants WHERE granted_to = $1 AND expires_at > $2 AND revoked_at IS NULL FOR UPDATE',
+      [endpointId, timestamp]
+    );
+    return result.rows;
   }
   async registerHumanCredential({ humanId, endpointId, credentialId, type = 'webauthn', publicKey, algorithm, coseKey, now = new Date() } = {}) {
     if (type !== 'webauthn' || !humanId || !endpointId || !credentialId || !publicKey) throw Object.assign(new Error('Endpoint-bound WebAuthn credential is required'), { code: 'INVALID_ATTESTATION' });
@@ -70,16 +108,35 @@ export class PostgresRepository {
       return decision.rows[0];
     });
   }
-  async listInbox(endpointId, since = '') {
+  async listInbox(endpointId, since = '', viewerOwnerId = null) {
     const result = await this.pool.query(
       `SELECT d.delivery_id, d.message_id, d.recipient_endpoint_id, d.state, d.attempts, d.queued_at,
               e.protocol, e.message_type, e.body, e.context_refs, e.capabilities, e.correlation_id,
-              e.sender_endpoint_id, e.expires_at, e.created_at
+              e.sender_endpoint_id, e.expires_at, e.created_at,
+              (ea.acknowledged_endpoint_id IS NULL) AS sender_unverified
        FROM deliveries d JOIN envelopes e ON e.message_id = d.message_id
+       LEFT JOIN endpoint_acknowledgements ea ON ea.acknowledged_endpoint_id = e.sender_endpoint_id AND ea.viewer_owner_id = $3
        WHERE d.recipient_endpoint_id = $1 AND d.state = 'queued' AND ($2 = '' OR d.queued_at > $2)
-       ORDER BY d.queued_at, d.delivery_id`, [endpointId, since]
+       ORDER BY d.queued_at, d.delivery_id`, [endpointId, since, viewerOwnerId]
     );
     return result.rows;
+  }
+  async acknowledgeEndpoint({ viewerOwnerId, acknowledgedEndpointId, now = new Date() } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    return this.withTransaction(async (client) => {
+      const result = await client.query(`INSERT INTO endpoint_acknowledgements (viewer_owner_id, acknowledged_endpoint_id, acknowledged_at) VALUES ($1,$2,$3) ON CONFLICT (viewer_owner_id, acknowledged_endpoint_id) DO UPDATE SET acknowledged_at = $3 RETURNING *`, [viewerOwnerId, acknowledgedEndpointId, timestamp]);
+      await client.query(`INSERT INTO audit_events (event_id, event_type, subject_id, actor_human_id, object_type, object_id, outcome, created_at) VALUES ($1,'endpoint_acknowledgement.created',$2,$3,'endpoint',$2,'success',$4)`, [`audit_${crypto.randomUUID()}`, acknowledgedEndpointId, viewerOwnerId, timestamp]);
+      return result.rows[0];
+    });
+  }
+  async createEndpointWithAudit({ endpointId, ownerId, installationId, runtime, displayName, keyId, publicKey, now = new Date() } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    return this.withTransaction(async (client) => { try {
+      const endpoint = await client.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at) VALUES ($1,$2,$3,$4,$5,'active',$6) RETURNING *`, [endpointId, ownerId, runtime, installationId, displayName, timestamp]);
+      await client.query(`INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from) VALUES ($1,$2,'Ed25519',$3,'active',$4)`, [keyId, endpointId, publicKey, timestamp]);
+      await client.query(`INSERT INTO audit_events (event_id,event_type,subject_id,actor_id,object_type,object_id,outcome,created_at) VALUES ($1,'endpoint.created',$2,$3,'endpoint',$2,'success',$4)`, [`audit_${crypto.randomUUID()}`, endpointId, ownerId, timestamp]);
+      return endpoint.rows[0];
+    } catch (error) { if (error.code === '23505' && error.constraint === 'endpoints_owner_display_name_idx') throw Object.assign(new Error('An endpoint with this display name already exists for this owner'), { code: 'DISPLAY_NAME_COLLISION' }); throw error; } });
   }
   async getDelivery(deliveryId, endpointId) {
     const result = await this.pool.query('SELECT * FROM deliveries WHERE delivery_id = $1 AND recipient_endpoint_id = $2', [deliveryId, endpointId]);
@@ -130,18 +187,43 @@ export class PostgresRepository {
          WHERE delivery_id = $9 RETURNING *`,
         [next.state, next.attempts ?? current.rows[0].attempts, next.updated_at ?? new Date().toISOString(), next.delivered_at ?? null, next.acknowledged_at ?? null, next.processing_at ?? null, next.processed_at ?? null, next.failure_reason ?? null, deliveryId]
       );
+      await client.query(
+        `INSERT INTO audit_events (event_id, event_type, subject_id, endpoint_id, conversation_id, payload, reason, created_at)
+         SELECT $1, $2, $3, $4, e.conversation_id, '{}', $5, $6
+         FROM deliveries d JOIN envelopes e ON e.message_id = d.message_id WHERE d.delivery_id = $3`,
+        [`audit_${crypto.randomUUID()}`, `delivery.${next.state}`, deliveryId, endpointId, next.failure_reason ?? null, next.updated_at ?? new Date().toISOString()]
+      );
       return result.rows[0];
     });
   }
   async withTransaction(work) {
-    const client = await this.pool.connect();
-    try { await client.query('BEGIN'); const result = await work(client); await client.query('COMMIT'); return result; }
-    catch (error) { await client.query('ROLLBACK'); throw error; }
-    finally { client.release(); }
+    return withTransaction(this.pool, work);
   }
-  async persistAcceptedEnvelope(row) {
+  // Recipient inbox-depth limit (design §18 #23): derived live from
+  // non-terminal deliveries rows rather than a separate counter, so it
+  // never drifts from the actual outstanding queue.
+  async countOpenDeliveries(recipientEndpointId, client) {
+    const result = await client.query(
+      `SELECT count(*) FROM deliveries WHERE recipient_endpoint_id = $1
+       AND state NOT IN ('acknowledged', 'processed', 'delivery_rejected', 'dead_letter')`,
+      [recipientEndpointId]
+    );
+    return Number(result.rows[0].count);
+  }
+  async reserveRateLimit(scopeKind, scopeId, windowStart, limit, client) {
+    const result = await client.query(
+      `INSERT INTO quota_usage (scope_kind, scope_id, window_start, count) VALUES ($1, $2, $3, 1)
+       ON CONFLICT (scope_kind, scope_id, window_start) DO UPDATE SET count = quota_usage.count + 1
+       RETURNING count`,
+      [scopeKind, scopeId, windowStart]
+    );
+    const count = result.rows[0].count;
+    return { count, allowed: count <= limit };
+  }
+  async persistAcceptedEnvelope(row, client) {
+    if (client) return this.#insertAcceptedEnvelope(row, client);
     try {
-      return await this.#persistAcceptedEnvelopeTransaction(row);
+      return await this.withTransaction((txClient) => this.#insertAcceptedEnvelope(row, txClient));
     } catch (error) {
       if (error.code === '23505') {
         const existing = await this.lookupIdempotency(row.envelope.sender.endpoint_id, row.envelope.idempotency_key);
@@ -150,33 +232,31 @@ export class PostgresRepository {
       throw error;
     }
   }
-  async #persistAcceptedEnvelopeTransaction(row) {
-    return this.withTransaction(async (client) => {
-      const result = await client.query(
-        `INSERT INTO envelopes (message_id, conversation_id, protocol, message_type, sender_endpoint_id, sender_owner_id, recipient_endpoint_id, broadcast_scope, body, context_refs, capabilities, correlation_id, idempotency_key, expires_at, created_at, signature_algorithm, signature_key_id, signature_value, canonical_bytes, action_hash, envelope_status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'accepted') RETURNING message_id`,
-        [row.envelope.message_id, row.envelope.conversation_id, row.envelope.protocol, row.envelope.message_type, row.envelope.sender.endpoint_id, row.envelope.sender.owner_id, row.envelope.recipient?.endpoint_id ?? null, row.envelope.broadcast_scope ?? null, row.envelope.body, row.envelope.context_refs, row.envelope.capabilities, row.envelope.correlation_id, row.envelope.idempotency_key, row.envelope.expires_at, row.envelope.created_at, row.envelope.signature.algorithm, row.envelope.signature.key_id, row.envelope.signature.value, row.canonical_bytes ?? null, row.action_hash ?? null]
-      );
-      const deliveryId = row.delivery_id ?? `del_${crypto.randomUUID()}`;
-      if (row.envelope.recipient?.endpoint_id) {
-        await client.query(
-          `INSERT INTO deliveries (delivery_id, message_id, recipient_endpoint_id, state, attempts, queued_at, updated_at, next_attempt_at)
-           VALUES ($1,$2,$3,'queued',0,$4,$4,$4)`,
-          [deliveryId, row.envelope.message_id, row.envelope.recipient.endpoint_id, row.envelope.created_at]
-        );
-      }
+  async #insertAcceptedEnvelope(row, client) {
+    const result = await client.query(
+      `INSERT INTO envelopes (message_id, conversation_id, protocol, message_type, sender_endpoint_id, sender_owner_id, recipient_endpoint_id, broadcast_scope, body, context_refs, capabilities, correlation_id, idempotency_key, expires_at, created_at, signature_algorithm, signature_key_id, signature_value, canonical_bytes, action_hash, envelope_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'accepted') RETURNING message_id`,
+      [row.envelope.message_id, row.envelope.conversation_id, row.envelope.protocol, row.envelope.message_type, row.envelope.sender.endpoint_id, row.envelope.sender.owner_id, row.envelope.recipient?.endpoint_id ?? null, row.envelope.broadcast_scope ?? null, row.envelope.body, row.envelope.context_refs, row.envelope.capabilities, row.envelope.correlation_id, row.envelope.idempotency_key, row.envelope.expires_at, row.envelope.created_at, row.envelope.signature.algorithm, row.envelope.signature.key_id, row.envelope.signature.value, row.canonical_bytes ?? null, row.action_hash ?? null]
+    );
+    const deliveryId = row.delivery_id ?? `del_${crypto.randomUUID()}`;
+    if (row.envelope.recipient?.endpoint_id) {
       await client.query(
-        `INSERT INTO idempotency_keys (idempotency_key, endpoint_id, message_id, canonical_hash, created_at, expires_at)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
-        [row.envelope.idempotency_key, row.envelope.sender.endpoint_id, row.envelope.message_id, row.canonical_hash ?? row.action_hash ?? '', row.envelope.created_at, row.envelope.expires_at]
+        `INSERT INTO deliveries (delivery_id, message_id, recipient_endpoint_id, state, attempts, queued_at, updated_at, next_attempt_at)
+         VALUES ($1,$2,$3,'queued',0,$4,$4,$4)`,
+        [deliveryId, row.envelope.message_id, row.envelope.recipient.endpoint_id, row.envelope.created_at]
       );
-      await client.query(
-        `INSERT INTO audit_events (event_id, event_type, subject_id, actor_id, payload, created_at)
-         VALUES ($1, 'envelope.accepted', $2, $3, $4, $5)`,
-        [`audit_${crypto.randomUUID()}`, row.envelope.message_id, row.envelope.sender.endpoint_id, JSON.stringify({ recipient_endpoint_id: row.envelope.recipient?.endpoint_id ?? null }), row.envelope.created_at]
-      );
-      return { message_id: result.rows[0].message_id, duplicate: false };
-    });
+    }
+    await client.query(
+      `INSERT INTO idempotency_keys (idempotency_key, endpoint_id, message_id, canonical_hash, created_at, expires_at)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [row.envelope.idempotency_key, row.envelope.sender.endpoint_id, row.envelope.message_id, row.canonical_hash ?? row.action_hash ?? '', row.envelope.created_at, row.envelope.expires_at]
+    );
+    await client.query(
+      `INSERT INTO audit_events (event_id, event_type, subject_id, actor_id, conversation_id, payload, created_at)
+       VALUES ($1, 'envelope.accepted', $2, $3, $4, $5, $6)`,
+      [`audit_${crypto.randomUUID()}`, row.envelope.message_id, row.envelope.sender.endpoint_id, row.envelope.conversation_id, JSON.stringify({ recipient_endpoint_id: row.envelope.recipient?.endpoint_id ?? null }), row.envelope.created_at]
+    );
+    return { message_id: result.rows[0].message_id, duplicate: false };
   }
   async acknowledgeDelivery({ deliveryId, endpointId, now = new Date() } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
@@ -204,6 +284,12 @@ export class PostgresRepository {
       const result = await client.query(
         `UPDATE deliveries SET state = 'acknowledged', updated_at = $1, acknowledged_at = $1 WHERE delivery_id = $2 RETURNING *`,
         [timestamp, deliveryId]
+      );
+      await client.query(
+        `INSERT INTO audit_events (event_id, event_type, subject_id, endpoint_id, conversation_id, payload, created_at)
+         SELECT $1, $2, $3, $4, e.conversation_id, '{}', $5
+         FROM deliveries d JOIN envelopes e ON e.message_id = d.message_id WHERE d.delivery_id = $3`,
+        [`audit_${crypto.randomUUID()}`, 'delivery.acknowledged', deliveryId, endpointId, timestamp]
       );
       return { delivery_id: deliveryId, duplicate: false, delivery: result.rows[0] };
     });
@@ -513,6 +599,20 @@ export class PostgresRepository {
       [eventId, eventType, subjectId, actorId, actorHumanId, endpointId, objectType, objectId, actionHash, outcome, reason, JSON.stringify(payload), metadataRedacted ? JSON.stringify(metadataRedacted) : null, timestamp]
     );
     return result.rows[0];
+  }
+  async isConversationMember(endpointId, conversationId, client = this.pool) {
+    const result = await client.query(
+      'SELECT 1 FROM conversation_members WHERE conversation_id = $1 AND endpoint_id = $2 AND removed_at IS NULL',
+      [conversationId, endpointId]
+    );
+    return result.rows.length > 0;
+  }
+  async listAuditEventsForConversation(conversationId, client = this.pool) {
+    const result = await client.query(
+      'SELECT event_id, event_type, subject_id, actor_id, actor_human_id, endpoint_id, object_type, object_id, outcome, reason, created_at FROM audit_events WHERE conversation_id = $1 ORDER BY created_at',
+      [conversationId]
+    );
+    return result.rows;
   }
   async close() { await this.pool.end(); }
 }

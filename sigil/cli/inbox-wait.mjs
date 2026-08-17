@@ -1,7 +1,8 @@
 import { WebSocket as DefaultWebSocket } from 'ws';
 import { appendInboxLedger } from './ledger.mjs';
+import { resolveHeartbeat } from '../relay/v1/relay-config.mjs';
 
-export const INBOX_WAIT_EXIT_CODES = Object.freeze({ TIMEOUT: 2, AUTH: 3, CONNECTION: 4, MALFORMED: 5, SIGINT: 130, SIGTERM: 143 });
+export const INBOX_WAIT_EXIT_CODES = Object.freeze({ TIMEOUT: 2, AUTH: 3, CONNECTION: 4, MALFORMED: 5, RELAY_UNREACHABLE: 6, SIGINT: 130, SIGTERM: 143 });
 
 export class InboxWaitError extends Error {
   constructor(message, exitCode, options = {}) { super(message, options); this.name = 'InboxWaitError'; this.exitCode = exitCode; }
@@ -22,9 +23,10 @@ export function formatInboxItem(item) {
   return `[${envelope.created_at}] ${envelope.sender.endpoint_id} -> ${envelope.recipient?.endpoint_id ?? '(broadcast)'} (${envelope.message_type}): ${JSON.stringify(envelope.body)}`;
 }
 
-export async function waitForOneInboxMessage({ relay, identity, streamUrl, timeoutMs = 300_000, WebSocketImpl = DefaultWebSocket, print = console.log, signalSource = process, ledgerPath } = {}) {
+export async function waitForOneInboxMessage({ relay, identity, streamUrl, timeoutMs = 300_000, WebSocketImpl = DefaultWebSocket, print = console.log, signalSource = process, ledgerPath, heartbeat: heartbeatOverrides } = {}) {
+  const heartbeat = resolveHeartbeat(heartbeatOverrides);
   if (!relay || !identity?.relay_token || !streamUrl) throw new Error('relay, identity, and streamUrl are required');
-  let socket; let stopped = false; let reconnectTimer; let fallbackTimer; let timeoutTimer; let reconnectDelay = 250; let polling = false;
+  let socket; let stopped = false; let reconnectTimer; let fallbackTimer; let timeoutTimer; let heartbeatTimer; let missedHeartbeats = 0; let reconnectDelay = 250; let polling = false;
   let resolveWait; let rejectWait;
   const wait = new Promise((resolve, reject) => { resolveWait = resolve; rejectWait = reject; });
   // Attach a handler immediately because timeout/socket callbacks can settle
@@ -39,6 +41,7 @@ export async function waitForOneInboxMessage({ relay, identity, streamUrl, timeo
   const cleanup = () => {
     stopped = true;
     clearTimeout(reconnectTimer); clearInterval(fallbackTimer); clearTimeout(timeoutTimer);
+    clearInterval(heartbeatTimer);
     signalSource.removeListener('SIGINT', onSigint); signalSource.removeListener('SIGTERM', onSigterm);
     try { socket?.close(); socket?.terminate?.(); } catch {}
   };
@@ -86,9 +89,9 @@ export async function waitForOneInboxMessage({ relay, identity, streamUrl, timeo
     try {
       socket = new WebSocketImpl(streamUrl, { headers: { authorization: `Bearer ${identity.relay_token}` } });
       let opened = false;
-      socket.once('open', () => { opened = true; reconnectDelay = 250; });
+      socket.once('open', () => { opened = true; reconnectDelay = 250; missedHeartbeats = 0; clearInterval(heartbeatTimer); heartbeatTimer = setInterval(() => { missedHeartbeats += 1; if (missedHeartbeats > heartbeat.missedBeforeTimeout) return fail(new InboxWaitError('Relay unreachable: no heartbeat reply', INBOX_WAIT_EXIT_CODES.RELAY_UNREACHABLE)); try { socket.send(JSON.stringify({ type: 'ping', timestamp: new Date().toISOString() })); } catch {} }, heartbeat.intervalMs); });
       socket.on('message', (raw) => {
-        try { const event = JSON.parse(raw); if (event.type === 'delivered') poll(); }
+        try { const event = JSON.parse(raw); if (event.type === 'delivered') poll(); if (event.type === 'pong') missedHeartbeats = 0; }
         catch (error) { fail(new InboxWaitError(`Malformed stream event: ${error.message}`, INBOX_WAIT_EXIT_CODES.MALFORMED, { cause: error })); }
       });
       socket.once('unexpected-response', (_request, response) => {

@@ -34,7 +34,13 @@ test('HTTP relay defaults to repository persistence with canonical acceptance da
   envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
   const persisted = [];
   const repository = {
+    async withTransaction(fn) { return fn(null); },
     async lookupIdempotency() { return null; },
+    async lookupAcceptedMessageId() { return null; },
+    async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
+    async lookupActiveCapabilityGrants() { return []; },
+    async reserveRateLimit() { return { count: 1, allowed: true }; },
+    async countOpenDeliveries() { return 0; },
     async persistAcceptedEnvelope(row) { persisted.push(row); return { message_id: row.envelope.message_id }; }
   };
   const server = createRelayServer({
@@ -58,7 +64,7 @@ test('HTTP relay does not notify when durable persistence fails', async () => {
   const notifications = [];
   const server = createRelayServer({
     registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
-    repository: { async lookupIdempotency() { return null; }, async persistAcceptedEnvelope() { throw new Error('database unavailable'); } },
+    repository: { async withTransaction(fn) { return fn(null); }, async lookupIdempotency() { return null; }, async lookupAcceptedMessageId() { return null; }, async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; }, async lookupActiveCapabilityGrants() { return []; }, async reserveRateLimit() { return { count: 1, allowed: true }; }, async countOpenDeliveries() { return 0; }, async persistAcceptedEnvelope() { throw new Error('database unavailable'); } },
     stream: { notify(...args) { notifications.push(args); } }, now: new Date('2026-08-13T12:01:00Z')
   });
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
@@ -76,7 +82,13 @@ test('HTTP relay returns prior acceptance for duplicate idempotency retry', asyn
   envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
   const persisted = []; const notifications = []; const canonicalHash = crypto.createHash('sha256').update(signedBytes(envelope)).digest('hex');
   const repository = {
+    async withTransaction(fn) { return fn(null); },
     async lookupIdempotency() { return persisted.length ? { message_id: envelope.message_id, canonical_hash: canonicalHash } : null; },
+    async lookupAcceptedMessageId() { return null; },
+    async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
+    async lookupActiveCapabilityGrants() { return []; },
+    async reserveRateLimit() { return { count: 1, allowed: true }; },
+    async countOpenDeliveries() { return 0; },
     async persistAcceptedEnvelope(row) { persisted.push(row); return { message_id: row.envelope.message_id }; }
   };
   const server = createRelayServer({
@@ -100,7 +112,13 @@ test('HTTP relay rejects conflicting idempotency retry', async () => {
   envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
   const originalHash = crypto.createHash('sha256').update(signedBytes(envelope)).digest('hex');
   const repository = {
+    async withTransaction(fn) { return fn(null); },
     async lookupIdempotency() { return { message_id: envelope.message_id, canonical_hash: originalHash }; },
+    async lookupAcceptedMessageId() { return null; },
+    async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
+    async lookupActiveCapabilityGrants() { return []; },
+    async reserveRateLimit() { return { count: 1, allowed: true }; },
+    async countOpenDeliveries() { return 0; },
     async persistAcceptedEnvelope() { throw new Error('must not persist conflicting retry'); }
   };
   const server = createRelayServer({
@@ -120,11 +138,49 @@ test('HTTP relay notifies recipient stream after acceptance', async () => {
   const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
   envelope.created_at = '2026-08-13T12:00:00.000Z'; envelope.expires_at = '2026-08-14T00:00:00.000Z'; envelope.recipient.endpoint_id = 'ep_claude'; envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
   const notifications = []; const stream = { notify: (endpointId, messageId) => { notifications.push({ endpointId, messageId }); return true; } };
-  const server = createRelayServer({ registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]), persist: () => {}, stream, now: new Date('2026-08-13T12:01:00Z') });
+  const repository = {
+    async withTransaction(fn) { return fn(null); },
+    async lookupIdempotency() { return null; },
+    async lookupAcceptedMessageId() { return null; },
+    async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
+    async lookupActiveCapabilityGrants() { return []; },
+    async reserveRateLimit() { return { count: 1, allowed: true }; },
+    async countOpenDeliveries() { return 0; },
+    async persistAcceptedEnvelope(row) { return { message_id: row.envelope.message_id, duplicate: false }; }
+  };
+  const server = createRelayServer({ registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]), repository, stream, now: new Date('2026-08-13T12:01:00Z') });
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
   await new Promise((resolve, reject) => { const request = http.request({ port, method: 'POST', path: '/v1/envelopes' }, (response) => { response.resume(); response.on('end', resolve); }); request.on('error', reject); request.end(JSON.stringify(envelope)); });
   await new Promise((resolve) => server.close(resolve));
   assert.deepEqual(notifications, [{ endpointId: 'ep_claude', messageId: 'msg_01JEXAMPLE' }]);
+});
+
+test('HTTP relay pushes the sender a delivered receipt via stream.notifyReceipt at accept time', async () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
+  envelope.created_at = '2026-08-13T12:00:00.000Z'; envelope.expires_at = '2026-08-14T00:00:00.000Z'; envelope.recipient.endpoint_id = 'ep_claude'; envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
+  const receipts = [];
+  const stream = { notify() { return true; }, notifyReceipt: (endpointId, receipt) => { receipts.push({ endpointId, receipt }); return true; } };
+  const repository = {
+    async withTransaction(fn) { return fn(null); },
+    async lookupIdempotency() { return null; },
+    async lookupAcceptedMessageId() { return null; },
+    async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
+    async lookupActiveCapabilityGrants() { return []; },
+    async reserveRateLimit() { return { count: 1, allowed: true }; },
+    async countOpenDeliveries() { return 0; },
+    async persistAcceptedEnvelope(row) { return { message_id: row.envelope.message_id, duplicate: false }; }
+  };
+  const server = createRelayServer({ registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]), repository, stream, now: new Date('2026-08-13T12:01:00Z') });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  await new Promise((resolve, reject) => { const request = http.request({ port, method: 'POST', path: '/v1/envelopes' }, (response) => { response.resume(); response.on('end', resolve); }); request.on('error', reject); request.end(JSON.stringify(envelope)); });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0].endpointId, envelope.sender.endpoint_id);
+  assert.equal(receipts[0].receipt.message_id, 'msg_01JEXAMPLE');
+  assert.equal(receipts[0].receipt.delivery_id, 'del_msg_01JEXAMPLE');
+  assert.equal(receipts[0].receipt.state, 'delivered');
+  assert.equal(receipts[0].receipt.at, envelope.created_at);
 });
 
 test('HTTP relay suppresses duplicate notification when persistence detects a concurrent race', async () => {
@@ -134,7 +190,13 @@ test('HTTP relay suppresses duplicate notification when persistence detects a co
   envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
   const notifications = [];
   const repository = {
+    async withTransaction(fn) { return fn(null); },
     async lookupIdempotency() { return null; },
+    async lookupAcceptedMessageId() { return null; },
+    async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
+    async lookupActiveCapabilityGrants() { return []; },
+    async reserveRateLimit() { return { count: 1, allowed: true }; },
+    async countOpenDeliveries() { return 0; },
     async persistAcceptedEnvelope() { return { message_id: 'msg_won_the_race', duplicate: true }; }
   };
   const server = createRelayServer({
@@ -354,6 +416,26 @@ test('authenticated routes reject missing principal', async () => {
   const result = await request(port, { method: 'GET', path: '/v1/inbox' });
   await new Promise((resolve) => server.close(resolve));
   assert.equal(result.status, 401); assert.equal(result.body.code, 'UNAUTHENTICATED');
+});
+
+test('GET /v1/audit requires conversation_id and membership, then returns the conversation timeline', async () => {
+  const calls = [];
+  const repository = {
+    async isConversationMember(endpointId, conversationId) { calls.push(['isConversationMember', endpointId, conversationId]); return conversationId === 'conv_1'; },
+    async listAuditEventsForConversation(conversationId) { calls.push(['listAuditEventsForConversation', conversationId]); return [{ event_id: 'audit_1', event_type: 'delivery.acknowledged' }]; }
+  };
+  const server = createRelayServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_claude' }) });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const missingParam = await request(port, { method: 'GET', path: '/v1/audit' });
+  const notMember = await request(port, { method: 'GET', path: '/v1/audit?conversation_id=conv_2' });
+  const ok = await request(port, { method: 'GET', path: '/v1/audit?conversation_id=conv_1' });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(missingParam.status, 400); assert.equal(missingParam.body.code, 'INVALID_ENVELOPE');
+  assert.equal(notMember.status, 403); assert.equal(notMember.body.code, 'ROUTE_NOT_AUTHORIZED');
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.code, 'OK');
+  assert.deepEqual(ok.body.events, [{ event_id: 'audit_1', event_type: 'delivery.acknowledged' }]);
+  assert.deepEqual(calls, [['isConversationMember', 'ep_claude', 'conv_2'], ['isConversationMember', 'ep_claude', 'conv_1'], ['listAuditEventsForConversation', 'conv_1']]);
 });
 
 function request(port, { method, path, body }) {

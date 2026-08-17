@@ -8,7 +8,7 @@ function fakePool({ fail = false } = {}) {
     async query(text, values) { calls.push({ text, values }); if (fail && text.startsWith('INSERT')) throw new Error('insert failed'); return text === 'BEGIN' || text === 'COMMIT' || text === 'ROLLBACK' ? { rows: [] } : { rows: [{ message_id: values?.[0] }] }; },
     release() { calls.push({ text: 'RELEASE' }); }
   };
-  return { calls, async connect() { calls.push({ text: 'CONNECT' }); return client; }, async end() { calls.push({ text: 'END' }); } };
+  return { calls, async connect() { calls.push({ text: 'CONNECT' }); return client; }, async end() { calls.push({ text: 'END' }); }, query: client.query };
 }
 
 const envelope = { message_id: 'msg_1', conversation_id: 'conv_1', protocol: 'sigil/1', message_type: 'task.request', sender: { endpoint_id: 'ep_codex', owner_id: 'usr_1' }, recipient: { endpoint_id: 'ep_claude' }, body: { task_id: 'task_1' }, context_refs: [], capabilities: [], correlation_id: null, idempotency_key: 'send_1', expires_at: '2026-08-14T00:00:00Z', created_at: '2026-08-13T12:00:00Z', signature: { algorithm: 'Ed25519', key_id: 'key_1', value: 'sig' } };
@@ -31,6 +31,42 @@ test('repository rolls back and releases client on persistence failure', async (
   await assert.rejects(() => new PostgresRepository({ pool }).persistAcceptedEnvelope({ envelope }));
   assert.ok(pool.calls.some((call) => call.text === 'ROLLBACK'));
   assert.equal(pool.calls.at(-1).text, 'RELEASE');
+});
+
+test('countOpenDeliveries excludes terminal delivery states', async () => {
+  const pool = fakePool();
+  const repository = new PostgresRepository({ pool });
+  await repository.withTransaction((client) => repository.countOpenDeliveries('ep_claude', client));
+  const query = pool.calls.find((call) => call.text?.includes('SELECT'));
+  assert.match(query.text, /NOT IN/);
+  assert.match(query.text, /acknowledged/);
+  assert.match(query.text, /processed/);
+  assert.match(query.text, /delivery_rejected/);
+  assert.match(query.text, /dead_letter/);
+});
+
+test('persistAcceptedEnvelope writes an audit row with conversation_id bound', async () => {
+  const pool = fakePool();
+  const row = await new PostgresRepository({ pool }).persistAcceptedEnvelope({ envelope, canonical_bytes: Buffer.from('c'), action_hash: 'sha256:x' });
+  const audit = pool.calls.find((call) => call.text?.includes('INSERT INTO audit_events'));
+  assert.match(audit.text, /conversation_id/);
+  assert.equal(audit.values.includes('conv_1'), true);
+});
+
+test('acknowledgeDelivery writes a delivery.acknowledged audit row in the same transaction', async () => {
+  const pool = fakeAckPool();
+  const repository = new PostgresRepository({ pool });
+  await repository.acknowledgeDelivery({ deliveryId: 'del_1', endpointId: 'ep_claude', now: new Date('2026-08-16T12:00:00Z') });
+  const audit = pool.calls.find((call) => call.text?.includes('INSERT INTO audit_events') && call.values?.includes('delivery.acknowledged'));
+  assert.ok(audit);
+});
+
+test('transitionDelivery writes a delivery.<state> audit row in the same transaction', async () => {
+  const pool = fakePool();
+  const repository = new PostgresRepository({ pool });
+  await repository.transitionDelivery('del_1', 'ep_claude', 'processed', { next: { state: 'processed', updated_at: '2026-08-16T12:00:00Z' } });
+  const audit = pool.calls.find((call) => call.text?.includes('INSERT INTO audit_events') && call.values?.includes('delivery.processed'));
+  assert.ok(audit);
 });
 
 test('concurrent duplicate submission surfaces the winning acceptance instead of throwing', async () => {
@@ -128,9 +164,125 @@ test('acknowledgeDelivery rejects a delivery that cannot reach acknowledged', as
   );
 });
 
+test('acknowledgeDelivery resolves the message sender for receipt notification', async () => {
+  const pool = fakeAckPool();
+  const repository = new PostgresRepository({ pool });
+  const result = await repository.acknowledgeDelivery({ deliveryId: 'del_1', endpointId: 'ep_claude', now: new Date('2026-08-16T12:00:00Z') });
+  assert.ok('delivery' in result);
+});
+
+test('lookupMessageSender resolves the sender endpoint for a message id', async () => {
+  const calls = [];
+  const pool = { async query(text, values) { calls.push({ text, values }); return { rows: [{ sender_endpoint_id: 'ep_codex' }] }; } };
+  const result = await new PostgresRepository({ pool }).lookupMessageSender('msg_1');
+  assert.deepEqual(result, { endpoint_id: 'ep_codex' });
+  assert.match(calls[0].text, /FROM envelopes WHERE message_id = \$1/);
+  assert.deepEqual(calls[0].values, ['msg_1']);
+});
+
+test('lookupMessageSender returns null for an unknown message id', async () => {
+  const pool = { async query() { return { rows: [] }; } };
+  const result = await new PostgresRepository({ pool }).lookupMessageSender('msg_missing');
+  assert.equal(result, null);
+});
+
+test('lookupTaskRequest returns the accepted task.request row for the conversation', async () => {
+  const calls = [];
+  const pool = { async query(text, values) { calls.push({ text, values }); return { rows: [{ message_id: 'msg_original' }] }; } };
+  const result = await new PostgresRepository({ pool }).lookupTaskRequest('task_1', 'conv_1');
+  assert.deepEqual(result, { message_id: 'msg_original' });
+  assert.match(calls[0].text, /message_type = 'task\.request'/);
+  assert.deepEqual(calls[0].values, ['conv_1', 'task_1']);
+});
+
+test('lookupTaskRequest returns null when no accepted task.request matches', async () => {
+  const pool = { async query() { return { rows: [] }; } };
+  const result = await new PostgresRepository({ pool }).lookupTaskRequest('task_missing', 'conv_1');
+  assert.equal(result, null);
+});
+
 test('repository registers WebAuthn credential for active human', async () => {
   const calls = [];
   const pool = { async query(text, values) { calls.push({ text, values }); return { rows: [{ credential_id: 'cred_1', human_id: 'usr_1', type: 'webauthn', status: 'active' }] }; } };
   const result = await new PostgresRepository({ pool }).registerHumanCredential({ humanId: 'usr_1', endpointId: 'ep_codex', credentialId: 'cred_1', publicKey: Buffer.from('key') });
   assert.equal(result.credential_id, 'cred_1'); assert.equal(calls.length, 1); assert.match(calls[0].text, /INSERT INTO human_credentials/);
+});
+
+test('lookupAcceptedMessageId is scoped to (sender_endpoint_id, message_id), never a bare message_id lookup', async () => {
+  const calls = [];
+  const pool = { async query(text, values) { calls.push({ text, values }); return { rows: [{ message_id: 'msg_1', idempotency_key: 'idempotency_1' }] }; } };
+  const result = await new PostgresRepository({ pool }).lookupAcceptedMessageId('ep_codex', 'msg_1');
+  assert.match(calls[0].text, /sender_endpoint_id\s*=\s*\$1/);
+  assert.match(calls[0].text, /message_id\s*=\s*\$2/);
+  assert.match(calls[0].text, /envelope_status\s*=\s*\$3/);
+  assert.deepEqual(calls[0].values, ['ep_codex', 'msg_1', 'accepted']);
+  assert.deepEqual(result, { message_id: 'msg_1', idempotency_key: 'idempotency_1' });
+});
+
+test('lookupCapabilityRegistration returns the registered row for a known capability', async () => {
+  const calls = [];
+  const pool = { async query(text, values) { calls.push({ text, values }); return { rows: [{ capability: 'sigil.task/submit', namespace: 'sigil.task', risk_tier: 'standard' }] }; } };
+  const repository = new PostgresRepository({ pool });
+  const registration = await repository.lookupCapabilityRegistration('sigil.task/submit');
+  assert.ok(registration);
+  assert.equal(registration.capability, 'sigil.task/submit');
+  assert.equal(registration.namespace, 'sigil.task');
+  assert.equal(registration.risk_tier, 'standard');
+});
+
+test('lookupActiveCapabilityGrants row-locks the grants it returns', async () => {
+  const pool = fakePool();
+  const repository = new PostgresRepository({ pool });
+  await repository.withTransaction((client) => repository.lookupActiveCapabilityGrants('ep_codex', new Date('2026-08-16T00:00:00Z'), client));
+  const query = pool.calls.find((call) => call.text?.includes('SELECT'));
+  assert.match(query.text, /FOR UPDATE/);
+  assert.match(query.text, /granted_to\s*=\s*\$1/);
+  assert.match(query.text, /revoked_at IS NULL/);
+  assert.match(query.text, /expires_at\s*>\s*\$2/);
+});
+
+test('lookupCapabilityRegistration returns null for an unregistered capability', async () => {
+  const pool = { calls: [], async connect() { throw new Error('should not open a transaction for a plain lookup'); }, async query(text, values) { this.calls.push({ text, values }); return { rows: [] }; } };
+  const repository = new PostgresRepository({ pool });
+  const registration = await repository.lookupCapabilityRegistration('made.up/capability');
+  assert.equal(registration, null);
+});
+
+test('reserveRateLimit atomically increments the window counter and reports allowed/denied', async () => {
+  const rows = new Map();
+  const client = {
+    async query(text, values) {
+      if (text.startsWith('INSERT')) {
+        const key = `${values[0]}:${values[1]}:${values[2]}`;
+        const next = (rows.get(key) ?? 0) + 1;
+        rows.set(key, next);
+        return { rows: [{ count: next }] };
+      }
+      return { rows: [] };
+    }
+  };
+  const repository = new PostgresRepository({ pool: {} });
+  const first = await repository.reserveRateLimit('endpoint', 'ep_1', '2026-08-16T12:00:00.000Z', 2, client);
+  const second = await repository.reserveRateLimit('endpoint', 'ep_1', '2026-08-16T12:00:00.000Z', 2, client);
+  const third = await repository.reserveRateLimit('endpoint', 'ep_1', '2026-08-16T12:00:00.000Z', 2, client);
+  assert.equal(first.allowed, true);
+  assert.equal(second.allowed, true);
+  assert.equal(third.allowed, false);
+  assert.equal(third.count, 3);
+});
+
+test('isConversationMember checks conversation_members for an active (non-removed) row', async () => {
+  const pool = fakePool();
+  const repository = new PostgresRepository({ pool });
+  await repository.isConversationMember('ep_claude', 'conv_1');
+  const query = pool.calls.find((call) => call.text?.includes('conversation_members'));
+  assert.match(query.text, /removed_at IS NULL/);
+});
+
+test('listAuditEventsForConversation orders by created_at', async () => {
+  const pool = fakePool();
+  const repository = new PostgresRepository({ pool });
+  await repository.listAuditEventsForConversation('conv_1');
+  const query = pool.calls.find((call) => call.text?.includes('FROM audit_events'));
+  assert.match(query.text, /ORDER BY created_at/);
 });

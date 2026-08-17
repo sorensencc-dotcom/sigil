@@ -1,19 +1,13 @@
+import { canonicalJson } from '../../relay/v1/jcs.mjs';
+
 const HOSTS = new Set(['chatgpt', 'codex', 'claude']);
 const VERSION = /^sigil\.connector\/v(\d+)$/;
 const PACKAGE_ID = /^sigil\.[a-z0-9][a-z0-9.-]*$/;
 const DIGEST = /^[a-f0-9]{64}$/;
 
-function canonicalize(value) {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value);
-  if (typeof value === 'number' && Number.isFinite(value)) return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalize).join(',')}]`;
-  if (value && typeof value === 'object') return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalize(value[key])}`).join(',')}}`;
-  throw new Error('manifest contains unsupported value');
-}
-
 export function canonicalManifest(manifest) {
   const { signature: _signature, ...unsigned } = manifest ?? {};
-  return canonicalize(unsigned);
+  return canonicalJson(unsigned);
 }
 
 export function validatePluginManifest(manifest, { revokedPublisherKeys = new Set(), supportedMajor = 1 } = {}) {
