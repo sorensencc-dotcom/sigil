@@ -12,7 +12,7 @@ Sigil keeps host capabilities behind an authenticated local connector, validates
 
 ## Current status
 
-The repository has focused and live validation, but is not a production deployment package. The latest live PostgreSQL gate passed 29 tests with zero failures against PostgreSQL 16. The standard unit and integration suite passes 286 tests with 29 expected PostgreSQL skips when no live database is configured.
+The repository has focused and live validation, but is not a production deployment package. The latest live PostgreSQL gate passed 30 tests with zero failures against PostgreSQL 16. The standard unit and integration suite passes 295 tests with 30 expected PostgreSQL skips when no live database is configured.
 
 ## Repository map
 
