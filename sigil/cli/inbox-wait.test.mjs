@@ -168,13 +168,14 @@ test('fails with RELAY_UNREACHABLE after exactly missedBeforeTimeout missed hear
       relay: { async reconcileInbox() { return { items: [] }; }, async acknowledge() {} },
       identity: { relay_token: 'token' }, streamUrl: 'ws://stream',
       WebSocketImpl: SilentHeartbeatSocket,
-      heartbeat: { intervalMs: 50, missedBeforeTimeout: 1 },
+      heartbeat: { intervalMs: 100, missedBeforeTimeout: 1 },
     }),
     (error) => error instanceof InboxWaitError && error.exitCode === INBOX_WAIT_EXIT_CODES.RELAY_UNREACHABLE,
   );
   // missedBeforeTimeout: 1 means the FIRST missed heartbeat must trip it --
-  // one interval (~50ms), not two (~100ms+).
-  assert.ok(Date.now() - started < 90, `expected failure within ~1 interval, took ${Date.now() - started}ms`);
+  // one interval (~100ms), not two (~200ms+). Bound set well under 2x to
+  // stay clear of the old off-by-one while tolerating scheduler jitter.
+  assert.ok(Date.now() - started < 170, `expected failure within ~1 interval, took ${Date.now() - started}ms`);
 });
 
 test('a pong reply resets the missed-heartbeat counter, so a live relay never trips RELAY_UNREACHABLE', async () => {

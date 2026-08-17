@@ -253,3 +253,49 @@ test('recordAuditEvent persists the completed §9 columns alongside the legacy o
   const stored = await pool.query('SELECT actor_human_id, endpoint_id, object_type, object_id, outcome FROM audit_events WHERE event_id = $1', [event.event_id]);
   assert.deepEqual(stored.rows[0], { actor_human_id: humanId, endpoint_id: `ep_${suffix}`, object_type: 'capability_grant', object_id: `grant_${suffix}`, outcome: 'success' });
 });
+
+test('createEndpointWithAudit creates the endpoint, its key, and an audit row in one transaction, and rejects a display-name collision for the same owner', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  await freshSchema(pool);
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const humanId = await seedHuman(pool, suffix);
+  const repository = repo(pool);
+  const { publicKey } = crypto.generateKeyPairSync('ed25519');
+  const publicKeyDer = publicKey.export({ type: 'spki', format: 'der' });
+
+  const created = await repository.createEndpointWithAudit({
+    endpointId: `ep_${suffix}`, ownerId: humanId, installationId: `install_${suffix}`,
+    runtime: 'codex', displayName: 'Codex', keyId: `key_${suffix}`, publicKey: publicKeyDer,
+  });
+  assert.equal(created.endpoint_id, `ep_${suffix}`);
+  assert.equal(created.display_name, 'Codex');
+
+  const keyRow = await pool.query('SELECT key_id, endpoint_id, status FROM endpoint_keys WHERE endpoint_id = $1', [`ep_${suffix}`]);
+  assert.deepEqual(keyRow.rows, [{ key_id: `key_${suffix}`, endpoint_id: `ep_${suffix}`, status: 'active' }]);
+
+  const audit = await pool.query('SELECT event_type, subject_id, actor_id FROM audit_events WHERE subject_id = $1', [`ep_${suffix}`]);
+  assert.deepEqual(audit.rows, [{ event_type: 'endpoint.created', subject_id: `ep_${suffix}`, actor_id: humanId }]);
+
+  // Same owner, colliding (case/whitespace-insensitive) display name -> DISPLAY_NAME_COLLISION,
+  // and the failed attempt must not have inserted a stray key or audit row.
+  await assert.rejects(
+    () => repository.createEndpointWithAudit({
+      endpointId: `ep_collide_${suffix}`, ownerId: humanId, installationId: `install_collide_${suffix}`,
+      runtime: 'codex', displayName: '  codex  ', keyId: `key_collide_${suffix}`, publicKey: publicKeyDer,
+    }),
+    { code: 'DISPLAY_NAME_COLLISION' }
+  );
+  const strayKey = await pool.query('SELECT 1 FROM endpoint_keys WHERE key_id = $1', [`key_collide_${suffix}`]);
+  assert.equal(strayKey.rowCount, 0);
+  const strayEndpoint = await pool.query('SELECT 1 FROM endpoints WHERE endpoint_id = $1', [`ep_collide_${suffix}`]);
+  assert.equal(strayEndpoint.rowCount, 0);
+
+  // A different owner may still use the same display name.
+  const otherHumanId = await seedHuman(pool, `${suffix}_other`);
+  const otherOwnerCreated = await repository.createEndpointWithAudit({
+    endpointId: `ep_other_${suffix}`, ownerId: otherHumanId, installationId: `install_other_${suffix}`,
+    runtime: 'codex', displayName: 'Codex', keyId: `key_other_${suffix}`, publicKey: publicKeyDer,
+  });
+  assert.equal(otherOwnerCreated.endpoint_id, `ep_other_${suffix}`);
+});
