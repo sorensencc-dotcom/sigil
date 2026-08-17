@@ -1,6 +1,6 @@
 {
   "name": "@sigil/connector",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Governed task relay connector for Codex and Claude hosts",
   "type": "module",
   "bin": {
