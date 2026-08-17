@@ -10,6 +10,10 @@ export function createStreamServer({ server, authenticate, tokenHashes } = {}) {
     const endpointId = typeof principal === 'string' ? principal : principal?.endpoint_id;
     if (!endpointId) return socket.close(1008, 'unauthorized');
     clients.set(endpointId, socket);
+    socket.on('message', (raw) => {
+      let message; try { message = JSON.parse(raw); } catch { return; }
+      if (message?.type === 'ping') socket.send(JSON.stringify({ type: 'pong', timestamp: message.timestamp }));
+    });
     socket.on('close', () => { if (clients.get(endpointId) === socket) clients.delete(endpointId); });
   });
   return {

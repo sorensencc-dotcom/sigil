@@ -9,11 +9,10 @@ import { PostgresRepository } from './postgres-repository.mjs';
 
 const connectionString = process.env.SIGIL_TEST_DATABASE_URL;
 const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
-const MIGRATIONS = ['001_initial.sql', '002_delivery_acknowledgement_idempotency.sql', '003_plugin_connector_auth.sql', '004_security_hardening.sql'];
-
 async function freshSchema(pool) {
   await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
-  for (const file of MIGRATIONS) await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
+  const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
+  for (const file of sqlFiles) await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
 }
 
 async function seedHuman(pool, suffix) {
@@ -22,11 +21,11 @@ async function seedHuman(pool, suffix) {
   return humanId;
 }
 
-async function seedEndpoint(pool, { endpointId, humanId }) {
+async function seedEndpoint(pool, { endpointId, humanId, displayName }) {
   await pool.query(
     `INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-     VALUES ($1, $2, 'codex', $3, 'Codex', 'active', NOW())`,
-    [endpointId, humanId, `install_${endpointId}`]
+     VALUES ($1, $2, 'codex', $3, $4, 'active', NOW())`,
+    [endpointId, humanId, `install_${endpointId}`, displayName || `Codex_${endpointId}`]
   );
 }
 

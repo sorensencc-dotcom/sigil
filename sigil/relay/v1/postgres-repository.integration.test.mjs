@@ -21,7 +21,8 @@ test('migration and repository persist an envelope in live PostgreSQL', { skip: 
 
   const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
   await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
-  for (const file of ['001_initial.sql', '002_delivery_acknowledgement_idempotency.sql', '003_plugin_connector_auth.sql', '004_security_hardening.sql']) {
+  const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
+  for (const file of sqlFiles) {
     await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
   }
 
@@ -117,7 +118,8 @@ test('concurrent duplicate envelope submissions race safely to exactly one accep
   };
   const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
   await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
-  for (const file of ['001_initial.sql', '002_delivery_acknowledgement_idempotency.sql', '003_plugin_connector_auth.sql', '004_security_hardening.sql']) {
+  const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
+  for (const file of sqlFiles) {
     await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
   }
   await pool.query(`
@@ -169,7 +171,8 @@ test('concurrent duplicate ack requests race safely to exactly one acknowledgeme
   };
   const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
   await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
-  for (const file of ['001_initial.sql', '002_delivery_acknowledgement_idempotency.sql', '003_plugin_connector_auth.sql', '004_security_hardening.sql']) {
+  const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
+  for (const file of sqlFiles) {
     await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
   }
   await pool.query(`

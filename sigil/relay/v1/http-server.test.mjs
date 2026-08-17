@@ -155,6 +155,34 @@ test('HTTP relay notifies recipient stream after acceptance', async () => {
   assert.deepEqual(notifications, [{ endpointId: 'ep_claude', messageId: 'msg_01JEXAMPLE' }]);
 });
 
+test('HTTP relay pushes the sender a delivered receipt via stream.notifyReceipt at accept time', async () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
+  envelope.created_at = '2026-08-13T12:00:00.000Z'; envelope.expires_at = '2026-08-14T00:00:00.000Z'; envelope.recipient.endpoint_id = 'ep_claude'; envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
+  const receipts = [];
+  const stream = { notify() { return true; }, notifyReceipt: (endpointId, receipt) => { receipts.push({ endpointId, receipt }); return true; } };
+  const repository = {
+    async withTransaction(fn) { return fn(null); },
+    async lookupIdempotency() { return null; },
+    async lookupAcceptedMessageId() { return null; },
+    async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
+    async lookupActiveCapabilityGrants() { return []; },
+    async reserveRateLimit() { return { count: 1, allowed: true }; },
+    async countOpenDeliveries() { return 0; },
+    async persistAcceptedEnvelope(row) { return { message_id: row.envelope.message_id, duplicate: false }; }
+  };
+  const server = createRelayServer({ registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]), repository, stream, now: new Date('2026-08-13T12:01:00Z') });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  await new Promise((resolve, reject) => { const request = http.request({ port, method: 'POST', path: '/v1/envelopes' }, (response) => { response.resume(); response.on('end', resolve); }); request.on('error', reject); request.end(JSON.stringify(envelope)); });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0].endpointId, envelope.sender.endpoint_id);
+  assert.equal(receipts[0].receipt.message_id, 'msg_01JEXAMPLE');
+  assert.equal(receipts[0].receipt.delivery_id, 'del_msg_01JEXAMPLE');
+  assert.equal(receipts[0].receipt.state, 'delivered');
+  assert.equal(receipts[0].receipt.at, envelope.created_at);
+});
+
 test('HTTP relay suppresses duplicate notification when persistence detects a concurrent race', async () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));

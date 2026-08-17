@@ -21,6 +21,7 @@ export function createMemoryRepository() {
   const idempotency = new Map();
   const grants = [];
   const rateWindows = new Map();
+  const acknowledgements = new Map();
   return {
     // Single-process, no real client/connection -- the transaction wrapper
     // exists so acceptEnvelopeAsync's repository-aware path works unchanged
@@ -71,10 +72,15 @@ export function createMemoryRepository() {
       }
       return { message_id: row.message_id, duplicate: false };
     },
-    async listInbox(endpointId, since = '') {
+    async listInbox(endpointId, since = '', viewerOwnerId = null) {
       return [...deliveries.values()]
         .filter((d) => d.recipient_endpoint_id === endpointId && d.state === 'delivered' && d.queued_at > since)
-        .map((d) => ({ delivery_id: d.delivery_id, message_id: d.message_id, envelope: envelopes.get(d.message_id).envelope, queued_at: d.queued_at }));
+        .map((d) => { const envelope = envelopes.get(d.message_id).envelope; return { delivery_id: d.delivery_id, message_id: d.message_id, envelope, queued_at: d.queued_at, sender_unverified: !viewerOwnerId || !acknowledgements.has(`${viewerOwnerId}:${envelope.sender.endpoint_id}`) }; });
+    },
+    async acknowledgeEndpoint({ viewerOwnerId, acknowledgedEndpointId, now = new Date() }) {
+      const record = { viewer_owner_id: viewerOwnerId, acknowledged_endpoint_id: acknowledgedEndpointId, acknowledged_at: (now instanceof Date ? now : new Date(now)).toISOString() };
+      acknowledgements.set(`${viewerOwnerId}:${acknowledgedEndpointId}`, record);
+      return record;
     },
     async acknowledgeDelivery({ deliveryId, endpointId, now }) {
       const current = deliveries.get(deliveryId);

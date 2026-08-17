@@ -111,7 +111,16 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       const result = await acceptEnvelopeAsync(envelope, {
         registered: registry, request_id: requestId, now, repository,
         onPersisted: async ({ envelope: accepted, persisted }) => {
-          if (stream && accepted.recipient?.endpoint_id && !persisted?.duplicate) stream.notify(accepted.recipient.endpoint_id, persisted.message_id);
+          if (!stream || persisted?.duplicate) return;
+          if (accepted.recipient?.endpoint_id) stream.notify(accepted.recipient.endpoint_id, persisted.message_id);
+          if (accepted.sender?.endpoint_id && typeof stream.notifyReceipt === 'function') {
+            stream.notifyReceipt(accepted.sender.endpoint_id, {
+              message_id: persisted.message_id,
+              delivery_id: persisted.delivery_id ?? `del_${persisted.message_id}`,
+              state: 'delivered',
+              at: accepted.created_at
+            });
+          }
         }
       });
       response.writeHead(result.status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
@@ -120,10 +129,19 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     if (request.method === 'GET' && request.url.startsWith('/v1/inbox')) {
       if (!repository?.listInbox) return response.writeHead(503).end();
       const since = new URL(request.url, 'http://sigil.local').searchParams.get('since') ?? '';
-      const items = await repository.listInbox(principal.endpoint_id, since);
+      const items = await repository.listInbox(principal.endpoint_id, since, principal.owner_id ?? null);
       const nextSince = items.at(-1)?.queued_at ?? since;
       response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(JSON.stringify({ request_id: requestId, code: 'OK', items, next_since: nextSince }));
+    }
+    if (request.method === 'POST' && request.url === '/v1/endpoint-acknowledgements') {
+      let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413); return response.end(); }
+      let body; try { body = JSON.parse(raw); } catch { body = null; }
+      if (!body?.acknowledged_endpoint_id) { response.writeHead(400, { 'content-type': 'application/json' }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'acknowledged_endpoint_id is required', details: {} })); }
+      if (!repository?.acknowledgeEndpoint) return response.writeHead(503).end();
+      const acknowledgement = await repository.acknowledgeEndpoint({ viewerOwnerId: principal.owner_id, acknowledgedEndpointId: body.acknowledged_endpoint_id, now });
+      response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+      return response.end(JSON.stringify({ request_id: requestId, code: 'OK', acknowledgement }));
     }
     const deliveryMatch = request.url.match(/^\/v1\/deliveries\/([^/]+)\/(ack|processing)$/);
     if (request.method === 'POST' && deliveryMatch) {
@@ -137,7 +155,12 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       }
       if (action === 'ack' && repository?.acknowledgeDelivery) {
         try {
-          await repository.acknowledgeDelivery({ deliveryId, endpointId: principal.endpoint_id, now });
+          const acked = await repository.acknowledgeDelivery({ deliveryId, endpointId: principal.endpoint_id, now });
+          if (stream && repository.lookupMessageSender) {
+            const messageId = acked.delivery?.message_id ?? acked.message_id;
+            const sender = await repository.lookupMessageSender(messageId);
+            if (sender) stream.notifyReceipt(sender.endpoint_id, { message_id: messageId, delivery_id: deliveryId, state: 'acknowledged', at: now.toISOString() });
+          }
           response.writeHead(204, { 'x-sigil-request-id': requestId });
           return response.end();
         } catch (error) {
@@ -150,6 +173,10 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         const current = await repository.getDelivery(deliveryId, principal.endpoint_id);
         const next = transitionDelivery(current, target, { now, reason: body.reason ?? null });
         await repository.transitionDelivery(deliveryId, principal.endpoint_id, target, { next });
+        if (stream && repository.lookupMessageSender) {
+          const sender = await repository.lookupMessageSender(current.message_id);
+          if (sender) stream.notifyReceipt(sender.endpoint_id, { message_id: current.message_id, delivery_id: deliveryId, state: next.state, at: next.updated_at });
+        }
         response.writeHead(204, { 'x-sigil-request-id': requestId });
         return response.end();
       } catch (error) {

@@ -108,16 +108,35 @@ export class PostgresRepository {
       return decision.rows[0];
     });
   }
-  async listInbox(endpointId, since = '') {
+  async listInbox(endpointId, since = '', viewerOwnerId = null) {
     const result = await this.pool.query(
       `SELECT d.delivery_id, d.message_id, d.recipient_endpoint_id, d.state, d.attempts, d.queued_at,
               e.protocol, e.message_type, e.body, e.context_refs, e.capabilities, e.correlation_id,
-              e.sender_endpoint_id, e.expires_at, e.created_at
+              e.sender_endpoint_id, e.expires_at, e.created_at,
+              (ea.acknowledged_endpoint_id IS NULL) AS sender_unverified
        FROM deliveries d JOIN envelopes e ON e.message_id = d.message_id
+       LEFT JOIN endpoint_acknowledgements ea ON ea.acknowledged_endpoint_id = e.sender_endpoint_id AND ea.viewer_owner_id = $3
        WHERE d.recipient_endpoint_id = $1 AND d.state = 'queued' AND ($2 = '' OR d.queued_at > $2)
-       ORDER BY d.queued_at, d.delivery_id`, [endpointId, since]
+       ORDER BY d.queued_at, d.delivery_id`, [endpointId, since, viewerOwnerId]
     );
     return result.rows;
+  }
+  async acknowledgeEndpoint({ viewerOwnerId, acknowledgedEndpointId, now = new Date() } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    return this.withTransaction(async (client) => {
+      const result = await client.query(`INSERT INTO endpoint_acknowledgements (viewer_owner_id, acknowledged_endpoint_id, acknowledged_at) VALUES ($1,$2,$3) ON CONFLICT (viewer_owner_id, acknowledged_endpoint_id) DO UPDATE SET acknowledged_at = $3 RETURNING *`, [viewerOwnerId, acknowledgedEndpointId, timestamp]);
+      await client.query(`INSERT INTO audit_events (event_id, event_type, subject_id, actor_human_id, object_type, object_id, outcome, created_at) VALUES ($1,'endpoint_acknowledgement.created',$2,$3,'endpoint',$2,'success',$4)`, [`audit_${crypto.randomUUID()}`, acknowledgedEndpointId, viewerOwnerId, timestamp]);
+      return result.rows[0];
+    });
+  }
+  async createEndpointWithAudit({ endpointId, ownerId, installationId, runtime, displayName, keyId, publicKey, now = new Date() } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    return this.withTransaction(async (client) => { try {
+      const endpoint = await client.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at) VALUES ($1,$2,$3,$4,$5,'active',$6) RETURNING *`, [endpointId, ownerId, runtime, installationId, displayName, timestamp]);
+      await client.query(`INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from) VALUES ($1,$2,'Ed25519',$3,'active',$4)`, [keyId, endpointId, publicKey, timestamp]);
+      await client.query(`INSERT INTO audit_events (event_id,event_type,subject_id,actor_id,object_type,object_id,outcome,created_at) VALUES ($1,'endpoint.created',$2,$3,'endpoint',$2,'success',$4)`, [`audit_${crypto.randomUUID()}`, endpointId, ownerId, timestamp]);
+      return endpoint.rows[0];
+    } catch (error) { if (error.code === '23505' && error.constraint === 'endpoints_owner_display_name_idx') throw Object.assign(new Error('An endpoint with this display name already exists for this owner'), { code: 'DISPLAY_NAME_COLLISION' }); throw error; } });
   }
   async getDelivery(deliveryId, endpointId) {
     const result = await this.pool.query('SELECT * FROM deliveries WHERE delivery_id = $1 AND recipient_endpoint_id = $2', [deliveryId, endpointId]);
