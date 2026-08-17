@@ -574,5 +574,19 @@ export class PostgresRepository {
     );
     return result.rows[0];
   }
+  async isConversationMember(endpointId, conversationId, client = this.pool) {
+    const result = await client.query(
+      'SELECT 1 FROM conversation_members WHERE conversation_id = $1 AND endpoint_id = $2 AND removed_at IS NULL',
+      [conversationId, endpointId]
+    );
+    return result.rows.length > 0;
+  }
+  async listAuditEventsForConversation(conversationId, client = this.pool) {
+    const result = await client.query(
+      'SELECT event_id, event_type, subject_id, actor_id, actor_human_id, endpoint_id, object_type, object_id, outcome, reason, created_at FROM audit_events WHERE conversation_id = $1 ORDER BY created_at',
+      [conversationId]
+    );
+    return result.rows;
+  }
   async close() { await this.pool.end(); }
 }

@@ -390,6 +390,26 @@ test('authenticated routes reject missing principal', async () => {
   assert.equal(result.status, 401); assert.equal(result.body.code, 'UNAUTHENTICATED');
 });
 
+test('GET /v1/audit requires conversation_id and membership, then returns the conversation timeline', async () => {
+  const calls = [];
+  const repository = {
+    async isConversationMember(endpointId, conversationId) { calls.push(['isConversationMember', endpointId, conversationId]); return conversationId === 'conv_1'; },
+    async listAuditEventsForConversation(conversationId) { calls.push(['listAuditEventsForConversation', conversationId]); return [{ event_id: 'audit_1', event_type: 'delivery.acknowledged' }]; }
+  };
+  const server = createRelayServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_claude' }) });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const missingParam = await request(port, { method: 'GET', path: '/v1/audit' });
+  const notMember = await request(port, { method: 'GET', path: '/v1/audit?conversation_id=conv_2' });
+  const ok = await request(port, { method: 'GET', path: '/v1/audit?conversation_id=conv_1' });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(missingParam.status, 400); assert.equal(missingParam.body.code, 'INVALID_ENVELOPE');
+  assert.equal(notMember.status, 403); assert.equal(notMember.body.code, 'ROUTE_NOT_AUTHORIZED');
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.code, 'OK');
+  assert.deepEqual(ok.body.events, [{ event_id: 'audit_1', event_type: 'delivery.acknowledged' }]);
+  assert.deepEqual(calls, [['isConversationMember', 'ep_claude', 'conv_2'], ['isConversationMember', 'ep_claude', 'conv_1'], ['listAuditEventsForConversation', 'conv_1']]);
+});
+
 function request(port, { method, path, body }) {
   return new Promise((resolve, reject) => {
     const request = http.request({ port, method, path, headers: { 'content-type': 'application/json' } }, (response) => {

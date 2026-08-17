@@ -398,6 +398,16 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'GRANT_UNAVAILABLE', message: error.message, details: {} }));
       }
     }
+    if (request.method === 'GET' && request.url.startsWith('/v1/audit')) {
+      const conversationId = new URL(request.url, 'http://sigil.local').searchParams.get('conversation_id');
+      if (!conversationId) { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'conversation_id query parameter is required', details: {} })); }
+      if (!repository?.isConversationMember || !repository?.listAuditEventsForConversation) return response.writeHead(503).end();
+      const isMember = await repository.isConversationMember(principal.endpoint_id, conversationId);
+      if (!isMember) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'ROUTE_NOT_AUTHORIZED', message: 'Not a member of this conversation', details: {} })); }
+      const events = await repository.listAuditEventsForConversation(conversationId);
+      response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+      return response.end(JSON.stringify({ request_id: requestId, code: 'OK', events }));
+    }
     response.writeHead(404, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ request_id: requestId, code: 'CONTEXT_NOT_FOUND', message: 'Route not found', details: {} }));
   });

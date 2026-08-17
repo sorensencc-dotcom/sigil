@@ -8,7 +8,7 @@ function fakePool({ fail = false } = {}) {
     async query(text, values) { calls.push({ text, values }); if (fail && text.startsWith('INSERT')) throw new Error('insert failed'); return text === 'BEGIN' || text === 'COMMIT' || text === 'ROLLBACK' ? { rows: [] } : { rows: [{ message_id: values?.[0] }] }; },
     release() { calls.push({ text: 'RELEASE' }); }
   };
-  return { calls, async connect() { calls.push({ text: 'CONNECT' }); return client; }, async end() { calls.push({ text: 'END' }); } };
+  return { calls, async connect() { calls.push({ text: 'CONNECT' }); return client; }, async end() { calls.push({ text: 'END' }); }, query: client.query };
 }
 
 const envelope = { message_id: 'msg_1', conversation_id: 'conv_1', protocol: 'sigil/1', message_type: 'task.request', sender: { endpoint_id: 'ep_codex', owner_id: 'usr_1' }, recipient: { endpoint_id: 'ep_claude' }, body: { task_id: 'task_1' }, context_refs: [], capabilities: [], correlation_id: null, idempotency_key: 'send_1', expires_at: '2026-08-14T00:00:00Z', created_at: '2026-08-13T12:00:00Z', signature: { algorithm: 'Ed25519', key_id: 'key_1', value: 'sig' } };
@@ -247,4 +247,20 @@ test('reserveRateLimit atomically increments the window counter and reports allo
   assert.equal(second.allowed, true);
   assert.equal(third.allowed, false);
   assert.equal(third.count, 3);
+});
+
+test('isConversationMember checks conversation_members for an active (non-removed) row', async () => {
+  const pool = fakePool();
+  const repository = new PostgresRepository({ pool });
+  await repository.isConversationMember('ep_claude', 'conv_1');
+  const query = pool.calls.find((call) => call.text?.includes('conversation_members'));
+  assert.match(query.text, /removed_at IS NULL/);
+});
+
+test('listAuditEventsForConversation orders by created_at', async () => {
+  const pool = fakePool();
+  const repository = new PostgresRepository({ pool });
+  await repository.listAuditEventsForConversation('conv_1');
+  const query = pool.calls.find((call) => call.text?.includes('FROM audit_events'));
+  assert.match(query.text, /ORDER BY created_at/);
 });
