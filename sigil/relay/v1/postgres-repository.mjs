@@ -256,7 +256,7 @@ export class PostgresRepository {
        VALUES ($1, 'envelope.accepted', $2, $3, $4, $5, $6)`,
       [`audit_${crypto.randomUUID()}`, row.envelope.message_id, row.envelope.sender.endpoint_id, row.envelope.conversation_id, JSON.stringify({ recipient_endpoint_id: row.envelope.recipient?.endpoint_id ?? null }), row.envelope.created_at]
     );
-    return { message_id: result.rows[0].message_id, duplicate: false };
+    return { message_id: result.rows[0].message_id, duplicate: false, delivery_id: row.envelope.recipient?.endpoint_id ? deliveryId : null };
   }
   async acknowledgeDelivery({ deliveryId, endpointId, now = new Date() } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();

@@ -89,7 +89,7 @@ export async function waitForOneInboxMessage({ relay, identity, streamUrl, timeo
     try {
       socket = new WebSocketImpl(streamUrl, { headers: { authorization: `Bearer ${identity.relay_token}` } });
       let opened = false;
-      socket.once('open', () => { opened = true; reconnectDelay = 250; missedHeartbeats = 0; clearInterval(heartbeatTimer); heartbeatTimer = setInterval(() => { missedHeartbeats += 1; if (missedHeartbeats > heartbeat.missedBeforeTimeout) return fail(new InboxWaitError('Relay unreachable: no heartbeat reply', INBOX_WAIT_EXIT_CODES.RELAY_UNREACHABLE)); try { socket.send(JSON.stringify({ type: 'ping', timestamp: new Date().toISOString() })); } catch {} }, heartbeat.intervalMs); });
+      socket.once('open', () => { opened = true; reconnectDelay = 250; missedHeartbeats = 0; clearInterval(heartbeatTimer); heartbeatTimer = setInterval(() => { missedHeartbeats += 1; if (missedHeartbeats >= heartbeat.missedBeforeTimeout) return fail(new InboxWaitError('Relay unreachable: no heartbeat reply', INBOX_WAIT_EXIT_CODES.RELAY_UNREACHABLE)); try { socket.send(JSON.stringify({ type: 'ping', timestamp: new Date().toISOString() })); } catch {} }, heartbeat.intervalMs); });
       socket.on('message', (raw) => {
         try { const event = JSON.parse(raw); if (event.type === 'delivered') poll(); if (event.type === 'pong') missedHeartbeats = 0; }
         catch (error) { fail(new InboxWaitError(`Malformed stream event: ${error.message}`, INBOX_WAIT_EXIT_CODES.MALFORMED, { cause: error })); }

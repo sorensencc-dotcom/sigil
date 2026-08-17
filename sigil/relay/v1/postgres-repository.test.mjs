@@ -16,7 +16,13 @@ const envelope = { message_id: 'msg_1', conversation_id: 'conv_1', protocol: 'si
 test('repository persists accepted envelope in one transaction', async () => {
   const pool = fakePool();
   const row = await new PostgresRepository({ pool }).persistAcceptedEnvelope({ envelope, canonical_bytes: Buffer.from('canonical'), action_hash: 'sha256:abc' });
-  assert.deepEqual(row, { message_id: 'msg_1', duplicate: false });
+  assert.equal(row.message_id, 'msg_1');
+  assert.equal(row.duplicate, false);
+  // Must be the same delivery_id actually inserted into `deliveries` --
+  // otherwise a delivery-receipt push built from this return value points
+  // at a delivery row that doesn't exist.
+  const deliveryInsert = pool.calls.find((call) => call.text.startsWith('INSERT INTO deliveries'));
+  assert.equal(row.delivery_id, deliveryInsert.values[0]);
   assert.equal(pool.calls[1].text, 'BEGIN');
   const insert = pool.calls.find((call) => call.text.startsWith('INSERT'));
   assert.equal(insert.values.length, 20);

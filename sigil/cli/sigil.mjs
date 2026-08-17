@@ -18,6 +18,7 @@ import { WebSocket } from 'ws';
 import { createIdentity, loadIdentity, saveIdentity, identityKeys } from './identity.mjs';
 import { loadRegistryFile, addEndpointToRegistry, toRegistryMap, toTokenHashes } from './registry-store.mjs';
 import { createMemoryRepository } from './memory-repository.mjs';
+import { sendWithOptionalReceiptWait } from './send-with-receipt.mjs';
 import { createRelayServer } from '../relay/v1/http-server.mjs';
 import { createStreamServer } from '../relay/v1/stream-server.mjs';
 import { RelayClient } from '../connectors/v1/relay-client.mjs';
@@ -130,12 +131,14 @@ async function cmdSend(argv) {
   };
   const queued = outbox.queue(unsigned);
   const relay = new RelayClient({ baseUrl: relayUrl, token: identity.relay_token });
-  const result = await relay.sendEnvelope(queued.envelope);
-  console.log(`Sent. message_id=${result.message_id} conversation_id=${conversationId} duplicate=${result.duplicate}`);
-  if (args.values['wait-for-receipt']) {
-    const streamUrl = resolved.streamUrl ?? (() => { const url = new URL(relayUrl); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'; url.port = String(Number(url.port || 80) + 1); url.pathname = '/v1/stream'; return url.toString(); })();
-    await new Promise((resolve) => { const socket = new WebSocket(streamUrl, { headers: { authorization: `Bearer ${identity.relay_token}` } }); const seen = new Set(); const timer = setTimeout(() => { try { socket.close(); } catch {} resolve(); }, 60_000); socket.on('message', (raw) => { let event; try { event = JSON.parse(raw); } catch { return; } if (event.type !== 'delivery.receipt' || event.message_id !== result.message_id || seen.has(event.state)) return; seen.add(event.state); console.log(`  -> ${event.state} (${event.at})`); if (['acknowledged', 'processed', 'processing_failed', 'dead_letter'].includes(event.state)) { clearTimeout(timer); socket.close(); resolve(); } }); socket.once('error', () => { clearTimeout(timer); resolve(); }); });
-  }
+  const waitForReceipt = args.values['wait-for-receipt'];
+  const streamUrl = waitForReceipt
+    ? (resolved.streamUrl ?? (() => { const url = new URL(relayUrl); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'; url.port = String(Number(url.port || 80) + 1); url.pathname = '/v1/stream'; return url.toString(); })())
+    : null;
+  await sendWithOptionalReceiptWait({
+    relay, envelope: queued.envelope, waitForReceipt, streamUrl, token: identity.relay_token,
+    print: (line) => console.log(line),
+  });
 }
 
 async function cmdInbox(argv) {

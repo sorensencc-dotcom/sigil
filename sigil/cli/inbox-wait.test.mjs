@@ -19,6 +19,23 @@ class IdleSocket extends EventEmitter {
   close() { this.emit('close'); }
 }
 
+class SilentHeartbeatSocket extends EventEmitter {
+  constructor() { super(); setImmediate(() => this.emit('open')); }
+  send() {}
+  close() { this.emit('close'); }
+  terminate() {}
+}
+
+class PongReplyingSocket extends EventEmitter {
+  constructor() { super(); setImmediate(() => this.emit('open')); }
+  send(raw) {
+    const message = JSON.parse(raw);
+    if (message.type === 'ping') setImmediate(() => this.emit('message', JSON.stringify({ type: 'pong', timestamp: message.timestamp })));
+  }
+  close() { this.emit('close'); }
+  terminate() {}
+}
+
 test('wait consumes exactly one item and leaves the next item for the next invocation', async () => {
   const queue = [item('one'), item('two')];
   const acknowledged = [];
@@ -142,6 +159,41 @@ test('SIGINT during an in-flight reconcile does not print or acknowledge the ite
   await pending;
   assert.deepEqual(acknowledged, []);
   assert.deepEqual(output, []);
+});
+
+test('fails with RELAY_UNREACHABLE after exactly missedBeforeTimeout missed heartbeats, not one extra', async () => {
+  const started = Date.now();
+  await assert.rejects(
+    waitForOneInboxMessage({
+      relay: { async reconcileInbox() { return { items: [] }; }, async acknowledge() {} },
+      identity: { relay_token: 'token' }, streamUrl: 'ws://stream',
+      WebSocketImpl: SilentHeartbeatSocket,
+      heartbeat: { intervalMs: 50, missedBeforeTimeout: 1 },
+    }),
+    (error) => error instanceof InboxWaitError && error.exitCode === INBOX_WAIT_EXIT_CODES.RELAY_UNREACHABLE,
+  );
+  // missedBeforeTimeout: 1 means the FIRST missed heartbeat must trip it --
+  // one interval (~50ms), not two (~100ms+).
+  assert.ok(Date.now() - started < 90, `expected failure within ~1 interval, took ${Date.now() - started}ms`);
+});
+
+test('a pong reply resets the missed-heartbeat counter, so a live relay never trips RELAY_UNREACHABLE', async () => {
+  const signalSource = new EventEmitter();
+  const pending = assert.rejects(
+    waitForOneInboxMessage({
+      relay: { async reconcileInbox() { return { items: [] }; }, async acknowledge() {} },
+      identity: { relay_token: 'token' }, streamUrl: 'ws://stream',
+      WebSocketImpl: PongReplyingSocket, signalSource,
+      heartbeat: { intervalMs: 15, missedBeforeTimeout: 2 },
+    }),
+    (error) => error instanceof InboxWaitError && error.exitCode === INBOX_WAIT_EXIT_CODES.SIGINT,
+  );
+  // Outlive several heartbeat intervals (each answered with a pong) before
+  // ending the wait deliberately -- if pong didn't reset the counter this
+  // would already have failed with RELAY_UNREACHABLE by now.
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  signalSource.emit('SIGINT');
+  await pending;
 });
 
 test('cleanup removes signal listeners so they do not leak across invocations', async () => {

@@ -254,6 +254,65 @@ test('authenticated inbox route returns only principal deliveries and acknowledg
   assert.equal(ack.status, 204); assert.deepEqual(calls, [['list', 'ep_claude', 'cursor_1'], ['get', 'del_1', 'ep_claude'], ['transition', 'del_1', 'ep_claude', 'acknowledged', 'acknowledged']]);
 });
 
+test('inbox route passes the principal owner_id through to listInbox for viewer-scoped sender_unverified', async () => {
+  const calls = [];
+  const repository = { async listInbox(endpointId, since, viewerOwnerId) { calls.push([endpointId, since, viewerOwnerId]); return [{ delivery_id: 'del_1', message_id: 'msg_1', sender_unverified: true }]; } };
+  const server = createRelayServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_claude', owner_id: 'usr_claude_owner' }) });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const get = await request(port, { method: 'GET', path: '/v1/inbox' });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(get.status, 200);
+  assert.deepEqual(calls, [['ep_claude', '', 'usr_claude_owner']]);
+  assert.equal(get.body.items[0].sender_unverified, true);
+});
+
+test('POST /v1/endpoint-acknowledgements records an acknowledgement scoped to the authenticated viewer', async () => {
+  const calls = [];
+  const repository = { async acknowledgeEndpoint({ viewerOwnerId, acknowledgedEndpointId }) { calls.push([viewerOwnerId, acknowledgedEndpointId]); return { viewer_owner_id: viewerOwnerId, acknowledged_endpoint_id: acknowledgedEndpointId, acknowledged_at: '2026-08-16T00:00:00.000Z' }; } };
+  const server = createRelayServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_claude', owner_id: 'usr_claude_owner' }) });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const result = await request(port, { method: 'POST', path: '/v1/endpoint-acknowledgements', body: { acknowledged_endpoint_id: 'ep_codex' } });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(result.status, 201);
+  assert.deepEqual(calls, [['usr_claude_owner', 'ep_codex']]);
+  assert.equal(result.body.acknowledgement.acknowledged_endpoint_id, 'ep_codex');
+});
+
+test('POST /v1/endpoint-acknowledgements rejects a body missing acknowledged_endpoint_id', async () => {
+  const server = createRelayServer({ repository: {}, authenticate: async () => ({ endpoint_id: 'ep_claude', owner_id: 'usr_claude_owner' }) });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const result = await request(port, { method: 'POST', path: '/v1/endpoint-acknowledgements', body: {} });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(result.status, 400);
+  assert.equal(result.body.code, 'INVALID_ENVELOPE');
+});
+
+test('POST /v1/endpoint-acknowledgements returns 503 when the repository does not support acknowledgements', async () => {
+  const server = createRelayServer({ repository: {}, authenticate: async () => ({ endpoint_id: 'ep_claude', owner_id: 'usr_claude_owner' }) });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const result = await request(port, { method: 'POST', path: '/v1/endpoint-acknowledgements', body: { acknowledged_endpoint_id: 'ep_codex' } });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(result.status, 503);
+});
+
+test('ack route pushes an acknowledged receipt to the sender via stream.notifyReceipt', async () => {
+  const receipts = [];
+  const repository = {
+    async acknowledgeDelivery({ deliveryId }) { return { delivery_id: deliveryId, message_id: 'msg_1' }; },
+    async lookupMessageSender(messageId) { return messageId === 'msg_1' ? { endpoint_id: 'ep_codex' } : null; },
+  };
+  const stream = { notifyReceipt: (endpointId, receipt) => { receipts.push({ endpointId, receipt }); return true; } };
+  const server = createRelayServer({ repository, stream, authenticate: async () => ({ endpoint_id: 'ep_claude' }), now: new Date('2026-08-16T00:00:00.000Z') });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const ack = await request(port, { method: 'POST', path: '/v1/deliveries/del_1/ack' });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(ack.status, 204);
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0].endpointId, 'ep_codex');
+  assert.equal(receipts[0].receipt.state, 'acknowledged');
+  assert.equal(receipts[0].receipt.delivery_id, 'del_1');
+});
+
 test('authenticated delivery route rejects invalid processing state', async () => {
   const server = createRelayServer({ repository: {}, authenticate: async () => ({ endpoint_id: 'ep_claude' }) });
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();

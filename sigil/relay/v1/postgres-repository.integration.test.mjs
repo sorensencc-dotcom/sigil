@@ -48,7 +48,10 @@ test('migration and repository persist an envelope in live PostgreSQL', { skip: 
   const row = await new PostgresRepository({ pool }).persistAcceptedEnvelope({
     envelope, canonical_bytes: Buffer.from(`{"message_id":"${ids.message}"}`), action_hash: 'sha256:live'
   });
-  assert.deepEqual(row, { message_id: ids.message, duplicate: false });
+  assert.equal(row.message_id, ids.message);
+  assert.equal(row.duplicate, false);
+  assert.equal(typeof row.delivery_id, 'string');
+  assert.ok(row.delivery_id.startsWith('del_'));
 
   const persisted = await pool.query(
     'SELECT message_id, envelope_status, sender_endpoint_id, recipient_endpoint_id, canonical_bytes, action_hash FROM envelopes WHERE message_id = $1',
@@ -60,8 +63,8 @@ test('migration and repository persist an envelope in live PostgreSQL', { skip: 
   assert.equal(persisted.rows[0].recipient_endpoint_id, ids.claude);
   assert.equal(persisted.rows[0].canonical_bytes.toString(), `{"message_id":"${ids.message}"}`);
   assert.equal(persisted.rows[0].action_hash, 'sha256:live');
-  const delivery = await pool.query('SELECT message_id, recipient_endpoint_id, state FROM deliveries WHERE message_id = $1', [ids.message]);
-  assert.deepEqual(delivery.rows, [{ message_id: ids.message, recipient_endpoint_id: ids.claude, state: 'queued' }]);
+  const delivery = await pool.query('SELECT delivery_id, message_id, recipient_endpoint_id, state FROM deliveries WHERE message_id = $1', [ids.message]);
+  assert.deepEqual(delivery.rows, [{ delivery_id: row.delivery_id, message_id: ids.message, recipient_endpoint_id: ids.claude, state: 'queued' }]);
   const repository = new PostgresRepository({ pool });
   const claimed = await repository.claimDelivery({ workerId: `worker_${suffix}`, now: new Date('2029-12-31T12:01:00Z') });
   assert.equal(claimed.delivery_id.startsWith('del_'), true);
