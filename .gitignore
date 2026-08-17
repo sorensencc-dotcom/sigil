@@ -1,2 +1,5 @@
 .sigil/
 node_modules/
+.claude/
+.context/
+.ijfw/
