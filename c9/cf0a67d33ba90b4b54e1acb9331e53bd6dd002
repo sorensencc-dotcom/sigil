@@ -1,0 +1,19 @@
+README.md
+  s_42b84b1143f597::t_207740c05ecf8d 15,19-22,24,34-52,59-60,67,71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "c9cf0a67d33ba90b4b54e1acb9331e53bd6dd002",
+  "prompts": {},
+  "sessions": {
+    "s_42b84b1143f597": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff87d-e129-7310-ab30-dc054de846f6",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
