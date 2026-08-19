@@ -11,6 +11,33 @@ function cborInt(value) { return value >= 0 ? Buffer.from([value]) : Buffer.from
 function cborMap(entries) { return Buffer.concat([Buffer.from([0xa0 + entries.length]), ...entries.flatMap(([key, value]) => [typeof key === 'string' ? Buffer.concat([Buffer.from([0x60 + key.length]), Buffer.from(key)]) : cborInt(key), value])]); }
 function cborBytes(value) { return Buffer.concat([Buffer.from([0x58, value.length]), value]); }
 
+test('relay clock function is evaluated for each request', async () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
+  envelope.created_at = '2026-08-19T15:00:00.000Z'; envelope.expires_at = '2026-08-19T16:00:00.000Z';
+  envelope.sender.endpoint_id = 'ep_codex'; envelope.sender.owner_id = 'usr_codex_owner'; envelope.sender.key_id = 'key_01JEXAMPLE'; envelope.recipient = { endpoint_id: 'ep_codex', owner_id: 'usr_codex_owner' };
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
+  const repository = {
+    async withTransaction(fn) { return fn(null); }, async lookupIdempotency() { return null; },
+    async lookupAcceptedMessageId() { return null; }, async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
+    async lookupActiveCapabilityGrants() { return []; }, async reserveRateLimit() { return { count: 1, allowed: true }; },
+    async countOpenDeliveries() { return 0; }, async persistAcceptedEnvelope(row) { return { message_id: row.envelope.message_id }; },
+  };
+  let calls = 0;
+  const server = createRelayServer({
+    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    repository, now: () => (++calls === 1 ? new Date('2026-08-18T15:00:00.000Z') : new Date('2026-08-19T15:00:01.000Z')),
+  });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const first = await request(port, { method: 'POST', path: '/v1/envelopes', body: envelope });
+  const second = await request(port, { method: 'POST', path: '/v1/envelopes', body: envelope });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(first.status, 400);
+  assert.equal(first.body.code, 'INVALID_ENVELOPE');
+  assert.match(first.body.message, /clock-skew tolerance/);
+  assert.equal(second.status, 202);
+  assert.equal(calls, 2);
+});
 test('HTTP relay accepts signed envelope and returns request ID', async () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
