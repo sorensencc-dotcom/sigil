@@ -36,6 +36,35 @@ class PongReplyingSocket extends EventEmitter {
   terminate() {}
 }
 
+class DeliveredEventSocket extends EventEmitter {
+  constructor() { super(); setImmediate(() => { this.emit('open'); this.emit('message', JSON.stringify({ type: 'delivered', message_id: 'msg_bad' })); }); }
+  send() {}
+  close() { this.emit('close'); }
+  terminate() {}
+}
+
+class UnauthorizedStreamSocket extends EventEmitter {
+  constructor() { super(); setImmediate(() => this.emit('unexpected-response', null, { statusCode: 401 })); }
+  send() {}
+  close() { this.emit('close'); }
+  terminate() {}
+}
+
+class CloseThenSilentSocket extends EventEmitter {
+  static created = 0;
+  constructor() {
+    super();
+    this.id = ++CloseThenSilentSocket.created;
+    setImmediate(() => {
+      if (this.id === 1) this.emit('close');
+      else this.emit('open');
+    });
+  }
+  send() {}
+  close() { this.emit('close'); }
+  terminate() {}
+}
+
 test('wait consumes exactly one item and leaves the next item for the next invocation', async () => {
   const queue = [item('one'), item('two')];
   const acknowledged = [];
@@ -104,6 +133,20 @@ test('wait does not acknowledge malformed delivered items', async () => {
   assert.deepEqual(acknowledged, []);
 });
 
+test('stream-triggered wait does not acknowledge or print malformed delivered items', async () => {
+  const acknowledged = [];
+  const output = [];
+  await assert.rejects(
+    waitForOneInboxMessage({
+      relay: { async reconcileInbox() { return { items: [{ delivery_id: 'bad_stream', envelope: {} }] }; }, async acknowledge(id) { acknowledged.push(id); } },
+      identity: { relay_token: 'token' }, streamUrl: 'ws://stream', WebSocketImpl: DeliveredEventSocket, print: (line) => output.push(line),
+    }),
+    (error) => error instanceof InboxWaitError && error.exitCode === INBOX_WAIT_EXIT_CODES.MALFORMED,
+  );
+  assert.deepEqual(acknowledged, []);
+  assert.deepEqual(output, []);
+});
+
 test('SIGINT rejects with exit code 130 and acknowledges nothing', async () => {
   const acknowledged = [];
   const signalSource = new EventEmitter();
@@ -131,6 +174,22 @@ test('SIGTERM rejects with exit code 143 and acknowledges nothing', async () => 
   );
   signalSource.emit('SIGTERM');
   await pending;
+  assert.deepEqual(acknowledged, []);
+});
+
+test('SIGTERM during output rejects before acknowledging delivered item', async () => {
+  const acknowledged = [];
+  const output = [];
+  const signalSource = new EventEmitter();
+  await assert.rejects(
+    waitForOneInboxMessage({
+      relay: { async reconcileInbox() { return { items: [item('signal_before_ack')] }; }, async acknowledge(id) { acknowledged.push(id); } },
+      identity: { relay_token: 'token' }, streamUrl: 'ws://stream', WebSocketImpl: IdleSocket, signalSource,
+      print: async (line) => { output.push(line); signalSource.emit('SIGTERM'); },
+    }),
+    (error) => error instanceof InboxWaitError && error.exitCode === INBOX_WAIT_EXIT_CODES.SIGTERM,
+  );
+  assert.equal(output.length, 1);
   assert.deepEqual(acknowledged, []);
 });
 
@@ -176,6 +235,32 @@ test('fails with RELAY_UNREACHABLE after exactly missedBeforeTimeout missed hear
   // one interval (~100ms), not two (~200ms+). Bound set well under 2x to
   // stay clear of the old off-by-one while tolerating scheduler jitter.
   assert.ok(Date.now() - started < 170, `expected failure within ~1 interval, took ${Date.now() - started}ms`);
+});
+
+test('stream 401 maps to auth exit code and acknowledges nothing', async () => {
+  const acknowledged = [];
+  await assert.rejects(
+    waitForOneInboxMessage({
+      relay: { async reconcileInbox() { return { items: [] }; }, async acknowledge(id) { acknowledged.push(id); } },
+      identity: { relay_token: 'bad-token' }, streamUrl: 'ws://stream', WebSocketImpl: UnauthorizedStreamSocket,
+    }),
+    (error) => error instanceof InboxWaitError && error.exitCode === INBOX_WAIT_EXIT_CODES.AUTH && error.message === 'Authentication required',
+  );
+  assert.deepEqual(acknowledged, []);
+});
+
+test('reconnected stream still maps missed heartbeat to RELAY_UNREACHABLE', async () => {
+  CloseThenSilentSocket.created = 0;
+  await assert.rejects(
+    waitForOneInboxMessage({
+      relay: { async reconcileInbox() { return { items: [] }; }, async acknowledge() {} },
+      identity: { relay_token: 'token' }, streamUrl: 'ws://stream',
+      WebSocketImpl: CloseThenSilentSocket,
+      heartbeat: { intervalMs: 20, missedBeforeTimeout: 1 },
+    }),
+    (error) => error instanceof InboxWaitError && error.exitCode === INBOX_WAIT_EXIT_CODES.RELAY_UNREACHABLE,
+  );
+  assert.equal(CloseThenSilentSocket.created >= 2, true);
 });
 
 test('a pong reply resets the missed-heartbeat counter, so a live relay never trips RELAY_UNREACHABLE', async () => {
