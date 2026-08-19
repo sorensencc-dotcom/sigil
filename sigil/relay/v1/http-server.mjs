@@ -24,10 +24,11 @@ async function readBody(request, maxBytes = 1024 * 1024) {
   return raw;
 }
 
-export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now = new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion } = {}) {
+export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion } = {}) {
   const authenticateRequest = authenticate ?? (tokenHashes ? createBearerAuthenticator(tokenHashes) : null);
   const resolveHumanCredential = lookupHumanCredential ?? repository?.lookupHumanCredential?.bind(repository);
   return http.createServer(async (request, response) => {
+    const now = typeof configuredNow === 'function' ? configuredNow() : configuredNow;
     const requestId = request.headers['x-sigil-request-id'] ?? crypto.randomUUID();
     const principal = authenticateRequest ? await authenticateRequest(request) : null;
     if (authenticateRequest && !principal) {
