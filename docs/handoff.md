@@ -53,3 +53,13 @@ Verified current worktree:
 - Live PostgreSQL proof uses an isolated local PostgreSQL 16 container.
 - Work is strictly confined to `C:\dev\sigil-repo`.
 
+## Next session: process improvements before further build-out
+
+2026-08-19 review loop (JCS audit / ackDelivery / WebAuthn approval / CLI timestamps, 17 commits, 8 fix-and-recheck rounds with `ep_antigravity` over sigil relay) worked but was token-heavy. Before further Sigil build-out, apply:
+
+- **Lower `/code-review` depth for small diffs.** Defaults to a thorough multi-angle pass. For a 1-2 file, <20-line fix commit, a lighter effort (low/medium) catches the same class of bug for a fraction of the tokens — full multi-agent passes should be reserved for first-pass reviews of new surfaces (like the WebAuthn work), not re-checks of a 6-line patch.
+- **Trim sigil message bodies.** Send payloads reproduced full file:line reasoning every round — good for the human record, wasteful as chat volume. Terser sends (bug + fix hint, skip restating verified-correct context) cut send/receive tokens without losing signal. Already partly addressed: long-form findings (>1-2KB) now go to `docs/reviews/<slug>.md` with just the path + one-line summary sent over relay (see `sigil` skill).
+- **Monitor/listener cost is already near-zero** when idle — nothing to cut there, they're not the driver. Cost is per-event (each inbox message injected into context), not per-second.
+- **Stop re-deriving repo state each round.** Re-ran `git log`/`grep` early in some rounds instead of trusting what was already known from conversation context. Only re-check when something's actually stale.
+- **Consider a `sigil-reviewer` skill**: wraps the listen → `/code-review` → send-feedback loop as a repeatable procedure invocable from any CLI (`/sigil-reviewer`). Keep a human checkpoint rather than fully unattended — auto-pick review depth by diff size/surface novelty, batch small fixes instead of round-tripping per commit, and ping (not just log) on Critical findings. Not yet built.
+
