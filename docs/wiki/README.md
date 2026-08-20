@@ -161,38 +161,95 @@ sigil send --identity .sigil/codex.identity.json `
 
 #### Read or wait for incoming messages:
 ```powershell
-# Wait for the next message and exit
 sigil inbox --identity .sigil/claude.identity.json --relay-url http://127.0.0.1:8791 --wait
 
 # Continuous watch stream
 sigil inbox --identity .sigil/claude.identity.json --relay-url http://127.0.0.1:8791 --watch
 
-# View persistent local inbox ledger
-sigil inbox --identity .sigil/claude.identity.json --local
+#### View persistent local inbox ledger:
+```powershell
+sigil inbox --local
+```
+
+### Step 5: Run Autonomous Agent Worker Daemon
+
+To have an agent host automatically listen for `task.request` envelopes, execute subprocess workers, and return signed `task.result` envelopes:
+
+```powershell
+# Run daemon using default Claude worker
+sigil agent run --identity .sigil/claude.identity.json --relay-url http://127.0.0.1:8791
+
+# Run daemon with a custom worker script
+sigil agent run --identity .sigil/claude.identity.json --relay-url http://127.0.0.1:8791 --worker sigil/scripts/codex-cli-worker.mjs
 ```
 
 ---
 
-## 5. Model Context Protocol (MCP) Integration
+## 5. WebAuthn Human Approval Ceremony
 
-Sigil provides an MCP Stdio bridge to integrate directly with AI desktop and CLI interfaces.
+For high-risk operations requiring human authorization (such as root filesystem access or sensitive API execution):
 
-### Configuring Claude Code / Claude Desktop
+1. **Challenge Request**: The agent requests a one-time approval challenge bound to the canonical action hash:
+   ```http
+   POST /v1/approval-challenges
+   { "action_hash": "sha256:...", "callback_url": "http://127.0.0.1:4567/callback" }
+   ```
+2. **Browser Ceremony (`GET /approve`)**: The user's browser opens `https://<relay-origin>/approve?challenge=<id>&cb=<callback_url>` and prompts for a biometric Touch ID, Windows Hello, or hardware passkey assertion via `navigator.credentials.get()`.
+3. **Loopback Handshake**: The relay verifies the signed assertion, records the approval, and redirects to the connector's localhost callback with a single-use decision token to resume agent execution.
 
-Add to `.mcp.json` or your Claude configuration:
+---
+
+## 6. Library SDK Usage
+
+`@sigil/connector` can be imported directly into Node.js applications:
+
+```javascript
+import {
+  createRelayServer,
+  createLocalConnector,
+  createAgentDaemon,
+  RelayClient,
+  LocalOutbox,
+  canonicalizeJson
+} from '@sigil/connector';
+
+// Start a programmatic relay instance
+const server = createRelayServer({
+  relayOrigin: 'http://127.0.0.1:8791',
+  rpId: '127.0.0.1'
+});
+await new Promise((resolve) => server.listen(8791, resolve));
+```
+
+---
+
+## 7. MCP Host Integration
+
+Sigil exposes an MCP stdio server that integrates seamlessly with AI agent hosts like Claude Code and OpenAI Codex CLI.
+
+### Available MCP Tools
+
+- `sigil_send_task`: Send a signed task envelope to another agent endpoint.
+- `sigil_check_inbox`: Read authenticated inbox deliveries.
+- `sigil_get_result`: Retrieve execution results for a task.
+- `sigil_ack_delivery`: Acknowledge or report failure (`acknowledged`, `processed`, `delivery_rejected`, `processing_failed`) for a delivery.
+- `sigil_request_approval`: Request verified human approval for an action.
+- `sigil_resolve_context`: Resolve an integrity-checked context bundle.
+
+### Configuring Claude Code
+
+Add Sigil to `.mcp.json` in your project root:
 
 ```json
 {
   "mcpServers": {
     "sigil": {
-      "command": "sigil",
-      "args": ["mcp"],
+      "command": "node",
+      "args": ["C:\\dev\\sigil-repo\\sigil\\connectors\\v1\\mcp-stdio-server.mjs"],
       "env": {
         "SIGIL_RUNTIME": "claude",
-        "SIGIL_CONNECTOR_URL": "http://127.0.0.1:8787",
-        "SIGIL_CONNECTOR_TOKEN": "<your-endpoint-token>",
-        "SIGIL_PACKAGE_PERMISSIONS": "sigil.task/*,sigil.approval/request,sigil.core/read_shared_context",
-        "SIGIL_CONNECTOR_GRANTS": "sigil.task/*,sigil.approval/request,sigil.core/read_shared_context"
+        "SIGIL_CONNECTOR_URL": "http://127.0.0.1:8791",
+        "SIGIL_CONNECTOR_TOKEN": "ep_claude_token_secret"
       }
     }
   }
@@ -209,7 +266,7 @@ codex mcp add sigil --env SIGIL_RUNTIME=codex -- node C:\dev\sigil-repo\sigil\co
 
 ---
 
-## 6. Verification and Testing
+## 8. Verification and Testing
 
 Sigil enforces strict quality gates across the repository:
 
@@ -217,13 +274,13 @@ Sigil enforces strict quality gates across the repository:
    ```powershell
    npm run audit:jcs
    ```
-   Scans all JavaScript source files for JCS compliance (zero hand-rolled canonicalizers, pinned RFC 8785 dependency).
+   Scans all 113 JavaScript source files for JCS compliance (zero hand-rolled canonicalizers, pinned RFC 8785 dependency).
 
 2. **Unit & Contract Suite**:
    ```powershell
    npm test
    ```
-   Runs 311 unit, integration, and MCP contract test suites.
+   Runs 318 unit, integration, and MCP contract test suites.
 
 3. **Live PostgreSQL Integration Gate**:
    ```powershell

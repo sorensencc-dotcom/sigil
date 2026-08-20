@@ -3,17 +3,18 @@
 **Date:** 2026-08-19
 **Repository:** `sorensencc-dotcom/sigil`
 **Branch:** `main`
-**Checkpoint:** `12d1bb4`
+**Checkpoint:** `3d0d1d8`
 
 ## Status
 
-Protocol, implementation, human-approval, decision specs, and all 8 conformance gap closure workstreams (`D → F → B → A → C → E → H → G`) are implemented and committed.
+Protocol, implementation, human-approval, decision specs, all 8 conformance gap closure workstreams (`D → F → B → A → C → E → H → G`), autonomous daemon, CI matrix, WebAuthn browser UI, and packaging distribution are implemented and committed.
 
 Verified current worktree:
-- **JCS Conformance Gate (`npm run audit:jcs`)**: 100% PASS across all 109 source files.
-- **Unit & Contract Suite (`npm test`)**: 311 passed, 0 failed.
+- **GitHub Actions CI (`.github/workflows/ci.yml`)**: Automated cross-platform matrix on Node 20, 22, and 24 with live PostgreSQL service container.
+- **JCS Conformance Gate (`npm run audit:jcs`)**: 100% PASS across all 113 source files.
+- **Unit & Contract Suite (`npm test`)**: 318 passed, 0 failed.
 - **Live PostgreSQL Gate (`npm run test:live`)**: 30 passed, 0 failed, 0 skipped across 4 schema-resetting suites.
-- **Total test coverage**: 341 tests passed, 0 failed, 0 skipped.
+- **Total test coverage**: 348 tests passed, 0 failed, 0 skipped.
 
 ## Implemented
 
@@ -26,6 +27,9 @@ Verified current worktree:
 - **Task H (Receipts & Heartbeats)**: Sender-side `delivery.receipt` WebSocket notifications, application-level JSON ping/pong heartbeats, and stress testing.
 - **Task G (Identity Integrity)**: Display-name collision constraints and `POST /v1/endpoint-acknowledgements` viewer-scoped acknowledgements.
 - **Connectors & MCP**: `sigil_ack_delivery` wired end-to-end with outcome/reason forwarding and `sigil.task/process` capability boundary.
+- **Autonomous Agent Daemon**: `sigil agent run` / `sigil/cli/agent-daemon.mjs` background listener and auto-reply task runner.
+- **WebAuthn Browser Ceremony**: `GET /approve` interactive passkey UI with biometric prompt and loopback connector handoff.
+- **Packaging & CI Pipeline**: Root `index.js`, subpath exports map, `prepack` / `release:check` scripts, and `.github/workflows/ci.yml`.
 
 ## Evidence checklist
 
@@ -36,10 +40,10 @@ Verified current worktree:
 - [x] HTTP duplicate idempotency retry path
 - [x] HTTP conflicting idempotency retry rejection
 - [x] Authenticated WebSocket and reconnect reconciliation
-- [x] WebAuthn credential/assertion verification
+- [x] WebAuthn credential/assertion verification and browser ceremony UI
 - [x] Connector HTTP client/server round trip
 - [x] End-to-end `sigil_ack_delivery` MCP tool with real Codex and Claude host runtimes
-- [x] Real Claude and Codex host runtimes wired through connector client/server
+- [x] Autonomous agent daemon with task execution and signed result reply loop
 - [x] Contract fixture validator
 - [x] Relay-side envelope and acknowledgement idempotency focused tests
 
@@ -47,6 +51,5 @@ Verified current worktree:
 
 - Node 24 `node:sqlite` is experimental in current connector tests.
 - Live PostgreSQL proof uses an isolated local PostgreSQL 16 container.
-- WebAuthn ceremony is relay-verification proof with test assertions, not a deployed browser UX.
 - Work is strictly confined to `C:\dev\sigil-repo`.
 

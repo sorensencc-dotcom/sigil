@@ -14,21 +14,24 @@ Sigil keeps host capabilities behind an authenticated local connector, validates
 ## Current status
 
 The repository is verified against full v1 protocol conformance specifications:
-- **JCS Conformance Gate (`npm run audit:jcs`)**: 100% PASS across 109 source files, enforcing pinned RFC 8785 canonicalization.
-- **Unit & Contract Suite (`npm test`)**: 311 passed, 0 failed.
+- **GitHub Actions CI (`.github/workflows/ci.yml`)**: Automated cross-platform matrix on Node 20, 22, and 24 with live PostgreSQL service container.
+- **JCS Conformance Gate (`npm run audit:jcs`)**: 100% PASS across 113 source files, enforcing pinned RFC 8785 canonicalization.
+- **Unit & Contract Suite (`npm test`)**: 318 passed, 0 failed.
 - **Live PostgreSQL Gate (`npm run test:live`)**: 30 passed, 0 failed across 4 schema-resetting suites against PostgreSQL 16.
-- **Total Test Suite**: 341 passed, 0 failed.
+- **Total Test Suite**: 348 passed, 0 failed.
 
 ## Repository map
 
+- `index.js` — root library entrypoint exporting connectors, relay, repositories, JCS, daemon, and identity utilities.
 - `bin/` — executable entrypoint for the `sigil` CLI.
-- `sigil/cli/` — CLI commands (`init`, `relay up`, `send`, `inbox`), durable local inbox ledger (`.sigil/inbox.jsonl`), and config resolution.
+- `sigil/cli/` — CLI commands (`init`, `relay up`, `agent run`, `send`, `inbox`), autonomous agent daemon, durable inbox ledger (`.sigil/inbox.jsonl`), and config resolution.
 - `sigil/contracts/v1/` — protocol schemas (`task-request-schema`, `task-result-schema`), envelope fixtures, and RFC 8785 JCS canonicalization.
-- `sigil/relay/v1/` — signed envelope validation, replay classification, rate limiting, capability registry, relay routes, delivery state, approvals, and PostgreSQL repositories.
+- `sigil/relay/v1/` — signed envelope validation, replay classification, rate limiting, capability registry, relay routes, WebAuthn approval ceremony UI (`/approve`), delivery state, and PostgreSQL repositories.
 - `sigil/connectors/v1/` — authenticated local connector, Codex/Claude adapters, context resolution, and MCP stdio bridge.
 - `sigil/migrations/` — ordered PostgreSQL migrations `001` through `010`.
 - `sigil/scripts/live-db-tests.mjs` — sequential live database gate; suites reset the `public` schema.
 - `docs/wiki/` — user-friendly wiki, architecture overview, and operational runbooks.
+- `.github/workflows/ci.yml` — continuous integration pipeline.
 - `.mcp.json` — repo-scoped Claude MCP registration.
 
 ## Requirements
@@ -49,6 +52,10 @@ sigil init claude --owner usr_soren
 # Start a local relay instance (in-memory or PostgreSQL-backed)
 sigil relay up
 sigil relay up --port 8791 --stream-port 8793 --database-url postgres://sigil:password@127.0.0.1:55432/sigil
+
+# Start autonomous background worker daemon (listens for tasks and auto-replies)
+sigil agent run
+sigil agent run --worker sigil/scripts/claude-worker.mjs
 
 # Send a signed task envelope to an agent runtime
 sigil send --to ep_claude --to-owner usr_soren --message "Analyze test suite coverage" --wait-for-receipt
