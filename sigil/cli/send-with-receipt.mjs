@@ -19,6 +19,7 @@ export async function sendWithOptionalReceiptWait({ relay, envelope, waitForRece
     const seen = new Set();
     let result;
     let settled = false;
+    let envelopeSent = false;
 
     const finish = () => {
       if (settled) return;
@@ -28,11 +29,27 @@ export async function sendWithOptionalReceiptWait({ relay, envelope, waitForRece
       resolve(result);
     };
 
+    // A stream failure (connect error, or open-but-later-error/close before a
+    // terminal receipt) must never be swallowed into a silent success -- the
+    // caller (and its exit code) needs to know the envelope was never sent.
+    // Once sendEnvelope has actually been called, though, the send itself
+    // already happened; a subsequent stream drop only means the receipt wait
+    // was cut short, not that the send failed, so that case still finishes.
+    const failIfUnsent = (error) => {
+      if (settled) return;
+      if (envelopeSent) { finish(); return; }
+      settled = true;
+      clearTimeout(timer);
+      try { socket.close(); } catch {}
+      reject(error instanceof Error ? error : new Error('Sigil stream connection failed before the envelope could be sent', { cause: error }));
+    };
+
     const timer = setTimeout(finish, timeoutMs);
 
     socket.once('open', async () => {
       try {
         result = await relay.sendEnvelope(envelope);
+        envelopeSent = true;
         const sentAt = new Date().toISOString();
         await print(`[${sentAt}] Sent. message_id=${result.message_id} conversation_id=${envelope.conversation_id} duplicate=${result.duplicate}`);
       } catch (error) {
@@ -55,6 +72,7 @@ export async function sendWithOptionalReceiptWait({ relay, envelope, waitForRece
       if (TERMINAL_RECEIPT_STATES.includes(event.state)) finish();
     });
 
-    socket.once('error', () => finish());
+    socket.once('error', (error) => failIfUnsent(error));
+    socket.once('close', () => failIfUnsent(new Error('Sigil stream closed before the envelope could be sent')));
   });
 }

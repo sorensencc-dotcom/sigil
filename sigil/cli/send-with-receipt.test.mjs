@@ -77,3 +77,24 @@ test('does not open a stream at all when waitForReceipt is false, but still prin
   assert.equal(result.message_id, 'msg_2');
   assert.ok(printed.some((line) => line.includes('Sent.') && line.includes('msg_2')), 'must still print the Sent confirmation without --wait-for-receipt');
 });
+
+test('rejects instead of silently succeeding when the stream errors before it ever opens, so the envelope is never posted and the caller sees a failure', async () => {
+  let socket;
+  const WebSocketImpl = class extends ScriptedSocket { constructor(...args) { super(...args); socket = this; } };
+  let sendEnvelopeCalled = false;
+  const relay = { async sendEnvelope() { sendEnvelopeCalled = true; return { message_id: 'msg_3', duplicate: false }; } };
+  const printed = [];
+
+  const resultPromise = sendWithOptionalReceiptWait({
+    relay, envelope: { message_id: 'msg_3', conversation_id: 'conv_3' }, waitForReceipt: true,
+    streamUrl: 'ws://stream', token: 'tok', WebSocketImpl, timeoutMs: 2000,
+    print: (line) => printed.push(line),
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  socket.emit('error', new Error('connect ECONNREFUSED'));
+
+  await assert.rejects(resultPromise);
+  assert.equal(sendEnvelopeCalled, false, 'the envelope must never be posted if the stream never opened');
+  assert.equal(printed.length, 0, 'no Sent confirmation may be printed for a send that never happened');
+});
