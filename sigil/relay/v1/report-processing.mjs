@@ -1,8 +1,8 @@
 import { transitionDelivery } from './delivery-state.mjs';
 
 export function reportProcessing(delivery, report, options = {}) {
-  if (!report || !['processing', 'processing_failed'].includes(report.state)) {
-    return { status: 400, body: { request_id: options.request_id ?? null, code: 'INVALID_ENVELOPE', message: 'Report state must be processing or processing_failed', details: {} } };
+  if (!report || !['processing', 'processing_failed', 'delivery_rejected'].includes(report.state)) {
+    return { status: 400, body: { request_id: options.request_id ?? null, code: 'INVALID_ENVELOPE', message: 'Report state must be processing, processing_failed, or delivery_rejected', details: {} } };
   }
   try {
     const next = transitionDelivery(delivery, report.state, { ...options, reason: report.reason ?? null });

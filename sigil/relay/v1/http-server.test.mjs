@@ -348,6 +348,39 @@ test('authenticated delivery route rejects invalid processing state', async () =
   assert.equal(result.status, 400); assert.equal(result.body.code, 'INVALID_ENVELOPE');
 });
 
+test('authenticated delivery route transitions acknowledged delivery to processing_failed with reason and pushes receipt', async () => {
+  const receipts = [];
+  const transitions = [];
+  const repository = {
+    async getDelivery(deliveryId, endpointId) {
+      return { delivery_id: deliveryId, recipient_endpoint_id: endpointId, message_id: 'msg_ack_fail', state: 'acknowledged', attempts: 0 };
+    },
+    async transitionDelivery(deliveryId, endpointId, state, { next }) {
+      transitions.push({ deliveryId, endpointId, state, next });
+      return next;
+    },
+    async lookupMessageSender(messageId) {
+      return messageId === 'msg_ack_fail' ? { endpoint_id: 'ep_codex' } : null;
+    }
+  };
+  const stream = { notifyReceipt: (endpointId, receipt) => { receipts.push({ endpointId, receipt }); return true; } };
+  const server = createRelayServer({ repository, stream, authenticate: async () => ({ endpoint_id: 'ep_claude' }), now: new Date('2026-08-16T00:00:00.000Z') });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const result = await request(port, {
+    method: 'POST',
+    path: '/v1/deliveries/del_1/processing',
+    body: { state: 'processing_failed', reason: 'task runner timed out' }
+  });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(result.status, 204);
+  assert.equal(transitions.length, 1);
+  assert.equal(transitions[0].next.state, 'processing_failed');
+  assert.equal(transitions[0].next.failure_reason, 'task runner timed out');
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0].endpointId, 'ep_codex');
+  assert.equal(receipts[0].receipt.state, 'processing_failed');
+});
+
 test('authenticated approval challenge route returns public metadata only', async () => {
   const challenges = new Map();
   const server = createRelayServer({

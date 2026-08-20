@@ -1,3 +1,5 @@
+const VALID_OUTCOMES = Object.freeze(new Set(['acknowledged', 'processed', 'delivery_rejected', 'rejected', 'processing_failed', 'failed']));
+
 export function createConnector({ relay, outbox, inbox, requestApproval, resolveContext, processTask, submitResult } = {}) {
   if (!relay || typeof relay.sendEnvelope !== 'function' || typeof relay.reconcileInbox !== 'function') throw new Error('relay client is required');
   if (!outbox || typeof outbox.queue !== 'function' || typeof outbox.markAccepted !== 'function') throw new Error('outbox is required');
@@ -25,6 +27,9 @@ export function createConnector({ relay, outbox, inbox, requestApproval, resolve
       const outcome = typeof input === 'object' ? (input?.outcome ?? 'acknowledged') : 'acknowledged';
       const reason = typeof input === 'object' ? (input?.reason ?? null) : null;
       if (!deliveryId) throw Object.assign(new Error('delivery_id is required'), { code: 'INVALID_ENVELOPE' });
+      if (!VALID_OUTCOMES.has(outcome)) {
+        throw Object.assign(new Error(`Invalid delivery outcome: ${outcome}`), { code: 'INVALID_ENVELOPE' });
+      }
       if (typeof relay.acknowledge === 'function') {
         await relay.acknowledge(deliveryId, { outcome, reason });
       }

@@ -34,6 +34,7 @@ Usage:
   sigil send [options] --to <id> --to-owner <owner> --message <text>
                                          Send a signed task envelope
   sigil inbox [options] [--watch|--wait] Read/wait for incoming envelopes
+  sigil agent run [options]              Start autonomous worker daemon
   sigil mcp                              Start the MCP stdio bridge
   sigil configure                        Show host configuration instructions
   sigil configure --codex                Register Sigil in Codex MCP configuration
@@ -43,7 +44,7 @@ Usage:
   process.exit(command ? 0 : 1);
 }
 
-if (['relay', 'send', 'inbox'].includes(command) || (command === 'init' && process.argv[3] !== 'codex')) {
+if (['relay', 'send', 'inbox', 'agent'].includes(command) || (command === 'init' && process.argv[3] !== 'codex')) {
   await import('../sigil/cli/sigil.mjs');
   process.exit(0);
 }

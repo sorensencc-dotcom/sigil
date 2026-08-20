@@ -228,11 +228,37 @@ async function cmdInbox(argv) {
   await new Promise(() => {});
 }
 
+async function cmdAgentRun(argv) {
+  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, worker: { type: 'string' }, config: { type: 'string' } } });
+  const config = loadConfigFile(opt(args, ['config']) ?? DEFAULT_CLI_CONFIG);
+  const resolved = resolveConfig({ flags: { relayUrl: opt(args, ['relay-url']), streamUrl: opt(args, ['stream-url']), identity: opt(args, ['identity']) }, config });
+  if (!resolved.identityPath) throw new Error('usage: sigil agent run --identity path --relay-url url [--worker path]');
+  const identity = loadIdentity(resolved.identityPath);
+  const { fileURLToPath } = await import('node:url');
+  const workerScript = opt(args, ['worker']) ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'claude-worker.mjs');
+  const { createAgentDaemon } = await import('./agent-daemon.mjs');
+  const daemon = createAgentDaemon({
+    identity,
+    relayUrl: resolved.relayUrl,
+    streamUrl: resolved.streamUrl,
+    workerCommand: process.execPath,
+    workerArgs: [workerScript],
+    autoReply: true
+  });
+  console.log(`Sigil autonomous agent daemon running for ${identity.endpoint_id} (${identity.owner_id}).`);
+  console.log(`Relay: ${resolved.relayUrl}`);
+  console.log(`Worker: ${workerScript}`);
+  console.log('Listening for inbound task envelopes. Press Ctrl+C to stop.');
+  daemon.start();
+  await new Promise(() => {});
+}
+
 async function main() {
   const [command, sub, ...rest] = process.argv.slice(2);
   try {
     if (command === 'init') await cmdInit(process.argv.slice(3));
     else if (command === 'relay' && sub === 'up') await cmdRelayUp(rest);
+    else if (command === 'agent' && sub === 'run') await cmdAgentRun(rest);
     else if (command === 'send') await cmdSend(process.argv.slice(3));
     else if (command === 'inbox') await cmdInbox(process.argv.slice(3));
     else usage();

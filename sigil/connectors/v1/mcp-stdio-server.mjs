@@ -11,6 +11,18 @@ const TOOLS = [
   ['sigil_resolve_context', 'Resolve an authorized integrity-checked context reference.', 'resolveContext']
 ];
 
+const TOOL_SCHEMAS = Object.freeze({
+  sigil_ack_delivery: {
+    type: 'object',
+    properties: {
+      delivery_id: { type: 'string' },
+      outcome: { type: 'string', enum: ['acknowledged', 'processed', 'delivery_rejected', 'rejected', 'processing_failed', 'failed'] },
+      reason: { type: 'string' }
+    },
+    required: ['delivery_id']
+  }
+});
+
 function reply(id, result) { process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id, result })}\n`); }
 function error(id, code, message) { process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } })}\n`); }
 
@@ -18,7 +30,7 @@ export function createMcpHandler(runtime) {
   return async (message) => {
     if (message.method === 'initialize') return reply(message.id, { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'sigil-connector', version: '1.0.0' } });
     if (message.method === 'notifications/initialized') return;
-    if (message.method === 'tools/list') return reply(message.id, { tools: TOOLS.map(([name, description]) => ({ name, description, inputSchema: { type: 'object', additionalProperties: true } })) });
+    if (message.method === 'tools/list') return reply(message.id, { tools: TOOLS.map(([name, description]) => ({ name, description, inputSchema: TOOL_SCHEMAS[name] ?? { type: 'object', additionalProperties: true } })) });
     if (message.method === 'tools/call') {
       const tool = TOOLS.find(([name]) => name === message.params?.name);
       if (!tool) return error(message.id, -32602, 'Unknown Sigil tool');

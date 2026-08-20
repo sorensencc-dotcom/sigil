@@ -78,6 +78,7 @@ stateDiagram-v2
     delivered --> delivery_rejected: Delivery Rejected
     acknowledged --> processing: Processing Started
     acknowledged --> delivery_rejected: Delivery Rejected
+    acknowledged --> processing_failed: Processing Failed
     processing --> processed: Processing Succeeded
     processing --> processing_failed: Processing Failed
     processing_failed --> processing: Retry Attempt (< max)
