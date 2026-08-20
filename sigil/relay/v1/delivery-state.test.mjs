@@ -29,6 +29,12 @@ test('processing failure supports retry and then dead-letter', () => {
   assert.equal(delivery.state, 'dead_letter');
 });
 
+test('processing failure is allowed directly from acknowledged state', () => {
+  const delivery = transitionDelivery({ ...base, state: 'acknowledged', attempts: 0 }, 'processing_failed', { reason: 'worker crashed before processing loop' });
+  assert.equal(delivery.state, 'processing_failed');
+  assert.equal(delivery.failure_reason, 'worker crashed before processing loop');
+});
+
 test('terminal states cannot be mutated', () => {
   assert.equal(canTransition('processed', 'processing'), false);
   assert.equal(canTransition('dead_letter', 'processing'), false);

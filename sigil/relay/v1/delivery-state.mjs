@@ -1,7 +1,7 @@
 const transitions = Object.freeze({
   queued: new Set(['delivered', 'delivery_rejected']),
   delivered: new Set(['acknowledged', 'delivery_rejected']),
-  acknowledged: new Set(['processing', 'delivery_rejected']),
+  acknowledged: new Set(['processing', 'delivery_rejected', 'processing_failed']),
   processing: new Set(['processed', 'processing_failed']),
   processing_failed: new Set(['processing', 'dead_letter']),
   processed: new Set(),

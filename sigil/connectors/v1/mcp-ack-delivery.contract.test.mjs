@@ -195,6 +195,55 @@ test('shared MCP ack_delivery forwards delivery_rejected outcome and reason', as
   }
 });
 
+test('shared MCP ack_delivery forwards processing_failed outcome and reason', async () => {
+  const acks = [];
+  const server = createConnectorServer({
+    token: 'failed-token',
+    connector: {
+      async checkInbox() { return { items: [] }; },
+      async getResult(id) { return { id }; },
+      async ackDelivery(input) {
+        acks.push(input);
+        return { delivery_id: input.delivery_id, outcome: input.outcome, reason: input.reason };
+      },
+      async requestApproval() { return { approved: false }; },
+      async resolveContext() { return { found: true }; },
+    },
+  });
+  await server.listen();
+  const port = server.address().port;
+
+  try {
+    const runtime = createCodexHostRuntime({
+      baseUrl: `http://127.0.0.1:${port}`,
+      token: 'failed-token',
+      packagePermissions: permissions,
+      connectorGrants: permissions,
+    });
+    const handler = createMcpHandler(runtime);
+    const [reply] = await captureReplies(() => handler({
+      jsonrpc: '2.0',
+      id: 5,
+      method: 'tools/call',
+      params: {
+        name: 'sigil_ack_delivery',
+        arguments: { delivery_id: 'del_failed_1', outcome: 'processing_failed', reason: 'subprocess exit code 1' },
+      },
+    }));
+
+    assert.deepEqual(acks, [
+      { delivery_id: 'del_failed_1', outcome: 'processing_failed', reason: 'subprocess exit code 1' },
+    ]);
+    assert.deepEqual(JSON.parse(reply.result.content[0].text), {
+      delivery_id: 'del_failed_1',
+      outcome: 'processing_failed',
+      reason: 'subprocess exit code 1',
+    });
+  } finally {
+    await server.close();
+  }
+});
+
 test('ackDelivery is denied when connector only holds read_inbox capability without process', async () => {
   const readOnlyPermissions = ['sigil.task/read_inbox', 'sigil.task/read_result', 'sigil.approval/request', 'sigil.core/read_shared_context'];
   assert.throws(
