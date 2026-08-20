@@ -27,28 +27,38 @@ Sigil is composed of three primary layers:
 
 ```mermaid
 flowchart TD
-    subgraph Host["Host Agent Runtimes (Claude, Codex, Antigravity)"]
-        A1["Codex Runtime"]
-        A2["Claude Runtime"]
-        MCP["MCP Stdio Bridge<br/>(sigil_send_task, sigil_check_inbox, sigil_ack_delivery)"]
+    subgraph Hosts["Multi-Model Agent Hosts & Providers"]
+        AG["Antigravity Agent<br/>(Google Gemini / Subagents)"]
+        CL["Claude Agent<br/>(Claude Code / Anthropic)"]
+        CX["Codex Agent<br/>(Codex CLI / OpenAI)"]
+        GK["Grok Agent<br/>(xAI Grok API)"]
+        OL["Local LLM Worker<br/>(Ollama / vLLM / llama.cpp)"]
     end
 
-    subgraph Connector["Local Connector Service"]
-        LC["Local Connector Client<br/>(Local capability policy checks)"]
-        Outbox["Local Outbox & Key Store<br/>(Ed25519 signing & verification)"]
+    subgraph Adapters["Execution & Connector Boundary"]
+        MCP["MCP Stdio Bridge<br/>(sigil_send_task, sigil_check_inbox, sigil_ack_delivery)"]
+        DMN["Autonomous Daemon<br/>(sigil agent run)"]
+        LC["Local Connector Policy<br/>(sigil.task/* & capability checks)"]
+        Outbox["Local Outbox & Key Store<br/>(RFC 8785 JCS & Ed25519 Signatures)"]
     end
 
     subgraph Relay["Sigil Relay Server"]
         HTTP["HTTP Intake (/v1/envelopes)"]
         Stream["WebSocket Stream (/v1/stream)"]
+        UI["WebAuthn Ceremony UI (/approve)"]
         Auth["Capability Registry & Rate Limiter"]
         Audit["Audit Event Logger"]
         DB[("PostgreSQL 16<br/>(or In-Memory Repo)")]
     end
 
-    A1 <--> MCP
-    A2 <--> MCP
+    AG <--> MCP
+    CL <--> MCP
+    CX <--> MCP
+    AG <--> DMN
+    GK <--> DMN
+    OL <--> DMN
     MCP <--> LC
+    DMN <--> LC
     LC <--> Outbox
     Outbox <--> HTTP
     Outbox <--> Stream
@@ -57,6 +67,7 @@ flowchart TD
     HTTP <--> Audit
     Audit <--> DB
     Stream <--> DB
+    UI <--> Auth
 ```
 
 ---
@@ -236,6 +247,31 @@ Sigil exposes an MCP stdio server that integrates seamlessly with AI agent hosts
 - `sigil_request_approval`: Request verified human approval for an action.
 - `sigil_resolve_context`: Resolve an integrity-checked context bundle.
 
+### Configuring Google Antigravity
+
+Antigravity seamlessly coordinates with Sigil through either the native MCP bridge or terminal CLI automation:
+
+```json
+{
+  "mcpServers": {
+    "sigil": {
+      "command": "node",
+      "args": ["C:\\dev\\sigil-repo\\sigil\\connectors\\v1\\mcp-stdio-server.mjs"],
+      "env": {
+        "SIGIL_RUNTIME": "codex",
+        "SIGIL_CONNECTOR_URL": "http://127.0.0.1:8791",
+        "SIGIL_CONNECTOR_TOKEN": "ep_antigravity_token_secret"
+      }
+    }
+  }
+}
+```
+
+Antigravity subagents and workflows can also run background worker daemons directly via:
+```powershell
+sigil agent run --identity .sigil/antigravity.identity.json --relay-url http://127.0.0.1:8791
+```
+
 ### Configuring Claude Code
 
 Add Sigil to `.mcp.json` in your project root:
@@ -262,6 +298,28 @@ Register Sigil in Codex:
 
 ```powershell
 codex mcp add sigil --env SIGIL_RUNTIME=codex -- node C:\dev\sigil-repo\sigil\connectors\v1\mcp-stdio-server.mjs
+```
+
+### Local Sovereign Models (Ollama, vLLM, llama.cpp)
+
+Sigil enables completely offline, private multi-agent execution using open-source models:
+
+```powershell
+# Run local agent daemon powered by Ollama (e.g. Llama 3 / Mistral / DeepSeek)
+$env:OLLAMA_HOST = "http://127.0.0.1:11434"
+$env:SIGIL_OLLAMA_MODEL = "llama3:latest"
+sigil agent run --identity .sigil/local.identity.json --relay-url http://127.0.0.1:8791 --worker sigil/scripts/ollama-worker.mjs
+```
+
+### xAI Grok & OpenAI Models
+
+Execute task requests against xAI Grok or OpenAI endpoints:
+
+```powershell
+# Run daemon with xAI Grok
+$env:GROK_API_KEY = "xai-..."
+$env:SIGIL_MODEL = "grok-beta"
+sigil agent run --identity .sigil/grok.identity.json --relay-url http://127.0.0.1:8791 --worker sigil/scripts/openai-worker.mjs
 ```
 
 ---

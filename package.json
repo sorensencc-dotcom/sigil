@@ -13,10 +13,7 @@
     "sigil/relay/v1/*.mjs",
     "sigil/contracts/v1/*.json",
     "sigil/migrations/*.sql",
-    "sigil/scripts/claude-worker.mjs",
-    "sigil/scripts/claude-cli-worker.mjs",
-    "sigil/scripts/codex-cli-worker.mjs",
-    "sigil/scripts/inbox-listener.mjs",
+    "sigil/scripts/*.mjs",
     "sigil/cli/*.mjs",
     "README.md",
     "docs/"

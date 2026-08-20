@@ -1,13 +1,13 @@
 # Sigil
 
-Governed task relay and host connector for Codex, Claude, and Antigravity runtimes.
+Governed cryptographic task relay and host connector for Antigravity, Claude, Codex, xAI Grok, and sovereign local LLMs (Ollama, vLLM).
 
 - **User & Architecture Guide**: [Sigil Wiki](docs/wiki/README.md)
 - **Quickstart Guide**: [Getting started](docs/getting-started.md)
 
 For remote machines, install directly from GitHub with `npm install --global github:sorensencc-dotcom/sigil`; no local `C:\dev\sigil-repo` checkout is required.
 
-Claude task execution supports either an Anthropic API key or an authenticated Claude Code subscription/login; see [the worker setup](docs/getting-started.md#claude-task-worker).
+Multi-agent execution supports Google Antigravity, Anthropic Claude, OpenAI Codex, xAI Grok, and local Ollama models; see [the wiki guide](docs/wiki/README.md#multi-model-agent-hosts--providers).
 
 Sigil keeps host capabilities behind an authenticated local connector, validates signed envelopes before durable idempotency handling, and records delivery, approval, and processing state in PostgreSQL.
 
@@ -15,7 +15,7 @@ Sigil keeps host capabilities behind an authenticated local connector, validates
 
 The repository is verified against full v1 protocol conformance specifications:
 - **GitHub Actions CI (`.github/workflows/ci.yml`)**: Automated cross-platform matrix on Node 20, 22, and 24 with live PostgreSQL service container.
-- **JCS Conformance Gate (`npm run audit:jcs`)**: 100% PASS across 113 source files, enforcing pinned RFC 8785 canonicalization.
+- **JCS Conformance Gate (`npm run audit:jcs`)**: 100% PASS across 115 source files, enforcing pinned RFC 8785 canonicalization.
 - **Unit & Contract Suite (`npm test`)**: 318 passed, 0 failed.
 - **Live PostgreSQL Gate (`npm run test:live`)**: 30 passed, 0 failed across 4 schema-resetting suites against PostgreSQL 16.
 - **Total Test Suite**: 348 passed, 0 failed.
@@ -28,6 +28,7 @@ The repository is verified against full v1 protocol conformance specifications:
 - `sigil/contracts/v1/` — protocol schemas (`task-request-schema`, `task-result-schema`), envelope fixtures, and RFC 8785 JCS canonicalization.
 - `sigil/relay/v1/` — signed envelope validation, replay classification, rate limiting, capability registry, relay routes, WebAuthn approval ceremony UI (`/approve`), delivery state, and PostgreSQL repositories.
 - `sigil/connectors/v1/` — authenticated local connector, Codex/Claude adapters, context resolution, and MCP stdio bridge.
+- `sigil/scripts/` — worker subprocess adapters (`claude-worker.mjs`, `codex-cli-worker.mjs`, `ollama-worker.mjs`, `openai-worker.mjs`).
 - `sigil/migrations/` — ordered PostgreSQL migrations `001` through `010`.
 - `sigil/scripts/live-db-tests.mjs` — sequential live database gate; suites reset the `public` schema.
 - `docs/wiki/` — user-friendly wiki, architecture overview, and operational runbooks.
