@@ -28,9 +28,9 @@ export function renderApprovalPage({ challenge, error = null } = {}) {
   const safeEndpointId = escapeHtml(challenge.endpointId ?? 'unknown');
   const safeChallengeId = escapeHtml(challenge.id);
   const safeExpiresAt = escapeHtml(challenge.expiresAt ?? '');
-  const callbackUrlJson = JSON.stringify(challenge.callbackUrl ?? '');
-  const challengeIdJson = JSON.stringify(challenge.id);
-  const webauthnChallengeJson = JSON.stringify(challenge.webauthnChallenge ?? '');
+  const callbackUrlJson = safeJsonForScript(challenge.callbackUrl ?? '');
+  const challengeIdJson = safeJsonForScript(challenge.id);
+  const webauthnChallengeJson = safeJsonForScript(challenge.webauthnChallenge ?? '');
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -166,6 +166,14 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+function safeJsonForScript(val) {
+  return JSON.stringify(val ?? '')
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
 }
 
 function baseCss() {

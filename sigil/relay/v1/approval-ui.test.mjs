@@ -56,3 +56,85 @@ test('GET /approve serves interactive HTML ceremony page on real relay server', 
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('renderApprovalPage escapes script closing tags in callbackUrl and challenge fields to prevent XSS', () => {
+  const html = renderApprovalPage({
+    challenge: {
+      id: 'chal_xss_1',
+      endpointId: 'ep_test',
+      actionHash: 'sha256:abc',
+      expiresAt: '2026-08-20T12:00:00Z',
+      callbackUrl: 'http://127.0.0.1:9/</script><script>alert("xss")</script>',
+      webauthnChallenge: 'test</script>'
+    }
+  });
+
+  assert.ok(!html.includes('</script><script>alert("xss")</script>'));
+  assert.ok(html.includes('\\u003c/script\\u003e'));
+});
+
+test('POST /v1/approval-challenges/:id/assertion succeeds without bearer token when authenticateRequest is enabled on relay', async () => {
+  const challenges = new Map([
+    ['chal_auth_test', {
+      id: 'chal_auth_test',
+      endpointId: 'ep_codex',
+      actionHash: 'sha256:targethash',
+      expiresAt: new Date(Date.now() + 60000).toISOString(),
+      callbackUrl: 'http://127.0.0.1:8765/cb',
+      webauthnChallenge: 'testwebauthnchallenge'
+    }]
+  ]);
+
+  const fakeCredential = {
+    endpointId: 'ep_codex',
+    humanId: 'usr_soren',
+    credentialId: 'cred_test_1',
+    status: 'active',
+    type: 'webauthn',
+    publicKey: { kty: 'OKP', crv: 'Ed25519', x: 'abc' }
+  };
+
+  const server = createRelayServer({
+    relayOrigin: 'https://relay.sigil.test',
+    approvalChallenges: challenges,
+    authenticate: async () => null,
+    lookupHumanCredential: async () => fakeCredential,
+    verifyAssertion: async () => true
+  });
+
+  await new Promise((resolve) => server.listen(0, resolve));
+  const { port } = server.address();
+
+  try {
+    const pageRes = await fetch(`http://127.0.0.1:${port}/approve?challenge=chal_auth_test`);
+    assert.equal(pageRes.status, 200);
+
+    const inboxRes = await fetch(`http://127.0.0.1:${port}/v1/inbox`);
+    assert.equal(inboxRes.status, 401);
+
+    const assertRes = await fetch(`http://127.0.0.1:${port}/v1/approval-challenges/chal_auth_test/assertion`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        credential_id: 'cred_test_1',
+        challenge: 'chal_auth_test',
+        actionHash: 'sha256:targethash',
+        endpointId: 'ep_codex',
+        origin: 'https://relay.sigil.test',
+        rpId: 'relay.sigil.test',
+        userVerified: true,
+        authenticator_data: 'dGVzdA',
+        client_data_json: 'dGVzdA',
+        signature: 'dGVzdA'
+      })
+    });
+    assert.equal(assertRes.status, 200);
+    const body = await assertRes.json();
+    assert.equal(body.verified, true);
+    assert.equal(body.actorId, 'usr_soren');
+    assert.equal(body.credentialId, 'cred_test_1');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+

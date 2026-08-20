@@ -89,6 +89,7 @@ test('agent daemon executes local worker on task.request and sends signed task.r
     assert.equal(sentEnvelopes[0].recipient.endpoint_id, 'ep_codex');
     assert.equal(sentEnvelopes[0].body.task_id, 'task_1');
     assert.equal(sentEnvelopes[0].body.status, 'completed');
+    assert.equal(ackCalls.length, 0);
   } finally {
     globalThis.fetch = originalFetch;
   }
