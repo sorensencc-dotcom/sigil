@@ -22,12 +22,13 @@ export function createConnector({ relay, outbox, inbox, requestApproval, resolve
     },
     async ackDelivery(input) {
       const deliveryId = typeof input === 'string' ? input : input?.delivery_id ?? input?.deliveryId;
-      const outcome = (typeof input === 'object' ? (input?.outcome ?? 'processed') : 'processed');
+      const outcome = typeof input === 'object' ? (input?.outcome ?? 'acknowledged') : 'acknowledged';
+      const reason = typeof input === 'object' ? (input?.reason ?? null) : null;
       if (!deliveryId) throw Object.assign(new Error('delivery_id is required'), { code: 'INVALID_ENVELOPE' });
       if (typeof relay.acknowledge === 'function') {
-        await relay.acknowledge(deliveryId);
+        await relay.acknowledge(deliveryId, { outcome, reason });
       }
-      return { delivery_id: deliveryId, outcome };
+      return { delivery_id: deliveryId, outcome, reason };
     },
     async processTask(task) {
       if (typeof processTask !== 'function') throw Object.assign(new Error('Task processor is not configured'), { code: 'PROCESSING_UNAVAILABLE' });

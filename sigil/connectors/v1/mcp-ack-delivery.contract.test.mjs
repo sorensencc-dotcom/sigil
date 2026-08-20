@@ -145,3 +145,65 @@ test('shared MCP ack_delivery dispatches end-to-end through real Claude host run
     await server.close();
   }
 });
+
+test('shared MCP ack_delivery forwards delivery_rejected outcome and reason', async () => {
+  const acks = [];
+  const server = createConnectorServer({
+    token: 'reject-token',
+    connector: {
+      async checkInbox() { return { items: [] }; },
+      async getResult(id) { return { id }; },
+      async ackDelivery(input) {
+        acks.push(input);
+        return { delivery_id: input.delivery_id, outcome: input.outcome, reason: input.reason };
+      },
+      async requestApproval() { return { approved: false }; },
+      async resolveContext() { return { found: true }; },
+    },
+  });
+  await server.listen();
+  const port = server.address().port;
+
+  try {
+    const runtime = createCodexHostRuntime({
+      baseUrl: `http://127.0.0.1:${port}`,
+      token: 'reject-token',
+      packagePermissions: permissions,
+      connectorGrants: permissions,
+    });
+    const handler = createMcpHandler(runtime);
+    const [reply] = await captureReplies(() => handler({
+      jsonrpc: '2.0',
+      id: 4,
+      method: 'tools/call',
+      params: {
+        name: 'sigil_ack_delivery',
+        arguments: { delivery_id: 'del_reject_1', outcome: 'delivery_rejected', reason: 'payload schema mismatch' },
+      },
+    }));
+
+    assert.deepEqual(acks, [
+      { delivery_id: 'del_reject_1', outcome: 'delivery_rejected', reason: 'payload schema mismatch' },
+    ]);
+    assert.deepEqual(JSON.parse(reply.result.content[0].text), {
+      delivery_id: 'del_reject_1',
+      outcome: 'delivery_rejected',
+      reason: 'payload schema mismatch',
+    });
+  } finally {
+    await server.close();
+  }
+});
+
+test('ackDelivery is denied when connector only holds read_inbox capability without process', async () => {
+  const readOnlyPermissions = ['sigil.task/read_inbox', 'sigil.task/read_result', 'sigil.approval/request', 'sigil.core/read_shared_context'];
+  assert.throws(
+    () => createCodexHostRuntime({
+      baseUrl: 'http://127.0.0.1:9999',
+      token: 'tok',
+      packagePermissions: readOnlyPermissions,
+      connectorGrants: readOnlyPermissions,
+    }),
+    (error) => error.code === 'CAPABILITY_DENIED' && error.capability === 'sigil.task/process',
+  );
+});

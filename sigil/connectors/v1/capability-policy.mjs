@@ -2,7 +2,7 @@ const OPERATION_CAPABILITIES = Object.freeze({
   sendTask: 'sigil.task/submit',
   checkInbox: 'sigil.task/read_inbox',
   getResult: 'sigil.task/read_result',
-  ackDelivery: 'sigil.task/read_inbox',
+  ackDelivery: 'sigil.task/process',
   requestApproval: 'sigil.approval/request',
   resolveContext: 'sigil.core/read_shared_context',
   processTask: 'sigil.task/process',

@@ -150,7 +150,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       let body = {}; let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       if (raw) { try { body = JSON.parse(raw); } catch { body = {}; } }
       const target = action === 'ack' ? 'acknowledged' : body.state;
-      if (action === 'processing' && !['processing', 'processing_failed'].includes(target)) {
+      if (action === 'processing' && !['processing', 'processing_failed', 'delivery_rejected'].includes(target)) {
         response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'Invalid processing state', details: {} }));
       }

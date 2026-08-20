@@ -17,6 +17,14 @@ export class RelayClient {
     const page = await this.pollInbox(since);
     return { items: page.items ?? [], nextSince: page.next_since ?? since };
   }
-  async acknowledge(deliveryId) { return this.request(`/v1/deliveries/${encodeURIComponent(deliveryId)}/ack`, { method: 'POST' }); }
+  async acknowledge(deliveryId, { outcome = 'acknowledged', reason = null } = {}) {
+    if (outcome === 'delivery_rejected' || outcome === 'rejected') {
+      return this.reportProcessing(deliveryId, 'delivery_rejected', reason);
+    }
+    if (outcome === 'processing_failed' || outcome === 'failed') {
+      return this.reportProcessing(deliveryId, 'processing_failed', reason);
+    }
+    return this.request(`/v1/deliveries/${encodeURIComponent(deliveryId)}/ack`, { method: 'POST', body: JSON.stringify({ outcome, reason }) });
+  }
   async reportProcessing(deliveryId, state, reason = null) { return this.request(`/v1/deliveries/${encodeURIComponent(deliveryId)}/processing`, { method: 'POST', body: JSON.stringify({ state, reason }) }); }
 }
