@@ -1,12 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createMcpHandler } from './mcp-stdio-server.mjs';
+import { createCodexHostRuntime, createClaudeHostRuntime } from './host-runtimes.mjs';
+import { createConnectorServer } from './connector-server.mjs';
 
 async function captureReplies(run) {
   const replies = [];
   const original = process.stdout.write;
-  process.stdout.write = (value) => {
-    replies.push(JSON.parse(value));
+  process.stdout.write = (chunk) => {
+    const text = typeof chunk === 'string' ? chunk : chunk?.toString?.('utf8') ?? '';
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+        try {
+          replies.push(JSON.parse(trimmed));
+        } catch {
+          // ignore non-JSON runner output
+        }
+      }
+    }
     return true;
   };
   try {
@@ -16,6 +28,8 @@ async function captureReplies(run) {
     process.stdout.write = original;
   }
 }
+
+const permissions = ['sigil.task/*', 'sigil.approval/request', 'sigil.core/read_shared_context'];
 
 test('shared MCP contract advertises ack_delivery', async () => {
   const handler = createMcpHandler({ runtime: 'codex' });
@@ -31,30 +45,103 @@ test('shared MCP contract advertises ack_delivery', async () => {
   );
 });
 
-test('shared MCP ack_delivery dispatches delivery ID and outcome to runtime', async () => {
-  const calls = [];
-  const handler = createMcpHandler({
-    runtime: 'codex',
-    ackDelivery: async (input) => {
-      calls.push(input);
-      return { delivery_id: input.delivery_id, outcome: input.outcome };
+test('shared MCP ack_delivery dispatches end-to-end through real Codex host runtime and connector server', async () => {
+  const acks = [];
+  const server = createConnectorServer({
+    token: 'server-token',
+    connector: {
+      async sendTask() { return { accepted: true }; },
+      async checkInbox() { return { items: [] }; },
+      async getResult(id) { return { id }; },
+      async ackDelivery(input) {
+        acks.push(input);
+        return { delivery_id: input.delivery_id, outcome: input.outcome ?? 'processed' };
+      },
+      async requestApproval() { return { approved: false }; },
+      async resolveContext() { return { found: true }; },
     },
   });
-  const [reply] = await captureReplies(() => handler({
-    jsonrpc: '2.0',
-    id: 2,
-    method: 'tools/call',
-    params: {
-      name: 'sigil_ack_delivery',
-      arguments: { delivery_id: 'del_contract_1', outcome: 'processed' },
-    },
-  }));
+  await server.listen();
+  const port = server.address().port;
 
-  assert.deepEqual(calls, [
-    { delivery_id: 'del_contract_1', outcome: 'processed' },
-  ]);
-  assert.deepEqual(JSON.parse(reply.result.content[0].text), {
-    delivery_id: 'del_contract_1',
-    outcome: 'processed',
+  try {
+    const runtime = createCodexHostRuntime({
+      baseUrl: `http://127.0.0.1:${port}`,
+      token: 'server-token',
+      packagePermissions: permissions,
+      connectorGrants: permissions,
+    });
+    const handler = createMcpHandler(runtime);
+    const [reply] = await captureReplies(() => handler({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: {
+        name: 'sigil_ack_delivery',
+        arguments: { delivery_id: 'del_contract_1', outcome: 'processed' },
+      },
+    }));
+
+    assert.deepEqual(acks, [
+      { delivery_id: 'del_contract_1', outcome: 'processed' },
+    ]);
+    assert.deepEqual(JSON.parse(reply.result.content[0].text), {
+      delivery_id: 'del_contract_1',
+      outcome: 'processed',
+    });
+  } finally {
+    await server.close();
+  }
+});
+
+test('shared MCP ack_delivery dispatches end-to-end through real Claude host runtime and connector server', async () => {
+  const acks = [];
+  const server = createConnectorServer({
+    token: 'claude-token',
+    connector: {
+      async checkInbox() { return { items: [] }; },
+      async getResult(id) { return { id }; },
+      async ackDelivery(input) {
+        acks.push(input);
+        return { delivery_id: input.delivery_id, outcome: input.outcome ?? 'processed' };
+      },
+      async requestApproval() { return { approved: false }; },
+      async resolveContext() { return { found: true }; },
+      async processTask() { return { processed: true }; },
+      async processDelivery() { return { state: 'processed' }; },
+      async submitResult() { return { accepted: true }; },
+    },
   });
+  await server.listen();
+  const port = server.address().port;
+
+  try {
+    const runtime = createClaudeHostRuntime({
+      baseUrl: `http://127.0.0.1:${port}`,
+      token: 'claude-token',
+      processTask: async () => ({ ok: true }),
+      packagePermissions: permissions,
+      connectorGrants: permissions,
+    });
+    const handler = createMcpHandler(runtime);
+    const [reply] = await captureReplies(() => handler({
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'tools/call',
+      params: {
+        name: 'sigil_ack_delivery',
+        arguments: { delivery_id: 'del_claude_1', outcome: 'processed' },
+      },
+    }));
+
+    assert.deepEqual(acks, [
+      { delivery_id: 'del_claude_1', outcome: 'processed' },
+    ]);
+    assert.deepEqual(JSON.parse(reply.result.content[0].text), {
+      delivery_id: 'del_claude_1',
+      outcome: 'processed',
+    });
+  } finally {
+    await server.close();
+  }
 });

@@ -20,6 +20,15 @@ export function createConnector({ relay, outbox, inbox, requestApproval, resolve
     async getResult(taskId) {
       return inbox.get(taskId);
     },
+    async ackDelivery(input) {
+      const deliveryId = typeof input === 'string' ? input : input?.delivery_id ?? input?.deliveryId;
+      const outcome = (typeof input === 'object' ? (input?.outcome ?? 'processed') : 'processed');
+      if (!deliveryId) throw Object.assign(new Error('delivery_id is required'), { code: 'INVALID_ENVELOPE' });
+      if (typeof relay.acknowledge === 'function') {
+        await relay.acknowledge(deliveryId);
+      }
+      return { delivery_id: deliveryId, outcome };
+    },
     async processTask(task) {
       if (typeof processTask !== 'function') throw Object.assign(new Error('Task processor is not configured'), { code: 'PROCESSING_UNAVAILABLE' });
       return processTask(task);

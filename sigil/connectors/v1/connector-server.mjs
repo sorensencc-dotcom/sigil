@@ -7,6 +7,7 @@ import { resolveContext } from './context-resolver.mjs';
 
 const routes = new Map([
   ['POST /v1/tasks', 'sendTask'], ['GET /v1/inbox', 'checkInbox'], ['GET /v1/results', 'getResult'],
+  ['POST /v1/ack', 'ackDelivery'],
   ['POST /v1/approvals', 'requestApproval'], ['POST /v1/context', 'resolveContext'],
   ['POST /v1/process', 'processDelivery'], ['POST /v1/results', 'submitResult']
 ]);

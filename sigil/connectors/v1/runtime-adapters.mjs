@@ -1,6 +1,6 @@
 import { createHostAdapter } from './host-adapter.mjs';
 
-const COMMON = ['checkInbox', 'getResult', 'requestApproval', 'resolveContext'];
+const COMMON = ['checkInbox', 'getResult', 'requestApproval', 'resolveContext', 'ackDelivery'];
 
 function createRuntimeAdapter({ connector, runtime, operations, packagePermissions, connectorGrants }) {
   if (!connector || typeof connector !== 'object') throw new Error('connector is required');

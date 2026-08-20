@@ -127,13 +127,16 @@ async function runAudit() {
       const relativePath = path.relative(targetDir, file).replace(/\\/g, '/');
       const content = fs.readFileSync(file, 'utf8');
 
-      // Check for 'function canonicalize' declaration
-      if (content.includes('function canonicalize')) {
-        auditIssues.push({
-          rule_id: 'LINGERING_HAND_ROLLED_CANONICALIZER',
-          file: relativePath,
-          message: "Contains declaration 'function canonicalize'. Prior hand-rolled implementations must be deleted and replaced with imported 'canonicalJson' from relay/v1/jcs.mjs."
-        });
+      // Check for any 'canonicalize' declaration (function, const, let, var) outside official jcs.mjs
+      if (relativePath !== 'sigil/relay/v1/jcs.mjs') {
+        const canonicalizeDeclPattern = /(?:function\*?\s+canonicalize\b|\b(?:const|let|var)\s+canonicalize\s*=)/;
+        if (canonicalizeDeclPattern.test(content)) {
+          auditIssues.push({
+            rule_id: 'LINGERING_HAND_ROLLED_CANONICALIZER',
+            file: relativePath,
+            message: "Contains declaration or assignment of 'canonicalize'. Prior hand-rolled implementations must be deleted and replaced with imported 'canonicalJson' from relay/v1/jcs.mjs."
+          });
+        }
       }
 
       // Check for Object.keys().sort() pattern that indicates hand-rolled key sorting
@@ -166,8 +169,9 @@ async function runAudit() {
       const relativePath = path.relative(targetDir, file).replace(/\\/g, '/');
       const content = fs.readFileSync(file, 'utf8');
       
-      // Look for "canonicalize" or "JCS" string values that suggest a local implementation
-      if (content.includes('function canonicalize') || content.includes('const canonicalize =')) {
+      // Look for any declaration or assignment of canonicalize
+      const canonicalizeDeclPattern = /(?:function\*?\s+canonicalize\b|\b(?:const|let|var)\s+canonicalize\s*=)/;
+      if (canonicalizeDeclPattern.test(content)) {
         auditIssues.push({
           rule_id: 'CONTRACTS_LOCAL_CANONICALIZER',
           file: relativePath,
