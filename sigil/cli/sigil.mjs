@@ -77,15 +77,24 @@ async function cmdInit(argv) {
 }
 
 async function cmdRelayUp(argv) {
-  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' } } });
+  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' } } });
   const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
   const port = Number(opt(args, ['port']) ?? 0);
   const streamPort = Number(opt(args, ['stream-port']) ?? (port ? port + 1 : 0));
+  const databaseUrl = opt(args, ['database-url']) ?? process.env.SIGIL_DATABASE_URL;
   const data = loadRegistryFile(registryPath);
   if (!data.endpoints.length) throw new Error(`No endpoints in ${registryPath}. Run "sigil init <name> --owner <owner_id>" first.`);
   const registry = toRegistryMap(data);
   const tokenHashes = toTokenHashes(data);
-  const repository = createMemoryRepository();
+  let repository;
+  if (databaseUrl) {
+    const { PostgresRepository } = await import('../relay/v1/postgres-repository.mjs');
+    const { default: pg } = await import('pg');
+    const pool = new pg.Pool({ connectionString: databaseUrl });
+    repository = new PostgresRepository({ pool });
+  } else {
+    repository = createMemoryRepository();
+  }
 
   // Stream server needs its own http.Server (createRelayServer builds one
   // internally and doesn't accept an existing one), so push notifications
@@ -101,7 +110,7 @@ async function cmdRelayUp(argv) {
   console.log(`Sigil relay listening on http://127.0.0.1:${address.port}`);
   console.log(`Sigil stream (push notify) on ws://127.0.0.1:${streamAddress.port}/v1/stream`);
   console.log(`Registered endpoints: ${[...registry.keys()].join(', ')}`);
-  console.log('In-memory only -- state is lost when this process exits. Ctrl+C to stop.');
+  console.log(databaseUrl ? `Persisting to PostgreSQL database (${databaseUrl.replace(/:[^:@]+@/, ':***@')}). Ctrl+C to stop.` : 'In-memory only -- state is lost when this process exits. Ctrl+C to stop.');
   await new Promise(() => {}); // keep the process alive
 }
 

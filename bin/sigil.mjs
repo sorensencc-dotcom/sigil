@@ -24,31 +24,28 @@ function applyConfig(config) {
 }
 
 if (command === '--help' || command === '-h' || !command) {
-  console.log(`Sigil connector CLI
+  console.log(`Sigil CLI & Host Connector
 
 Usage:
-  sigil mcp              Start the MCP stdio bridge
-  sigil configure       Show host configuration instructions
-  sigil configure --codex
-                         Register Sigil in Codex MCP configuration
-  sigil configure --claude
-                         Print Claude MCP configuration JSON
-  sigil init codex --owner <owner-id>
-                         Create local Codex endpoint configuration
-  sigil --help           Show this help
-
-Required environment for "sigil mcp":
-  SIGIL_CONNECTOR_URL    Authenticated local connector URL
-  SIGIL_CONNECTOR_TOKEN  Endpoint token
-
-Optional:
-  SIGIL_RUNTIME=codex|claude
-  SIGIL_PACKAGE_PERMISSIONS=capability,...
-  SIGIL_CONNECTOR_GRANTS=capability,...
-  SIGIL_CLAUDE_PROCESS_COMMAND=executable
-  SIGIL_CLAUDE_PROCESS_ARGS=["arg", "..."]
+  sigil init <name> --owner <owner_id>   Create a local identity and register it
+  sigil init codex --owner <owner_id>    Create local Codex endpoint configuration
+  sigil relay up [--port N] [--database-url url]
+                                         Start a local Sigil relay
+  sigil send [options] --to <id> --to-owner <owner> --message <text>
+                                         Send a signed task envelope
+  sigil inbox [options] [--watch|--wait] Read/wait for incoming envelopes
+  sigil mcp                              Start the MCP stdio bridge
+  sigil configure                        Show host configuration instructions
+  sigil configure --codex                Register Sigil in Codex MCP configuration
+  sigil configure --claude               Print Claude MCP configuration JSON
+  sigil --help                           Show this help
 `);
   process.exit(command ? 0 : 1);
+}
+
+if (['relay', 'send', 'inbox'].includes(command) || (command === 'init' && process.argv[3] !== 'codex')) {
+  await import('../sigil/cli/sigil.mjs');
+  process.exit(0);
 }
 
 if (command === 'configure') {
