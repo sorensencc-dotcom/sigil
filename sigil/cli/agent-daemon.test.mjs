@@ -80,15 +80,15 @@ test('agent daemon executes local worker on task.request and sends signed task.r
 
     const count = await daemon.poll();
     assert.equal(count, 1);
-    assert.equal(reports.length, 1);
+    assert.equal(reports.length, 2);
     assert.equal(reports[0].state, 'processing');
+    assert.equal(reports[1].state, 'processed');
     assert.equal(sentEnvelopes.length, 1);
     assert.equal(sentEnvelopes[0].message_type, 'task.result');
     assert.equal(sentEnvelopes[0].correlation_id, 'msg_req_1');
     assert.equal(sentEnvelopes[0].recipient.endpoint_id, 'ep_codex');
     assert.equal(sentEnvelopes[0].body.task_id, 'task_1');
     assert.equal(sentEnvelopes[0].body.status, 'completed');
-    assert.equal(ackCalls.length, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }

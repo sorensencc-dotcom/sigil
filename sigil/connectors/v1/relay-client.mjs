@@ -24,6 +24,12 @@ export class RelayClient {
     if (outcome === 'processing_failed' || outcome === 'failed') {
       return this.reportProcessing(deliveryId, 'processing_failed', reason);
     }
+    if (outcome === 'processed') {
+      return this.reportProcessing(deliveryId, 'processed', reason);
+    }
+    if (outcome !== 'acknowledged') {
+      throw Object.assign(new Error(`Invalid delivery outcome: ${outcome}`), { code: 'INVALID_ENVELOPE' });
+    }
     return this.request(`/v1/deliveries/${encodeURIComponent(deliveryId)}/ack`, { method: 'POST', body: JSON.stringify({ outcome, reason }) });
   }
   async reportProcessing(deliveryId, state, reason = null) { return this.request(`/v1/deliveries/${encodeURIComponent(deliveryId)}/processing`, { method: 'POST', body: JSON.stringify({ state, reason }) }); }

@@ -23,3 +23,22 @@ test('client exposes cursor-based inbox reconciliation', async () => {
   const client = new RelayClient({ baseUrl: 'https://relay.test', token: 't', fetchImpl: async () => ({ ok: true, status: 200, async text() { return JSON.stringify({ items: [{ delivery_id: 'del_2' }], next_since: 'cursor_3' }); } }) });
   assert.deepEqual(await client.reconcileInbox('cursor_2'), { items: [{ delivery_id: 'del_2' }], nextSince: 'cursor_3' });
 });
+
+test('acknowledge with outcome: processed routes to /processing with state: processed', async () => {
+  const { calls, fetchImpl } = fakeFetch();
+  const client = new RelayClient({ baseUrl: 'https://relay.test/', token: 'token_1', fetchImpl });
+  await client.acknowledge('del_proc_1', { outcome: 'processed' });
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /\/v1\/deliveries\/del_proc_1\/processing$/);
+  assert.deepEqual(JSON.parse(calls[0].options.body), { state: 'processed', reason: null });
+});
+
+test('acknowledge rejects unrecognized outcome with INVALID_ENVELOPE', async () => {
+  const { fetchImpl } = fakeFetch();
+  const client = new RelayClient({ baseUrl: 'https://relay.test/', token: 'token_1', fetchImpl });
+  await assert.rejects(
+    () => client.acknowledge('del_bad', { outcome: 'unrecognized_status' }),
+    (error) => error.code === 'INVALID_ENVELOPE'
+  );
+});
+

@@ -18,7 +18,7 @@ test('reports processing failure with reason', () => {
 
 test('rejects invalid report state without persistence', () => {
   let writes = 0;
-  const response = reportProcessing({ delivery_id: 'del_1', state: 'acknowledged', attempts: 0 }, { state: 'processed' }, { persist: () => writes++ });
+  const response = reportProcessing({ delivery_id: 'del_1', state: 'acknowledged', attempts: 0 }, { state: 'invalid_status' }, { persist: () => writes++ });
   assert.equal(response.status, 400);
   assert.equal(response.body.code, 'INVALID_ENVELOPE');
   assert.equal(writes, 0);

@@ -343,7 +343,7 @@ test('ack route pushes an acknowledged receipt to the sender via stream.notifyRe
 test('authenticated delivery route rejects invalid processing state', async () => {
   const server = createRelayServer({ repository: {}, authenticate: async () => ({ endpoint_id: 'ep_claude' }) });
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
-  const result = await request(port, { method: 'POST', path: '/v1/deliveries/del_1/processing', body: { state: 'processed' } });
+  const result = await request(port, { method: 'POST', path: '/v1/deliveries/del_1/processing', body: { state: 'unknown_state' } });
   await new Promise((resolve) => server.close(resolve));
   assert.equal(result.status, 400); assert.equal(result.body.code, 'INVALID_ENVELOPE');
 });
