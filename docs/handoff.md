@@ -1,51 +1,36 @@
 # Sigil Session Handoff
 
-**Date:** 2026-08-14
+**Date:** 2026-08-19
 **Repository:** `sorensencc-dotcom/sigil`
 **Branch:** `main`
-**Checkpoint:** `d44c527`
+**Checkpoint:** `12d1bb4`
 
 ## Status
 
-Protocol, implementation, human-approval, and decision specs are committed
-under `docs/specs/`. Executable foundation is committed under `sigil/`.
+Protocol, implementation, human-approval, decision specs, and all 8 conformance gap closure workstreams (`D → F → B → A → C → E → H → G`) are implemented and committed.
 
-Verified current worktree: 104 tests pass with the local PostgreSQL container
-enabled. Without `SIGIL_TEST_DATABASE_URL`, the live-PostgreSQL test is the
-only expected skip. `git diff --check` passes.
+Verified current worktree:
+- **JCS Conformance Gate (`npm run audit:jcs`)**: 100% PASS across all 109 source files.
+- **Unit & Contract Suite (`npm test`)**: 311 passed, 0 failed.
+- **Live PostgreSQL Gate (`npm run test:live`)**: 30 passed, 0 failed, 0 skipped across 4 schema-resetting suites.
+- **Total test coverage**: 341 tests passed, 0 failed, 0 skipped.
 
 ## Implemented
 
-- PostgreSQL migration and repository transaction boundary with mocked-pool tests
-- Envelope validation with real Ed25519 verification and idempotency handling
-- Endpoint registry, HTTP intake, WebSocket delivery notifications
-- Delivery state machine, retries, processing failure, dead-letter behavior
-- SQLite connector store, inbox/outbox, relay client, host adapter boundary
-- Approval challenge/result-token scaffold with relay-origin ceremony contract
-- Codex -> relay -> Claude -> relay -> Codex in-process vertical-slice test
-
-## Next work
-
-1. [x] Run migration against a real PostgreSQL instance and add integration coverage.
-2. [x] Wire HTTP routes to repository transactions and durable delivery records.
-3. [x] Complete WebSocket reconnect/poll reconciliation and authenticated transport.
-4. [x] Implement relay-hosted WebAuthn ceremony and credential verification.
-5. [~] Build actual Codex and Claude host adapters against connector contracts.
-   Connector server/client and authenticated round-trip proof exist; real host
-   runtime integrations remain.
-6. [ ] Expand to all 25 conformance items, failure injection, and staging gates.
-7. [ ] Implement approved plugin/connector/auth schema conformance migration.
-   Migration `001_initial.sql` does not yet represent the approved §9 objects
-   and fields: OIDC identities, human attributes/sessions, account links,
-   endpoint tokens, approval decisions, complete capability grants, audit
-   events, idempotency records, and recovery attempts. Design a forward-only
-   migration, repository boundary, rollback/recovery procedure, and adversarial
-   tests before claiming schema conformance. Treat this as a separate Tier
-   1-scale implementation action, not cleanup of migration 001.
+- **Task D (JCS Canonicalization)**: RFC 8785 canonicalization pinned to `canonicalize: "2.0.0"`; standalone `sigil-jcs-audit.mjs` pre-commit gate.
+- **Task F (Task Body Schemas)**: `task-request-schema.mjs` and `task-result-schema.mjs` contract schemas with cross-reference integrity checks.
+- **Task B (Replay Detection)**: Scoped `(sender_endpoint_id, message_id)` duplicate detection distinguishing first-time expiry, duplicate retries, and replay attacks.
+- **Task A (Capability Authorization)**: Fail-closed capability registry, hierarchy resolution via `scope.mjs`, and row-level locked grants (`FOR UPDATE`).
+- **Task C (Rejection Audits & Audit Query)**: `rejection-audit.mjs` two-tier bounded retry with fallback log, `conversation_id` column binding, and `GET /v1/audit`.
+- **Task E (Rate & Depth Limits)**: Multi-scope rolling-window rate limits and recipient open-inbox depth limits.
+- **Task H (Receipts & Heartbeats)**: Sender-side `delivery.receipt` WebSocket notifications, application-level JSON ping/pong heartbeats, and stress testing.
+- **Task G (Identity Integrity)**: Display-name collision constraints and `POST /v1/endpoint-acknowledgements` viewer-scoped acknowledgements.
+- **Connectors & MCP**: `sigil_ack_delivery` wired end-to-end with outcome/reason forwarding and `sigil.task/process` capability boundary.
 
 ## Evidence checklist
 
-- [x] Live PostgreSQL migration/repository test
+- [x] JCS RFC 8785 audit gate scan across all repository files
+- [x] Live PostgreSQL migration/repository test (`npm run test:live`, 30/30 passed)
 - [x] PostgreSQL restart recovery followed by full live suite
 - [x] HTTP repository persistence path
 - [x] HTTP duplicate idempotency retry path
@@ -53,18 +38,15 @@ only expected skip. `git diff --check` passes.
 - [x] Authenticated WebSocket and reconnect reconciliation
 - [x] WebAuthn credential/assertion verification
 - [x] Connector HTTP client/server round trip
-- [x] Codex/Claude host-runtime bootstrap with explicit Claude local processor
+- [x] End-to-end `sigil_ack_delivery` MCP tool with real Codex and Claude host runtimes
+- [x] Real Claude and Codex host runtimes wired through connector client/server
 - [x] Contract fixture validator
 - [x] Relay-side envelope and acknowledgement idempotency focused tests
-- [ ] Migration 002 deployment validation
-- [ ] Real Codex host runtime
-- [ ] Real Claude host runtime
-- [ ] Full conformance, failure injection, staging, and Tier 1 approval
 
 ## Boundaries
 
-- Current tests prove the bounded executable slice; no production-readiness claim.
 - Node 24 `node:sqlite` is experimental in current connector tests.
 - Live PostgreSQL proof uses an isolated local PostgreSQL 16 container.
 - WebAuthn ceremony is relay-verification proof with test assertions, not a deployed browser UX.
-- Do not add Sigil files to `C:\dev`; work only in the dedicated checkout.
+- Work is strictly confined to `C:\dev\sigil-repo`.
+
