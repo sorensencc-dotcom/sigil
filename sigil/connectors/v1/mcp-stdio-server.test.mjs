@@ -10,7 +10,7 @@ test('stdio MCP handler exposes approved tools and dispatches connector calls', 
     await handler({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
     await handler({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'sigil_send_task', arguments: { value: 'ok' } } });
   } finally { process.stdout.write = original; }
-  assert.equal(writes[0].result.tools.length, 5); assert.equal(JSON.parse(writes[1].result.content[0].text).accepted, 'ok');
+  assert.equal(writes[0].result.tools.length, 6); assert.equal(JSON.parse(writes[1].result.content[0].text).accepted, 'ok');
 });
 
 test('stdio MCP handler rejects unavailable runtime operations', async () => {

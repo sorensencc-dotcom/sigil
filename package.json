@@ -25,7 +25,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test",
+    "test": "node sigil-jcs-audit.mjs && node --test",
+    "audit:jcs": "node sigil-jcs-audit.mjs",
     "test:live": "node sigil/scripts/live-db-tests.mjs",
     "receipt:claude": "node sigil/scripts/live-claude-worker-receipt.mjs",
     "pack:check": "npm pack --dry-run"

@@ -1,5 +1,8 @@
 .sigil/
+.sigil-demo/
+.superpowers/
 node_modules/
 .claude/
 .context/
 .ijfw/
+

@@ -6,6 +6,7 @@ const TOOLS = [
   ['sigil_send_task', 'Send a signed task through Sigil.', 'sendTask'],
   ['sigil_check_inbox', 'Read authenticated Sigil inbox.', 'checkInbox'],
   ['sigil_get_result', 'Read a task result from Sigil.', 'getResult'],
+  ['sigil_ack_delivery', 'Acknowledge or report an outcome for a delivered item.', 'ackDelivery'],
   ['sigil_request_approval', 'Request human approval for an action.', 'requestApproval'],
   ['sigil_resolve_context', 'Resolve an authorized integrity-checked context reference.', 'resolveContext']
 ];
