@@ -65,6 +65,12 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       return response.end(html);
     }
 
+    const resolveRelayOrigin = () => {
+      if (typeof relayOrigin === 'function') return relayOrigin(request);
+      if (relayOrigin) return relayOrigin;
+      return null;
+    };
+
     const assertionMatch = request.url.match(/^\/v1\/approval-challenges\/([^/]+)\/assertion$/);
     if (request.method === 'POST' && assertionMatch) {
       const challengeId = assertionMatch[1];
@@ -83,15 +89,16 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         return response.end(JSON.stringify({ request_id: requestId, code: 'RATE_LIMITED', message: 'Too many assertion attempts', details: {} }));
       }
 
-      if (!relayOrigin) {
+      const effectiveRelayOrigin = resolveRelayOrigin();
+      if (!effectiveRelayOrigin) {
         response.writeHead(500, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
-        return response.end(JSON.stringify({ request_id: requestId, code: 'APPROVAL_REQUIRED', message: 'relayOrigin must be configured on the server to process WebAuthn approvals', details: {} }));
+        return response.end(JSON.stringify({ request_id: requestId, code: 'RELAY_ORIGIN_UNCONFIGURED', message: 'relayOrigin must be configured on the server to process WebAuthn approvals', details: {} }));
       }
 
       let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       let assertion; try { assertion = JSON.parse(raw); } catch { assertion = null; }
 
-      const effectiveRpId = rpId ?? new URL(relayOrigin).hostname;
+      const effectiveRpId = rpId ?? new URL(effectiveRelayOrigin).hostname;
 
       try {
         const normalized = {
@@ -107,10 +114,10 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         const result = await verifyWebAuthnApproval({
           challenge,
           assertion: normalized,
-          relayOrigin,
+          relayOrigin: effectiveRelayOrigin,
           rpId: effectiveRpId,
           credential,
-          verifyAssertion: verifyAssertion ?? (({ assertion: candidate, credential: registered }) => verifyWebAuthnAssertion({ ...candidate, challenge, relayOrigin, rpId: effectiveRpId, credential: registered })),
+          verifyAssertion: verifyAssertion ?? (({ assertion: candidate, credential: registered }) => verifyWebAuthnAssertion({ ...candidate, challenge, relayOrigin: effectiveRelayOrigin, rpId: effectiveRpId, credential: registered })),
           now: nowMs
         });
         if (repository?.finalizeApprovalDecision) await repository.finalizeApprovalDecision({ challengeId: challenge.id, humanId: result.actorId, credentialId: result.credentialId, endpointId: challenge.endpointId, now });
@@ -141,7 +148,8 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
           return response.end(JSON.stringify({ request_id: requestId, code: 'APPROVAL_REQUIRED', message: 'Action hash does not match canonical action', details: {} }));
         }
       }
-      if (!actionHash || !body?.callback_url || !relayOrigin || !principal?.endpoint_id) {
+      const effectiveRelayOrigin = resolveRelayOrigin();
+      if (!actionHash || !body?.callback_url || !effectiveRelayOrigin || !principal?.endpoint_id) {
         response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'APPROVAL_REQUIRED', message: 'Approval challenge fields are required', details: {} }));
       }
@@ -150,7 +158,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         return response.end(JSON.stringify({ request_id: requestId, code: 'RATE_LIMITED', message: 'Approval queue capacity reached', details: {} }));
       }
       try {
-        const challenge = createApprovalChallenge({ relayOrigin, actionHash, endpointId: principal.endpoint_id, callbackUrl: body.callback_url });
+        const challenge = createApprovalChallenge({ relayOrigin: effectiveRelayOrigin, actionHash, endpointId: principal.endpoint_id, callbackUrl: body.callback_url });
         if (repository?.createApprovalChallenge) await repository.createApprovalChallenge(challenge);
         else approvalChallenges.set(challenge.id, challenge);
         response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });

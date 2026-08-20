@@ -235,11 +235,73 @@ test('POST /v1/approval-challenges/:id/assertion returns 500 when relayOrigin is
     });
     assert.equal(res.status, 500);
     const body = await res.json();
-    assert.equal(body.code, 'APPROVAL_REQUIRED');
+    assert.equal(body.code, 'RELAY_ORIGIN_UNCONFIGURED');
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('dynamic relayOrigin with ephemeral port 0 validates WebAuthn assertion successfully', async () => {
+  let server;
+  const challenges = new Map();
+  const fakeCredential = {
+    endpointId: 'ep_codex',
+    humanId: 'usr_soren',
+    credentialId: 'cred_dyn_1',
+    status: 'active',
+    type: 'webauthn',
+    publicKey: { kty: 'OKP', crv: 'Ed25519', x: 'abc' }
+  };
+
+  server = createRelayServer({
+    approvalChallenges: challenges,
+    authenticate: async () => ({ endpoint_id: 'ep_codex' }),
+    lookupHumanCredential: async () => fakeCredential,
+    verifyAssertion: async () => true,
+    relayOrigin: () => `http://127.0.0.1:${server.address()?.port}`
+  });
+
+  await new Promise((resolve) => server.listen(0, resolve));
+  const { port } = server.address();
+  const dynamicOrigin = `http://127.0.0.1:${port}`;
+
+  try {
+    // Create challenge using dynamic origin
+    const createRes = await fetch(`http://127.0.0.1:${port}/v1/approval-challenges`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action_hash: 'sha256:dynamic', callback_url: 'http://127.0.0.1:9090/cb' })
+    });
+    assert.equal(createRes.status, 201);
+    const created = await createRes.json();
+    assert.match(created.approval_url, new RegExp(`^http://127\\.0\\.0\\.1:${port}/approve`));
+
+    // Submit assertion matching dynamic origin
+    const assertRes = await fetch(`http://127.0.0.1:${port}/v1/approval-challenges/${created.challenge_id}/assertion`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        credential_id: 'cred_dyn_1',
+        challenge: created.challenge_id,
+        actionHash: 'sha256:dynamic',
+        endpointId: 'ep_codex',
+        origin: dynamicOrigin,
+        rpId: '127.0.0.1',
+        userVerified: true,
+        authenticator_data: 'dGVzdA',
+        client_data_json: 'dGVzdA',
+        signature: 'dGVzdA'
+      })
+    });
+    assert.equal(assertRes.status, 200);
+    const result = await assertRes.json();
+    assert.equal(result.verified, true);
+    assert.equal(result.actorId, 'usr_soren');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 
 
 

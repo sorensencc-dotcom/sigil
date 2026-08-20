@@ -96,7 +96,9 @@ export function verifyWebAuthnAssertion({ clientDataJSON, authenticatorData, sig
 export function createApprovalChallenge({ relayOrigin, actionHash, endpointId, callbackUrl, ttlMs = 5 * 60 * 1000 } = {}) {
   const origin = new URL(relayOrigin);
   const callback = new URL(callbackUrl);
-  if (origin.protocol !== 'https:') throw Object.assign(new Error('Approval origin must use HTTPS'), { code: 'APPROVAL_REQUIRED' });
+  if (origin.protocol !== 'https:' && !['127.0.0.1', 'localhost', '[::1]'].includes(origin.hostname)) {
+    throw Object.assign(new Error('Approval origin must use HTTPS'), { code: 'APPROVAL_REQUIRED' });
+  }
   if (callback.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(callback.hostname)) {
     throw Object.assign(new Error('Approval callback must be localhost HTTP'), { code: 'APPROVAL_REQUIRED' });
   }
