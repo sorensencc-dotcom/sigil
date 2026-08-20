@@ -138,3 +138,73 @@ test('POST /v1/approval-challenges/:id/assertion succeeds without bearer token w
   }
 });
 
+test('POST /v1/approval-challenges/:id/assertion returns 404 for unknown challenge without calling lookupHumanCredential', async () => {
+  let lookupCalled = false;
+  const server = createRelayServer({
+    lookupHumanCredential: async () => { lookupCalled = true; return null; }
+  });
+
+  await new Promise((resolve) => server.listen(0, resolve));
+  const { port } = server.address();
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/v1/approval-challenges/chal_nonexistent/assertion`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ credential_id: 'cred_probe' })
+    });
+    assert.equal(res.status, 404);
+    const body = await res.json();
+    assert.equal(body.code, 'APPROVAL_EXPIRED');
+    assert.equal(lookupCalled, false);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('POST /v1/approval-challenges/:id/assertion rate limits repeated failed attempts with 429', async () => {
+  const challenges = new Map([
+    ['chal_brute_force', {
+      id: 'chal_brute_force',
+      endpointId: 'ep_codex',
+      actionHash: 'sha256:brutehash',
+      expiresAt: new Date(Date.now() + 60000).toISOString(),
+      callbackUrl: 'http://127.0.0.1:8765/cb',
+      webauthnChallenge: 'brutechallenge'
+    }]
+  ]);
+
+  const server = createRelayServer({
+    approvalChallenges: challenges,
+    lookupHumanCredential: async () => null // always fails to resolve credential
+  });
+
+  await new Promise((resolve) => server.listen(0, resolve));
+  const { port } = server.address();
+
+  try {
+    // 10 failed attempts
+    for (let i = 0; i < 10; i++) {
+      const res = await fetch(`http://127.0.0.1:${port}/v1/approval-challenges/chal_brute_force/assertion`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ credential_id: `cred_${i}` })
+      });
+      assert.equal(res.status, 409);
+    }
+
+    // 11th attempt is rate limited with 429
+    const rateLimitedRes = await fetch(`http://127.0.0.1:${port}/v1/approval-challenges/chal_brute_force/assertion`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ credential_id: 'cred_11' })
+    });
+    assert.equal(rateLimitedRes.status, 429);
+    const body = await rateLimitedRes.json();
+    assert.equal(body.code, 'RATE_LIMITED');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+

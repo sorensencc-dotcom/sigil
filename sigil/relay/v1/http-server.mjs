@@ -25,12 +25,13 @@ async function readBody(request, maxBytes = 1024 * 1024) {
   return raw;
 }
 
-export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin = 'https://sigil.test', rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion } = {}) {
-  const effectiveRpId = rpId ?? (relayOrigin ? new URL(relayOrigin).hostname : 'sigil.test');
+export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion } = {}) {
   const authenticateRequest = authenticate ?? (tokenHashes ? createBearerAuthenticator(tokenHashes) : null);
   const resolveHumanCredential = lookupHumanCredential ?? repository?.lookupHumanCredential?.bind(repository);
+  const assertionRateLimits = new Map();
   return http.createServer(async (request, response) => {
     const now = typeof configuredNow === 'function' ? configuredNow() : configuredNow;
+    const nowMs = now instanceof Date ? now.getTime() : typeof now === 'string' || typeof now === 'number' ? new Date(now).getTime() : Date.now();
     const requestId = request.headers['x-sigil-request-id'] ?? crypto.randomUUID();
 
     const parsedUrl = new URL(request.url, `http://${request.headers.host || '127.0.0.1'}`);
@@ -44,20 +45,55 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
 
     const assertionMatch = request.url.match(/^\/v1\/approval-challenges\/([^/]+)\/assertion$/);
     if (request.method === 'POST' && assertionMatch) {
+      const challengeId = assertionMatch[1];
+      const challenge = repository?.getApprovalChallenge ? await repository.getApprovalChallenge(challengeId) : approvalChallenges.get(challengeId);
+      if (!challenge) {
+        response.writeHead(404, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'APPROVAL_EXPIRED', message: 'Approval challenge not found', details: {} }));
+      }
+      if (challenge.used || challenge.consuming || Date.parse(challenge.expiresAt) <= nowMs) {
+        response.writeHead(409, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'APPROVAL_EXPIRED', message: 'Approval challenge expired or already used', details: {} }));
+      }
+
+      const attempts = assertionRateLimits.get(challengeId) || 0;
+      if (attempts >= 10) {
+        response.writeHead(429, { 'content-type': 'application/json', 'x-sigil-request-id': requestId, 'retry-after': '60' });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'RATE_LIMITED', message: 'Too many assertion attempts', details: {} }));
+      }
+
       let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       let assertion; try { assertion = JSON.parse(raw); } catch { assertion = null; }
-      const challenge = repository?.getApprovalChallenge ? await repository.getApprovalChallenge(assertionMatch[1]) : approvalChallenges.get(assertionMatch[1]);
+
+      const effectiveRelayOrigin = relayOrigin ?? (challenge.approvalUrl ? new URL(challenge.approvalUrl).origin : `https://${request.headers.host || 'sigil.local'}`);
+      const effectiveRpId = rpId ?? (effectiveRelayOrigin ? new URL(effectiveRelayOrigin).hostname : 'sigil.local');
+
       try {
-        const targetEndpointId = challenge?.endpointId;
-        const credential = await resolveHumanCredential?.(assertion?.credential_id, targetEndpointId);
-        if (credential && credential.endpointId !== targetEndpointId) throw Object.assign(new Error('WebAuthn credential is not registered to this endpoint'), { code: 'APPROVAL_REQUIRED' });
+        const normalized = {
+          ...assertion,
+          credentialId: assertion?.credentialId ?? assertion?.credential_id,
+          endpointId: assertion?.endpointId ?? assertion?.endpoint_id ?? challenge.endpointId
+        };
+        const credential = await resolveHumanCredential?.(normalized.credentialId, challenge.endpointId);
+        if (!credential || credential.endpointId !== challenge.endpointId) {
+          throw Object.assign(new Error('WebAuthn authorization failed'), { code: 'APPROVAL_REQUIRED' });
+        }
         if (credential?.coseKey && !credential.publicKey) Object.assign(credential, coseKeyToPublicKey(credential.coseKey) ?? {});
-        const normalized = { ...assertion, credentialId: assertion?.credentialId ?? assertion?.credential_id };
-        const result = await verifyWebAuthnApproval({ challenge, assertion: normalized, relayOrigin, rpId: effectiveRpId, credential, verifyAssertion: verifyAssertion ?? (({ assertion: candidate, credential: registered }) => verifyWebAuthnAssertion({ ...candidate, challenge, relayOrigin, rpId: effectiveRpId, credential: registered })), now: now instanceof Date ? now.getTime() : Date.now() });
-        if (repository?.finalizeApprovalDecision) await repository.finalizeApprovalDecision({ challengeId: challenge.id, humanId: result.actorId, credentialId: result.credentialId, endpointId: targetEndpointId, now });
+        const result = await verifyWebAuthnApproval({
+          challenge,
+          assertion: normalized,
+          relayOrigin: effectiveRelayOrigin,
+          rpId: effectiveRpId,
+          credential,
+          verifyAssertion: verifyAssertion ?? (({ assertion: candidate, credential: registered }) => verifyWebAuthnAssertion({ ...candidate, challenge, relayOrigin: effectiveRelayOrigin, rpId: effectiveRpId, credential: registered })),
+          now: nowMs
+        });
+        if (repository?.finalizeApprovalDecision) await repository.finalizeApprovalDecision({ challengeId: challenge.id, humanId: result.actorId, credentialId: result.credentialId, endpointId: challenge.endpointId, now });
+        assertionRateLimits.delete(challengeId);
         response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'OK', ...result }));
       } catch (error) {
+        assertionRateLimits.set(challengeId, (assertionRateLimits.get(challengeId) || 0) + 1);
         response.writeHead(409, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'APPROVAL_REQUIRED', message: error.message, details: {} }));
       }
