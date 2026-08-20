@@ -9,7 +9,7 @@ const TERMINAL_RECEIPT_STATES = ['acknowledged', 'processed', 'processing_failed
 export async function sendWithOptionalReceiptWait({ relay, envelope, waitForReceipt, streamUrl, token, WebSocketImpl = DefaultWebSocket, timeoutMs = 60_000, print = console.log }) {
   if (!waitForReceipt) {
     const result = await relay.sendEnvelope(envelope);
-    await print(`Sent. message_id=${result.message_id} conversation_id=${envelope.conversation_id} duplicate=${result.duplicate}`);
+    await print(`[${envelope.created_at ?? new Date().toISOString()}] Sent. message_id=${result.message_id} conversation_id=${envelope.conversation_id} duplicate=${result.duplicate}`);
     return result;
   }
 
@@ -32,7 +32,7 @@ export async function sendWithOptionalReceiptWait({ relay, envelope, waitForRece
     socket.once('open', async () => {
       try {
         result = await relay.sendEnvelope(envelope);
-        await print(`Sent. message_id=${result.message_id} conversation_id=${envelope.conversation_id} duplicate=${result.duplicate}`);
+        await print(`[${envelope.created_at ?? new Date().toISOString()}] Sent. message_id=${result.message_id} conversation_id=${envelope.conversation_id} duplicate=${result.duplicate}`);
       } catch (error) {
         settled = true;
         clearTimeout(timer);
