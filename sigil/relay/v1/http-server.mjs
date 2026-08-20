@@ -4,6 +4,7 @@ import { acceptEnvelopeAsync } from './accept-envelope.mjs';
 import { transitionDelivery } from './delivery-state.mjs';
 import { createBearerAuthenticator } from './transport-auth.mjs';
 import { createApprovalChallenge, coseKeyToPublicKey, parseAttestationObject, verifyPackedAttestation, verifyWebAuthnApproval, verifyWebAuthnAssertion } from './approval-ceremony.mjs';
+import { renderApprovalPage } from './approval-ui.mjs';
 import { computeActionHash } from './action-hash.mjs';
 import { normalizeIssuer } from './issuer-normalization.mjs';
 import { assertAccountLinkCeremony, assertAllowedIssuer, boundedTokenExpiry } from './auth-policy.mjs';
@@ -30,6 +31,16 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
   return http.createServer(async (request, response) => {
     const now = typeof configuredNow === 'function' ? configuredNow() : configuredNow;
     const requestId = request.headers['x-sigil-request-id'] ?? crypto.randomUUID();
+
+    const parsedUrl = new URL(request.url, `http://${request.headers.host || '127.0.0.1'}`);
+    if (request.method === 'GET' && (parsedUrl.pathname === '/approve' || parsedUrl.pathname === '/v1/approvals/ceremony')) {
+      const challengeId = parsedUrl.searchParams.get('challenge');
+      const challenge = challengeId ? (repository?.getApprovalChallenge ? await repository.getApprovalChallenge(challengeId) : approvalChallenges.get(challengeId)) : null;
+      const html = renderApprovalPage({ challenge });
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'x-sigil-request-id': requestId });
+      return response.end(html);
+    }
+
     const principal = authenticateRequest ? await authenticateRequest(request) : null;
     if (authenticateRequest && !principal) {
       response.writeHead(401, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });

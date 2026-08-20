@@ -7,6 +7,7 @@
     "sigil": "bin/sigil.mjs"
   },
   "files": [
+    "index.js",
     "bin/",
     "sigil/connectors/v1/*.mjs",
     "sigil/relay/v1/*.mjs",
@@ -16,7 +17,6 @@
     "sigil/scripts/claude-cli-worker.mjs",
     "sigil/scripts/codex-cli-worker.mjs",
     "sigil/scripts/inbox-listener.mjs",
-
     "sigil/cli/*.mjs",
     "README.md",
     "docs/"
@@ -29,10 +29,20 @@
     "audit:jcs": "node sigil-jcs-audit.mjs",
     "test:live": "node sigil/scripts/live-db-tests.mjs",
     "receipt:claude": "node sigil/scripts/live-claude-worker-receipt.mjs",
-    "pack:check": "npm pack --dry-run"
+    "prepack": "node sigil-jcs-audit.mjs && node --test",
+    "pack:check": "npm pack --dry-run",
+    "release:check": "npm run audit:jcs && npm test && npm pack --dry-run"
   },
   "license": "MIT",
   "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./connector": "./sigil/connectors/v1/connector.mjs",
+    "./relay": "./sigil/relay/v1/http-server.mjs",
+    "./daemon": "./sigil/cli/agent-daemon.mjs",
+    "./identity": "./sigil/cli/identity.mjs",
+    "./contracts/*": "./sigil/contracts/v1/*"
+  },
   "directories": {
     "doc": "docs"
   },
