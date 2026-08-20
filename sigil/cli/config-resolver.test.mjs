@@ -46,6 +46,43 @@ test('resolveConfig applies flag over env over config over defaults for every fi
   });
 });
 
+test('resolveConfig fills in the /v1/stream path only when no path was given at all', () => {
+  assert.equal(
+    resolveConfig({ flags: { streamUrl: 'ws://127.0.0.1:8793' }, env: {}, config: {} }).streamUrl,
+    'ws://127.0.0.1:8793/v1/stream',
+    'a bare host:port stream-url (no path) must resolve to the real stream path, not 400 at handshake time'
+  );
+  assert.equal(
+    resolveConfig({ flags: { streamUrl: 'ws://127.0.0.1:8793/' }, env: {}, config: {} }).streamUrl,
+    'ws://127.0.0.1:8793/v1/stream',
+    'a bare trailing-slash stream-url counts as no path'
+  );
+});
+
+test('resolveConfig preserves an explicit custom stream-url path instead of overwriting it -- needed for reverse-proxy multi-machine setups', () => {
+  assert.equal(
+    resolveConfig({ flags: { streamUrl: 'wss://proxy.example.test/sigil-stream' }, env: {}, config: {} }).streamUrl,
+    'wss://proxy.example.test/sigil-stream',
+    'an operator-configured custom path (e.g. behind a fronting reverse proxy) must not be silently clobbered'
+  );
+});
+
+test('resolveConfig treats an explicit empty stream-url as not-provided, not a broken empty string', () => {
+  assert.equal(
+    resolveConfig({ flags: { streamUrl: '' }, env: {}, config: {} }).streamUrl,
+    null,
+    'an explicit empty --stream-url must normalize to null so callers\' `?? computeDefault()` fallback still fires, instead of silently propagating an empty string as the connection target'
+  );
+  assert.equal(resolveConfig({ flags: {}, env: {}, config: { stream_url: '' } }).streamUrl, null);
+});
+
+test('resolveConfig raises a clear, attributed error for a malformed stream-url instead of an opaque URL-parser exception', () => {
+  assert.throws(
+    () => resolveConfig({ flags: { streamUrl: 'not a url' }, env: {}, config: {} }),
+    /Invalid --stream-url\/SIGIL_STREAM_URL\/stream_url value "not a url"/
+  );
+});
+
 test('loadConfigFile returns an empty object for missing and invalid files', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-config-test-'));
   const missingPath = path.join(directory, 'missing.json');
