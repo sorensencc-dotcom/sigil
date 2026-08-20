@@ -29,6 +29,28 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
   const authenticateRequest = authenticate ?? (tokenHashes ? createBearerAuthenticator(tokenHashes) : null);
   const resolveHumanCredential = lookupHumanCredential ?? repository?.lookupHumanCredential?.bind(repository);
   const assertionRateLimits = new Map();
+  const MAX_STORED_LIMITS = 5000;
+  const ATTEMPT_LIMIT = 10;
+  const ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
+
+  function recordAttemptAndCheckLimit(challengeId, nowMs) {
+    if (assertionRateLimits.size > MAX_STORED_LIMITS) {
+      for (const [k, v] of assertionRateLimits.entries()) {
+        if (v.expiresAt <= nowMs) assertionRateLimits.delete(k);
+      }
+    }
+    const entry = assertionRateLimits.get(challengeId);
+    if (entry && entry.expiresAt > nowMs) {
+      entry.count += 1;
+      if (entry.count > ATTEMPT_LIMIT) {
+        return false;
+      }
+      return true;
+    }
+    assertionRateLimits.set(challengeId, { count: 1, expiresAt: nowMs + ATTEMPT_WINDOW_MS });
+    return true;
+  }
+
   return http.createServer(async (request, response) => {
     const now = typeof configuredNow === 'function' ? configuredNow() : configuredNow;
     const nowMs = now instanceof Date ? now.getTime() : typeof now === 'string' || typeof now === 'number' ? new Date(now).getTime() : Date.now();
@@ -56,17 +78,20 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         return response.end(JSON.stringify({ request_id: requestId, code: 'APPROVAL_EXPIRED', message: 'Approval challenge expired or already used', details: {} }));
       }
 
-      const attempts = assertionRateLimits.get(challengeId) || 0;
-      if (attempts >= 10) {
+      if (!recordAttemptAndCheckLimit(challengeId, nowMs)) {
         response.writeHead(429, { 'content-type': 'application/json', 'x-sigil-request-id': requestId, 'retry-after': '60' });
         return response.end(JSON.stringify({ request_id: requestId, code: 'RATE_LIMITED', message: 'Too many assertion attempts', details: {} }));
+      }
+
+      if (!relayOrigin) {
+        response.writeHead(500, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'APPROVAL_REQUIRED', message: 'relayOrigin must be configured on the server to process WebAuthn approvals', details: {} }));
       }
 
       let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       let assertion; try { assertion = JSON.parse(raw); } catch { assertion = null; }
 
-      const effectiveRelayOrigin = relayOrigin ?? (challenge.approvalUrl ? new URL(challenge.approvalUrl).origin : `https://${request.headers.host || 'sigil.local'}`);
-      const effectiveRpId = rpId ?? (effectiveRelayOrigin ? new URL(effectiveRelayOrigin).hostname : 'sigil.local');
+      const effectiveRpId = rpId ?? new URL(relayOrigin).hostname;
 
       try {
         const normalized = {
@@ -82,10 +107,10 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         const result = await verifyWebAuthnApproval({
           challenge,
           assertion: normalized,
-          relayOrigin: effectiveRelayOrigin,
+          relayOrigin,
           rpId: effectiveRpId,
           credential,
-          verifyAssertion: verifyAssertion ?? (({ assertion: candidate, credential: registered }) => verifyWebAuthnAssertion({ ...candidate, challenge, relayOrigin: effectiveRelayOrigin, rpId: effectiveRpId, credential: registered })),
+          verifyAssertion: verifyAssertion ?? (({ assertion: candidate, credential: registered }) => verifyWebAuthnAssertion({ ...candidate, challenge, relayOrigin, rpId: effectiveRpId, credential: registered })),
           now: nowMs
         });
         if (repository?.finalizeApprovalDecision) await repository.finalizeApprovalDecision({ challengeId: challenge.id, humanId: result.actorId, credentialId: result.credentialId, endpointId: challenge.endpointId, now });
@@ -93,7 +118,6 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'OK', ...result }));
       } catch (error) {
-        assertionRateLimits.set(challengeId, (assertionRateLimits.get(challengeId) || 0) + 1);
         response.writeHead(409, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'APPROVAL_REQUIRED', message: error.message, details: {} }));
       }

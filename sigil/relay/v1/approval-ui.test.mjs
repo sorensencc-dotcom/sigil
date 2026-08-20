@@ -175,6 +175,7 @@ test('POST /v1/approval-challenges/:id/assertion rate limits repeated failed att
   ]);
 
   const server = createRelayServer({
+    relayOrigin: 'https://relay.test',
     approvalChallenges: challenges,
     lookupHumanCredential: async () => null // always fails to resolve credential
   });
@@ -206,5 +207,39 @@ test('POST /v1/approval-challenges/:id/assertion rate limits repeated failed att
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('POST /v1/approval-challenges/:id/assertion returns 500 when relayOrigin is not configured on server', async () => {
+  const challenges = new Map([
+    ['chal_no_origin', {
+      id: 'chal_no_origin',
+      endpointId: 'ep_codex',
+      actionHash: 'sha256:targethash',
+      expiresAt: new Date(Date.now() + 60000).toISOString(),
+      callbackUrl: 'http://127.0.0.1:8765/cb',
+      webauthnChallenge: 'challenge'
+    }]
+  ]);
+
+  const server = createRelayServer({
+    approvalChallenges: challenges
+  });
+
+  await new Promise((resolve) => server.listen(0, resolve));
+  const { port } = server.address();
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/v1/approval-challenges/chal_no_origin/assertion`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ credential_id: 'cred_1' })
+    });
+    assert.equal(res.status, 500);
+    const body = await res.json();
+    assert.equal(body.code, 'APPROVAL_REQUIRED');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 
 

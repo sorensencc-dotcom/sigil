@@ -104,7 +104,8 @@ async function cmdRelayUp(argv) {
   await new Promise((resolve) => streamHttpServer.listen(streamPort, '127.0.0.1', resolve));
   const streamAddress = streamHttpServer.address();
 
-  const server = createRelayServer({ registry, repository, tokenHashes, stream });
+  const relayOrigin = `http://127.0.0.1:${port}`;
+  const server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();
   console.log(`Sigil relay listening on http://127.0.0.1:${address.port}`);
