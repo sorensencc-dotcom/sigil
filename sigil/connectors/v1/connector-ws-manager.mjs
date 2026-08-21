@@ -2,180 +2,296 @@ import WebSocket from 'ws';
 import { EventEmitter } from 'events';
 
 /**
- * WebSocketConnectionManager maintains resilient relay connectivity,
- * guarantees durable-before-ack inbox intake, and flushes outbox messages.
+ * ConnectorWebSocketManager coordinates active client-side WebSocket connections
+ * with the Sigil Relay. It handles real-time application-level heartbeats (ping/pong),
+ * exponential backoff reconnects, and maps incoming stream event receipts back to
+ * the local SQLite ConnectorDatabase outbox.
  */
-export class WebSocketConnectionManager extends EventEmitter {
+export class ConnectorWebSocketManager extends EventEmitter {
   /**
    * @param {Object} options
-   * @param {import('./connector-db-adapter.mjs').ConnectorDatabase} options.db
-   * @param {string} options.profileId
-   * @param {string} options.bearerToken
-   * @param {number} [options.heartbeatIntervalMs=15000]
-   * @param {number} [options.outboxSweepIntervalMs=2000]
+   * @param {string} [options.wsUrl] - The Sigil Relay stream WebSocket URL
+   * @param {string} [options.authToken] - The bearer authorization token
+   * @param {string} options.profileId - Local profile ID the manager is serving
+   * @param {import('./connector-db-adapter.mjs').ConnectorDatabase} [options.dbAdapter] - Instantiated ConnectorDatabase adapter
+   * @param {import('./connector-db-adapter.mjs').ConnectorDatabase} [options.db] - Alias for dbAdapter
+   * @param {string} [options.bearerToken] - Alias for authToken
+   * @param {Object} [options.heartbeat] - Override heartbeat defaults
+   * @param {number} [options.heartbeat.intervalMs=15000] - Interval between pings (15s default)
+   * @param {number} [options.heartbeat.timeoutMs=45000] - Duration to declare timeout (45s default)
+   * @param {number} [options.heartbeat.maxMissed=3] - Maximum missed pings before exit
+   * @param {number} [options.heartbeatIntervalMs] - Direct ping interval setting
+   * @param {number} [options.outboxSweepIntervalMs=2000] - Outbox retry/flush interval
    */
   constructor({
-    db,
+    wsUrl,
+    authToken,
     profileId,
+    dbAdapter,
+    db,
     bearerToken,
-    heartbeatIntervalMs = 15000,
+    heartbeat = {},
+    heartbeatIntervalMs,
     outboxSweepIntervalMs = 2000,
-  }) {
+  } = {}) {
     super();
-    this.db = db;
+    this.wsUrl = wsUrl;
+    this.authToken = authToken || bearerToken;
     this.profileId = profileId;
-    this.bearerToken = bearerToken;
-    this.heartbeatIntervalMs = heartbeatIntervalMs;
+    this.db = dbAdapter || db;
+
+    // Conformance Liveness Limits (Default: Ping every 15s, Timeout after 3 missed pongs = 45s)
+    this.pingIntervalMs = heartbeatIntervalMs || heartbeat.intervalMs || 15000;
+    this.maxMissedPongs = heartbeat.maxMissed || 3;
     this.outboxSweepIntervalMs = outboxSweepIntervalMs;
 
     this.ws = null;
-    this.isConnected = false;
-    this.isShuttingDown = false;
-    this.reconnectAttempts = 0;
-    this.heartbeatTimer = null;
+    this.pingTimer = null;
     this.outboxTimer = null;
+    this.missedPongs = 0;
+    this.reconnectAttempts = 0;
+    this.maxReconnectDelayMs = 30000; // Cap exponential backoff at 30 seconds
+    this.isClosedPurposely = false;
+    this.isConnected = false;
+
+    // Bound listeners to maintain execution context
+    this._onOpen = this._onOpen.bind(this);
+    this._onMessage = this._onMessage.bind(this);
+    this._onClose = this._onClose.bind(this);
+    this._onError = this._onError.bind(this);
   }
 
   /**
    * Starts connection lifecycle and background queue pollers.
    */
   start() {
-    this.isShuttingDown = false;
     this.connect();
     this.startOutboxSweepLoop();
   }
 
   /**
-   * Establishes authenticated WebSocket session to the configured relay URL.
+   * Initiates the WebSocket transport connection.
    */
   connect() {
-    if (this.isShuttingDown) return;
+    this.isClosedPurposely = false;
 
-    const profile = this.db.getProfile(this.profileId);
-    if (!profile) {
-      throw new Error(`Profile not found for ID: ${this.profileId}`);
+    let targetUrl = this.wsUrl;
+    let endpointId = this.profileId;
+
+    if (this.db) {
+      const profile = this.db.getProfile(this.profileId);
+      if (profile) {
+        endpointId = profile.endpoint_id;
+        if (!targetUrl && profile.relay_url) {
+          const parsed = new URL(profile.relay_url);
+          parsed.protocol = parsed.protocol === 'https:' ? 'wss:' : 'ws:';
+          targetUrl = parsed.toString();
+        }
+      }
     }
 
-    const wsUrl = new URL(profile.relay_url);
-    wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-    wsUrl.searchParams.set('endpoint_id', profile.endpoint_id);
+    if (!targetUrl) {
+      throw new Error(`WebSocket URL not configured for profile: ${this.profileId}`);
+    }
 
-    this.ws = new WebSocket(wsUrl.toString(), {
-      headers: {
-        Authorization: `Bearer ${this.bearerToken}`,
-        'X-Sigil-Endpoint-Id': profile.endpoint_id,
-      },
-    });
+    const wsUrlObj = new URL(targetUrl);
+    wsUrlObj.searchParams.set('endpoint_id', endpointId);
 
-    this.ws.on('open', () => this.handleOpen());
-    this.ws.on('message', (data) => this.handleMessage(data));
-    this.ws.on('pong', () => this.handlePong());
-    this.ws.on('close', (code, reason) => this.handleClose(code, reason));
-    this.ws.on('error', (error) => this.handleError(error));
+    const headers = {
+      Authorization: `Bearer ${this.authToken}`,
+      'X-Sigil-Endpoint-Id': endpointId,
+    };
+
+    this.ws = new WebSocket(wsUrlObj.toString(), { headers });
+
+    this.ws.on('open', this._onOpen);
+    this.ws.on('message', this._onMessage);
+    this.ws.on('pong', () => this.emit('heartbeat'));
+    this.ws.on('close', this._onClose);
+    this.ws.on('error', this._onError);
   }
 
-  handleOpen() {
+  /**
+   * Gracefully shuts down the connection and stops heartbeat timers.
+   */
+  disconnect() {
+    this.close();
+  }
+
+  /**
+   * Closes connection and cleans up background loops.
+   */
+  close() {
+    this.isClosedPurposely = true;
+    this.isConnected = false;
+    this._stopHeartbeat();
+
+    if (this.outboxTimer) {
+      clearInterval(this.outboxTimer);
+      this.outboxTimer = null;
+    }
+
+    if (this.ws) {
+      this.ws.close(1000, 'Client shutting down');
+      this.ws = null;
+    }
+  }
+
+  /**
+   * Handles stream connection opening. Resets reconnection counters and starts heartbeats.
+   */
+  _onOpen() {
     this.isConnected = true;
     this.reconnectAttempts = 0;
+    this.missedPongs = 0;
     this.emit('connected');
 
-    this.startHeartbeat();
+    this._startHeartbeat();
     this.flushOutbox();
   }
 
-  handleClose(code, reason) {
-    this.isConnected = false;
-    this.stopHeartbeat();
-    this.emit('disconnected', { code, reason: reason ? reason.toString() : '' });
+  /**
+   * Starts the application-level ping cycle.
+   */
+  _startHeartbeat() {
+    this._stopHeartbeat();
 
-    if (!this.isShuttingDown) {
-      this.scheduleReconnect();
-    }
-  }
-
-  handleError(error) {
-    this.emit('error', error);
+    this.pingTimer = setInterval(() => {
+      this._sendPing();
+    }, this.pingIntervalMs);
   }
 
   /**
-   * Processes inbound frames according to the Durable-Before-Ack protocol.
-   * @param {Buffer|string} data
+   * Stops the application-level ping cycle.
    */
-  handleMessage(data) {
-    let frame;
-    try {
-      frame = JSON.parse(data.toString());
-    } catch {
-      this.emit('error', new Error('Malformed JSON payload received from relay'));
+  _stopHeartbeat() {
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
+  }
+
+  /**
+   * Fires a JSON-formatted application-level ping frame.
+   * Tracks outstanding pongs to enforce liveness limits.
+   */
+  _sendPing() {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+
+    if (this.missedPongs >= this.maxMissedPongs) {
+      this._stopHeartbeat();
+      this.emit('liveness_timeout');
+      this.ws.terminate();
       return;
     }
 
-    switch (frame.action) {
-      case 'delivery':
-        this.processInboundEnvelope(frame.payload);
-        break;
+    const pingFrame = JSON.stringify({
+      type: 'ping',
+      timestamp: new Date().toISOString(),
+    });
 
-      case 'receipt':
-        this.processOutboundReceipt(frame.payload);
-        break;
-
-      case 'pong':
-        this.emit('heartbeat_acknowledged');
-        break;
-
-      default:
-        this.emit('unhandled_frame', frame);
+    try {
+      this.ws.ping();
+      this.ws.send(pingFrame);
+      this.missedPongs++;
+    } catch (error) {
+      this.emit('error', error);
     }
   }
 
   /**
-   * Commits the envelope to SQLite before transmitting the intake acknowledgement.
-   * @param {Object} envelope
+   * Routes incoming messages based on their structural payload type.
+   * Supports application-level pongs and real-time delivery state updates.
    */
-  processInboundEnvelope(envelope) {
+  _onMessage(raw) {
+    try {
+      const frame = JSON.parse(raw.toString());
+      const eventType = frame.type || frame.action;
+
+      switch (eventType) {
+        case 'pong':
+          this.missedPongs = 0;
+          this.emit('heartbeat_acknowledged');
+          break;
+
+        case 'delivery.receipt':
+        case 'receipt':
+          this._handleDeliveryReceipt(frame.payload || frame);
+          break;
+
+        case 'delivery':
+          this._handleIncomingDelivery(frame.payload || frame);
+          break;
+
+        default:
+          this.emit('unhandled_frame', frame);
+      }
+    } catch (err) {
+      this.emit('error', new Error(`Failed to parse stream payload: ${err.message}`));
+    }
+  }
+
+  /**
+   * Idempotently updates outbox states inside SQLite upon receiving real-time delivery.receipt events.
+   */
+  _handleDeliveryReceipt(receipt) {
+    const messageId = receipt.message_id;
+    const state = receipt.state;
+    const at = receipt.at || new Date().toISOString();
+    const failureCode = receipt.failure_code || null;
+
+    if (this.db && messageId) {
+      try {
+        this.db.updateOutboxDeliveryState(messageId, {
+          state,
+          attemptIncrement: 0,
+          lastAttemptAt: at,
+          failureCode,
+        });
+      } catch (dbError) {
+        this.emit('error', dbError);
+      }
+    }
+
+    this.emit('receipt_processed', receipt);
+  }
+
+  /**
+   * Processes incoming real-time deliveries dispatched from the relay.
+   * Follows the strict "Durable-Before-Ack" protocol boundary.
+   */
+  _handleIncomingDelivery(delivery) {
+    const envelope = delivery.envelope || delivery;
+    const deliveryId = delivery.delivery_id;
     const reconciledAt = new Date().toISOString();
 
     try {
-      // 1. Commit durable local storage record
-      this.db.commitDurableInboxIntake(envelope, this.profileId, reconciledAt);
+      // 1. Commit message to durable SQLite storage BEFORE sending acceptance receipt back to relay
+      if (this.db && envelope.message_id) {
+        this.db.commitDurableInboxIntake(envelope, this.profileId, reconciledAt);
+      }
 
       // 2. Transmit protocol acknowledgement frame
       this.sendFrame({
         action: 'acknowledge',
         payload: {
           message_id: envelope.message_id,
+          delivery_id: deliveryId,
           reconciled_at: reconciledAt,
         },
       });
 
       this.emit('message_received', envelope);
     } catch (err) {
-      this.emit('error', new Error(`Durable intake failed for message ${envelope.message_id}: ${err.message}`));
+      this.emit('error', new Error(`Failed to commit incoming envelope to durable local storage: ${err.message}`));
     }
-  }
-
-  /**
-   * Applies delivery state transitions to outbox entries from relay receipt events.
-   * @param {Object} receipt
-   */
-  processOutboundReceipt(receipt) {
-    const { message_id, state, failure_code } = receipt;
-
-    this.db.updateOutboxDeliveryState(message_id, {
-      state,
-      attemptIncrement: 0,
-      lastAttemptAt: new Date().toISOString(),
-      failureCode: failure_code || null,
-    });
-
-    this.emit('receipt_processed', receipt);
   }
 
   /**
    * Sweeps SQLite outbox and transmits queued envelopes over the active WebSocket.
    */
   flushOutbox() {
-    if (!this.isConnected || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    if (!this.isConnected || !this.ws || this.ws.readyState !== WebSocket.OPEN || !this.db) {
       return;
     }
 
@@ -224,61 +340,49 @@ export class WebSocketConnectionManager extends EventEmitter {
     }
   }
 
-  startHeartbeat() {
-    this.stopHeartbeat();
-    this.heartbeatTimer = setInterval(() => {
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.ping();
-      }
-    }, this.heartbeatIntervalMs);
-  }
-
-  stopHeartbeat() {
-    if (this.heartbeatTimer) {
-      clearInterval(this.heartbeatTimer);
-      this.heartbeatTimer = null;
-    }
-  }
-
-  handlePong() {
-    this.emit('heartbeat');
-  }
-
   startOutboxSweepLoop() {
     this.outboxTimer = setInterval(() => {
       this.flushOutbox();
     }, this.outboxSweepIntervalMs);
   }
 
-  scheduleReconnect() {
-    this.reconnectAttempts += 1;
-    // Jittered exponential backoff capped at 30 seconds
-    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts) + Math.random() * 1000, 30000);
+  /**
+   * Tracks unexpected stream drops and triggers the exponential backoff recovery loop.
+   */
+  _onClose(code, reason) {
+    this.isConnected = false;
+    this._stopHeartbeat();
+    this.emit('disconnected', { code, reason: reason ? reason.toString() : '' });
+
+    if (!this.isClosedPurposely) {
+      this._scheduleReconnect();
+    }
+  }
+
+  /**
+   * Handles errors on the transport socket.
+   */
+  _onError(error) {
+    this.emit('error', error);
+  }
+
+  /**
+   * Calculates backoff delay and attempts reconnection.
+   */
+  _scheduleReconnect() {
+    this.reconnectAttempts++;
+    const delay = Math.min(
+      Math.pow(2, this.reconnectAttempts) * 1000,
+      this.maxReconnectDelayMs
+    ) + Math.random() * 1000;
 
     setTimeout(() => {
-      if (!this.isShuttingDown && !this.isConnected) {
+      if (!this.isClosedPurposely && !this.isConnected) {
         this.connect();
       }
     }, delay);
   }
-
-  /**
-   * Performs graceful connection shutdown.
-   */
-  close() {
-    this.isShuttingDown = true;
-    this.stopHeartbeat();
-
-    if (this.outboxTimer) {
-      clearInterval(this.outboxTimer);
-      this.outboxTimer = null;
-    }
-
-    if (this.ws) {
-      this.ws.close(1000, 'Client shutting down');
-      this.ws = null;
-    }
-
-    this.isConnected = false;
-  }
 }
+
+// Export alias for backward compatibility
+export const WebSocketConnectionManager = ConnectorWebSocketManager;

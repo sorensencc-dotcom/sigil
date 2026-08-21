@@ -4,7 +4,7 @@ export { LocalOutbox } from './sigil/connectors/v1/local-outbox.mjs';
 export { LocalInbox } from './sigil/connectors/v1/local-inbox.mjs';
 export { RelayClient } from './sigil/connectors/v1/relay-client.mjs';
 export { ConnectorDatabase } from './sigil/connectors/v1/connector-db-adapter.mjs';
-export { WebSocketConnectionManager } from './sigil/connectors/v1/connector-ws-manager.mjs';
+export { ConnectorWebSocketManager, WebSocketConnectionManager } from './sigil/connectors/v1/connector-ws-manager.mjs';
 export { createCodexHostRuntime, createClaudeHostRuntime } from './sigil/connectors/v1/host-runtimes.mjs';
 export { createMcpHandler, startMcpStdioServer } from './sigil/connectors/v1/mcp-stdio-server.mjs';
 

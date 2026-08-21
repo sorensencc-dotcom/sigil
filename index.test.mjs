@@ -9,6 +9,7 @@ test('index.js exports all connector, relay, repo, jcs, daemon, and identity fun
   assert.equal(typeof sigil.LocalInbox, 'function');
   assert.equal(typeof sigil.RelayClient, 'function');
   assert.equal(typeof sigil.ConnectorDatabase, 'function');
+  assert.equal(typeof sigil.ConnectorWebSocketManager, 'function');
   assert.equal(typeof sigil.WebSocketConnectionManager, 'function');
   assert.equal(typeof sigil.createCodexHostRuntime, 'function');
   assert.equal(typeof sigil.createClaudeHostRuntime, 'function');
