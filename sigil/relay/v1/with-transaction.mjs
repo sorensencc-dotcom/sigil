@@ -1,17 +1,34 @@
-// Standardizes connect/BEGIN/fn/COMMIT/ROLLBACK/release (design §3 "single
-// transaction-bound client" requirement, blocker 4) so no call site can
-// forget to release on an error path.
+/**
+ * Executes a multi-step database workflow inside a single transaction
+ * on a single, isolated pool connection client.
+ * 
+ * @param {import('pg').Pool} pool - The active PostgreSQL connection pool
+ * @param {function(import('pg').PoolClient): Promise<any>} fn - The transactional operations callback
+ * @returns {Promise<any>} The result of the callback
+ */
 export async function withTransaction(pool, fn) {
+  if (!pool || typeof pool.connect !== 'function') {
+    throw new Error('Transaction execution requires a valid pg connection pool instance.');
+  }
+  if (typeof fn !== 'function') {
+    throw new Error('Transaction execution requires a callback function.');
+  }
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const result = await fn(client);
     await client.query('COMMIT');
     return result;
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      console.error('[DATABASE] [ERROR] Failed to execute transaction rollback:', rollbackError);
+    }
+    throw error;
   } finally {
     client.release();
   }
 }
+

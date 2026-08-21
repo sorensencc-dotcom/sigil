@@ -29,3 +29,37 @@ test('releases even when rollback itself is never reached (release is in finally
   try { await withTransaction(pool, async () => { throw Object.assign(new Error('x'), { code: 'CUSTOM' }); }); } catch {}
   assert.equal(pool.calls.at(-1), 'RELEASE');
 });
+
+test('validates pool and callback function parameters', async () => {
+  await assert.rejects(
+    () => withTransaction(null, async () => {}),
+    /Transaction execution requires a valid pg connection pool instance/
+  );
+  await assert.rejects(
+    () => withTransaction({}, async () => {}),
+    /Transaction execution requires a valid pg connection pool instance/
+  );
+  await assert.rejects(
+    () => withTransaction({ connect: () => {} }, null),
+    /Transaction execution requires a callback function/
+  );
+});
+
+test('does not allow rollback failure to mask primary transaction error', async () => {
+  const calls = [];
+  const client = {
+    async query(text) {
+      calls.push(text);
+      if (text === 'ROLLBACK') throw new Error('connection lost during rollback');
+    },
+    release() { calls.push('RELEASE'); }
+  };
+  const pool = { async connect() { calls.push('CONNECT'); return client; } };
+
+  await assert.rejects(
+    () => withTransaction(pool, async () => { throw new Error('primary write failure'); }),
+    /primary write failure/
+  );
+  assert.deepEqual(calls, ['CONNECT', 'BEGIN', 'ROLLBACK', 'RELEASE']);
+});
+
