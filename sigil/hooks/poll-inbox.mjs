@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { formatInboxItem } from '../cli/inbox-wait.mjs';
+import { readInboxLedger } from '../cli/ledger.mjs';
 
 /**
  * Polls local inbox state and outputs unread message summaries to stdout.
@@ -21,31 +22,42 @@ export async function pollInbox({
   }
 
   let lastSeenTimestamp = 0;
+  let lastSeenIds = new Set();
   if (fs.existsSync(lastSeenPath)) {
     const raw = fs.readFileSync(lastSeenPath, 'utf8').trim();
-    lastSeenTimestamp = parseInt(raw, 10) || 0;
+    try {
+      const parsed = JSON.parse(raw);
+      lastSeenTimestamp = Number(parsed.timestamp) || 0;
+      lastSeenIds = new Set(parsed.ids || []);
+    } catch {
+      // Legacy cursor format: a bare integer timestamp with no id tracking
+      lastSeenTimestamp = parseInt(raw, 10) || 0;
+    }
   }
 
-  const rawLedger = fs.readFileSync(ledgerPath, 'utf8');
-  const lines = rawLedger.split('\n').filter(Boolean);
+  const entries = await readInboxLedger(ledgerPath, { limit: Infinity });
   const unreadItems = [];
   let newestTimestamp = lastSeenTimestamp;
+  let newestIds = new Set(lastSeenIds);
 
-  for (const line of lines) {
-    try {
-      const entry = JSON.parse(line);
-      const envelope = entry?.envelope ?? entry;
-      const rawDate = entry.received_at || envelope.created_at || entry.created_at;
-      const entryTime = rawDate ? new Date(rawDate).getTime() : 0;
+  for (const entry of entries) {
+    const envelope = entry?.envelope ?? entry;
+    const rawDate = entry.received_at || envelope.created_at || entry.created_at;
+    const entryTime = rawDate ? new Date(rawDate).getTime() : 0;
+    const entryId = envelope.message_id || entry.message_id;
 
-      if (entryTime > lastSeenTimestamp) {
-        unreadItems.push(entry);
-        if (entryTime > newestTimestamp) {
-          newestTimestamp = entryTime;
-        }
+    const isNewer = entryTime > lastSeenTimestamp;
+    const isSameTimestampUnseen = entryTime === lastSeenTimestamp && entryTime > 0 && !lastSeenIds.has(entryId);
+
+    if (isNewer || isSameTimestampUnseen) {
+      unreadItems.push(entry);
+      if (entryTime > newestTimestamp) {
+        newestTimestamp = entryTime;
+        newestIds = new Set();
       }
-    } catch {
-      // Ignore corrupted or partial lines in the local log
+      if (entryTime === newestTimestamp) {
+        newestIds.add(entryId);
+      }
     }
   }
 
@@ -54,7 +66,7 @@ export async function pollInbox({
   }
 
   fs.mkdirSync(path.dirname(lastSeenPath), { recursive: true });
-  fs.writeFileSync(lastSeenPath, String(newestTimestamp), 'utf8');
+  fs.writeFileSync(lastSeenPath, JSON.stringify({ timestamp: newestTimestamp, ids: [...newestIds] }), 'utf8');
 
   output('\n[SIGIL INBOX NOTIFICATION]');
   output(`You have ${unreadItems.length} new unread Sigil envelope(s):`);

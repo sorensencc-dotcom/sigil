@@ -69,8 +69,9 @@ describe('Sigil Hook: poll-inbox', () => {
       assert.ok(logs.some((msg) => msg.includes('2 new unread Sigil envelope(s)')));
       assert.ok(fs.existsSync(lastSeenPath));
 
-      const storedCursor = fs.readFileSync(lastSeenPath, 'utf8');
-      assert.equal(storedCursor, String(new Date('2026-08-21T10:05:00.000Z').getTime()));
+      const storedCursor = JSON.parse(fs.readFileSync(lastSeenPath, 'utf8'));
+      assert.equal(storedCursor.timestamp, new Date('2026-08-21T10:05:00.000Z').getTime());
+      assert.deepEqual(storedCursor.ids, ['msg_02']);
 
       // Subsequent poll with no new messages should return empty
       const logs2 = [];
@@ -141,6 +142,46 @@ describe('Sigil Hook: poll-inbox', () => {
 
       assert.equal(result.length, 1);
       assert.equal(result[0].envelope.message_id, 'msg_valid');
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not drop a later envelope that shares the exact timestamp of the cursor', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-poll-test-'));
+    try {
+      const ledgerPath = path.join(tempDir, 'inbox-ledger.jsonl');
+      const lastSeenPath = path.join(tempDir, '.last_seen_cursor');
+      const sharedTimestamp = '2026-08-21T10:00:00.000Z';
+
+      const envelopeA = {
+        message_id: 'msg_a',
+        conversation_id: 'conv_01',
+        message_type: 'task.request',
+        created_at: sharedTimestamp,
+        sender: { endpoint_id: 'endpoint_codex_01', owner_id: 'owner_alex' },
+        body: { task: 'first' }
+      };
+
+      fs.writeFileSync(ledgerPath, `${JSON.stringify({ envelope: envelopeA })}\n`, 'utf8');
+
+      const result1 = await pollInbox({ ledgerPath, lastSeenPath, output: () => {} });
+      assert.equal(result1.length, 1);
+
+      const envelopeB = {
+        message_id: 'msg_b',
+        conversation_id: 'conv_01',
+        message_type: 'task.request',
+        created_at: sharedTimestamp,
+        sender: { endpoint_id: 'endpoint_codex_01', owner_id: 'owner_alex' },
+        body: { task: 'second, same millisecond' }
+      };
+
+      fs.appendFileSync(ledgerPath, `${JSON.stringify({ envelope: envelopeB })}\n`, 'utf8');
+
+      const result2 = await pollInbox({ ledgerPath, lastSeenPath, output: () => {} });
+      assert.equal(result2.length, 1);
+      assert.equal(result2[0].envelope.message_id, 'msg_b');
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
