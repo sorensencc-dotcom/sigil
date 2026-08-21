@@ -98,3 +98,36 @@ test('rejects instead of silently succeeding when the stream errors before it ev
   assert.equal(sendEnvelopeCalled, false, 'the envelope must never be posted if the stream never opened');
   assert.equal(printed.length, 0, 'no Sent confirmation may be printed for a send that never happened');
 });
+
+test('stream closing while sendEnvelope is in flight awaits send completion rather than rejecting a successful send', async () => {
+  let socket;
+  const WebSocketImpl = class extends ScriptedSocket { constructor(...args) { super(...args); socket = this; } };
+  let resolveSend;
+  const relay = {
+    async sendEnvelope() {
+      return new Promise((resolve) => { resolveSend = resolve; });
+    }
+  };
+  const printed = [];
+
+  const resultPromise = sendWithOptionalReceiptWait({
+    relay, envelope: { message_id: 'msg_4', conversation_id: 'conv_4' }, waitForReceipt: true,
+    streamUrl: 'ws://stream', token: 'tok', WebSocketImpl, timeoutMs: 2000,
+    print: (line) => printed.push(line),
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  socket.emit('open');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  // Stream closes while sendEnvelope is in-flight
+  socket.emit('close');
+
+  // sendEnvelope completes successfully afterwards
+  resolveSend({ message_id: 'msg_4', duplicate: false });
+
+  const result = await resultPromise;
+  assert.equal(result.message_id, 'msg_4');
+  assert.ok(printed.some((line) => line.includes('Sent.') && line.includes('msg_4')));
+});
+

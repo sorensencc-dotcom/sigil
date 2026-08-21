@@ -6,7 +6,7 @@
  * @param {function(import('pg').PoolClient): Promise<any>} fn - The transactional operations callback
  * @returns {Promise<any>} The result of the callback
  */
-export async function withTransaction(pool, fn) {
+export async function withTransaction(pool, fn, { logger = console } = {}) {
   if (!pool || typeof pool.connect !== 'function') {
     throw new Error('Transaction execution requires a valid pg connection pool instance.');
   }
@@ -24,7 +24,9 @@ export async function withTransaction(pool, fn) {
     try {
       await client.query('ROLLBACK');
     } catch (rollbackError) {
-      console.error('[DATABASE] [ERROR] Failed to execute transaction rollback:', rollbackError);
+      if (logger && typeof logger.error === 'function') {
+        logger.error('[DATABASE] [ERROR] Failed to execute transaction rollback:', rollbackError);
+      }
     }
     throw error;
   } finally {

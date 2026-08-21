@@ -19,7 +19,8 @@ export async function sendWithOptionalReceiptWait({ relay, envelope, waitForRece
     const seen = new Set();
     let result;
     let settled = false;
-    let envelopeSent = false;
+    let sendStarted = false;
+    let sendPromise = null;
 
     const finish = () => {
       if (settled) return;
@@ -32,12 +33,24 @@ export async function sendWithOptionalReceiptWait({ relay, envelope, waitForRece
     // A stream failure (connect error, or open-but-later-error/close before a
     // terminal receipt) must never be swallowed into a silent success -- the
     // caller (and its exit code) needs to know the envelope was never sent.
-    // Once sendEnvelope has actually been called, though, the send itself
-    // already happened; a subsequent stream drop only means the receipt wait
-    // was cut short, not that the send failed, so that case still finishes.
-    const failIfUnsent = (error) => {
+    // Once sendEnvelope has been called, though, the send itself is in-flight
+    // or already succeeded; await that promise before deciding to reject so
+    // a successful HTTP post isn't falsely reported as unsent.
+    const failIfUnsent = async (error) => {
       if (settled) return;
-      if (envelopeSent) { finish(); return; }
+      if (sendStarted && sendPromise) {
+        try {
+          await sendPromise;
+          finish();
+          return;
+        } catch (sendError) {
+          settled = true;
+          clearTimeout(timer);
+          try { socket.close(); } catch {}
+          reject(sendError);
+          return;
+        }
+      }
       settled = true;
       clearTimeout(timer);
       try { socket.close(); } catch {}
@@ -48,8 +61,9 @@ export async function sendWithOptionalReceiptWait({ relay, envelope, waitForRece
 
     socket.once('open', async () => {
       try {
-        result = await relay.sendEnvelope(envelope);
-        envelopeSent = true;
+        sendStarted = true;
+        sendPromise = relay.sendEnvelope(envelope);
+        result = await sendPromise;
         const sentAt = new Date().toISOString();
         await print(`[${sentAt}] Sent. message_id=${result.message_id} conversation_id=${envelope.conversation_id} duplicate=${result.duplicate}`);
       } catch (error) {

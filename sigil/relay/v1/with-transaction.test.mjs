@@ -47,6 +47,7 @@ test('validates pool and callback function parameters', async () => {
 
 test('does not allow rollback failure to mask primary transaction error', async () => {
   const calls = [];
+  const loggedErrors = [];
   const client = {
     async query(text) {
       calls.push(text);
@@ -55,11 +56,15 @@ test('does not allow rollback failure to mask primary transaction error', async 
     release() { calls.push('RELEASE'); }
   };
   const pool = { async connect() { calls.push('CONNECT'); return client; } };
+  const customLogger = { error: (msg, err) => loggedErrors.push({ msg, err }) };
 
   await assert.rejects(
-    () => withTransaction(pool, async () => { throw new Error('primary write failure'); }),
+    () => withTransaction(pool, async () => { throw new Error('primary write failure'); }, { logger: customLogger }),
     /primary write failure/
   );
   assert.deepEqual(calls, ['CONNECT', 'BEGIN', 'ROLLBACK', 'RELEASE']);
+  assert.equal(loggedErrors.length, 1);
+  assert.match(loggedErrors[0].msg, /Failed to execute transaction rollback/);
 });
+
 

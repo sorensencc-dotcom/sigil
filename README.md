@@ -15,10 +15,11 @@ Sigil keeps host capabilities behind an authenticated local connector, validates
 
 The repository is verified against full v1 protocol conformance specifications:
 - **GitHub Actions CI (`.github/workflows/ci.yml`)**: Automated cross-platform matrix on Node 20, 22, and 24 with live PostgreSQL service container.
-- **JCS Conformance Gate (`npm run audit:jcs`)**: 100% PASS across 115 source files, enforcing pinned RFC 8785 canonicalization.
-- **Unit & Contract Suite (`npm test`)**: 318 passed, 0 failed.
+- **Dependency Audit Gate (`npm run audit:deps`)**: 100% PASS with 0 hoisted dependency gaps and strict exact pinning.
+- **JCS Conformance Gate (`npm run audit:jcs`)**: 100% PASS across 116 source files, enforcing pinned RFC 8785 canonicalization.
+- **Unit & Contract Suite (`npm test`)**: 336 passed, 0 failed.
 - **Live PostgreSQL Gate (`npm run test:live`)**: 30 passed, 0 failed across 4 schema-resetting suites against PostgreSQL 16.
-- **Total Test Suite**: 348 passed, 0 failed.
+- **Total Test Suite**: 366 passed, 0 failed.
 
 ## Repository map
 
