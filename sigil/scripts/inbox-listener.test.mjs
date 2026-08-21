@@ -107,6 +107,10 @@ test('start replaces stale pid with a detached listener process', async () => {
     if (childPid) {
       try {
         if (process.platform === 'win32') {
+          try {
+            const { execSync } = await import('node:child_process');
+            execSync(`taskkill /F /T /PID ${childPid}`, { stdio: 'ignore' });
+          } catch {}
           process.kill(childPid);
         } else {
           process.kill(childPid, 'SIGKILL');
@@ -114,6 +118,6 @@ test('start replaces stale pid with a detached listener process', async () => {
       } catch {}
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
-    fs.rmSync(root, { recursive: true, force: true, maxRetries: 40, retryDelay: 50 });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 50, retryDelay: 100 });
   }
 });
