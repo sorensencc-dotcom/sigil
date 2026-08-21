@@ -162,10 +162,12 @@ npm run receipt:claude
 That receipt uses real HTTP, MCP, connector, subprocess, and signed-envelope paths. Its persistence store is in memory. Run the PostgreSQL gate separately for migration and durability proof:
 
 ```powershell
-$env:SIGIL_TEST_DATABASE_URL = "postgres://sigil:<password>@127.0.0.1:55432/sigil"
+$env:SIGIL_TEST_DATABASE_URL = "postgres://sigil:<password>@127.0.0.1:55432/sigil_test"
 npm run test:live
 Remove-Item Env:SIGIL_TEST_DATABASE_URL
 ```
+
+These suites run `DROP SCHEMA public CASCADE` against whatever database this URL points at. Its name must end in `_test` (e.g. `sigil_test`, never the dev/relay database `sigil` itself) -- `assertDisposableTestDatabase` refuses to run otherwise.
 
 ## Troubleshooting
 

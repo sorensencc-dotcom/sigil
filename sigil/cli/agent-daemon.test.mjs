@@ -95,6 +95,61 @@ test('agent daemon executes local worker on task.request and sends signed task.r
   }
 });
 
+test('agent daemon derives the reply idempotency key from the inbound message_id, so redelivery cannot create a duplicate reply envelope', async () => {
+  const claudeIdentity = createIdentity({ ownerId: 'usr_soren', endpointId: 'ep_claude', kind: 'agent' });
+  const sentEnvelopes = [];
+  const inboundEnvelope = {
+    protocol: 'sigil/1',
+    message_id: 'msg_redelivered_1',
+    conversation_id: 'conv_agent_redelivery',
+    message_type: 'task.request',
+    sender: { owner_id: 'usr_soren', endpoint_id: 'ep_codex' },
+    recipient: { owner_id: 'usr_soren', endpoint_id: 'ep_claude' },
+    body: { task_id: 'task_redelivered_1', instruction: 'Audit dependencies' }
+  };
+
+  const fakeFetch = async (url, options = {}) => {
+    const urlStr = url.toString();
+    if (urlStr.includes('/v1/inbox')) {
+      return {
+        ok: true, status: 200,
+        text: async () => JSON.stringify({ items: [{ delivery_id: 'del_redelivered_1', envelope: inboundEnvelope }] })
+      };
+    }
+    if (urlStr.includes('/v1/envelopes')) {
+      const body = JSON.parse(options.body);
+      sentEnvelopes.push(body);
+      return { ok: true, status: 202, text: async () => JSON.stringify({ code: 'OK', message_id: body.message_id }) };
+    }
+    return { ok: true, status: 204, text: async () => '' };
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = fakeFetch;
+
+  try {
+    const daemon = createAgentDaemon({
+      identity: claudeIdentity,
+      relayUrl: 'http://127.0.0.1:8791',
+      workerCommand: process.execPath,
+      workerArgs: [fakeWorkerScript],
+      autoReply: true
+    });
+
+    // Simulate the relay redelivering the same inbound message twice (e.g. the
+    // first ack never reached it). Both poll() calls process the same envelope.
+    await daemon.processItem({ delivery_id: 'del_redelivered_1', envelope: inboundEnvelope });
+    await daemon.processItem({ delivery_id: 'del_redelivered_2', envelope: inboundEnvelope });
+
+    assert.equal(sentEnvelopes.length, 2);
+    assert.notEqual(sentEnvelopes[0].message_id, sentEnvelopes[1].message_id, 'message_id may still vary per attempt');
+    assert.equal(sentEnvelopes[0].idempotency_key, sentEnvelopes[1].idempotency_key);
+    assert.equal(sentEnvelopes[0].idempotency_key, `reply_${inboundEnvelope.message_id}`);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('agent daemon reports processing_failed when worker fails', async () => {
   const claudeIdentity = createIdentity({ ownerId: 'usr_soren', endpointId: 'ep_claude', kind: 'agent' });
   const ackCalls = [];

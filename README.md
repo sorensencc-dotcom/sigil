@@ -100,10 +100,12 @@ npm test
 Run the live PostgreSQL gate against an active database:
 
 ```powershell
-$env:SIGIL_TEST_DATABASE_URL = "postgres://sigil:sigil_password@127.0.0.1:55432/sigil"
+$env:SIGIL_TEST_DATABASE_URL = "postgres://sigil:sigil_password@127.0.0.1:55432/sigil_test"
 npm run test:live
 Remove-Item Env:SIGIL_TEST_DATABASE_URL
 ```
+
+These suites run `DROP SCHEMA public CASCADE` against whatever database this URL points at. Its name must end in `_test` (never the dev/relay database `sigil` itself) -- `assertDisposableTestDatabase` refuses to run otherwise.
 
 The live gate applies migrations `001`–`011` and runs schema-resetting suites sequentially. It covers migration constraints, durable approvals and audit transactions, identity/session/grant persistence, envelope idempotency, capability verification, rate quotas, normalized display-name collisions, acknowledgement races, and task cross-reference lookup optimization.
 

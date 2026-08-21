@@ -15,6 +15,21 @@ test('host adapter rejects an incomplete connector contract', () => {
   assert.throws(() => createHostAdapter({ connector: {}, runtime: 'codex' }), /connector\.sendTask is required/);
 });
 
+test('host adapter re-checks capability on every call, so revoking a grant after construction takes effect immediately', async () => {
+  const connector = Object.fromEntries(['sendTask', 'checkInbox', 'getResult', 'requestApproval', 'resolveContext'].map((name) => [name, async () => name]));
+  const permissions = ['sigil.task/*', 'sigil.approval/request', 'sigil.core/read_shared_context'];
+  // Same array reference passed in -- mutating it in place after construction
+  // simulates a grant being revoked out from under an already-built adapter.
+  const connectorGrants = [...permissions];
+  const adapter = createHostAdapter({ connector, runtime: 'codex', packagePermissions: permissions, connectorGrants });
+
+  assert.equal(await adapter.sendTask(), 'sendTask');
+
+  connectorGrants.length = 0;
+
+  await assert.rejects(() => adapter.sendTask(), /CAPABILITY_DENIED|Capability denied/);
+});
+
 test('host adapter requires package and connector capability intersection', async () => {
   const connector = Object.fromEntries(['sendTask', 'checkInbox', 'getResult', 'requestApproval', 'resolveContext'].map((name) => [name, async () => name]));
   assert.throws(() => createHostAdapter({ connector, runtime: 'codex' }), /CAPABILITY_DENIED|Capability denied/);

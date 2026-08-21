@@ -8,6 +8,7 @@ import pg from 'pg';
 import http from 'node:http';
 
 import { createIdentity } from './identity.mjs';
+import { assertDisposableTestDatabase } from '../scripts/assert-disposable-test-db.mjs';
 
 const connectionString = process.env.SIGIL_TEST_DATABASE_URL;
 
@@ -16,6 +17,7 @@ test('sigil relay up auto-migrates fresh database and registers endpoints', { sk
   t.after(() => pool.end());
 
   // 1. Wipe schema completely so database is completely fresh/empty
+  assertDisposableTestDatabase(connectionString);
   await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
 
   // 2. Prepare test registry

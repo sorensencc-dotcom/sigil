@@ -6,10 +6,12 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { PostgresRepository } from './postgres-repository.mjs';
+import { assertDisposableTestDatabase } from '../../scripts/assert-disposable-test-db.mjs';
 
 const connectionString = process.env.SIGIL_TEST_DATABASE_URL;
 const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
 async function freshSchema(pool) {
+  assertDisposableTestDatabase(connectionString);
   await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
   const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
   for (const file of sqlFiles) await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));

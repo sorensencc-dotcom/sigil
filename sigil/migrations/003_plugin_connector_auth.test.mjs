@@ -5,12 +5,14 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+import { assertDisposableTestDatabase } from '../scripts/assert-disposable-test-db.mjs';
 
 const connectionString = process.env.SIGIL_TEST_DATABASE_URL;
 const migrationsDir = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS = ['001_initial.sql', '002_delivery_acknowledgement_idempotency.sql', '003_plugin_connector_auth.sql', '004_security_hardening.sql'];
 
 async function freshSchema(pool) {
+  assertDisposableTestDatabase(connectionString);
   await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
   for (const file of MIGRATIONS) await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
 }

@@ -68,6 +68,7 @@ export function createAgentDaemon({
   let heartbeatTimer = null;
   let since = '';
   let missedHeartbeats = 0;
+  let reconnectDelay = 250;
 
   async function executeWorker(taskPayload) {
     return new Promise((resolve, reject) => {
@@ -138,7 +139,7 @@ export function createAgentDaemon({
             body: taskResult,
             context_refs: [],
             capabilities: [],
-            idempotency_key: `reply_${crypto.randomUUID()}`,
+            idempotency_key: `reply_${envelope.message_id}`,
             created_at: now.toISOString(),
             expires_at: new Date(now.getTime() + 24 * 3600_000).toISOString(),
             signature: { algorithm: 'Ed25519', key_id: identity.key_id, value: '' }
@@ -220,6 +221,7 @@ export function createAgentDaemon({
         });
         socket.on('open', () => {
           missedHeartbeats = 0;
+          reconnectDelay = 250;
           if (heartbeatTimer) clearInterval(heartbeatTimer);
           heartbeatTimer = setInterval(() => {
             if (socket?.readyState === WebSocket.OPEN) {
@@ -245,7 +247,10 @@ export function createAgentDaemon({
         });
         socket.on('close', () => {
           if (heartbeatTimer) clearInterval(heartbeatTimer);
-          if (running) setTimeout(connectSocket, 1000);
+          if (running) {
+            setTimeout(connectSocket, reconnectDelay);
+            reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
+          }
         });
         socket.on('error', () => {
           try { socket.close(); } catch {}

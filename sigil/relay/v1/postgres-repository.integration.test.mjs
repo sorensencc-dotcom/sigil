@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { PostgresRepository } from './postgres-repository.mjs';
+import { assertDisposableTestDatabase } from '../../scripts/assert-disposable-test-db.mjs';
 
 const connectionString = process.env.SIGIL_TEST_DATABASE_URL;
 
@@ -20,6 +21,7 @@ test('migration and repository persist an envelope in live PostgreSQL', { skip: 
   };
 
   const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  assertDisposableTestDatabase(connectionString);
   await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
   const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
   for (const file of sqlFiles) {
@@ -120,6 +122,7 @@ test('concurrent duplicate envelope submissions race safely to exactly one accep
     key: `key_${suffix}`, conversation: `conv_${suffix}`, idempotency: `send_race_${suffix}`
   };
   const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  assertDisposableTestDatabase(connectionString);
   await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
   const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
   for (const file of sqlFiles) {
@@ -173,6 +176,7 @@ test('concurrent duplicate ack requests race safely to exactly one acknowledgeme
     key: `key_${suffix}`, conversation: `conv_${suffix}`, message: `msg_ack_race_${suffix}`, delivery: `del_ack_race_${suffix}`
   };
   const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  assertDisposableTestDatabase(connectionString);
   await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
   const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
   for (const file of sqlFiles) {

@@ -24,7 +24,14 @@ fs.mkdirSync(state, { recursive: true });
 if (command === 'start') {
   const existing = fs.existsSync(pidPath) ? fs.readFileSync(pidPath, 'utf8').trim() : '';
   if (existing && alive(existing)) process.exit(0);
-  if (!identity || !relay || !stream || !fs.existsSync(cli)) process.exit(0);
+  if (!identity || !relay || !stream) {
+    console.error('inbox-listener.mjs start: --identity, --relay-url, and --stream-url are required');
+    process.exit(2);
+  }
+  if (!fs.existsSync(cli)) {
+    console.error(`inbox-listener.mjs start: sigil CLI not found at ${cli}`);
+    process.exit(2);
+  }
   const out = fs.openSync(logPath, 'a');
   const child = spawn(process.execPath, [cli, 'inbox', '--identity', identity, '--relay-url', relay, '--stream-url', stream, '--wait', '--loop', '--timeout', '300000'], { cwd: root, detached: true, stdio: ['ignore', out, out], windowsHide: true });
   fs.closeSync(out);
@@ -37,8 +44,10 @@ if (command === 'read') {
   if (!fs.existsSync(logPath)) process.exit(0);
   const lines = fs.readFileSync(logPath, 'utf8').split(/\r?\n/).filter(Boolean);
   const seen = Number(fs.existsSync(offsetPath) ? fs.readFileSync(offsetPath, 'utf8') : 0) || 0;
-  if (lines.length > seen) process.stdout.write(`${lines.slice(seen).slice(-20).join('\n')}\n`);
-  fs.writeFileSync(offsetPath, `${lines.length}\n`);
+  const pending = lines.slice(seen);
+  const toPrint = pending.slice(0, 20);
+  if (toPrint.length) process.stdout.write(`${toPrint.join('\n')}\n`);
+  fs.writeFileSync(offsetPath, `${seen + toPrint.length}\n`);
   process.exit(0);
 }
 

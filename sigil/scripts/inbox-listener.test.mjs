@@ -78,6 +78,44 @@ test('read emits lines after stored offset and advances offset to log length', a
   }
 });
 
+test('read preserves backlog beyond the 20-line print cap instead of dropping it', async () => {
+  const root = temporaryRoot();
+  const state = path.join(root, 'state');
+  fs.mkdirSync(state, { recursive: true });
+  const lines = Array.from({ length: 25 }, (_, i) => `line${i + 1}`);
+  fs.writeFileSync(path.join(state, 'inbox-listener.log'), `${lines.join('\n')}\n`, 'utf8');
+
+  try {
+    const first = await runListener(root, 'read');
+    assert.equal(first.code, 0);
+    assert.equal(first.stdout.replace(/\r\n/g, '\n').trim().split('\n').length, 20);
+    assert.equal(fs.readFileSync(path.join(state, 'inbox-listener.offset'), 'utf8').trim(), '20');
+
+    const second = await runListener(root, 'read');
+    const remaining = second.stdout.replace(/\r\n/g, '\n').trim().split('\n');
+    assert.deepEqual(remaining, ['line21', 'line22', 'line23', 'line24', 'line25']);
+    assert.equal(fs.readFileSync(path.join(state, 'inbox-listener.offset'), 'utf8').trim(), '25');
+  } finally {
+    await safeRemove(root);
+  }
+});
+
+test('start fails loudly with a non-zero exit when required flags are missing', async () => {
+  const root = temporaryRoot();
+  const state = path.join(root, 'state');
+  fs.mkdirSync(state, { recursive: true });
+
+  try {
+    const result = await runListener(root, 'start');
+
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /--identity, --relay-url, and --stream-url are required/);
+    assert.equal(fs.existsSync(path.join(state, 'inbox-listener.log')), false);
+  } finally {
+    await safeRemove(root);
+  }
+});
+
 test('start is a no-op when pid file points to a live process', async () => {
   const root = temporaryRoot();
   const state = path.join(root, 'state');

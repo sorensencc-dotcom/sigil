@@ -37,9 +37,13 @@ mistaken for suites needing a live database.)
 ## Usage
 
 ```sh
-SIGIL_TEST_DATABASE_URL=postgres://sigil:<password>@localhost:55432/sigil \
+SIGIL_TEST_DATABASE_URL=postgres://sigil:<password>@localhost:55432/sigil_test \
   node sigil/scripts/live-db-tests.mjs
 ```
+
+The database name must end in `_test` -- these suites run `DROP SCHEMA public CASCADE`
+against it, and `assertDisposableTestDatabase` refuses to run against anything else
+(in particular, never the dev/relay database `sigil` itself).
 
 The runner:
 

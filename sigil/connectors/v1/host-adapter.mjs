@@ -6,7 +6,10 @@ export function createHostAdapter({ connector, runtime, operations = ['sendTask'
   for (const operation of operations) {
     if (typeof connector[operation] !== 'function') throw new Error(`connector.${operation} is required`);
     assertCapability(operation, { packagePermissions, connectorGrants });
-    adapter[operation] = async (...args) => connector[operation](...args);
+    adapter[operation] = async (...args) => {
+      assertCapability(operation, { packagePermissions, connectorGrants });
+      return connector[operation](...args);
+    };
   }
   return Object.freeze(adapter);
 }

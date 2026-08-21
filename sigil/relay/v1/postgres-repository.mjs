@@ -109,26 +109,32 @@ export class PostgresRepository {
     });
   }
   async listInbox(endpointId, since = '', viewerOwnerId = null) {
+    // The final SELECT deliberately never re-reads `deliveries` by id: a data-modifying
+    // CTE in the same statement is not visible to sibling scans of the same table (they
+    // run against the pre-update snapshot), so every column the caller needs is carried
+    // straight out of `candidate` instead of joined back in post-update.
     const result = await this.pool.query(
-      `SELECT d.delivery_id, d.message_id, d.recipient_endpoint_id, d.state, d.attempts, d.queued_at,
+      `WITH candidate AS (
+         SELECT delivery_id, message_id, recipient_endpoint_id, queued_at FROM deliveries
+         WHERE recipient_endpoint_id = $1 AND state IN ('queued', 'delivered') AND ($2 = '' OR queued_at > $2::timestamptz)
+         ORDER BY queued_at, delivery_id
+         FOR UPDATE SKIP LOCKED
+       ),
+       advanced AS (
+         UPDATE deliveries SET state = 'delivered', delivered_at = NOW(), updated_at = NOW()
+         WHERE delivery_id IN (SELECT delivery_id FROM candidate) AND state = 'queued'
+       )
+       SELECT c.delivery_id, c.message_id, c.recipient_endpoint_id, c.queued_at,
               e.protocol, e.message_type, e.body, e.context_refs, e.capabilities, e.correlation_id,
               e.sender_endpoint_id, e.sender_owner_id, e.recipient_endpoint_id AS env_recipient,
               e.conversation_id, e.idempotency_key, e.signature_algorithm, e.signature_key_id,
               e.signature_value, e.expires_at, e.created_at,
               (ea.acknowledged_endpoint_id IS NULL) AS sender_unverified
-       FROM deliveries d JOIN envelopes e ON e.message_id = d.message_id
+       FROM candidate c
+       JOIN envelopes e ON e.message_id = c.message_id
        LEFT JOIN endpoint_acknowledgements ea ON ea.acknowledged_endpoint_id = e.sender_endpoint_id AND ea.viewer_owner_id = $3
-       WHERE d.recipient_endpoint_id = $1 AND d.state IN ('queued', 'delivered') AND ($2 = '' OR d.queued_at > $2::timestamptz)
-       ORDER BY d.queued_at, d.delivery_id`, [endpointId, since, viewerOwnerId]
+       ORDER BY c.queued_at, c.delivery_id`, [endpointId, since, viewerOwnerId]
     );
-    if (result.rows.length > 0) {
-      const deliveryIds = result.rows.map((r) => r.delivery_id);
-      await this.pool.query(
-        `UPDATE deliveries SET state = 'delivered', delivered_at = NOW(), updated_at = NOW()
-         WHERE delivery_id = ANY($1::text[]) AND state = 'queued'`,
-        [deliveryIds]
-      );
-    }
     return result.rows.map((row) => ({
       delivery_id: row.delivery_id,
       message_id: row.message_id,

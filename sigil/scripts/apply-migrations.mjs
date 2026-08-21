@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+import { assertDisposableTestDatabase } from './assert-disposable-test-db.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const migrationsDir = path.resolve(here, '../migrations');
@@ -12,6 +13,7 @@ export async function applyMigrations(connectionString = process.env.SIGIL_DATAB
 
   try {
     if (reset) {
+      assertDisposableTestDatabase(connectionString);
       console.log('Resetting schema public...');
       await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
     }

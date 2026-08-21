@@ -342,10 +342,12 @@ Sigil enforces strict quality gates across the repository:
 
 3. **Live PostgreSQL Integration Gate**:
    ```powershell
-   $env:SIGIL_TEST_DATABASE_URL = "postgres://sigil:sigil_password@127.0.0.1:55432/sigil"
+   $env:SIGIL_TEST_DATABASE_URL = "postgres://sigil:sigil_password@127.0.0.1:55432/sigil_test"
    npm run test:live
    ```
    Executes 30 live transaction, rollback, migration, and concurrency tests against PostgreSQL 16.
+   These suites run `DROP SCHEMA public CASCADE`, so the URL's database name must end in `_test`
+   (never the dev/relay database `sigil` itself) -- `assertDisposableTestDatabase` refuses otherwise.
 
 ---
 

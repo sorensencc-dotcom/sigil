@@ -13,6 +13,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+import { assertDisposableTestDatabase } from './assert-disposable-test-db.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const sigilRoot = path.resolve(here, '..');
@@ -128,6 +129,7 @@ export async function main() {
     return;
   }
   try {
+    assertDisposableTestDatabase(connectionString);
     console.log('Waiting for PostgreSQL readiness...');
     await waitForPostgresReady(connectionString);
 
