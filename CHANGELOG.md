@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [0.2.0] - 2026-08-20
 
 ### Added
-- **RFC 8785 JSON Canonicalization Scheme (JCS)**: Integrated canonicalization pinned to `canonicalize@2.0.0` with repository-wide pre-commit audit gate `sigil-jcs-audit.mjs` verifying 100% compliance across all 116 source files.
+- **RFC 8785 JSON Canonicalization Scheme (JCS)**: Integrated canonicalization pinned to `canonicalize@2.0.0` with repository audit gate `sigil-jcs-audit.mjs` verifying 100% compliance across all 116 source files.
 - **Contract schema validation**: Added strict JSON schemas for `task.request` and `task.result` envelopes in `sigil/contracts/v1/`, enforcing cross-reference checks and `envelopes_task_request_lookup_idx` partial expression index queries.
 - **Fail-closed capability authorization**: Implemented hierarchical path matching in `sigil/core/v1/scope.mjs`, automatic target scope derivation for shared contexts, and row-level `SELECT ... FOR UPDATE` lock escalation on active grants.
 - **Two-tier audit durability**: Added non-blocking rejection auditing in `sigil/relay/v1/rejection-audit.mjs` with dedicated connection checkout, 250ms retry timers, and local file fallback logging.

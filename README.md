@@ -55,7 +55,7 @@ The repository is verified against full v1 protocol conformance specifications:
 
 ## Requirements
 
-- Node.js 20+
+- Node.js 22+ (>=22.0.0)
 - PostgreSQL 16 for live validation and persistent relay mode
 - A registered Sigil endpoint token and matching connector grants
 
