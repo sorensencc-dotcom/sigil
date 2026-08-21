@@ -19,6 +19,7 @@
     "sigil/migrations/*.sql",
     "sigil/scripts/*.mjs",
     "sigil/cli/*.mjs",
+    "sigil/hooks/*.mjs",
     "README.md",
     "docs/"
   ],
