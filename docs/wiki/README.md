@@ -212,17 +212,17 @@ For high-risk operations requiring human authorization (such as root filesystem 
 
 ## 6. Library SDK Usage
 
-`@sigil/connector` can be imported directly into Node.js applications:
+`@sorensencc-dotcom/sigil` can be imported directly into Node.js applications:
 
 ```javascript
 import {
   createRelayServer,
-  createLocalConnector,
+  createConnector,
   createAgentDaemon,
   RelayClient,
   LocalOutbox,
-  canonicalizeJson
-} from '@sigil/connector';
+  canonicalJson
+} from '@sorensencc-dotcom/sigil';
 
 // Start a programmatic relay instance
 const server = createRelayServer({

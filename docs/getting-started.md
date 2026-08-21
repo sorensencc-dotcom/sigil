@@ -27,11 +27,11 @@ The package has no install-time network dependency. `npm install` installs the C
 The repository does not need to exist on the target machine. Install the published GitHub package directly:
 
 ```powershell
-npm install --global github:sorensencc-dotcom/sigil
+npm install --global @sorensencc-dotcom/sigil
 sigil --help
 ```
 
-The package is not currently published to the public npm registry, so `npm install --global @sigil/connector` will return `E404`. The GitHub form is the supported distribution path for now. Do not use `npm install --global .` unless your current directory is the Sigil checkout.
+To install directly from GitHub without the npm registry: `npm install --global github:sorensencc-dotcom/sigil`. Do not use `npm install --global .` unless your current directory is the Sigil checkout.
 
 ## Configure the connector environment
 

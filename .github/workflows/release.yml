@@ -1,0 +1,69 @@
+name: Publish Release to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Build, Verify, and Publish
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: sigil
+          POSTGRES_PASSWORD: sigil_password
+          POSTGRES_DB: sigil
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run dependency and JCS audits
+        run: |
+          npm run audit:deps
+          npm run audit:jcs
+
+      - name: Run unit & contract tests
+        run: npm test
+
+      - name: Run live PostgreSQL gate
+        env:
+          SIGIL_TEST_DATABASE_URL: postgres://sigil:sigil_password@localhost:55432/sigil
+        run: npm run test:live
+
+      - name: Verify package bundle
+        run: npm run pack:check
+
+      - name: Publish scoped package to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
