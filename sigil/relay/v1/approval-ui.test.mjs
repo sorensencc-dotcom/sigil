@@ -16,7 +16,7 @@ test('renderApprovalPage renders interactive passkey UI for active challenge', (
       id: 'chal_test_123',
       endpointId: 'ep_claude',
       actionHash: 'sha256:abcd1234ef',
-      expiresAt: '2026-08-20T12:00:00Z',
+      expiresAt: new Date(Date.now() + 3600000).toISOString(),
       callbackUrl: 'http://127.0.0.1:4567/cb',
       webauthnChallenge: 'challenge_bytes_base64url'
     }
@@ -63,7 +63,7 @@ test('renderApprovalPage escapes script closing tags in callbackUrl and challeng
       id: 'chal_xss_1',
       endpointId: 'ep_test',
       actionHash: 'sha256:abc',
-      expiresAt: '2026-08-20T12:00:00Z',
+      expiresAt: new Date(Date.now() + 3600000).toISOString(),
       callbackUrl: 'http://127.0.0.1:9/</script><script>alert("xss")</script>',
       webauthnChallenge: 'test</script>'
     }
