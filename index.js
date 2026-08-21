@@ -3,6 +3,8 @@ export { createLocalConnectorClient } from './sigil/connectors/v1/local-connecto
 export { LocalOutbox } from './sigil/connectors/v1/local-outbox.mjs';
 export { LocalInbox } from './sigil/connectors/v1/local-inbox.mjs';
 export { RelayClient } from './sigil/connectors/v1/relay-client.mjs';
+export { ConnectorDatabase } from './sigil/connectors/v1/connector-db-adapter.mjs';
+export { WebSocketConnectionManager } from './sigil/connectors/v1/connector-ws-manager.mjs';
 export { createCodexHostRuntime, createClaudeHostRuntime } from './sigil/connectors/v1/host-runtimes.mjs';
 export { createMcpHandler, startMcpStdioServer } from './sigil/connectors/v1/mcp-stdio-server.mjs';
 
@@ -15,4 +17,3 @@ export { renderApprovalPage } from './sigil/relay/v1/approval-ui.mjs';
 
 export { createAgentDaemon } from './sigil/cli/agent-daemon.mjs';
 export { createIdentity, loadIdentity, identityKeys } from './sigil/cli/identity.mjs';
-

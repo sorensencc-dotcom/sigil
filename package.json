@@ -10,6 +10,7 @@
     "index.js",
     "bin/",
     "sigil/connectors/v1/*.mjs",
+    "sigil/connectors/v1/*.sql",
     "sigil/relay/v1/*.mjs",
     "sigil/contracts/v1/*.json",
     "sigil/migrations/*.sql",
@@ -38,6 +39,8 @@
   "exports": {
     ".": "./index.js",
     "./connector": "./sigil/connectors/v1/connector.mjs",
+    "./connector-db": "./sigil/connectors/v1/connector-db-adapter.mjs",
+    "./connector-ws": "./sigil/connectors/v1/connector-ws-manager.mjs",
     "./relay": "./sigil/relay/v1/http-server.mjs",
     "./daemon": "./sigil/cli/agent-daemon.mjs",
     "./identity": "./sigil/cli/identity.mjs",

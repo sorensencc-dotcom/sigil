@@ -1,14 +1,29 @@
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 import { RelayClient } from '../connectors/v1/relay-client.mjs';
 import { LocalOutbox } from '../connectors/v1/local-outbox.mjs';
+import { ConnectorDatabase } from '../connectors/v1/connector-db-adapter.mjs';
+import { WebSocketConnectionManager } from '../connectors/v1/connector-ws-manager.mjs';
 import { identityKeys } from './identity.mjs';
+
+const defaultSchemaPath = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  'connectors',
+  'v1',
+  'connector-schema.sql'
+);
 
 export function createAgentDaemon({
   identity,
   relayUrl,
   streamUrl,
+  db = null,
+  dbPath = null,
+  schemaPath = null,
   workerCommand = process.execPath,
   workerArgs = [],
   autoReply = true,
@@ -18,6 +33,21 @@ export function createAgentDaemon({
   missedHeartbeatsLimit = 3
 } = {}) {
   if (!identity || !relayUrl) throw new Error('identity and relayUrl are required');
+
+  const connectorDb = db ?? (dbPath ? new ConnectorDatabase(dbPath, schemaPath ?? defaultSchemaPath) : null);
+
+  if (connectorDb) {
+    connectorDb.upsertProfile({
+      profile_id: `prof_${identity.endpoint_id}`,
+      owner_id: identity.owner_id,
+      endpoint_id: identity.endpoint_id,
+      display_name: identity.endpoint_id,
+      relay_url: relayUrl,
+      status: 'active',
+      secure_key_reference: `key://${identity.key_id || 'default'}`,
+      secure_token_reference: `token://${identity.endpoint_id}`
+    });
+  }
 
   const keys = identityKeys(identity);
   const outbox = new LocalOutbox({
@@ -33,6 +63,7 @@ export function createAgentDaemon({
 
   let running = false;
   let socket = null;
+  let wsManager = null;
   let pollTimer = null;
   let heartbeatTimer = null;
   let since = '';
@@ -73,6 +104,14 @@ export function createAgentDaemon({
     const envelope = item.envelope ?? item;
     const messageType = envelope.message_type;
 
+    if (connectorDb && envelope.message_id) {
+      try {
+        connectorDb.commitDurableInboxIntake(envelope, `prof_${identity.endpoint_id}`, new Date().toISOString());
+      } catch (err) {
+        logger.warn?.(`Durable intake write skipped: ${err.message}`);
+      }
+    }
+
     if (messageType === 'task.request') {
       try {
         if (deliveryId) {
@@ -105,16 +144,43 @@ export function createAgentDaemon({
             signature: { algorithm: 'Ed25519', key_id: identity.key_id, value: '' }
           };
           const queued = outbox.queue(unsignedReply);
+
+          if (connectorDb) {
+            try {
+              connectorDb.queueOutboundMessage(
+                `out_${queued.envelope.message_id}`,
+                `prof_${identity.endpoint_id}`,
+                queued.envelope
+              );
+            } catch (err) {
+              logger.warn?.(`Outbox queue write error: ${err.message}`);
+            }
+          }
+
           await relay.sendEnvelope(queued.envelope);
           outbox.markAccepted(queued.envelope.message_id);
+
+          if (connectorDb) {
+            connectorDb.updateOutboxDeliveryState(queued.envelope.message_id, {
+              state: 'submitted',
+              attemptIncrement: 1,
+              lastAttemptAt: new Date().toISOString()
+            });
+          }
         }
         if (deliveryId) {
           await relay.acknowledge(deliveryId, { outcome: 'processed' });
+        }
+        if (connectorDb && envelope.message_id) {
+          connectorDb.updateInboxProcessingState(envelope.message_id, 'processed');
         }
         return { delivery_id: deliveryId, outcome: 'processed', result: taskResult };
       } catch (err) {
         if (deliveryId) {
           await relay.acknowledge(deliveryId, { outcome: 'processing_failed', reason: err.message }).catch(() => {});
+        }
+        if (connectorDb && envelope.message_id) {
+          connectorDb.updateInboxProcessingState(envelope.message_id, 'failed');
         }
         return { delivery_id: deliveryId, outcome: 'processing_failed', error: err.message };
       }
@@ -198,6 +264,10 @@ export function createAgentDaemon({
       try { socket.close(); } catch {}
       socket = null;
     }
+    if (wsManager) {
+      wsManager.close();
+      wsManager = null;
+    }
   }
 
   return {
@@ -205,6 +275,7 @@ export function createAgentDaemon({
     stop,
     poll,
     processItem,
-    executeWorker
+    executeWorker,
+    get db() { return connectorDb; }
   };
 }

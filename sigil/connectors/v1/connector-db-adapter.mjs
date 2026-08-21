@@ -155,18 +155,22 @@ export class ConnectorDatabase {
    * Commits the incoming envelope into durable local storage before acknowledgement.
    */
   commitDurableInboxIntake(envelope, profileId, reconciledAt) {
+    const senderEndpointId = typeof envelope.sender === 'string' 
+      ? envelope.sender 
+      : (envelope.sender?.endpoint_id || '');
+
     const transaction = this.db.transaction((env) => {
       this.statements.insertInboxMessage.run(
         env.message_id,
         profileId,
         env.conversation_id,
         env.message_type,
-        env.sender,
+        senderEndpointId,
         JSON.stringify(env.body),
         env.canonical_hash || '',
         env.signature_value || '',
         env.expires_at || '',
-        env.created_at,
+        env.created_at || new Date().toISOString(),
         reconciledAt
       );
     });
