@@ -25,7 +25,7 @@ import { createStreamServer } from '../relay/v1/stream-server.mjs';
 import { RelayClient } from '../connectors/v1/relay-client.mjs';
 import { LocalOutbox } from '../connectors/v1/local-outbox.mjs';
 import { loadConfigFile, resolveConfig } from './config-resolver.mjs';
-import { formatInboxItem, INBOX_WAIT_EXIT_CODES, waitForOneInboxMessage } from './inbox-wait.mjs';
+import { formatInboxItem, INBOX_WAIT_EXIT_CODES, waitForOneInboxMessage, isRetryableInboxWaitExitCode } from './inbox-wait.mjs';
 import { appendInboxLedger, readInboxLedger } from './ledger.mjs';
 
 const DEFAULT_CLI_CONFIG = path.join('.sigil', 'config.json');
@@ -222,12 +222,15 @@ async function cmdInbox(argv) {
   };
   if (wait) {
     const timeoutMs = Number(opt(args, ['timeout']) ?? 300_000);
+    let retryDelayMs = 250;
     do {
       try {
         await waitForOneInboxMessage({ relay, identity, streamUrl, timeoutMs, print: flushPrint, ledgerPath });
+        retryDelayMs = 250;
       } catch (error) {
-        if (!loop || error.exitCode !== INBOX_WAIT_EXIT_CODES.TIMEOUT) throw error;
-        await new Promise((resolve) => setTimeout(resolve, 250));
+        if (!loop || !isRetryableInboxWaitExitCode(error.exitCode)) throw error;
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+        retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
       }
     } while (loop);
     return;

@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { EventEmitter } from 'node:events';
-import { INBOX_WAIT_EXIT_CODES, InboxWaitError, waitForOneInboxMessage } from './inbox-wait.mjs';
+import { INBOX_WAIT_EXIT_CODES, InboxWaitError, waitForOneInboxMessage, isRetryableInboxWaitExitCode } from './inbox-wait.mjs';
 import { readInboxLedger } from './ledger.mjs';
 
 function item(id) {
@@ -290,4 +290,17 @@ test('cleanup removes signal listeners so they do not leak across invocations', 
   });
   assert.equal(signalSource.listenerCount('SIGINT'), 0);
   assert.equal(signalSource.listenerCount('SIGTERM'), 0);
+});
+
+test('isRetryableInboxWaitExitCode treats TIMEOUT, CONNECTION, and RELAY_UNREACHABLE as retryable', () => {
+  assert.equal(isRetryableInboxWaitExitCode(INBOX_WAIT_EXIT_CODES.TIMEOUT), true);
+  assert.equal(isRetryableInboxWaitExitCode(INBOX_WAIT_EXIT_CODES.CONNECTION), true);
+  assert.equal(isRetryableInboxWaitExitCode(INBOX_WAIT_EXIT_CODES.RELAY_UNREACHABLE), true);
+});
+
+test('isRetryableInboxWaitExitCode treats AUTH, MALFORMED, SIGINT, and SIGTERM as fatal', () => {
+  assert.equal(isRetryableInboxWaitExitCode(INBOX_WAIT_EXIT_CODES.AUTH), false);
+  assert.equal(isRetryableInboxWaitExitCode(INBOX_WAIT_EXIT_CODES.MALFORMED), false);
+  assert.equal(isRetryableInboxWaitExitCode(INBOX_WAIT_EXIT_CODES.SIGINT), false);
+  assert.equal(isRetryableInboxWaitExitCode(INBOX_WAIT_EXIT_CODES.SIGTERM), false);
 });

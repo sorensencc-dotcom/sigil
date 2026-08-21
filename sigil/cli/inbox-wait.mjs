@@ -8,6 +8,17 @@ export class InboxWaitError extends Error {
   constructor(message, exitCode, options = {}) { super(message, options); this.name = 'InboxWaitError'; this.exitCode = exitCode; }
 }
 
+// TIMEOUT/CONNECTION/RELAY_UNREACHABLE all mean "the relay went quiet, try
+// again" -- a caller looping on waitForOneInboxMessage (e.g. `sigil inbox
+// --wait --loop`, which backs the detached inbox-listener.mjs process with
+// nothing supervising it) should retry all three, not just TIMEOUT.
+// AUTH/MALFORMED are not retryable and should still propagate.
+export function isRetryableInboxWaitExitCode(exitCode) {
+  return exitCode === INBOX_WAIT_EXIT_CODES.TIMEOUT
+    || exitCode === INBOX_WAIT_EXIT_CODES.CONNECTION
+    || exitCode === INBOX_WAIT_EXIT_CODES.RELAY_UNREACHABLE;
+}
+
 function classifyRelayError(error) {
   if (error?.status === 401 || error?.code === 'AUTHENTICATION_REQUIRED' || error?.code === 'AUTH_REQUIRED') {
     return new InboxWaitError(error.message || 'Authentication required', INBOX_WAIT_EXIT_CODES.AUTH, { cause: error });
