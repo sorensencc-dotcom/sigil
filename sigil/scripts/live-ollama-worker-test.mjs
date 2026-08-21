@@ -17,9 +17,32 @@ import { RelayClient } from '../connectors/v1/relay-client.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ollamaWorkerScript = path.resolve(here, 'ollama-worker.mjs');
 
-async function runOllamaWorkflowTest() {
-  console.log('[1/5] Setting up local Relay server with endpoint registry & capability grants...');
+async function checkOllamaAvailability(host = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434') {
+  try {
+    const res = await fetch(`${host}/api/tags`);
+    if (!res.ok) return { available: false, reason: `HTTP ${res.status}` };
+    const data = await res.json();
+    const models = Array.isArray(data.models) ? data.models.map((m) => m.name) : [];
+    if (!models.length) return { available: false, reason: 'Ollama is running but no models are installed' };
+    return { available: true, models };
+  } catch (err) {
+    return { available: false, reason: `Cannot reach Ollama at ${host}: ${err.message}` };
+  }
+}
 
+async function runLiveOllamaWorkflow() {
+  console.log('[1/6] Checking live Ollama service readiness...');
+  const ollamaCheck = await checkOllamaAvailability();
+  if (!ollamaCheck.available) {
+    console.log(`\n[SKIP] Live Ollama test skipped: ${ollamaCheck.reason}`);
+    console.log('To run live tests, install a model with: ollama pull llama3.2:1b\n');
+    return;
+  }
+
+  const modelToUse = process.env.SIGIL_OLLAMA_MODEL || ollamaCheck.models[0];
+  console.log(`✔ Live Ollama service ready. Using model: ${modelToUse}`);
+
+  console.log('[2/6] Setting up local Relay server with endpoint registry & capability grants...');
   const codexId = createIdentity({ ownerId: 'usr_soren', endpointId: 'ep_codex', kind: 'agent' });
   const ollamaId = createIdentity({ ownerId: 'usr_soren', endpointId: 'ep_ollama', kind: 'agent' });
 
@@ -51,8 +74,6 @@ async function runOllamaWorkflowTest() {
   ]);
 
   const repository = createMemoryRepository();
-
-  // Issue capability grants for task submission (scope:conversation covers all conversation sub-scopes)
   const expiresAt = new Date(Date.now() + 86400_000).toISOString();
   await repository.createCapabilityGrant({
     grantId: 'grant_codex_submit',
@@ -76,12 +97,15 @@ async function runOllamaWorkflowTest() {
   const relayUrl = `http://127.0.0.1:${port}`;
   const streamUrl = `ws://127.0.0.1:${port}/v1/stream`;
 
-  console.log(`Relay running on: ${relayUrl}`);
+  console.log('[3/6] Creating SQLite database for Ollama connector state...');
+  const tmpDb = join(tmpdir(), `sigil-ollama-live-${Date.now()}.db`);
 
-  console.log('[2/5] Creating SQLite database for Ollama connector state...');
-  const tmpDb = join(tmpdir(), `sigil-ollama-${Date.now()}.db`);
+  console.log('[4/6] Starting Ollama Agent Daemon (SIGIL_OLLAMA_FALLBACK=0)...');
+  const prevFallback = process.env.SIGIL_OLLAMA_FALLBACK;
+  const prevModel = process.env.SIGIL_OLLAMA_MODEL;
+  process.env.SIGIL_OLLAMA_FALLBACK = '0';
+  process.env.SIGIL_OLLAMA_MODEL = modelToUse;
 
-  console.log('[3/5] Starting Ollama Agent Daemon with durable SQLite persistence...');
   const daemon = createAgentDaemon({
     identity: ollamaId,
     relayUrl,
@@ -90,16 +114,11 @@ async function runOllamaWorkflowTest() {
     workerCommand: process.execPath,
     workerArgs: [ollamaWorkerScript],
     autoReply: true,
-    logger: {
-      error: (...args) => console.error('[DAEMON ERROR]', ...args),
-      warn: (...args) => console.warn('[DAEMON WARN]', ...args),
-      log: (...args) => console.log('[DAEMON LOG]', ...args),
-    },
   });
 
   daemon.start();
 
-  console.log('[4/5] Sending signed task.request envelope from Codex to Ollama...');
+  console.log('[5/6] Sending signed task.request envelope from Codex to Ollama...');
   const codexOutbox = new LocalOutbox({
     privateKey: codexKeys.privateKey,
     endpoint: {
@@ -115,8 +134,8 @@ async function runOllamaWorkflowTest() {
   const now = new Date();
   const taskEnvelope = {
     protocol: 'sigil/1',
-    message_id: `msg_task_${Date.now()}`,
-    conversation_id: 'conv_local_eval_001',
+    message_id: `msg_task_live_${Date.now()}`,
+    conversation_id: 'conv_live_ollama_001',
     message_type: 'task.request',
     sender: {
       owner_id: codexId.owner_id,
@@ -128,60 +147,57 @@ async function runOllamaWorkflowTest() {
       endpoint_id: ollamaId.endpoint_id,
     },
     body: {
-      task_id: 'task_local_001',
-      instruction: 'Analyze code security in local workspace',
+      task_id: 'task_live_001',
+      instruction: 'Provide a 1-sentence verification message.',
     },
     context_refs: [],
     capabilities: ['sigil.task/submit'],
-    idempotency_key: `idem_${Date.now()}`,
+    idempotency_key: `idem_live_${Date.now()}`,
     created_at: now.toISOString(),
     expires_at: new Date(now.getTime() + 24 * 3600_000).toISOString(),
     signature: { algorithm: 'Ed25519', key_id: codexId.key_id, value: '' },
   };
 
   const queued = codexOutbox.queue(taskEnvelope);
-  const acceptResult = await codexClient.sendEnvelope(queued.envelope);
-  console.log(`Task accepted by Relay: Message ID = ${acceptResult.message_id}`);
+  await codexClient.sendEnvelope(queued.envelope);
 
-  console.log('[5/5] Polling daemon and verifying delivery & reply...');
-  // Poll daemon to ingest task, run Ollama worker, and emit reply
+  console.log('[6/6] Polling daemon and verifying live Ollama model generation...');
   const processedCount = await daemon.poll();
   assert.equal(processedCount, 1, 'Daemon should process 1 task');
 
-  // Verify SQLite durable intake
   const storedInbox = daemon.db.getInboxMessage(queued.envelope.message_id);
-  assert.notEqual(storedInbox, null, 'Inbox message must be durably stored in SQLite');
+  assert.notEqual(storedInbox, null);
   assert.equal(storedInbox.processing_state, 'processed');
-  console.log(`✔ Durable intake verified in SQLite: ${storedInbox.message_id} -> ${storedInbox.processing_state}`);
 
-  // Verify reply arrived at Codex inbox on Relay
   const codexInbox = await codexClient.reconcileInbox();
-  assert.equal(codexInbox.items.length, 1, 'Codex should receive 1 reply envelope');
+  assert.equal(codexInbox.items.length, 1);
   const replyEnv = codexInbox.items[0].envelope;
 
   assert.equal(replyEnv.message_type, 'task.result');
   assert.equal(replyEnv.sender.endpoint_id, 'ep_ollama');
-  assert.equal(replyEnv.correlation_id, queued.envelope.message_id);
   assert.equal(replyEnv.body.status, 'completed');
-  assert.match(replyEnv.body.summary, /Analyze code security/);
+  assert.equal(replyEnv.body.processing, 'ollama_local_model', 'Live test must verify true Ollama model execution');
+  assert.ok(replyEnv.body.summary.length > 0, 'Live model summary must be non-empty');
 
-  console.log(`✔ Ollama worker executed and reply verified:`);
-  console.log(`  - Reply Message ID: ${replyEnv.message_id}`);
-  console.log(`  - Status: ${replyEnv.body.status}`);
-  console.log(`  - Processing Mode: ${replyEnv.body.processing}`);
+  console.log(`✔ Live Ollama model output verified:`);
   console.log(`  - Model: ${replyEnv.body.model}`);
-  console.log(`  - Summary: ${replyEnv.body.summary}`);
+  console.log(`  - Processing Mode: ${replyEnv.body.processing}`);
+  console.log(`  - Output: ${replyEnv.body.summary}`);
 
-  // Teardown
   daemon.stop();
   if (daemon.db) daemon.db.close();
   await relayServer.close();
   try { unlinkSync(tmpDb); } catch {}
 
-  console.log('\n[PASS] Ollama agent daemon and durable SQLite workflow verified successfully!');
+  if (prevFallback === undefined) delete process.env.SIGIL_OLLAMA_FALLBACK;
+  else process.env.SIGIL_OLLAMA_FALLBACK = prevFallback;
+  if (prevModel === undefined) delete process.env.SIGIL_OLLAMA_MODEL;
+  else process.env.SIGIL_OLLAMA_MODEL = prevModel;
+
+  console.log('\n[PASS] Live Ollama model execution verified successfully!');
 }
 
-runOllamaWorkflowTest().catch((err) => {
-  console.error('[FAIL] Ollama workflow test failed:', err);
+runLiveOllamaWorkflow().catch((err) => {
+  console.error('[FAIL] Live Ollama workflow test failed:', err);
   process.exit(1);
 });

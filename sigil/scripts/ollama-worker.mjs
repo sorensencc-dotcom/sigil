@@ -44,14 +44,19 @@ process.stdin.on('end', async () => {
     }
 
     if (!result) {
-      result = {
-        task_id: task.task_id ?? task.body?.task_id ?? null,
-        status: 'completed',
-        processing: 'local_deterministic_fallback',
-        model,
-        ollama_error: localError,
-        summary: instruction ? `Processed (offline fallback): ${instruction}` : 'Processed: (no instruction provided)'
-      };
+      const allowFallback = process.env.SIGIL_OLLAMA_FALLBACK === 'true' || process.env.SIGIL_OLLAMA_FALLBACK === '1';
+      if (allowFallback) {
+        result = {
+          task_id: task.task_id ?? task.body?.task_id ?? null,
+          status: 'completed',
+          processing: 'local_deterministic_fallback',
+          model,
+          ollama_error: localError,
+          summary: instruction ? `Processed (offline fallback): ${instruction}` : 'Processed: (no instruction provided)'
+        };
+      } else {
+        throw new Error(`Ollama model inference failed (${model}): ${localError ?? 'service unavailable'}`);
+      }
     }
 
     process.stdout.write(`${JSON.stringify(result)}\n`);

@@ -31,6 +31,7 @@
     "audit:deps": "node sigil-dep-audit.mjs",
     "audit:jcs": "node sigil-jcs-audit.mjs",
     "test:live": "node sigil/scripts/live-db-tests.mjs",
+    "db:migrate": "node sigil/scripts/apply-migrations.mjs",
     "receipt:claude": "node sigil/scripts/live-claude-worker-receipt.mjs",
     "prepack": "node sigil-dep-audit.mjs && node sigil-jcs-audit.mjs && node --test",
     "pack:check": "npm pack --dry-run",

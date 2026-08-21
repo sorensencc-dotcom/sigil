@@ -89,6 +89,8 @@ async function cmdRelayUp(argv) {
   const tokenHashes = toTokenHashes(data);
   let repository;
   if (databaseUrl) {
+    const { applyMigrations } = await import('../scripts/apply-migrations.mjs');
+    await applyMigrations(databaseUrl);
     const { PostgresRepository } = await import('../relay/v1/postgres-repository.mjs');
     const { default: pg } = await import('pg');
     const pool = new pg.Pool({ connectionString: databaseUrl });
