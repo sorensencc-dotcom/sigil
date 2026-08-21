@@ -45,11 +45,9 @@ Usage:
 }
 
 if (['relay', 'send', 'inbox', 'agent'].includes(command) || (command === 'init' && process.argv[3] !== 'codex')) {
-  await import('../sigil/cli/sigil.mjs');
-  process.exit(0);
-}
-
-if (command === 'configure') {
+  const cli = await import('../sigil/cli/sigil.mjs');
+  await cli.main?.();
+} else if (command === 'configure') {
   const mode = process.argv[3];
   if (mode === '--claude') { console.log(claudeConfig); process.exit(0); }
   if (mode === '--codex') {
@@ -59,9 +57,7 @@ if (command === 'configure') {
   }
   console.log('Host configuration\n\nCodex:\n  sigil configure --codex\n\nClaude:\n  sigil configure --claude\n  Copy the printed JSON into the host MCP configuration.\n\nSet SIGIL_CONNECTOR_URL and SIGIL_CONNECTOR_TOKEN in the host environment.');
   process.exit(0);
-}
-
-if (command === 'init') {
+} else if (command === 'init') {
   const runtime = process.argv[3];
   const ownerIndex = process.argv.indexOf('--owner');
   const owner = ownerIndex >= 0 ? process.argv[ownerIndex + 1] : null;
@@ -77,18 +73,16 @@ if (command === 'init') {
   fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
   console.log(`Initialized ${runtime} endpoint for ${owner}.\nConfig: ${configPath}\n\nNext steps:\n  1. Register endpoint ${config.endpoint_id} with your Sigil relay.\n  2. Start the connector at ${config.connector_url}.\n  3. Run: sigil configure --codex\n  4. Run: sigil mcp`);
   process.exit(0);
-}
-
-if (command !== 'mcp') {
+} else if (command === 'mcp') {
+  const { runtimeFromEnvironment, startMcpStdioServer } = await import('../sigil/connectors/v1/mcp-stdio-server.mjs');
+  try {
+    applyConfig(loadConfig());
+    startMcpStdioServer(runtimeFromEnvironment());
+  } catch (error) {
+    console.error(`Unable to start Sigil MCP: ${error.message}\n\nSet the connector environment in this PowerShell session, then retry:\n  $env:SIGIL_CONNECTOR_URL = "http://127.0.0.1:8787"\n  $env:SIGIL_CONNECTOR_TOKEN = "<endpoint-token>"\n  sigil mcp`);
+    process.exit(1);
+  }
+} else {
   console.error(`Unknown command: ${command}. Run "sigil --help".`);
-  process.exit(1);
-}
-
-const { runtimeFromEnvironment, startMcpStdioServer } = await import('../sigil/connectors/v1/mcp-stdio-server.mjs');
-try {
-  applyConfig(loadConfig());
-  startMcpStdioServer(runtimeFromEnvironment());
-} catch (error) {
-  console.error(`Unable to start Sigil MCP: ${error.message}\n\nSet the connector environment in this PowerShell session, then retry:\n  $env:SIGIL_CONNECTOR_URL = "http://127.0.0.1:8787"\n  $env:SIGIL_CONNECTOR_TOKEN = "<endpoint-token>"\n  sigil mcp`);
   process.exit(1);
 }

@@ -112,14 +112,54 @@ export class PostgresRepository {
     const result = await this.pool.query(
       `SELECT d.delivery_id, d.message_id, d.recipient_endpoint_id, d.state, d.attempts, d.queued_at,
               e.protocol, e.message_type, e.body, e.context_refs, e.capabilities, e.correlation_id,
-              e.sender_endpoint_id, e.expires_at, e.created_at,
+              e.sender_endpoint_id, e.sender_owner_id, e.recipient_endpoint_id AS env_recipient,
+              e.conversation_id, e.idempotency_key, e.signature_algorithm, e.signature_key_id,
+              e.signature_value, e.expires_at, e.created_at,
               (ea.acknowledged_endpoint_id IS NULL) AS sender_unverified
        FROM deliveries d JOIN envelopes e ON e.message_id = d.message_id
        LEFT JOIN endpoint_acknowledgements ea ON ea.acknowledged_endpoint_id = e.sender_endpoint_id AND ea.viewer_owner_id = $3
-       WHERE d.recipient_endpoint_id = $1 AND d.state = 'queued' AND ($2 = '' OR d.queued_at > $2)
+       WHERE d.recipient_endpoint_id = $1 AND d.state IN ('queued', 'delivered') AND ($2 = '' OR d.queued_at > $2::timestamptz)
        ORDER BY d.queued_at, d.delivery_id`, [endpointId, since, viewerOwnerId]
     );
-    return result.rows;
+    if (result.rows.length > 0) {
+      const deliveryIds = result.rows.map((r) => r.delivery_id);
+      await this.pool.query(
+        `UPDATE deliveries SET state = 'delivered', delivered_at = NOW(), updated_at = NOW()
+         WHERE delivery_id = ANY($1::text[]) AND state = 'queued'`,
+        [deliveryIds]
+      );
+    }
+    return result.rows.map((row) => ({
+      delivery_id: row.delivery_id,
+      message_id: row.message_id,
+      queued_at: row.queued_at instanceof Date ? row.queued_at.toISOString() : row.queued_at,
+      sender_unverified: row.sender_unverified,
+      envelope: {
+        protocol: row.protocol,
+        message_id: row.message_id,
+        conversation_id: row.conversation_id,
+        message_type: row.message_type,
+        sender: {
+          endpoint_id: row.sender_endpoint_id,
+          owner_id: row.sender_owner_id,
+        },
+        recipient: row.env_recipient ? {
+          endpoint_id: row.env_recipient,
+        } : undefined,
+        body: typeof row.body === 'string' ? JSON.parse(row.body) : row.body,
+        context_refs: row.context_refs ?? [],
+        capabilities: row.capabilities ?? [],
+        correlation_id: row.correlation_id,
+        idempotency_key: row.idempotency_key,
+        created_at: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
+        expires_at: row.expires_at instanceof Date ? row.expires_at.toISOString() : row.expires_at,
+        signature: {
+          algorithm: row.signature_algorithm,
+          key_id: row.signature_key_id,
+          value: row.signature_value,
+        },
+      }
+    }));
   }
   async acknowledgeEndpoint({ viewerOwnerId, acknowledgedEndpointId, now = new Date() } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
@@ -233,6 +273,26 @@ export class PostgresRepository {
     }
   }
   async #insertAcceptedEnvelope(row, client) {
+    await client.query(
+      `INSERT INTO conversations (conversation_id, kind, created_by, created_at)
+       VALUES ($1, 'direct', $2, $3)
+       ON CONFLICT (conversation_id) DO NOTHING`,
+      [row.envelope.conversation_id, row.envelope.sender.owner_id, row.envelope.created_at]
+    );
+    await client.query(
+      `INSERT INTO conversation_members (conversation_id, endpoint_id, role, added_by, added_at)
+       VALUES ($1, $2, 'member', $3, $4)
+       ON CONFLICT (conversation_id, endpoint_id) DO NOTHING`,
+      [row.envelope.conversation_id, row.envelope.sender.endpoint_id, row.envelope.sender.owner_id, row.envelope.created_at]
+    );
+    if (row.envelope.recipient?.endpoint_id) {
+      await client.query(
+        `INSERT INTO conversation_members (conversation_id, endpoint_id, role, added_by, added_at)
+         VALUES ($1, $2, 'member', $3, $4)
+         ON CONFLICT (conversation_id, endpoint_id) DO NOTHING`,
+        [row.envelope.conversation_id, row.envelope.recipient.endpoint_id, row.envelope.sender.owner_id, row.envelope.created_at]
+      );
+    }
     const result = await client.query(
       `INSERT INTO envelopes (message_id, conversation_id, protocol, message_type, sender_endpoint_id, sender_owner_id, recipient_endpoint_id, broadcast_scope, body, context_refs, capabilities, correlation_id, idempotency_key, expires_at, created_at, signature_algorithm, signature_key_id, signature_value, canonical_bytes, action_hash, envelope_status)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'accepted') RETURNING message_id`,

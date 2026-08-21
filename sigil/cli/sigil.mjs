@@ -11,6 +11,7 @@
 import { parseArgs } from 'node:util';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 import http from 'node:http';
 import { WebSocket } from 'ws';
@@ -92,6 +93,23 @@ async function cmdRelayUp(argv) {
     const { default: pg } = await import('pg');
     const pool = new pg.Pool({ connectionString: databaseUrl });
     repository = new PostgresRepository({ pool });
+
+    for (const ep of data.endpoints) {
+      await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW()) ON CONFLICT (human_id) DO NOTHING`, [ep.owner_id]);
+      await pool.query(`
+        INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
+        VALUES ($1, $2, $3, $4, $5, 'active', NOW())
+        ON CONFLICT (endpoint_id) DO UPDATE SET status = 'active'
+      `, [ep.endpoint_id, ep.owner_id, ep.kind ?? 'agent', `install_${ep.endpoint_id}`, ep.endpoint_id]);
+      if (ep.public_key_pem) {
+        const pubKeyBuf = crypto.createPublicKey(ep.public_key_pem).export({ type: 'spki', format: 'der' });
+        await pool.query(`
+          INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
+          VALUES ($1, $2, 'Ed25519', $3, 'active', NOW())
+          ON CONFLICT (key_id) DO NOTHING
+        `, [ep.key_id, ep.endpoint_id, pubKeyBuf]);
+      }
+    }
   } else {
     repository = createMemoryRepository();
   }
@@ -258,7 +276,7 @@ async function cmdAgentRun(argv) {
   await new Promise(() => {});
 }
 
-async function main() {
+export async function main() {
   const [command, sub, ...rest] = process.argv.slice(2);
   try {
     if (command === 'init') await cmdInit(process.argv.slice(3));
@@ -273,4 +291,14 @@ async function main() {
   }
 }
 
-main();
+const isDirectRun = (() => {
+  try {
+    return process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+  } catch {
+    return false;
+  }
+})();
+
+if (isDirectRun) {
+  main();
+}

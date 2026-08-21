@@ -24,7 +24,7 @@ test('repository persists accepted envelope in one transaction', async () => {
   const deliveryInsert = pool.calls.find((call) => call.text.startsWith('INSERT INTO deliveries'));
   assert.equal(row.delivery_id, deliveryInsert.values[0]);
   assert.equal(pool.calls[1].text, 'BEGIN');
-  const insert = pool.calls.find((call) => call.text.startsWith('INSERT'));
+  const insert = pool.calls.find((call) => call.text.startsWith('INSERT INTO envelopes'));
   assert.equal(insert.values.length, 20);
   assert.equal(insert.values[0], 'msg_1');
   assert.equal(insert.values[17], 'sig');
