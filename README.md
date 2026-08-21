@@ -1,5 +1,7 @@
 # Sigil
 
+[![Node Version](https://img.shields.io/badge/node-%3E%3D22.0.0-blue.svg)](https://nodejs.org/)
+
 Governed cryptographic task relay and host connector for Antigravity, Claude, Codex, xAI Grok, and sovereign local LLMs (Ollama, vLLM).
 
 - **User & Architecture Guide**: [Sigil Wiki](docs/wiki/README.md)
@@ -14,12 +16,27 @@ Sigil keeps host capabilities behind an authenticated local connector, validates
 ## Current status
 
 The repository is verified against full v1 protocol conformance specifications:
-- **GitHub Actions CI (`.github/workflows/ci.yml`)**: Automated cross-platform matrix on Node 20, 22, and 24 with live PostgreSQL service container.
+- **GitHub Actions CI (`.github/workflows/ci.yml`)**: Automated cross-platform matrix on Node 22.x and 24.x with live PostgreSQL service container.
 - **Dependency Audit Gate (`npm run audit:deps`)**: 100% PASS with 0 hoisted dependency gaps and strict exact pinning.
 - **JCS Conformance Gate (`npm run audit:jcs`)**: 100% PASS across 116 source files, enforcing pinned RFC 8785 canonicalization.
 - **Unit & Contract Suite (`npm test`)**: 336 passed, 0 failed.
 - **Live PostgreSQL Gate (`npm run test:live`)**: 30 passed, 0 failed across 4 schema-resetting suites against PostgreSQL 16.
 - **Total Test Suite**: 366 passed, 0 failed.
+
+## Prerequisites
+
+* **Node.js**: `>= 22.0.0` (Tested on Node 22.x and Node 24.x)
+* **npm**: `>= 10.0.0`
+* **PostgreSQL**: 16 for live validation and persistent relay mode
+* A registered Sigil endpoint token and matching connector grants
+
+### Compatibility matrix
+
+| Environment | Supported Versions | CI Status |
+| :--- | :--- | :--- |
+| **Node.js** | `22.x`, `24.x` | Verified |
+| **OS** | Ubuntu (latest), Windows (latest) | Verified |
+| **PostgreSQL** | 16.x | Verified |
 
 ## Repository map
 

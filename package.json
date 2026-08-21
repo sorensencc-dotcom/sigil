@@ -19,7 +19,8 @@
     "docs/"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
   },
   "scripts": {
     "test": "node sigil-dep-audit.mjs && node sigil-jcs-audit.mjs && node --test",
