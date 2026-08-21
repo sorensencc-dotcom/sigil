@@ -169,15 +169,16 @@ export function createAgentDaemon({
           }
         }
         if (deliveryId) {
-          await relay.acknowledge(deliveryId, { outcome: 'processed' });
+          await relay.reportProcessing(deliveryId, 'processed').catch(() => {});
         }
         if (connectorDb && envelope.message_id) {
           connectorDb.updateInboxProcessingState(envelope.message_id, 'processed');
         }
         return { delivery_id: deliveryId, outcome: 'processed', result: taskResult };
       } catch (err) {
+        logger.error?.(`Daemon task processing failed: ${err.message}`, err);
         if (deliveryId) {
-          await relay.acknowledge(deliveryId, { outcome: 'processing_failed', reason: err.message }).catch(() => {});
+          await relay.reportProcessing(deliveryId, 'processing_failed', err.message).catch(() => {});
         }
         if (connectorDb && envelope.message_id) {
           connectorDb.updateInboxProcessingState(envelope.message_id, 'failed');
