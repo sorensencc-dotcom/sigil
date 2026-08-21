@@ -311,3 +311,76 @@ test('agent daemon ignores unsupported message types without executing or acknow
     globalThis.fetch = originalFetch;
   }
 });
+
+test('agent daemon handles worker process failure by reporting processing_failed and omitting reply', async () => {
+  const identity = createIdentity({ ownerId: 'usr_soren', endpointId: 'ep_claude', kind: 'agent' });
+  const reports = [];
+  const sentEnvelopes = [];
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async (url, options = {}) => {
+    const urlStr = url.toString();
+    if (urlStr.includes('/processing')) {
+      reports.push(JSON.parse(options.body));
+      return { ok: true, status: 204, text: async () => '' };
+    }
+    if (urlStr.includes('/v1/envelopes')) {
+      sentEnvelopes.push(JSON.parse(options.body));
+      return { ok: true, status: 202, text: async () => JSON.stringify({ code: 'OK' }) };
+    }
+    return { ok: true, status: 200, text: async () => '{}' };
+  };
+
+  try {
+    const daemon = createAgentDaemon({
+      identity,
+      relayUrl: 'http://127.0.0.1:8791',
+      workerCommand: process.execPath,
+      workerArgs: ['-e', 'process.stderr.write("Fatal crash in worker"); process.exit(1);'],
+      autoReply: true,
+      logger: { error: () => {}, warn: () => {}, log: () => {} }
+    });
+
+    const result = await daemon.processItem({
+      delivery_id: 'del_fail_1',
+      envelope: {
+        protocol: 'sigil/1',
+        message_id: 'msg_fail_1',
+        conversation_id: 'conv_1',
+        message_type: 'task.request',
+        sender: { owner_id: 'usr_soren', endpoint_id: 'ep_codex' },
+        body: { task_id: 'task_fail', instruction: 'Do something impossible' }
+      }
+    });
+
+    assert.equal(result.outcome, 'processing_failed');
+    assert.ok(result.error.includes('Worker exited with code 1'));
+    assert.ok(reports.some((r) => r.state === 'processing_failed' && r.reason?.includes('Fatal crash in worker')));
+    assert.equal(sentEnvelopes.length, 0, 'Must not send task.result envelope on failure');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('agent daemon handles relay poll network errors gracefully without crashing', async () => {
+  const identity = createIdentity({ ownerId: 'usr_soren', endpointId: 'ep_claude', kind: 'agent' });
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async () => {
+    throw new Error('ECONNREFUSED 127.0.0.1:8791');
+  };
+
+  try {
+    const daemon = createAgentDaemon({
+      identity,
+      relayUrl: 'http://127.0.0.1:8791',
+      logger: { error: () => {}, warn: () => {}, log: () => {} }
+    });
+
+    const processed = await daemon.poll();
+    assert.equal(processed, 0, 'Must return 0 processed items on network error');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
