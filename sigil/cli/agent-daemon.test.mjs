@@ -276,3 +276,38 @@ test('agent daemon durably persists inbox intake and outbox state when dbPath is
   }
 });
 
+
+test('agent daemon ignores unsupported message types without executing or acknowledging them', async () => {
+  const identity = createIdentity({ ownerId: 'usr_soren', endpointId: 'ep_claude', kind: 'agent' });
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    calls.push(url.toString());
+    return { ok: true, status: 204, text: async () => '' };
+  };
+
+  try {
+    const daemon = createAgentDaemon({
+      identity,
+      relayUrl: 'http://127.0.0.1:8791',
+      workerCommand: process.execPath,
+      workerArgs: ['-e', 'throw new Error("worker must not run")']
+    });
+
+    await daemon.processItem({
+      delivery_id: 'del_notice_1',
+      envelope: {
+        protocol: 'sigil/1',
+        message_id: 'msg_notice_1',
+        message_type: 'status.notice',
+        sender: { owner_id: 'usr_soren', endpoint_id: 'ep_codex' },
+        body: { text: 'not a task' }
+      }
+    });
+
+    assert.equal(calls.filter((url) => url.includes('/ack')).length, 1);
+    assert.equal(calls.some((url) => url.includes('/processing')), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
