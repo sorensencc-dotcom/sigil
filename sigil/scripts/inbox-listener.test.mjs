@@ -36,6 +36,17 @@ function exitedChildPid() {
 }
 
 
+async function safeRemove(dirPath) {
+  for (let i = 0; i < 30; i++) {
+    try {
+      fs.rmSync(dirPath, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+}
+
 test('read exits cleanly when inbox log is absent', async () => {
   const root = temporaryRoot();
   try {
@@ -45,7 +56,7 @@ test('read exits cleanly when inbox log is absent', async () => {
     assert.equal(result.stdout, '');
     assert.equal(fs.existsSync(path.join(root, 'state', 'inbox-listener.offset')), false);
   } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+    await safeRemove(root);
   }
 });
 
@@ -63,7 +74,7 @@ test('read emits lines after stored offset and advances offset to log length', a
     assert.equal(result.stdout.replace(/\r\n/g, '\n'), 'new one\nnew two\n');
     assert.equal(fs.readFileSync(path.join(state, 'inbox-listener.offset'), 'utf8').trim(), '3');
   } finally {
-    fs.rmSync(root, { recursive: true, force: true, maxRetries: 40, retryDelay: 50 });
+    await safeRemove(root);
   }
 });
 
@@ -80,7 +91,7 @@ test('start is a no-op when pid file points to a live process', async () => {
     assert.equal(fs.readFileSync(path.join(state, 'inbox-listener.pid'), 'utf8').trim(), String(process.pid));
     assert.equal(fs.existsSync(path.join(state, 'inbox-listener.log')), false);
   } finally {
-    fs.rmSync(root, { recursive: true, force: true, maxRetries: 40, retryDelay: 50 });
+    await safeRemove(root);
   }
 });
 
@@ -92,7 +103,7 @@ test('start replaces stale pid with a detached listener process', async () => {
   fs.mkdirSync(cli, { recursive: true });
   const stalePid = await exitedChildPid();
   fs.writeFileSync(path.join(state, 'inbox-listener.pid'), `${stalePid}\n`, 'utf8');
-  fs.writeFileSync(path.join(cli, 'sigil.mjs'), 'setInterval(() => {}, 1000);\n', 'utf8');
+  fs.writeFileSync(path.join(cli, 'sigil.mjs'), 'setTimeout(() => process.exit(0), 10000);\n', 'utf8');
 
   let childPid;
   try {
@@ -111,13 +122,13 @@ test('start replaces stale pid with a detached listener process', async () => {
             const { execSync } = await import('node:child_process');
             execSync(`taskkill /F /T /PID ${childPid}`, { stdio: 'ignore' });
           } catch {}
-          process.kill(childPid);
+          try { process.kill(childPid, 'SIGKILL'); } catch {}
         } else {
           process.kill(childPid, 'SIGKILL');
         }
       } catch {}
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
-    fs.rmSync(root, { recursive: true, force: true, maxRetries: 50, retryDelay: 100 });
+    await safeRemove(root);
   }
 });
