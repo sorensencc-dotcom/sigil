@@ -212,7 +212,7 @@ For high-risk operations requiring human authorization (such as root filesystem 
 
 ## 6. Library SDK Usage
 
-`@sorensencc-dotcom/sigil` can be imported directly into Node.js applications:
+`@sorensencc/sigil` can be imported directly into Node.js applications:
 
 ```javascript
 import {
@@ -222,7 +222,7 @@ import {
   RelayClient,
   LocalOutbox,
   canonicalJson
-} from '@sorensencc-dotcom/sigil';
+} from '@sorensencc/sigil';
 
 // Start a programmatic relay instance
 const server = createRelayServer({

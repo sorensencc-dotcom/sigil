@@ -27,7 +27,7 @@ The package has no install-time network dependency. `npm install` installs the C
 The repository does not need to exist on the target machine. Install the published GitHub package directly:
 
 ```powershell
-npm install --global @sorensencc-dotcom/sigil
+npm install --global @sorensencc/sigil
 sigil --help
 ```
 
