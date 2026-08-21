@@ -29,7 +29,7 @@ The repository is verified against full v1 protocol conformance specifications:
 - `sigil/relay/v1/` — signed envelope validation, replay classification, rate limiting, capability registry, relay routes, WebAuthn approval ceremony UI (`/approve`), delivery state, and PostgreSQL repositories.
 - `sigil/connectors/v1/` — authenticated local connector, Codex/Claude adapters, context resolution, and MCP stdio bridge.
 - `sigil/scripts/` — worker subprocess adapters (`claude-worker.mjs`, `codex-cli-worker.mjs`, `ollama-worker.mjs`, `openai-worker.mjs`).
-- `sigil/migrations/` — ordered PostgreSQL migrations `001` through `010`.
+- `sigil/migrations/` — ordered PostgreSQL migrations `001` through `011`.
 - `sigil/scripts/live-db-tests.mjs` — sequential live database gate; suites reset the `public` schema.
 - `docs/wiki/` — user-friendly wiki, architecture overview, and operational runbooks.
 - `.github/workflows/ci.yml` — continuous integration pipeline.
@@ -87,7 +87,7 @@ npm run test:live
 Remove-Item Env:SIGIL_TEST_DATABASE_URL
 ```
 
-The live gate applies migrations `001`–`010` and runs schema-resetting suites sequentially. It covers migration constraints, durable approvals and audit transactions, identity/session/grant persistence, envelope idempotency, capability verification, rate quotas, normalized display-name collisions, and acknowledgement races.
+The live gate applies migrations `001`–`011` and runs schema-resetting suites sequentially. It covers migration constraints, durable approvals and audit transactions, identity/session/grant persistence, envelope idempotency, capability verification, rate quotas, normalized display-name collisions, acknowledgement races, and task cross-reference lookup optimization.
 
 ## Host MCP integration
 
