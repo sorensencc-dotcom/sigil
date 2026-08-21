@@ -4,6 +4,21 @@ All notable changes to the Sigil governed task relay and connector are documente
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-08-21
+
+### Added
+- **Standing PostgreSQL startup auto-migrations**: Automated execution of all schema migrations on relay startup before endpoint provisioning in `cmdRelayUp`.
+- **Database migration CLI script**: Added `npm run db:migrate` via `sigil/scripts/apply-migrations.mjs`.
+- **Empty-database integration test**: Added `sigil/cli/sigil-relay-postgres-startup.integration.test.mjs` to verify automated schema initialization and endpoint registration.
+- **Explicit Ollama fallback gating & unit tests**: Added `SIGIL_OLLAMA_FALLBACK` requirement to prevent false-positive offline test passes, and added `sigil/scripts/ollama-worker-fallback.test.mjs`.
+- **Scoped npm publishing workflow**: Added GitHub Actions workflow `.github/workflows/release.yml` for tag-triggered npm releases with OpenID Connect (OIDC) provenance.
+
+### Fixed
+- **PostgreSQL conversation foreign key constraints**: Auto-created conversation and conversation member rows on envelope intake.
+- **Relay inbox query parameter typing**: Added explicit timestamp casting (`$2::timestamptz`) in `PostgresRepository.listInbox`.
+- **Delivery state lifecycle progression**: Transitioned unread messages from `queued` to `delivered` during inbox inspection so subsequent acknowledgments succeed.
+- **CLI command routing in binary entry point**: Corrected asynchronous module execution and command branch fallthrough in `bin/sigil.mjs`.
+
 ## [0.2.0] - 2026-08-20
 
 ### Added

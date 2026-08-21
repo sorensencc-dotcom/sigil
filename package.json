@@ -1,6 +1,6 @@
 {
   "name": "@sorensencc-dotcom/sigil",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Governed task relay connector for Codex and Claude hosts",
   "type": "module",
   "publishConfig": {
