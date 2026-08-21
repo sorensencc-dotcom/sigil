@@ -288,3 +288,62 @@ test('flushes outbound queue and updates delivery states from receipt stream', a
   manager.close();
   await env.cleanup();
 });
+
+test('ConnectorWebSocketManager requires database adapter on construction', () => {
+  assert.throws(
+    () => new WebSocketConnectionManager({
+      profileId: 'prof_test',
+      bearerToken: 'secret',
+      wsUrl: 'ws://127.0.0.1:9999/v1/stream',
+    }),
+    /Database adapter \(db\/dbAdapter\) is required/
+  );
+});
+
+test('ConnectorWebSocketManager fails closed without ack when database intake fails', async () => {
+  const env = await setupTestEnvironment();
+  let relayAckReceived = false;
+
+  env.wss.once('connection', (ws) => {
+    ws.on('message', (raw) => {
+      const frame = JSON.parse(raw.toString());
+      if (frame.action === 'acknowledge') {
+        relayAckReceived = true;
+      }
+    });
+
+    // Simulate inbound delivery with missing message_id
+    ws.send(
+      JSON.stringify({
+        action: 'delivery',
+        payload: {
+          // message_id omitted to trigger fail-closed intake error
+          conversation_id: 'conv_err',
+          message_type: 'task.request',
+          body: {}
+        }
+      })
+    );
+  });
+
+  const manager = new WebSocketConnectionManager({
+    db: env.db,
+    profileId: env.profileId,
+    bearerToken: 'secret_token_123',
+  });
+
+  const errorCaptured = new Promise((resolve) => {
+    manager.once('error', resolve);
+  });
+
+  manager.start();
+  await errorCaptured;
+
+  // Wait a tick to confirm no acknowledge frame was transmitted
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(relayAckReceived, false);
+
+  manager.close();
+  await env.cleanup();
+});
+

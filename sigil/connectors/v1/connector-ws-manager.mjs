@@ -40,6 +40,10 @@ export class ConnectorWebSocketManager extends EventEmitter {
     this.profileId = profileId;
     this.db = dbAdapter || db;
 
+    if (!this.db) {
+      throw new Error('Database adapter (db/dbAdapter) is required to guarantee durable-before-ack delivery intake');
+    }
+
     // Conformance Liveness Limits (Default: Ping every 15s, Timeout after 3 missed pongs = 45s)
     this.pingIntervalMs = heartbeatIntervalMs || heartbeat.intervalMs || 15000;
     this.maxMissedPongs = heartbeat.maxMissed || 3;
@@ -265,13 +269,16 @@ export class ConnectorWebSocketManager extends EventEmitter {
     const deliveryId = delivery.delivery_id;
     const reconciledAt = new Date().toISOString();
 
+    if (!this.db || !envelope?.message_id) {
+      this.emit('error', new Error('Refusing to acknowledge delivery without durable database persistence'));
+      return;
+    }
+
     try {
       // 1. Commit message to durable SQLite storage BEFORE sending acceptance receipt back to relay
-      if (this.db && envelope.message_id) {
-        this.db.commitDurableInboxIntake(envelope, this.profileId, reconciledAt);
-      }
+      this.db.commitDurableInboxIntake(envelope, this.profileId, reconciledAt);
 
-      // 2. Transmit protocol acknowledgement frame
+      // 2. Transmit protocol acknowledgement frame only after successful local persistence
       this.sendFrame({
         action: 'acknowledge',
         payload: {
@@ -283,6 +290,7 @@ export class ConnectorWebSocketManager extends EventEmitter {
 
       this.emit('message_received', envelope);
     } catch (err) {
+      // Fail closed: Do NOT acknowledge the message. The relay will retry delivery later.
       this.emit('error', new Error(`Failed to commit incoming envelope to durable local storage: ${err.message}`));
     }
   }
