@@ -26,7 +26,8 @@ if (command === 'start') {
   if (existing && alive(existing)) process.exit(0);
   if (!identity || !relay || !stream || !fs.existsSync(cli)) process.exit(0);
   const out = fs.openSync(logPath, 'a');
-  const child = spawn(process.execPath, [cli, 'inbox', '--identity', identity, '--relay-url', relay, '--stream-url', stream, '--wait', '--loop', '--timeout', '300000'], { cwd: root, detached: true, stdio: ['ignore', out, out] });
+  const child = spawn(process.execPath, [cli, 'inbox', '--identity', identity, '--relay-url', relay, '--stream-url', stream, '--wait', '--loop', '--timeout', '300000'], { cwd: root, detached: true, stdio: ['ignore', out, out], windowsHide: true });
+  fs.closeSync(out);
   fs.writeFileSync(pidPath, `${child.pid}\n`);
   child.unref();
   process.exit(0);

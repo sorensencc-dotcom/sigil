@@ -60,10 +60,10 @@ test('read emits lines after stored offset and advances offset to log length', a
     const result = await runListener(root, 'read');
 
     assert.equal(result.code, 0);
-    assert.equal(result.stdout, 'new one\nnew two\n');
-    assert.equal(fs.readFileSync(path.join(state, 'inbox-listener.offset'), 'utf8'), '3\n');
+    assert.equal(result.stdout.replace(/\r\n/g, '\n'), 'new one\nnew two\n');
+    assert.equal(fs.readFileSync(path.join(state, 'inbox-listener.offset'), 'utf8').trim(), '3');
   } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 40, retryDelay: 50 });
   }
 });
 
@@ -77,10 +77,10 @@ test('start is a no-op when pid file points to a live process', async () => {
     const result = await runListener(root, 'start');
 
     assert.equal(result.code, 0);
-    assert.equal(fs.readFileSync(path.join(state, 'inbox-listener.pid'), 'utf8'), `${process.pid}\n`);
+    assert.equal(fs.readFileSync(path.join(state, 'inbox-listener.pid'), 'utf8').trim(), String(process.pid));
     assert.equal(fs.existsSync(path.join(state, 'inbox-listener.log')), false);
   } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 40, retryDelay: 50 });
   }
 });
 
@@ -99,13 +99,19 @@ test('start replaces stale pid with a detached listener process', async () => {
     const result = await runListener(root, 'start', ['--identity', 'test-identity', '--relay-url', 'http://relay.test', '--stream-url', 'ws://stream.test']);
 
     assert.equal(result.code, 0);
-    childPid = Number(fs.readFileSync(path.join(state, 'inbox-listener.pid'), 'utf8'));
+    childPid = Number(fs.readFileSync(path.join(state, 'inbox-listener.pid'), 'utf8').trim());
     assert.notEqual(childPid, stalePid);
     assert.ok(childPid > 0);
     assert.doesNotThrow(() => process.kill(childPid, 0));
   } finally {
     if (childPid) {
-      try { process.kill(childPid, 'SIGTERM'); } catch {}
+      try {
+        if (process.platform === 'win32') {
+          process.kill(childPid);
+        } else {
+          process.kill(childPid, 'SIGKILL');
+        }
+      } catch {}
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 40, retryDelay: 50 });
