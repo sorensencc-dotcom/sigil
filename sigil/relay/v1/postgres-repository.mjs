@@ -459,7 +459,7 @@ export class PostgresRepository {
     );
     return Number(result.rows[0].count);
   }
-  async reserveRateLimit(scopeKind, scopeId, windowStart, limit, client) {
+  async reserveRateLimit(scopeKind, scopeId, windowStart, limit, client = this.pool) {
     const result = await client.query(
       `INSERT INTO quota_usage (scope_kind, scope_id, window_start, count) VALUES ($1, $2, $3, 1)
        ON CONFLICT (scope_kind, scope_id, window_start) DO UPDATE SET count = quota_usage.count + 1
