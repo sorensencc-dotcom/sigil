@@ -558,8 +558,12 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'OK', link }));
       } catch (error) {
-        // spec §3.1.4: one generic error for wrong/expired/revoked/unknown --
-        // 404 with the same INVITE_UNAVAILABLE code regardless of which.
+        // spec §3.1.4: one generic error for wrong/expired/revoked/unknown invite
+        // codes -- 404 INVITE_UNAVAILABLE regardless of which, to avoid a
+        // code-guessing oracle. DIRECTORY_LINK_CONFLICT (409) is the one
+        // exception: spec §4 treats it as non-sensitive since both parties are
+        // already linked, so it's surfaced distinctly rather than folded into
+        // the generic 404.
         response.writeHead(error.code === 'DIRECTORY_LINK_CONFLICT' ? 409 : 404, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'INVITE_UNAVAILABLE', message: error.code === 'DIRECTORY_LINK_CONFLICT' ? error.message : 'Invite code is invalid or expired', details: {} }));
       }

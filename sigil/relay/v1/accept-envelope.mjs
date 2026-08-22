@@ -112,12 +112,14 @@ async function acceptWithRepository(envelope, options) {
     // same-owner pair, so gating on it here would permanently block a
     // human's own multi-endpoint traffic (e.g. their Codex and Claude
     // agents talking to each other), which is Sigil's primary use case.
-    // The recipient's real owner is resolved from options.registered (the
-    // trusted endpoint directory used for signature verification), never
-    // from envelope.recipient.owner_id, which is unverified client input.
+    // Both the sender's and recipient's real owners are resolved from
+    // options.registered (the trusted endpoint directory used for signature
+    // verification), never from envelope.sender.owner_id or
+    // envelope.recipient.owner_id, which are unverified client input.
     if (envelope.recipient?.endpoint_id && repository.lookupActiveDirectoryLink) {
       const recipientOwnerId = options.registered?.get(envelope.recipient.endpoint_id)?.owner_id;
-      const sameOwner = recipientOwnerId && recipientOwnerId === envelope.sender.owner_id;
+      const senderOwnerId = options.registered?.get(envelope.sender.endpoint_id)?.owner_id;
+      const sameOwner = recipientOwnerId && senderOwnerId && recipientOwnerId === senderOwnerId;
       if (!sameOwner) {
         const link = await repository.lookupActiveDirectoryLink(envelope.sender.endpoint_id, envelope.recipient.endpoint_id, client);
         if (!link) throw reject('DIRECTORY_LINK_REQUIRED', 'No active directory link between sender and recipient', { sender_endpoint_id: envelope.sender.endpoint_id, recipient_endpoint_id: envelope.recipient.endpoint_id });

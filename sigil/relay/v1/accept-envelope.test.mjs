@@ -291,6 +291,30 @@ test('direct envelope between two endpoints owned by the same human skips the di
   assert.equal(called, false);
 });
 
+test('forged sender.owner_id matching the recipient real owner does not skip the directory-link gate', async () => {
+  const repository = fakeTransactionalRepository();
+  let called = false;
+  repository.lookupActiveDirectoryLink = async () => { called = true; return null; };
+  repository.lookupActiveCapabilityGrants = async () => [];
+  repository.lookupCapabilityRegistration = async () => null;
+  repository.reserveRateLimit = async () => ({ count: 1, allowed: true });
+  repository.countOpenDeliveries = async () => 0;
+  repository.lookupAcceptedMessageId = async () => null;
+  repository.lookupIdempotency = async () => null;
+  repository.persistAcceptedEnvelope = async () => { throw new Error('must not persist a rejected envelope'); };
+  // Recipient's real (trusted) owner differs from the sender's real owner,
+  // so the gate must still fire. The forged envelope.sender.owner_id claims
+  // to match the recipient's real owner, but that field is unverified
+  // client input and must never be trusted for the same-owner exemption.
+  const recipientRealOwnerRegistered = new Map([...options.registered, ['ep_claude', { owner_id: 'usr_claude_real_owner', status: 'active' }]]);
+  const forgedEnvelope = { ...envelope, sender: { ...envelope.sender, owner_id: 'usr_claude_real_owner' } };
+  const { acceptEnvelopeAsync } = await import('./accept-envelope.mjs');
+  const result = await acceptEnvelopeAsync(forgedEnvelope, { ...options, registered: recipientRealOwnerRegistered, repository, idempotency: undefined });
+  assert.equal(called, true);
+  assert.equal(result.status, 403);
+  assert.equal(result.body.code, 'DIRECTORY_LINK_REQUIRED');
+});
+
 test('broadcast envelope (no recipient.endpoint_id) is never checked against directory_links', async () => {
   const repository = fakeTransactionalRepository();
   let called = false;
