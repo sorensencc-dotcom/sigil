@@ -13,3 +13,21 @@ export function generateInviteCode() {
 export function hashMatchTarget(value) {
   return crypto.createHash('sha256').update(String(value)).digest('hex');
 }
+
+// Spec §3.2 step 2: "When any human authenticates via [an allow-listed]
+// issuer, the relay checks their verified attributes against every
+// pending, unexpired match request for that issuer." This is that check --
+// but it is NOT wired to any login route, because this repo has no OIDC
+// login flow at all yet (no ID-token verification, no JWKS, nothing calls
+// repository.createHumanSession). It exists so that whichever future
+// change adds real OIDC login has a single, already-reviewed call to make
+// at the point a human's `provider_verified` email claim becomes
+// available, instead of reinventing this against claimDirectoryMatch
+// directly. Until that login flow exists, on-ramp 2 (OIDC match) can
+// create and nominate-ready a directory_match_requests row but that row
+// can never leave 'pending' in production.
+export async function attemptDirectoryMatchOnOidcLogin({ repository, issuer, verifiedEmail, matchedHumanId, now = new Date() }) {
+  if (!verifiedEmail || !matchedHumanId) return null;
+  if (typeof repository?.claimDirectoryMatch !== 'function') return null;
+  return repository.claimDirectoryMatch({ issuer, matchTarget: verifiedEmail, matchedHumanId, now });
+}
