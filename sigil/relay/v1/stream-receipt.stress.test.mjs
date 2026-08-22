@@ -133,6 +133,13 @@ test('reconnecting recipient reconciles concurrent missed deliveries and acknowl
   const senderEndpoint = endpoint(sender, senderKeys);
   const recipientEndpoint = endpoint(recipient, recipientKeys);
   const repository = createMemoryRepository();
+  // sender and recipient are owned by different humans (usr_codex/usr_claude),
+  // so the directory-link gate (spec §8) applies here for real -- seed an
+  // active link via the same invite/redeem/confirm flow a real deployment
+  // would use, rather than relying on the same-owner exemption.
+  const invite = await repository.createDirectoryInvite({ issuerEndpointId: sender.endpoint_id, issuerHumanId: sender.owner_id, expiresAt: new Date(Date.now() + 7200000).toISOString(), homeRelay: 'relay_test' });
+  const redemption = await repository.redeemDirectoryInvite({ code: invite.code, redeemerEndpointId: recipient.endpoint_id, redeemerHumanId: recipient.owner_id, homeRelay: 'relay_test' });
+  await repository.confirmDirectoryLink({ linkId: redemption.link_id, confirmingHumanId: sender.owner_id });
   const streamHttpServer = http.createServer();
   const stream = createStreamServer({
     server: streamHttpServer,

@@ -6,7 +6,7 @@ import { writeRejectionAudit } from './rejection-audit.mjs';
 // rejection worth auditing (design §9, round 3 blocker 5). A malformed-JSON
 // INVALID_ENVELOPE before signature verification has no meaningful
 // sender/conversation_id to audit against, so it's deliberately excluded.
-const AUDITED_REJECTION_CODES = new Set(['CAPABILITY_DENIED', 'REPLAY_DETECTED', 'RATE_LIMITED', 'QUOTA_EXCEEDED']);
+const AUDITED_REJECTION_CODES = new Set(['CAPABILITY_DENIED', 'REPLAY_DETECTED', 'RATE_LIMITED', 'QUOTA_EXCEEDED', 'DIRECTORY_LINK_REQUIRED']);
 
 const statusByCode = Object.freeze({
   INVALID_ENVELOPE: 400,
@@ -21,7 +21,8 @@ const statusByCode = Object.freeze({
   DUPLICATE_MESSAGE: 409,
   REPLAY_DETECTED: 409,
   RATE_LIMITED: 429,
-  QUOTA_EXCEEDED: 429
+  QUOTA_EXCEEDED: 429,
+  DIRECTORY_LINK_REQUIRED: 403
 });
 
 function toResponse(options, error) {
@@ -96,6 +97,31 @@ async function acceptWithRepository(envelope, options) {
       const depthLimit = options.inboxDepthLimit ?? DEFAULT_INBOX_DEPTH_LIMIT;
       const openCount = await repository.countOpenDeliveries(envelope.recipient.endpoint_id, client);
       if (openCount >= depthLimit) throw reject('QUOTA_EXCEEDED', 'Recipient inbox depth limit reached', { recipient_endpoint_id: envelope.recipient.endpoint_id, limit: depthLimit });
+    }
+    // Directory-link gate (spec §8): a direct envelope (recipient.endpoint_id
+    // set -- validateEnvelope's hasRecipient/hasBroadcast XOR guarantees a
+    // broadcast envelope never reaches here) requires an active
+    // directory_links row between sender and recipient. Broadcast delivery
+    // is deliberately never checked here -- it's gated by conversation
+    // membership instead (spec §8), which validateEnvelope's
+    // broadcastAuthorizer already covers.
+    //
+    // Exception: two endpoints owned by the same human never need a
+    // directory_links row -- the spec's own directory_links CHECK
+    // (human_a <> human_b) makes one structurally impossible for a
+    // same-owner pair, so gating on it here would permanently block a
+    // human's own multi-endpoint traffic (e.g. their Codex and Claude
+    // agents talking to each other), which is Sigil's primary use case.
+    // The recipient's real owner is resolved from options.registered (the
+    // trusted endpoint directory used for signature verification), never
+    // from envelope.recipient.owner_id, which is unverified client input.
+    if (envelope.recipient?.endpoint_id && repository.lookupActiveDirectoryLink) {
+      const recipientOwnerId = options.registered?.get(envelope.recipient.endpoint_id)?.owner_id;
+      const sameOwner = recipientOwnerId && recipientOwnerId === envelope.sender.owner_id;
+      if (!sameOwner) {
+        const link = await repository.lookupActiveDirectoryLink(envelope.sender.endpoint_id, envelope.recipient.endpoint_id, client);
+        if (!link) throw reject('DIRECTORY_LINK_REQUIRED', 'No active directory link between sender and recipient', { sender_endpoint_id: envelope.sender.endpoint_id, recipient_endpoint_id: envelope.recipient.endpoint_id });
+      }
     }
     const result = validateEnvelope(envelope, { ...options, idempotency: new Map(), capabilityGrants });
     const prior = await repository.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key, client);

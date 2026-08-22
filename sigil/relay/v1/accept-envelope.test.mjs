@@ -241,3 +241,69 @@ test('a CAPABILITY_DENIED rejection triggers a best-effort rejection audit', asy
   assert.equal(auditCalls.length, 1);
   assert.equal(auditCalls[0].eventType, 'envelope.rejected.capability_denied');
 });
+
+test('direct envelope with no active directory link is rejected DIRECTORY_LINK_REQUIRED', async () => {
+  const repository = fakeTransactionalRepository();
+  repository.lookupActiveDirectoryLink = async () => null;
+  repository.lookupActiveCapabilityGrants = async () => [];
+  repository.lookupCapabilityRegistration = async () => null;
+  repository.reserveRateLimit = async () => ({ count: 1, allowed: true });
+  repository.countOpenDeliveries = async () => 0;
+  repository.lookupAcceptedMessageId = async () => null;
+  repository.lookupIdempotency = async () => null;
+  repository.persistAcceptedEnvelope = async () => { throw new Error('must not persist a rejected envelope'); };
+  const { acceptEnvelopeAsync } = await import('./accept-envelope.mjs');
+  const result = await acceptEnvelopeAsync(envelope, { ...options, repository, idempotency: undefined });
+  assert.equal(result.status, 403);
+  assert.equal(result.body.code, 'DIRECTORY_LINK_REQUIRED');
+});
+
+test('direct envelope with an active directory link is accepted', async () => {
+  const repository = fakeTransactionalRepository();
+  repository.lookupActiveDirectoryLink = async () => ({ link_id: 'link_1', status: 'active' });
+  repository.lookupActiveCapabilityGrants = async () => [];
+  repository.lookupCapabilityRegistration = async () => null;
+  repository.reserveRateLimit = async () => ({ count: 1, allowed: true });
+  repository.countOpenDeliveries = async () => 0;
+  repository.lookupAcceptedMessageId = async () => null;
+  repository.lookupIdempotency = async () => null;
+  repository.persistAcceptedEnvelope = async () => ({ message_id: envelope.message_id, duplicate: false });
+  const { acceptEnvelopeAsync } = await import('./accept-envelope.mjs');
+  const result = await acceptEnvelopeAsync(envelope, { ...options, repository, idempotency: undefined });
+  assert.equal(result.status, 202);
+});
+
+test('direct envelope between two endpoints owned by the same human skips the directory-link gate entirely', async () => {
+  const repository = fakeTransactionalRepository();
+  let called = false;
+  repository.lookupActiveDirectoryLink = async () => { called = true; return null; };
+  repository.lookupActiveCapabilityGrants = async () => [];
+  repository.lookupCapabilityRegistration = async () => null;
+  repository.reserveRateLimit = async () => ({ count: 1, allowed: true });
+  repository.countOpenDeliveries = async () => 0;
+  repository.lookupAcceptedMessageId = async () => null;
+  repository.lookupIdempotency = async () => null;
+  repository.persistAcceptedEnvelope = async () => ({ message_id: envelope.message_id, duplicate: false });
+  const sameOwnerRegistered = new Map([...options.registered, ['ep_claude', { owner_id: 'usr_codex_owner', status: 'active' }]]);
+  const { acceptEnvelopeAsync } = await import('./accept-envelope.mjs');
+  const result = await acceptEnvelopeAsync(envelope, { ...options, registered: sameOwnerRegistered, repository, idempotency: undefined });
+  assert.equal(result.status, 202);
+  assert.equal(called, false);
+});
+
+test('broadcast envelope (no recipient.endpoint_id) is never checked against directory_links', async () => {
+  const repository = fakeTransactionalRepository();
+  let called = false;
+  repository.lookupActiveDirectoryLink = async () => { called = true; return null; };
+  repository.lookupActiveCapabilityGrants = async () => [];
+  repository.lookupCapabilityRegistration = async () => ({ capability: 'sigil.core/broadcast_message' });
+  repository.reserveRateLimit = async () => ({ count: 1, allowed: true });
+  repository.countOpenDeliveries = async () => 0;
+  repository.lookupAcceptedMessageId = async () => null;
+  repository.lookupIdempotency = async () => null;
+  repository.persistAcceptedEnvelope = async () => ({ message_id: 'msg_broadcast', duplicate: false });
+  const broadcastEnvelope = { ...envelope, recipient: undefined, broadcast_scope: { conversation_id: envelope.conversation_id }, capabilities: ['sigil.core/broadcast_message'] };
+  const { acceptEnvelopeAsync } = await import('./accept-envelope.mjs');
+  await acceptEnvelopeAsync(broadcastEnvelope, { ...options, repository, idempotency: undefined, broadcastAuthorizer: () => true });
+  assert.equal(called, false);
+});
