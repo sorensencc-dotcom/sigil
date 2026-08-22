@@ -4,7 +4,13 @@ function digest(token) {
   return crypto.createHash('sha256').update(token, 'utf8').digest('hex');
 }
 
-export function createBearerAuthenticator(tokenHashes) {
+// `registry`, when given, maps endpoint_id -> { owner_id, ... } (the same
+// shape registry-store.mjs's toRegistryMap produces). A bearer token proves
+// control of one endpoint, but every human-scoped route (OIDC identities,
+// account links, directory invites/matches) needs the owner of that
+// endpoint too -- this repo has no separate human-session credential, so
+// the endpoint's registered owner_id stands in as its human_id.
+export function createBearerAuthenticator(tokenHashes, registry) {
   const hashes = tokenHashes instanceof Map ? tokenHashes : new Map(Object.entries(tokenHashes ?? {}));
   return (request) => {
     const authorization = request.headers?.authorization;
@@ -14,7 +20,9 @@ export function createBearerAuthenticator(tokenHashes) {
       : typeof protocols === 'string' && protocols.split(',').map((item) => item.trim()).find((item) => item.startsWith('sigil-bearer.'))?.slice('sigil-bearer.'.length);
     if (!token) return null;
     const endpointId = hashes.get(digest(token));
-    return endpointId ? { endpoint_id: endpointId } : null;
+    if (!endpointId) return null;
+    const ownerId = registry?.get(endpointId)?.owner_id;
+    return ownerId ? { endpoint_id: endpointId, owner_id: ownerId, human_id: ownerId } : { endpoint_id: endpointId };
   };
 }
 

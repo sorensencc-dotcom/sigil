@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { signedBytes } from './validate-envelope.mjs';
 import { createRelayServer } from './http-server.mjs';
+import { hashBearerToken } from './transport-auth.mjs';
 import { parseAttestationObject } from './approval-ceremony.mjs';
 
 function cborInt(value) { return value >= 0 ? Buffer.from([value]) : Buffer.from([0x20 + (-1 - value)]); }
@@ -623,6 +624,24 @@ test('POST /v1/directory/invites is rate-limited per issuing endpoint/human', as
   } finally { server.close(); }
 });
 
+test('POST /v1/directory/invites is reachable under the CLI\'s real bearer authenticator, with human_id resolved from the registry', async () => {
+  const repository = { createDirectoryInvite: async () => ({ invite_id: 'invite_1', code: 'plaintext-code', expires_at: '2026-08-22T00:00:00Z' }), recordAuditEvent: async () => {} };
+  const tokenHashes = new Map([[hashBearerToken('token_a'), 'ep_a']]);
+  const registry = new Map([['ep_a', { owner_id: 'usr_a', endpoint_id: 'ep_a', status: 'active' }]]);
+  const { server, baseUrl } = await startServer({ tokenHashes, registry, repository });
+  try {
+    const url = new URL(baseUrl);
+    const response = await new Promise((resolve, reject) => {
+      const req = http.request({ port: url.port, method: 'POST', path: '/v1/directory/invites', headers: { 'content-type': 'application/json', authorization: 'Bearer token_a' } }, (res) => {
+        let text = ''; res.on('data', (chunk) => text += chunk); res.on('end', () => resolve({ status: res.statusCode, body: text ? JSON.parse(text) : null }));
+      });
+      req.on('error', reject); req.end('{}');
+    });
+    assert.equal(response.status, 201);
+    assert.equal(response.body.code, 'OK');
+  } finally { server.close(); }
+});
+
 test('POST /v1/directory/invites/redeem consumes quota on a guessed (invalid) code, not on infra failure', async () => {
   const reservations = [];
   const repository = {
@@ -637,9 +656,9 @@ test('POST /v1/directory/invites/redeem consumes quota on a guessed (invalid) co
   } finally { server.close(); }
 });
 
-function startServer({ authenticate, repository, relayOrigin, oidcIssuerAllowList = new Set() } = {}) {
+function startServer({ authenticate, repository, relayOrigin, oidcIssuerAllowList = new Set(), tokenHashes, registry } = {}) {
   return new Promise((resolve) => {
-    const server = createRelayServer({ authenticate, repository, relayOrigin, oidcIssuerAllowList, now: new Date('2026-08-22T00:00:00Z') });
+    const server = createRelayServer({ authenticate, repository, relayOrigin, oidcIssuerAllowList, tokenHashes, registry, now: new Date('2026-08-22T00:00:00Z') });
     server.listen(0, () => {
       const { port } = server.address();
       const baseUrl = `http://127.0.0.1:${port}`;
