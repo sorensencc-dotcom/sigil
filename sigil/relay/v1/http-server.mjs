@@ -7,7 +7,7 @@ import { createApprovalChallenge, coseKeyToPublicKey, parseAttestationObject, ve
 import { renderApprovalPage } from './approval-ui.mjs';
 import { computeActionHash } from './action-hash.mjs';
 import { normalizeIssuer } from './issuer-normalization.mjs';
-import { assertAccountLinkCeremony, assertAllowedIssuer, boundedTokenExpiry } from './auth-policy.mjs';
+import { assertAccountLinkCeremony, assertAllowedIssuer, boundedDirectoryExpiry, boundedTokenExpiry } from './auth-policy.mjs';
 
 function normalizeIssuerOrRespond(rawIssuer, response, requestId) {
   try {
@@ -517,6 +517,106 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       const events = await repository.listAuditEventsForConversation(conversationId);
       response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(JSON.stringify({ request_id: requestId, code: 'OK', events }));
+    }
+    if (request.method === 'POST' && request.url === '/v1/directory/invites') {
+      if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
+      if (!repository?.createDirectoryInvite) return response.writeHead(503).end();
+      let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      let body = {}; if (raw) { try { body = JSON.parse(raw); } catch { body = {}; } }
+      try {
+        const expiresAt = boundedDirectoryExpiry({ now, expiresAt: body.expires_at });
+        const invite = await repository.createDirectoryInvite({ issuerEndpointId: principal.endpoint_id, issuerHumanId: principal.human_id, expiresAt, homeRelay: resolveRelayOrigin() ?? 'local', now });
+        await repository.recordAuditEvent?.({ eventType: 'directory_invite.created', subjectId: invite.invite_id, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'directory_invite', objectId: invite.invite_id, outcome: 'success', now });
+        response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', invite }));
+      } catch (error) {
+        response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'DIRECTORY_EXPIRY_INVALID', message: error.message, details: {} }));
+      }
+    }
+    if (request.method === 'POST' && request.url === '/v1/directory/invites/redeem') {
+      if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
+      if (!repository?.redeemDirectoryInvite) return response.writeHead(503).end();
+      let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      let body; try { body = JSON.parse(raw); } catch { body = null; }
+      if (!body?.code) { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'code is required', details: {} })); }
+      try {
+        const link = await repository.redeemDirectoryInvite({ code: body.code, redeemerEndpointId: principal.endpoint_id, redeemerHumanId: principal.human_id, homeRelay: resolveRelayOrigin() ?? 'local', now });
+        await repository.recordAuditEvent?.({ eventType: 'directory_link.created', subjectId: link.link_id, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'directory_link', objectId: link.link_id, outcome: 'success', now });
+        response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', link }));
+      } catch (error) {
+        // spec §3.1.4: one generic error for wrong/expired/revoked/unknown --
+        // 404 with the same INVITE_UNAVAILABLE code regardless of which.
+        response.writeHead(error.code === 'DIRECTORY_LINK_CONFLICT' ? 409 : 404, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'INVITE_UNAVAILABLE', message: error.code === 'DIRECTORY_LINK_CONFLICT' ? error.message : 'Invite code is invalid or expired', details: {} }));
+      }
+    }
+    if (request.method === 'POST' && request.url === '/v1/directory/matches') {
+      if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
+      if (!repository?.createDirectoryMatchRequest) return response.writeHead(503).end();
+      let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      let body; try { body = JSON.parse(raw); } catch { body = null; }
+      if (!body?.issuer || !body?.match_target) { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'issuer and match_target are required', details: {} })); }
+      const normalizedMatch = normalizeIssuerOrRespond(body.issuer, response, requestId);
+      if (normalizedMatch.error) return;
+      try { assertAllowedIssuer(normalizedMatch.issuer, oidcIssuerAllowList); } catch (error) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      try {
+        const expiresAt = boundedDirectoryExpiry({ now, expiresAt: body.expires_at });
+        const match = await repository.createDirectoryMatchRequest({ issuerEndpointId: principal.endpoint_id, issuerHumanId: principal.human_id, issuer: normalizedMatch.issuer, matchTarget: body.match_target, expiresAt, homeRelay: resolveRelayOrigin() ?? 'local', now });
+        await repository.recordAuditEvent?.({ eventType: 'directory_match_request.created', subjectId: match.request_id, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'directory_match_request', objectId: match.request_id, outcome: 'success', now });
+        response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', match }));
+      } catch (error) {
+        response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'DIRECTORY_EXPIRY_INVALID', message: error.message, details: {} }));
+      }
+    }
+    const nominateMatch = request.url.match(/^\/v1\/directory\/matches\/([^/]+)\/nominate$/);
+    if (request.method === 'POST' && nominateMatch) {
+      if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
+      const [, requestIdParam] = nominateMatch;
+      if (!repository?.nominateDirectoryLinkEndpoint) return response.writeHead(503).end();
+      try {
+        const link = await repository.nominateDirectoryLinkEndpoint({ requestId: requestIdParam, nominatedEndpointId: principal.endpoint_id, nominatedHumanId: principal.human_id, homeRelay: resolveRelayOrigin() ?? 'local', now });
+        await repository.recordAuditEvent?.({ eventType: 'directory_link.created', subjectId: link.link_id, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'directory_link', objectId: link.link_id, outcome: 'success', now });
+        response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', link }));
+      } catch (error) {
+        response.writeHead(error.code === 'DIRECTORY_LINK_CONFLICT' ? 409 : 404, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'MATCH_UNAVAILABLE', message: error.message, details: {} }));
+      }
+    }
+    const confirmMatch = request.url.match(/^\/v1\/directory\/links\/([^/]+)\/confirm$/);
+    if (request.method === 'POST' && confirmMatch) {
+      if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
+      const [, linkId] = confirmMatch;
+      if (!repository?.confirmDirectoryLink) return response.writeHead(503).end();
+      try {
+        const link = await repository.confirmDirectoryLink({ linkId, confirmingHumanId: principal.human_id, now });
+        if (link.status === 'active') await repository.recordAuditEvent?.({ eventType: 'directory_link.activated', subjectId: linkId, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'directory_link', objectId: linkId, outcome: 'success', now });
+        else await repository.recordAuditEvent?.({ eventType: 'directory_link.confirmed', subjectId: linkId, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'directory_link', objectId: linkId, outcome: 'success', now });
+        response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', link }));
+      } catch (error) {
+        response.writeHead(error.code === 'LINK_UNAVAILABLE' ? 404 : 403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'LINK_UNAVAILABLE', message: error.message, details: {} }));
+      }
+    }
+    const revokeMatch = request.url.match(/^\/v1\/directory\/links\/([^/]+)\/revoke$/);
+    if (request.method === 'POST' && revokeMatch) {
+      if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
+      const [, linkId] = revokeMatch;
+      if (!repository?.revokeDirectoryLink) return response.writeHead(503).end();
+      try {
+        const link = await repository.revokeDirectoryLink({ linkId, revokingHumanId: principal.human_id, now });
+        if (!link.duplicate) await repository.recordAuditEvent?.({ eventType: 'directory_link.revoked', subjectId: linkId, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'directory_link', objectId: linkId, outcome: 'success', now });
+        response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', link }));
+      } catch (error) {
+        response.writeHead(error.code === 'LINK_UNAVAILABLE' ? 404 : 403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'LINK_UNAVAILABLE', message: error.message, details: {} }));
+      }
     }
     response.writeHead(404, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ request_id: requestId, code: 'CONTEXT_NOT_FOUND', message: 'Route not found', details: {} }));
