@@ -1,37 +1,89 @@
 # Sigil CLI — status and roadmap
 
-## What exists tonight (2026-08-15)
+## What exists (2026-08-21)
 
-A CLI at `sigil/cli/sigil.mjs`, four commands:
+A packaged CLI (`@sorensencc/sigil`, `bin/sigil.mjs`), installable via
+`npm install --global github:sorensencc-dotcom/sigil` — no local checkout
+required. Core commands:
 
-- `sigil init <name> --owner <owner_id>` — generates an Ed25519 keypair + relay/connector tokens, saves them to `.sigil/<name>.identity.json`, and registers the public identity in `.sigil/registry.json`.
-- `sigil relay up --registry <path> --port <n>` — runs a real `relay/v1/http-server.mjs` in the foreground, backed by an in-memory store (`sigil/cli/memory-repository.mjs`).
-- `sigil send --identity <path> --relay-url <url> --to <endpoint_id> --to-owner <owner_id> --message "text"` — builds, signs, and posts a `chat.message` envelope.
-- `sigil inbox --identity <path> --relay-url <url> [--watch|--wait] [--loop]` — polls or listens for inbox messages, prints messages, and acknowledges delivery. `--wait` consumes exactly one message and exits; `--wait --loop` keeps re-arming after timeouts. Timeout is exit code 2, auth failure 3, connection failure 4, and malformed delivery 5.
+- `sigil init <name> --owner <owner_id>` — generates an Ed25519 keypair +
+  relay/connector tokens, saves them to `.sigil/<name>.identity.json`, and
+  registers the public identity in `.sigil/registry.json`.
+- `sigil relay up --registry <path> --port <n>` — runs `relay/v1/http-server.mjs`
+  in the foreground. Supports both the in-memory store
+  (`sigil/cli/memory-repository.mjs`) and the PostgreSQL-backed repository
+  (`relay/v1/postgres-repository.mjs`) for restart durability.
+- `sigil send --identity <path> --relay-url <url> --to <endpoint_id> --to-owner <owner_id> --message "text"` —
+  builds, signs, and posts a `chat.message` envelope.
+- `sigil inbox --identity <path> --relay-url <url> [--watch|--wait] [--loop]` —
+  polls or listens (WebSocket notify-on-delivery) for inbox messages,
+  prints them, and acknowledges delivery. `--wait` consumes one message and
+  exits; `--wait --loop` re-arms after timeouts. Exit codes: 2 timeout, 3
+  auth failure, 4 connection failure, 5 malformed delivery.
+- `sigil agent run` — autonomous background daemon: listens, executes
+  incoming tasks, signs and returns results without a human in the loop.
+- `GET /approve` — interactive WebAuthn passkey browser ceremony for
+  human-approval-gated capabilities, with loopback connector handoff.
 
-Verified end to end tonight: two identities (`ep_claude`, `ep_codex`) registered against one relay, `send` from one, `inbox` on the other, and back. Real signature verification, real HTTP, real envelope validation — no mocks in that path.
+Full v1 protocol conformance implemented and verified: JCS (RFC 8785)
+canonicalization, task request/result schemas, replay detection,
+capability authorization (fail-closed registry + row-level locking),
+rejection audits + `GET /v1/audit`, rate/depth limits, delivery receipts +
+heartbeats, identity-collision constraints +
+`POST /v1/endpoint-acknowledgements`. See
+`docs/specs/sigil-v1-conformance-gap-closure-design.md` for the full
+build record (all 8 workstreams closed, no open items).
 
-No `package.json`/`bin` entry yet (matches this repo's existing "no root package.json" convention — see main `README.md`). Invoke as `node sigil/cli/sigil.mjs <command>`.
+CI: GitHub Actions matrix (Node 22.x/24.x, Ubuntu/Windows, live PostgreSQL
+16 service container). 366 tests passing (336 unit/contract + 30 live DB).
 
 ## What this is not
 
-- **Not multi-user.** The registry is a local JSON file you edit by hand (via `init`). There's no directory service, no way to discover or trust a stranger's endpoint, no identity verification beyond "the public key in this file matches."
-- **Not hosted.** `sigil relay up` is a foreground process on localhost. Its in-memory store is intentionally ephemeral: messages, acknowledgements, and idempotency state are lost on restart. Use the PostgreSQL relay path for restart durability.
-- **Not integrated into any chat UI.** Sending a message does not make it appear inside an actual Claude or Codex conversation. Host adapters may background `sigil inbox --wait` and act on the host's task-completion notification, but that notification is a host convention, not a Sigil protocol guarantee.
-- **Not a packaged install.** `npm install -g sigil` installs an unrelated package (confirmed 2026-08-15 — `sigil` on this machine's PATH resolves to `C:\Users\soren\AppData\Roaming\npm\sigil.cmd`, a different tool). There is no published package for this repo.
+- **Not multi-user in the trust sense.** The registry is still a local
+  JSON file populated by `init`. There's no directory service and no way
+  for two people who've never met to discover or authorize each other's
+  endpoints — WebAuthn covers *approving a capability request from an
+  already-known endpoint*, not *first contact*.
+- **Not centrally hosted.** `sigil relay up` runs on whatever host you
+  start it on. The PostgreSQL repository gives restart durability, but
+  nobody operates a shared, reachable, TLS-terminated instance of it —
+  every pair of agents currently needs its own relay.
+- **Not integrated into any chat UI.** Sending a message does not make it
+  appear inside a live Claude or Codex conversation turn. Host adapters
+  background `sigil inbox --wait` and act on the host's own
+  task-completion convention; that's a per-host convention Sigil doesn't
+  control, not a protocol guarantee.
 
 ## What a real "message Claude ↔ Codex, works for other people" product needs
 
-Roughly in the order it'd need to be tackled:
-
-1. **Packaging** — a real `bin` entry (own `package.json` scoped to `sigil/cli/`, or a root one if the "no package.json" convention is revisited), published so `npm install -g @you/sigil` (or similar) is the whole install step.
-2. **A relay someone actually hosts** — not `sigil relay up` in a terminal window. Needs the PostgreSQL-backed repository (`relay/v1/postgres-repository.mjs`) already in this repo, deployed somewhere reachable, plus operational concerns (TLS, backups, uptime) this repo doesn't address at all.
-3. **Real identity/directory** — some way for two people who've never met to find and authorize each other's endpoints. Today `init` trusts whatever's in a local file. `docs/specs/sigil-human-approval-auth-spec-v1.0.md` and `sigil-plugin-connector-auth-spec-v1.0.md` sketch pieces of this (WebAuthn approval ceremonies, OIDC identity linking) but nothing wires a first-time "add this person" flow.
-4. **Push, not poll** — `sigil inbox --wait` now uses the existing WebSocket notify-on-delivery stream for one-shot host handoff. A real product still needs a native chat-surface adapter.
-5. **Actual chat-surface integration** — the hard, unbuilt part. Getting a Sigil message to show up as a turn inside a live Claude conversation or a live Codex conversation requires each product to expose some extension point Sigil can write into. Neither this repo nor (as far as this session found) either product currently has that hook. Until that exists, the ceiling for "does this feel like messaging," even with everything else built, is: a person runs `sigil inbox --watch` in a terminal and reads it there.
+1. ~~**Packaging**~~ — done. `npm install --global github:sorensencc-dotcom/sigil`.
+2. **A relay someone actually hosts** — the PostgreSQL repository exists;
+   nobody has deployed a shared, reachable instance with TLS/backups/uptime.
+   Still open.
+3. **Real identity/directory** — first-contact trust between strangers.
+   `docs/specs/sigil-human-approval-auth-spec-v1.0.md` and
+   `sigil-plugin-connector-auth-spec-v1.0.md` cover approving an already-
+   registered endpoint's capability requests (WebAuthn) and connector-level
+   auth, but neither specs a "here's a stranger's endpoint, decide whether
+   to trust them" flow. Still open.
+4. ~~**Push, not poll**~~ — done. WebSocket delivery-notify stream backs
+   `sigil inbox --wait`; `sigil agent run` daemonizes it further.
+5. **Actual chat-surface integration** — still the hard, unbuilt part.
+   Getting a Sigil message to appear as a turn inside a live Claude or
+   Codex conversation requires each host product to expose an extension
+   point Sigil can write into. Neither product currently has that hook (as
+   far as any session here has found). Until it exists, the ceiling stays:
+   a person runs `sigil inbox --watch`/`agent run` and the message surfaces
+   via whatever host-specific convention (hook, MCP tool call) that host
+   supports — never a native inline turn.
 
 ## Immediate next candidates (not started)
 
-- Give the CLI a real `package.json` + `bin` so step 1 above stops being manual.
-- Add host-specific adapter instructions for backgrounding `sigil inbox --wait` and re-arming after each turn.
-- Decide whether "hosted relay" is in scope at all, or whether this stays a local/self-hosted tool by design.
+- Spec out first-contact identity/directory trust (item 3) — what proves
+  a stranger's endpoint claim is real, and what the human-approval flow
+  looks like for *adding* an endpoint, not just approving its requests.
+- Decide whether a shared hosted relay (item 2) is in scope at all, or
+  whether Sigil stays self-hosted-per-pair by design; if in scope, spec
+  deployment/ops (TLS, backups, uptime) this repo doesn't address yet.
+- Chat-surface integration (item 5) is blocked on host products exposing
+  a hook; track but don't spec until one does.
