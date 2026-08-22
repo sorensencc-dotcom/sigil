@@ -15,6 +15,22 @@ export function boundedTokenExpiry({ now = new Date(), expiresAt } = {}) {
   return expiry;
 }
 
+export const DIRECTORY_EXPIRY_DEFAULT_MS = 24 * 60 * 60 * 1000;
+export const DIRECTORY_EXPIRY_MIN_MS = 60 * 60 * 1000;
+export const DIRECTORY_EXPIRY_MAX_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Bounds invite/match-request expiry to spec §7's [1h, 7d] range, same
+// shape as boundedTokenExpiry above.
+export function boundedDirectoryExpiry({ now = new Date(), expiresAt } = {}) {
+  const issued = now instanceof Date ? now : new Date(now);
+  const expiry = expiresAt ? (expiresAt instanceof Date ? expiresAt : new Date(expiresAt)) : new Date(issued.getTime() + DIRECTORY_EXPIRY_DEFAULT_MS);
+  const durationMs = expiry.getTime() - issued.getTime();
+  if (Number.isNaN(expiry.getTime()) || durationMs < DIRECTORY_EXPIRY_MIN_MS || durationMs > DIRECTORY_EXPIRY_MAX_MS) {
+    throw Object.assign(new Error('Directory invite/match expiry must be between 1 hour and 7 days'), { code: 'DIRECTORY_EXPIRY_INVALID' });
+  }
+  return expiry;
+}
+
 export function assertAssurance(assurance) {
   if (!Object.hasOwn(ASSURANCE_LEVELS, assurance)) throw Object.assign(new Error('Unsupported assurance level'), { code: 'ASSURANCE_LEVEL_INVALID' });
   return assurance;
