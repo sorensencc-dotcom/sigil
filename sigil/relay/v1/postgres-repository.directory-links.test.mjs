@@ -71,3 +71,60 @@ test('directory link confirmation, revocation, and lookup', { skip: !connectionS
     assert.equal(gone, null);
   } finally { afterRevoke.release(); }
 });
+
+test('confirmed_by attribution is correct when the redeemer/nominee endpoint sorts before the issuer endpoint', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  assertDisposableTestDatabase(connectionString);
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  for (const file of (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort()) {
+    await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
+  }
+  // Issuer endpoint ('ep_z_...') deliberately sorts AFTER the
+  // redeemer/nominee endpoint ('ep_a_...') lexicographically -- the inverse
+  // of every other test in this file, which masked a real bug where
+  // a_confirmed_by/b_confirmed_by were computed relative to "is this the
+  // issuer's side" instead of "did this side actually confirm."
+  const ids = {
+    issuer: `usr_issuer_${suffix}`, redeemer: `usr_redeemer_${suffix}`, nominee: `usr_nominee_${suffix}`,
+    epIssuer: `ep_z_issuer_${suffix}`, epRedeemer: `ep_a_redeemer_${suffix}`, epNominee: `ep_a_nominee_${suffix}`
+  };
+  await pool.query(`
+    INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.issuer}', 'active', NOW()), ('${ids.redeemer}', 'active', NOW()), ('${ids.nominee}', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
+      VALUES ('${ids.epIssuer}', '${ids.issuer}', 'claude', 'install_issuer', 'Issuer', 'active', NOW()),
+             ('${ids.epRedeemer}', '${ids.redeemer}', 'codex', 'install_redeemer', 'Redeemer', 'active', NOW()),
+             ('${ids.epNominee}', '${ids.nominee}', 'codex', 'install_nominee', 'Nominee', 'active', NOW());
+    INSERT INTO oidc_issuer_allowlist (issuer, display_label, added_at)
+      VALUES ('https://issuer.example', 'Test Issuer', NOW());
+  `);
+  const repository = new PostgresRepository({ pool });
+  const now = new Date('2026-08-21T00:00:00Z');
+
+  // Invite path.
+  const invite = await repository.createDirectoryInvite({ issuerEndpointId: ids.epIssuer, issuerHumanId: ids.issuer, expiresAt: new Date(now.getTime() + 60 * 60 * 1000), homeRelay: 'relay.local', now });
+  const redeemed = await repository.redeemDirectoryInvite({ code: invite.code, redeemerEndpointId: ids.epRedeemer, redeemerHumanId: ids.redeemer, homeRelay: 'relay.local', now });
+  const inviteLinkRow = await pool.query('SELECT endpoint_a, endpoint_b, a_confirmed_at, b_confirmed_at, a_confirmed_by, b_confirmed_by FROM directory_links WHERE link_id = $1', [redeemed.link_id]);
+  const inviteRow = inviteLinkRow.rows[0];
+  assert.equal(inviteRow.endpoint_a, ids.epRedeemer, 'redeemer endpoint sorts first');
+  assert.equal(inviteRow.endpoint_b, ids.epIssuer, 'issuer endpoint sorts second');
+  assert.notEqual(inviteRow.a_confirmed_at, null);
+  assert.equal(inviteRow.b_confirmed_at, null);
+  assert.equal(inviteRow.a_confirmed_by, ids.redeemer, 'the side that actually confirmed (redeemer) must be attributed to the redeemer, not the issuer');
+  assert.equal(inviteRow.b_confirmed_by, null, 'the unconfirmed side must not carry a confirmed_by value');
+
+  // OIDC-match path.
+  const request = await repository.createDirectoryMatchRequest({ issuerEndpointId: ids.epIssuer, issuerHumanId: ids.issuer, issuer: 'https://issuer.example', matchTarget: `hash_${suffix}`, expiresAt: new Date(now.getTime() + 60 * 60 * 1000), homeRelay: 'relay.local', now });
+  await repository.claimDirectoryMatch({ issuer: 'https://issuer.example', matchTarget: `hash_${suffix}`, matchedHumanId: ids.nominee, now });
+  const nominated = await repository.nominateDirectoryLinkEndpoint({ requestId: request.request_id, nominatedEndpointId: ids.epNominee, nominatedHumanId: ids.nominee, homeRelay: 'relay.local', now });
+  const matchLinkRow = await pool.query('SELECT endpoint_a, endpoint_b, a_confirmed_at, b_confirmed_at, a_confirmed_by, b_confirmed_by FROM directory_links WHERE link_id = $1', [nominated.link_id]);
+  const matchRow = matchLinkRow.rows[0];
+  assert.equal(matchRow.endpoint_a, ids.epNominee, 'nominee endpoint sorts first');
+  assert.equal(matchRow.endpoint_b, ids.epIssuer, 'issuer endpoint sorts second');
+  assert.notEqual(matchRow.a_confirmed_at, null);
+  assert.equal(matchRow.b_confirmed_at, null);
+  assert.equal(matchRow.a_confirmed_by, ids.nominee, 'the side that actually confirmed (nominee) must be attributed to the nominee, not the issuer');
+  assert.equal(matchRow.b_confirmed_by, null, 'the unconfirmed side must not carry a confirmed_by value');
+});

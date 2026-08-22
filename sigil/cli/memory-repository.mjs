@@ -207,6 +207,12 @@ export function createMemoryRepository() {
       const found = [...directoryLinks.values()].find((l) => l.status === 'active' && ((l.endpoint_a === endpointIdA && l.endpoint_b === endpointIdB) || (l.endpoint_a === endpointIdB && l.endpoint_b === endpointIdA)));
       return found ? { link_id: found.link_id, status: found.status } : null;
     },
+    // Test-only: exposes the raw stored record (including a_confirmed_by/
+    // b_confirmed_by, which no production-facing method returns) so
+    // regression tests can assert on confirmation attribution directly.
+    _debugGetDirectoryLink(linkId) {
+      return directoryLinks.get(linkId);
+    },
     async acknowledgeDelivery({ deliveryId, endpointId, now }) {
       const current = deliveries.get(deliveryId);
       if (!current || current.recipient_endpoint_id !== endpointId) throw Object.assign(new Error('Delivery not found'), { code: 'DELIVERY_UNAVAILABLE' });

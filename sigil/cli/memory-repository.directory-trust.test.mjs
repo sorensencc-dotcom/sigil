@@ -173,3 +173,36 @@ test('memory relay directory link lookup: finds an active link regardless of end
   const gone = await repository.lookupActiveDirectoryLink('ep_lookup_a', 'ep_lookup_b');
   assert.equal(gone, null);
 });
+
+test('confirmed_by attribution is correct when the redeemer/nominee endpoint sorts before the issuer endpoint', async () => {
+  const repository = createMemoryRepository();
+  const now = new Date('2026-08-22T00:00:00Z');
+  const expiresAt = new Date(now.getTime() + 60 * 60 * 1000);
+
+  // Issuer endpoint ('ep_z_...') deliberately sorts AFTER the
+  // redeemer/nominee endpoint ('ep_a_...') -- the inverse of every other
+  // test in this file, which masked a real bug where a_confirmed_by/
+  // b_confirmed_by were computed relative to "is this the issuer's side"
+  // instead of "did this side actually confirm."
+
+  const invite = await repository.createDirectoryInvite({ issuerEndpointId: 'ep_z_sort_issuer', issuerHumanId: 'human_sort_issuer', homeRelay: 'relay.local', now });
+  const redeemed = await repository.redeemDirectoryInvite({ code: invite.code, redeemerEndpointId: 'ep_a_sort_redeemer', redeemerHumanId: 'human_sort_redeemer', homeRelay: 'relay.local', now });
+  const inviteLink = repository._debugGetDirectoryLink(redeemed.link_id);
+  assert.equal(inviteLink.endpoint_a, 'ep_a_sort_redeemer', 'redeemer endpoint sorts first');
+  assert.equal(inviteLink.endpoint_b, 'ep_z_sort_issuer', 'issuer endpoint sorts second');
+  assert.notEqual(inviteLink.a_confirmed_at, null);
+  assert.equal(inviteLink.b_confirmed_at, null);
+  assert.equal(inviteLink.a_confirmed_by, 'human_sort_redeemer', 'the side that actually confirmed (redeemer) must be attributed to the redeemer, not the issuer');
+  assert.equal(inviteLink.b_confirmed_by, null, 'the unconfirmed side must not carry a confirmed_by value');
+
+  const request = await repository.createDirectoryMatchRequest({ issuerEndpointId: 'ep_z_sort_issuer2', issuerHumanId: 'human_sort_issuer2', issuer: 'https://accounts.example.com', matchTarget: 'sort-target@example.com', expiresAt, homeRelay: 'relay.local', now });
+  await repository.claimDirectoryMatch({ issuer: 'https://accounts.example.com', matchTarget: 'sort-target@example.com', matchedHumanId: 'human_sort_nominee', now });
+  const nominated = await repository.nominateDirectoryLinkEndpoint({ requestId: request.request_id, nominatedEndpointId: 'ep_a_sort_nominee', nominatedHumanId: 'human_sort_nominee', homeRelay: 'relay.local', now });
+  const matchLink = repository._debugGetDirectoryLink(nominated.link_id);
+  assert.equal(matchLink.endpoint_a, 'ep_a_sort_nominee', 'nominee endpoint sorts first');
+  assert.equal(matchLink.endpoint_b, 'ep_z_sort_issuer2', 'issuer endpoint sorts second');
+  assert.notEqual(matchLink.a_confirmed_at, null);
+  assert.equal(matchLink.b_confirmed_at, null);
+  assert.equal(matchLink.a_confirmed_by, 'human_sort_nominee', 'the side that actually confirmed (nominee) must be attributed to the nominee, not the issuer');
+  assert.equal(matchLink.b_confirmed_by, null, 'the unconfirmed side must not carry a confirmed_by value');
+});
