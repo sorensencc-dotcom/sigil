@@ -26,6 +26,7 @@ export function createMemoryRepository() {
   const acknowledgements = new Map();
   const directoryInvites = new Map(); // code -> invite row (memory repo has no separate hash step -- single process, nothing to hide from itself)
   const directoryLinks = new Map();
+  const directoryMatchRequests = new Map();
   return {
     // Single-process, no real client/connection -- the transaction wrapper
     // exists so acceptEnvelopeAsync's repository-aware path works unchanged
@@ -122,6 +123,59 @@ export function createMemoryRepository() {
         revoked_at: null, home_relay: homeRelay, created_at: timestamp
       };
       directoryLinks.set(linkId, link);
+      return { link_id: linkId, status: 'pending' };
+    },
+    async createDirectoryMatchRequest({ issuerEndpointId, issuerHumanId, issuer, matchTarget, expiresAt, homeRelay, now = new Date() }) {
+      const requestId = `dreq_${crypto.randomUUID()}`;
+      const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      // Mirrors createDirectoryInvite's use of boundedDirectoryExpiry (same
+      // [1h, 7d] bound and Date-coercion) instead of calling
+      // expiresAt.toISOString() directly, which would throw on an
+      // undefined/string expiresAt.
+      const expiry = boundedDirectoryExpiry({ now, expiresAt });
+      directoryMatchRequests.set(requestId, { request_id: requestId, issuer_endpoint_id: issuerEndpointId, issuer_human_id: issuerHumanId, issuer, match_target: matchTarget, status: 'pending', expires_at: expiry.toISOString(), home_relay: homeRelay, created_at: timestamp });
+      return { request_id: requestId };
+    },
+    // Single-process, no real client/connection -- "concurrency" here
+    // reduces to first-write-wins on a synchronous find + mutation, with no
+    // `await` between the find and the status flip so nothing else in this
+    // single-threaded event loop can interleave and see the same pending
+    // row: equivalent in effect to Postgres's SELECT ... FOR UPDATE SKIP
+    // LOCKED for a store with only one writer ever active at a time.
+    async claimDirectoryMatch({ issuer, matchTarget, matchedHumanId, now = new Date() }) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      const candidate = [...directoryMatchRequests.values()].find((r) => r.issuer === issuer && r.match_target === matchTarget && r.status === 'pending' && r.expires_at > timestamp);
+      if (!candidate) return null;
+      candidate.status = 'matched'; candidate.matched_human_id = matchedHumanId; candidate.matched_at = timestamp;
+      return { request_id: candidate.request_id };
+    },
+    async nominateDirectoryLinkEndpoint({ requestId, nominatedEndpointId, nominatedHumanId, homeRelay, now = new Date() }) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      const request = directoryMatchRequests.get(requestId);
+      if (!request || request.status !== 'matched' || request.matched_human_id !== nominatedHumanId) {
+        throw Object.assign(new Error('Match request is invalid or already consumed'), { code: 'MATCH_UNAVAILABLE' });
+      }
+      // Mirrors redeemDirectoryInvite's human_a <> human_b guard (backed on
+      // the Postgres side by directory_links' CHECK constraint): a human
+      // can't link to their own other endpoint via their own match. Checked
+      // before the request is marked consumed, same as the Postgres path.
+      if (request.issuer_human_id === nominatedHumanId) {
+        throw Object.assign(new Error('Match request is invalid or already consumed'), { code: 'MATCH_UNAVAILABLE' });
+      }
+      request.status = 'consumed'; request.consumed_at = timestamp;
+      const [endpointA, endpointB] = [request.issuer_endpoint_id, nominatedEndpointId].sort();
+      const existing = [...directoryLinks.values()].find((l) => l.endpoint_a === endpointA && l.endpoint_b === endpointB && (l.status === 'pending' || l.status === 'active'));
+      if (existing) throw Object.assign(new Error('A directory link already exists or is pending between these endpoints'), { code: 'DIRECTORY_LINK_CONFLICT' });
+      const linkId = `link_${crypto.randomUUID()}`;
+      const [humanA, humanB] = endpointA === request.issuer_endpoint_id ? [request.issuer_human_id, nominatedHumanId] : [nominatedHumanId, request.issuer_human_id];
+      directoryLinks.set(linkId, {
+        link_id: linkId, endpoint_a: endpointA, endpoint_b: endpointB, human_a: humanA, human_b: humanB, status: 'pending', initiated_via: 'oidc_match',
+        a_confirmed_at: endpointA === request.issuer_endpoint_id ? null : timestamp,
+        b_confirmed_at: endpointA === request.issuer_endpoint_id ? timestamp : null,
+        a_confirmed_by: endpointA === request.issuer_endpoint_id ? null : request.issuer_human_id,
+        b_confirmed_by: endpointA === request.issuer_endpoint_id ? nominatedHumanId : request.issuer_human_id,
+        revoked_at: null, home_relay: homeRelay, created_at: timestamp
+      });
       return { link_id: linkId, status: 'pending' };
     },
     async acknowledgeDelivery({ deliveryId, endpointId, now }) {
