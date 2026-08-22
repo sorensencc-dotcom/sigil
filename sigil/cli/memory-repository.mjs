@@ -2,7 +2,9 @@
 // (see relay/v1/postgres-repository.mjs). Enough of the interface to run
 // a real local relay for a demo or single-machine session. State lives
 // only in this process -- restarting `sigil relay up` loses history.
+import crypto from 'node:crypto';
 import { transitionDelivery } from '../relay/v1/delivery-state.mjs';
+import { boundedDirectoryExpiry } from '../relay/v1/auth-policy.mjs';
 
 const SEEDED_CAPABILITIES = new Map([
   ['sigil.core/read_shared_context', { namespace: 'sigil.core', risk_tier: 'standard' }],
@@ -22,6 +24,8 @@ export function createMemoryRepository() {
   const grants = [];
   const rateWindows = new Map();
   const acknowledgements = new Map();
+  const directoryInvites = new Map(); // code -> invite row (memory repo has no separate hash step -- single process, nothing to hide from itself)
+  const directoryLinks = new Map();
   return {
     // Single-process, no real client/connection -- the transaction wrapper
     // exists so acceptEnvelopeAsync's repository-aware path works unchanged
@@ -81,6 +85,44 @@ export function createMemoryRepository() {
       const record = { viewer_owner_id: viewerOwnerId, acknowledged_endpoint_id: acknowledgedEndpointId, acknowledged_at: (now instanceof Date ? now : new Date(now)).toISOString() };
       acknowledgements.set(`${viewerOwnerId}:${acknowledgedEndpointId}`, record);
       return record;
+    },
+    async createDirectoryInvite({ issuerEndpointId, issuerHumanId, expiresAt, homeRelay, now = new Date() }) {
+      const inviteId = `invite_${crypto.randomUUID()}`;
+      const code = crypto.randomBytes(24).toString('base64url');
+      const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      const expiry = boundedDirectoryExpiry({ now, expiresAt });
+      directoryInvites.set(code, { invite_id: inviteId, issuer_endpoint_id: issuerEndpointId, issuer_human_id: issuerHumanId, status: 'pending', expires_at: expiry.toISOString(), home_relay: homeRelay, created_at: timestamp });
+      return { invite_id: inviteId, code, expires_at: expiry.toISOString() };
+    },
+    async redeemDirectoryInvite({ code, redeemerEndpointId, redeemerHumanId, homeRelay, now = new Date() }) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      const invite = directoryInvites.get(code);
+      if (!invite || invite.status !== 'pending' || invite.expires_at <= timestamp) {
+        throw Object.assign(new Error('Invite code is invalid or expired'), { code: 'INVITE_UNAVAILABLE' });
+      }
+      // Mirrors postgres-repository.mjs's human_a <> human_b guard (backed
+      // there by directory_links' CHECK constraint): a human can't link to
+      // their own other endpoint via their own invite. Checked before the
+      // invite is marked redeemed, same as the Postgres path.
+      if (invite.issuer_human_id === redeemerHumanId) {
+        throw Object.assign(new Error('Invite code is invalid or expired'), { code: 'INVITE_UNAVAILABLE' });
+      }
+      invite.status = 'redeemed'; invite.redeemed_by_human_id = redeemerHumanId; invite.redeemed_at = timestamp;
+      const [endpointA, endpointB] = [invite.issuer_endpoint_id, redeemerEndpointId].sort();
+      const existing = [...directoryLinks.values()].find((l) => l.endpoint_a === endpointA && l.endpoint_b === endpointB && (l.status === 'pending' || l.status === 'active'));
+      if (existing) throw Object.assign(new Error('A directory link already exists or is pending between these endpoints'), { code: 'DIRECTORY_LINK_CONFLICT' });
+      const linkId = `link_${crypto.randomUUID()}`;
+      const [humanA, humanB] = endpointA === invite.issuer_endpoint_id ? [invite.issuer_human_id, redeemerHumanId] : [redeemerHumanId, invite.issuer_human_id];
+      const link = {
+        link_id: linkId, endpoint_a: endpointA, endpoint_b: endpointB, human_a: humanA, human_b: humanB, status: 'pending', initiated_via: 'invite',
+        a_confirmed_at: endpointA === invite.issuer_endpoint_id ? null : timestamp,
+        b_confirmed_at: endpointA === invite.issuer_endpoint_id ? timestamp : null,
+        a_confirmed_by: endpointA === invite.issuer_endpoint_id ? null : invite.issuer_human_id,
+        b_confirmed_by: endpointA === invite.issuer_endpoint_id ? redeemerHumanId : invite.issuer_human_id,
+        revoked_at: null, home_relay: homeRelay, created_at: timestamp
+      };
+      directoryLinks.set(linkId, link);
+      return { link_id: linkId, status: 'pending' };
     },
     async acknowledgeDelivery({ deliveryId, endpointId, now }) {
       const current = deliveries.get(deliveryId);

@@ -1,8 +1,9 @@
 import pg from 'pg';
 import crypto from 'node:crypto';
 import { canTransition } from './delivery-state.mjs';
-import { assertAssurance } from './auth-policy.mjs';
+import { assertAssurance, boundedDirectoryExpiry } from './auth-policy.mjs';
 import { withTransaction } from './with-transaction.mjs';
+import { generateInviteCode } from './directory-trust.mjs';
 
 export class PostgresRepository {
   constructor({ pool = new pg.Pool(), schema = 'public' } = {}) { this.pool = pool; this.schema = schema; }
@@ -183,6 +184,69 @@ export class PostgresRepository {
       await client.query(`INSERT INTO audit_events (event_id,event_type,subject_id,actor_id,object_type,object_id,outcome,created_at) VALUES ($1,'endpoint.created',$2,$3,'endpoint',$2,'success',$4)`, [`audit_${crypto.randomUUID()}`, endpointId, ownerId, timestamp]);
       return endpoint.rows[0];
     } catch (error) { if (error.code === '23505' && error.constraint === 'endpoints_owner_display_name_idx') throw Object.assign(new Error('An endpoint with this display name already exists for this owner'), { code: 'DISPLAY_NAME_COLLISION' }); throw error; } });
+  }
+  async createDirectoryInvite({ issuerEndpointId, issuerHumanId, expiresAt, homeRelay, now = new Date() } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const { code, codeHash } = generateInviteCode();
+    const inviteId = `invite_${crypto.randomUUID()}`;
+    // expiresAt is optional at the repository layer -- boundedDirectoryExpiry
+    // (Task 2, auth-policy.mjs) supplies and validates the spec §7 [1h, 7d]
+    // default/bound so callers (this test, and the HTTP route in Task 7)
+    // don't have to compute it themselves.
+    const expiry = boundedDirectoryExpiry({ now, expiresAt });
+    const result = await this.pool.query(
+      `INSERT INTO directory_invites (invite_id, issuer_endpoint_id, issuer_human_id, code_hash, status, expires_at, home_relay, created_at)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7)
+       RETURNING invite_id, expires_at`,
+      [inviteId, issuerEndpointId, issuerHumanId, codeHash, expiry.toISOString(), homeRelay, timestamp]
+    );
+    return { invite_id: result.rows[0].invite_id, code, expires_at: result.rows[0].expires_at };
+  }
+  // Spec §3.1 step 3/4: single generic error for wrong/expired/revoked/
+  // unknown code, and an explicit endpoint-ownership check (round 1 review
+  // finding) before any code check is treated as successful.
+  async redeemDirectoryInvite({ code, redeemerEndpointId, redeemerHumanId, homeRelay, now = new Date() } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+    return this.withTransaction(async (client) => {
+      const ownership = await client.query('SELECT owner_id FROM endpoints WHERE endpoint_id = $1', [redeemerEndpointId]);
+      if (!ownership.rows[0] || ownership.rows[0].owner_id !== redeemerHumanId) {
+        throw Object.assign(new Error('Invite code is invalid or expired'), { code: 'INVITE_UNAVAILABLE' });
+      }
+      const invite = await client.query(
+        `SELECT * FROM directory_invites WHERE code_hash = $1 AND status = 'pending' AND expires_at > $2 FOR UPDATE`,
+        [codeHash, timestamp]
+      );
+      if (!invite.rows[0]) throw Object.assign(new Error('Invite code is invalid or expired'), { code: 'INVITE_UNAVAILABLE' });
+      const row = invite.rows[0];
+      // A human can't link to their own other endpoint via their own invite
+      // (directory_links' human_a <> human_b CHECK enforces this at the DB
+      // layer too) -- reject before mutating the invite so a self-redeem
+      // attempt doesn't burn a code the issuer could otherwise still use.
+      if (row.issuer_human_id === redeemerHumanId) {
+        throw Object.assign(new Error('Invite code is invalid or expired'), { code: 'INVITE_UNAVAILABLE' });
+      }
+      await client.query(`UPDATE directory_invites SET status = 'redeemed', redeemed_by_human_id = $1, redeemed_at = $2 WHERE invite_id = $3`, [redeemerHumanId, timestamp, row.invite_id]);
+      const [endpointA, endpointB] = [row.issuer_endpoint_id, redeemerEndpointId].sort();
+      const [humanA, humanB] = endpointA === row.issuer_endpoint_id ? [row.issuer_human_id, redeemerHumanId] : [redeemerHumanId, row.issuer_human_id];
+      const aConfirmedAt = endpointA === row.issuer_endpoint_id ? null : timestamp;
+      const bConfirmedAt = endpointA === row.issuer_endpoint_id ? timestamp : null;
+      const bConfirmedBy = endpointA === row.issuer_endpoint_id ? redeemerHumanId : row.issuer_human_id;
+      const aConfirmedBy = endpointA === row.issuer_endpoint_id ? null : row.issuer_human_id;
+      let link;
+      try {
+        link = await client.query(
+          `INSERT INTO directory_links (link_id, endpoint_a, endpoint_b, human_a, human_b, status, initiated_via, source_invite_id, a_confirmed_at, b_confirmed_at, a_confirmed_by, b_confirmed_by, home_relay, created_at)
+           VALUES ($1, $2, $3, $4, $5, 'pending', 'invite', $6, $7, $8, $9, $10, $11, $12)
+           RETURNING link_id, status`,
+          [`link_${crypto.randomUUID()}`, endpointA, endpointB, humanA, humanB, row.invite_id, aConfirmedAt, bConfirmedAt, aConfirmedBy, bConfirmedBy, homeRelay, timestamp]
+        );
+      } catch (error) {
+        if (error.code === '23505') throw Object.assign(new Error('A directory link already exists or is pending between these endpoints'), { code: 'DIRECTORY_LINK_CONFLICT' });
+        throw error;
+      }
+      return { link_id: link.rows[0].link_id, status: link.rows[0].status };
+    });
   }
   async getDelivery(deliveryId, endpointId) {
     const result = await this.pool.query('SELECT * FROM deliveries WHERE delivery_id = $1 AND recipient_endpoint_id = $2', [deliveryId, endpointId]);
