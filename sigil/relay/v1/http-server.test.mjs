@@ -607,6 +607,36 @@ test('POST /v1/directory/links/:linkId/revoke succeeds for either party', async 
   } finally { server.close(); }
 });
 
+test('POST /v1/directory/invites is rate-limited per issuing endpoint/human', async () => {
+  const reservations = [];
+  const repository = {
+    createDirectoryInvite: async () => ({ invite_id: 'invite_1', code: 'x', expires_at: '2026-08-22T00:00:00Z' }),
+    reserveRateLimit: async (scopeKind, scopeId) => { reservations.push({ scopeKind, scopeId }); return { count: 21, allowed: false }; },
+    recordAuditEvent: async () => {}
+  };
+  const { server, baseUrl } = await startServer({ authenticate: async () => ({ endpoint_id: 'ep_a', human_id: 'usr_a' }), repository });
+  try {
+    const response = await request(baseUrl, 'POST', '/v1/directory/invites', {});
+    assert.equal(response.status, 429);
+    assert.equal(response.body.code, 'RATE_LIMITED');
+    assert.equal(reservations[0].scopeKind, 'directory_invite_create');
+  } finally { server.close(); }
+});
+
+test('POST /v1/directory/invites/redeem consumes quota on a guessed (invalid) code, not on infra failure', async () => {
+  const reservations = [];
+  const repository = {
+    reserveRateLimit: async (scopeKind, scopeId) => { reservations.push({ scopeKind, scopeId }); return { count: 1, allowed: true }; },
+    redeemDirectoryInvite: async () => { throw Object.assign(new Error('Invite code is invalid or expired'), { code: 'INVITE_UNAVAILABLE' }); }
+  };
+  const { server, baseUrl } = await startServer({ authenticate: async () => ({ endpoint_id: 'ep_b', human_id: 'usr_b' }), repository });
+  try {
+    await request(baseUrl, 'POST', '/v1/directory/invites/redeem', { code: 'guess' });
+    assert.equal(reservations.length, 1);
+    assert.equal(reservations[0].scopeKind, 'directory_invite_redeem');
+  } finally { server.close(); }
+});
+
 function startServer({ authenticate, repository, relayOrigin, oidcIssuerAllowList = new Set() } = {}) {
   return new Promise((resolve) => {
     const server = createRelayServer({ authenticate, repository, relayOrigin, oidcIssuerAllowList, now: new Date('2026-08-22T00:00:00Z') });

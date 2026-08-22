@@ -8,6 +8,7 @@ import { renderApprovalPage } from './approval-ui.mjs';
 import { computeActionHash } from './action-hash.mjs';
 import { normalizeIssuer } from './issuer-normalization.mjs';
 import { assertAccountLinkCeremony, assertAllowedIssuer, boundedDirectoryExpiry, boundedTokenExpiry } from './auth-policy.mjs';
+import { resolveDirectoryRateLimits } from './relay-config.mjs';
 
 function normalizeIssuerOrRespond(rawIssuer, response, requestId) {
   try {
@@ -49,6 +50,13 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     }
     assertionRateLimits.set(challengeId, { count: 1, expiresAt: nowMs + ATTEMPT_WINDOW_MS });
     return true;
+  }
+
+  async function reserveDirectoryQuota(scopeKind, scopeId, nowMsValue) {
+    if (!repository?.reserveRateLimit) return { allowed: true };
+    const limits = resolveDirectoryRateLimits();
+    const windowStart = new Date(Math.floor(nowMsValue / 60_000) * 60_000).toISOString();
+    return repository.reserveRateLimit(scopeKind, scopeId, windowStart, limits[scopeKind]);
   }
 
   return http.createServer(async (request, response) => {
@@ -521,6 +529,8 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     if (request.method === 'POST' && request.url === '/v1/directory/invites') {
       if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
       if (!repository?.createDirectoryInvite) return response.writeHead(503).end();
+      const inviteQuota = await reserveDirectoryQuota('directory_invite_create', principal.human_id, nowMs);
+      if (!inviteQuota.allowed) { response.writeHead(429, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'RATE_LIMITED', message: 'directory_invite_create rate limit exceeded', details: {} })); }
       let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       let body = {}; if (raw) { try { body = JSON.parse(raw); } catch { body = {}; } }
       try {
@@ -537,6 +547,8 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     if (request.method === 'POST' && request.url === '/v1/directory/invites/redeem') {
       if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
       if (!repository?.redeemDirectoryInvite) return response.writeHead(503).end();
+      const redeemQuota = await reserveDirectoryQuota('directory_invite_redeem', principal.human_id, nowMs);
+      if (!redeemQuota.allowed) { response.writeHead(429, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'RATE_LIMITED', message: 'directory_invite_redeem rate limit exceeded', details: {} })); }
       let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       let body; try { body = JSON.parse(raw); } catch { body = null; }
       if (!body?.code) { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'code is required', details: {} })); }
@@ -555,6 +567,8 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     if (request.method === 'POST' && request.url === '/v1/directory/matches') {
       if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
       if (!repository?.createDirectoryMatchRequest) return response.writeHead(503).end();
+      const matchQuota = await reserveDirectoryQuota('directory_match_create', principal.human_id, nowMs);
+      if (!matchQuota.allowed) { response.writeHead(429, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'RATE_LIMITED', message: 'directory_match_create rate limit exceeded', details: {} })); }
       let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       let body; try { body = JSON.parse(raw); } catch { body = null; }
       if (!body?.issuer || !body?.match_target) { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'issuer and match_target are required', details: {} })); }
@@ -577,6 +591,8 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
       const [, requestIdParam] = nominateMatch;
       if (!repository?.nominateDirectoryLinkEndpoint) return response.writeHead(503).end();
+      const nominateQuota = await reserveDirectoryQuota('directory_match_attempt', `${requestIdParam}:${principal.human_id}`, nowMs);
+      if (!nominateQuota.allowed) { response.writeHead(429, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'RATE_LIMITED', message: 'directory_match_attempt rate limit exceeded', details: {} })); }
       try {
         const link = await repository.nominateDirectoryLinkEndpoint({ requestId: requestIdParam, nominatedEndpointId: principal.endpoint_id, nominatedHumanId: principal.human_id, homeRelay: resolveRelayOrigin() ?? 'local', now });
         await repository.recordAuditEvent?.({ eventType: 'directory_link.created', subjectId: link.link_id, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'directory_link', objectId: link.link_id, outcome: 'success', now });
