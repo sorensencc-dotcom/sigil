@@ -2,7 +2,9 @@
 // (see relay/v1/postgres-repository.mjs). Enough of the interface to run
 // a real local relay for a demo or single-machine session. State lives
 // only in this process -- restarting `sigil relay up` loses history.
+import crypto from 'node:crypto';
 import { transitionDelivery } from '../relay/v1/delivery-state.mjs';
+import { boundedDirectoryExpiry } from '../relay/v1/auth-policy.mjs';
 
 const SEEDED_CAPABILITIES = new Map([
   ['sigil.core/read_shared_context', { namespace: 'sigil.core', risk_tier: 'standard' }],
@@ -22,6 +24,9 @@ export function createMemoryRepository() {
   const grants = [];
   const rateWindows = new Map();
   const acknowledgements = new Map();
+  const directoryInvites = new Map(); // code -> invite row (memory repo has no separate hash step -- single process, nothing to hide from itself)
+  const directoryLinks = new Map();
+  const directoryMatchRequests = new Map();
   return {
     // Single-process, no real client/connection -- the transaction wrapper
     // exists so acceptEnvelopeAsync's repository-aware path works unchanged
@@ -81,6 +86,132 @@ export function createMemoryRepository() {
       const record = { viewer_owner_id: viewerOwnerId, acknowledged_endpoint_id: acknowledgedEndpointId, acknowledged_at: (now instanceof Date ? now : new Date(now)).toISOString() };
       acknowledgements.set(`${viewerOwnerId}:${acknowledgedEndpointId}`, record);
       return record;
+    },
+    async createDirectoryInvite({ issuerEndpointId, issuerHumanId, expiresAt, homeRelay, now = new Date() }) {
+      const inviteId = `invite_${crypto.randomUUID()}`;
+      const code = crypto.randomBytes(24).toString('base64url');
+      const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      const expiry = boundedDirectoryExpiry({ now, expiresAt });
+      directoryInvites.set(code, { invite_id: inviteId, issuer_endpoint_id: issuerEndpointId, issuer_human_id: issuerHumanId, status: 'pending', expires_at: expiry.toISOString(), home_relay: homeRelay, created_at: timestamp });
+      return { invite_id: inviteId, code, expires_at: expiry.toISOString() };
+    },
+    async redeemDirectoryInvite({ code, redeemerEndpointId, redeemerHumanId, homeRelay, now = new Date() }) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      const invite = directoryInvites.get(code);
+      if (!invite || invite.status !== 'pending' || invite.expires_at <= timestamp) {
+        throw Object.assign(new Error('Invite code is invalid or expired'), { code: 'INVITE_UNAVAILABLE' });
+      }
+      // Mirrors postgres-repository.mjs's human_a <> human_b guard (backed
+      // there by directory_links' CHECK constraint): a human can't link to
+      // their own other endpoint via their own invite. Checked before the
+      // invite is marked redeemed, same as the Postgres path.
+      if (invite.issuer_human_id === redeemerHumanId) {
+        throw Object.assign(new Error('Invite code is invalid or expired'), { code: 'INVITE_UNAVAILABLE' });
+      }
+      invite.status = 'redeemed'; invite.redeemed_by_human_id = redeemerHumanId; invite.redeemed_at = timestamp;
+      const [endpointA, endpointB] = [invite.issuer_endpoint_id, redeemerEndpointId].sort();
+      const existing = [...directoryLinks.values()].find((l) => l.endpoint_a === endpointA && l.endpoint_b === endpointB && (l.status === 'pending' || l.status === 'active'));
+      if (existing) throw Object.assign(new Error('A directory link already exists or is pending between these endpoints'), { code: 'DIRECTORY_LINK_CONFLICT' });
+      const linkId = `link_${crypto.randomUUID()}`;
+      const [humanA, humanB] = endpointA === invite.issuer_endpoint_id ? [invite.issuer_human_id, redeemerHumanId] : [redeemerHumanId, invite.issuer_human_id];
+      const link = {
+        link_id: linkId, endpoint_a: endpointA, endpoint_b: endpointB, human_a: humanA, human_b: humanB, status: 'pending', initiated_via: 'invite',
+        a_confirmed_at: endpointA === invite.issuer_endpoint_id ? null : timestamp,
+        b_confirmed_at: endpointA === invite.issuer_endpoint_id ? timestamp : null,
+        a_confirmed_by: endpointA === invite.issuer_endpoint_id ? null : redeemerHumanId,
+        b_confirmed_by: endpointA === invite.issuer_endpoint_id ? redeemerHumanId : null,
+        revoked_at: null, home_relay: homeRelay, created_at: timestamp
+      };
+      directoryLinks.set(linkId, link);
+      return { link_id: linkId, status: 'pending' };
+    },
+    async createDirectoryMatchRequest({ issuerEndpointId, issuerHumanId, issuer, matchTarget, expiresAt, homeRelay, now = new Date() }) {
+      const requestId = `dreq_${crypto.randomUUID()}`;
+      const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      // Mirrors createDirectoryInvite's use of boundedDirectoryExpiry (same
+      // [1h, 7d] bound and Date-coercion) instead of calling
+      // expiresAt.toISOString() directly, which would throw on an
+      // undefined/string expiresAt.
+      const expiry = boundedDirectoryExpiry({ now, expiresAt });
+      directoryMatchRequests.set(requestId, { request_id: requestId, issuer_endpoint_id: issuerEndpointId, issuer_human_id: issuerHumanId, issuer, match_target: matchTarget, status: 'pending', expires_at: expiry.toISOString(), home_relay: homeRelay, created_at: timestamp });
+      return { request_id: requestId };
+    },
+    // Single-process, no real client/connection -- "concurrency" here
+    // reduces to first-write-wins on a synchronous find + mutation, with no
+    // `await` between the find and the status flip so nothing else in this
+    // single-threaded event loop can interleave and see the same pending
+    // row: equivalent in effect to Postgres's SELECT ... FOR UPDATE SKIP
+    // LOCKED for a store with only one writer ever active at a time.
+    async claimDirectoryMatch({ issuer, matchTarget, matchedHumanId, now = new Date() }) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      const candidate = [...directoryMatchRequests.values()].find((r) => r.issuer === issuer && r.match_target === matchTarget && r.status === 'pending' && r.expires_at > timestamp);
+      if (!candidate) return null;
+      candidate.status = 'matched'; candidate.matched_human_id = matchedHumanId; candidate.matched_at = timestamp;
+      return { request_id: candidate.request_id };
+    },
+    async nominateDirectoryLinkEndpoint({ requestId, nominatedEndpointId, nominatedHumanId, homeRelay, now = new Date() }) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      const request = directoryMatchRequests.get(requestId);
+      if (!request || request.status !== 'matched' || request.matched_human_id !== nominatedHumanId) {
+        throw Object.assign(new Error('Match request is invalid or already consumed'), { code: 'MATCH_UNAVAILABLE' });
+      }
+      // Mirrors redeemDirectoryInvite's human_a <> human_b guard (backed on
+      // the Postgres side by directory_links' CHECK constraint): a human
+      // can't link to their own other endpoint via their own match. Checked
+      // before the request is marked consumed, same as the Postgres path.
+      if (request.issuer_human_id === nominatedHumanId) {
+        throw Object.assign(new Error('Match request is invalid or already consumed'), { code: 'MATCH_UNAVAILABLE' });
+      }
+      request.status = 'consumed'; request.consumed_at = timestamp;
+      const [endpointA, endpointB] = [request.issuer_endpoint_id, nominatedEndpointId].sort();
+      const existing = [...directoryLinks.values()].find((l) => l.endpoint_a === endpointA && l.endpoint_b === endpointB && (l.status === 'pending' || l.status === 'active'));
+      if (existing) throw Object.assign(new Error('A directory link already exists or is pending between these endpoints'), { code: 'DIRECTORY_LINK_CONFLICT' });
+      const linkId = `link_${crypto.randomUUID()}`;
+      const [humanA, humanB] = endpointA === request.issuer_endpoint_id ? [request.issuer_human_id, nominatedHumanId] : [nominatedHumanId, request.issuer_human_id];
+      directoryLinks.set(linkId, {
+        link_id: linkId, endpoint_a: endpointA, endpoint_b: endpointB, human_a: humanA, human_b: humanB, status: 'pending', initiated_via: 'oidc_match',
+        a_confirmed_at: endpointA === request.issuer_endpoint_id ? null : timestamp,
+        b_confirmed_at: endpointA === request.issuer_endpoint_id ? timestamp : null,
+        a_confirmed_by: endpointA === request.issuer_endpoint_id ? null : nominatedHumanId,
+        b_confirmed_by: endpointA === request.issuer_endpoint_id ? nominatedHumanId : null,
+        revoked_at: null, home_relay: homeRelay, created_at: timestamp
+      });
+      return { link_id: linkId, status: 'pending' };
+    },
+    async confirmDirectoryLink({ linkId, confirmingHumanId, now = new Date() }) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      const link = directoryLinks.get(linkId);
+      if (!link) throw Object.assign(new Error('Directory link not found'), { code: 'LINK_UNAVAILABLE' });
+      if (link.status !== 'pending') return { link_id: linkId, status: link.status };
+      if (confirmingHumanId !== link.human_a && confirmingHumanId !== link.human_b) {
+        throw Object.assign(new Error('Confirming human is not a party to this link'), { code: 'CONFIRMATION_ACTOR_MISMATCH' });
+      }
+      const isA = confirmingHumanId === link.human_a;
+      if (isA && link.a_confirmed_at) return { link_id: linkId, status: link.status };
+      if (!isA && link.b_confirmed_at) return { link_id: linkId, status: link.status };
+      if (isA) { link.a_confirmed_at = timestamp; link.a_confirmed_by = confirmingHumanId; } else { link.b_confirmed_at = timestamp; link.b_confirmed_by = confirmingHumanId; }
+      link.status = (link.a_confirmed_at && link.b_confirmed_at) ? 'active' : 'pending';
+      return { link_id: linkId, status: link.status };
+    },
+    async revokeDirectoryLink({ linkId, revokingHumanId, now = new Date() }) {
+      const link = directoryLinks.get(linkId);
+      if (!link) throw Object.assign(new Error('Directory link not found'), { code: 'LINK_UNAVAILABLE' });
+      if (link.status === 'revoked') return { link_id: linkId, status: 'revoked', duplicate: true };
+      if (revokingHumanId !== link.human_a && revokingHumanId !== link.human_b) {
+        throw Object.assign(new Error('Revoking human is not a party to this link'), { code: 'CONFIRMATION_ACTOR_MISMATCH' });
+      }
+      link.status = 'revoked'; link.revoked_at = (now instanceof Date ? now : new Date(now)).toISOString(); link.revoked_by = revokingHumanId;
+      return { link_id: linkId, status: 'revoked', duplicate: false };
+    },
+    async lookupActiveDirectoryLink(endpointIdA, endpointIdB) {
+      const found = [...directoryLinks.values()].find((l) => l.status === 'active' && ((l.endpoint_a === endpointIdA && l.endpoint_b === endpointIdB) || (l.endpoint_a === endpointIdB && l.endpoint_b === endpointIdA)));
+      return found ? { link_id: found.link_id, status: found.status } : null;
+    },
+    // Test-only: exposes the raw stored record (including a_confirmed_by/
+    // b_confirmed_by, which no production-facing method returns) so
+    // regression tests can assert on confirmation attribution directly.
+    _debugGetDirectoryLink(linkId) {
+      return directoryLinks.get(linkId);
     },
     async acknowledgeDelivery({ deliveryId, endpointId, now }) {
       const current = deliveries.get(deliveryId);

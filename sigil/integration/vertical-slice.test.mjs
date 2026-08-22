@@ -2,11 +2,118 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import fsPromises from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import pg from 'pg';
 import { LocalInbox } from '../connectors/v1/local-inbox.mjs';
 import { LocalOutbox } from '../connectors/v1/local-outbox.mjs';
 import { acceptEnvelope } from '../relay/v1/accept-envelope.mjs';
 import { DeliveryQueue } from '../relay/v1/delivery-queue.mjs';
 import { signedBytes } from '../relay/v1/validate-envelope.mjs';
+import { PostgresRepository } from '../relay/v1/postgres-repository.mjs';
+import { createRelayServer } from '../relay/v1/http-server.mjs';
+import { hashBearerToken } from '../relay/v1/transport-auth.mjs';
+import { assertDisposableTestDatabase } from '../scripts/assert-disposable-test-db.mjs';
+
+const connectionString = process.env.SIGIL_TEST_DATABASE_URL;
+const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../migrations');
+
+// Live-Postgres bootstrap for the directory-trust vertical slice below: spins
+// up a real createRelayServer backed by a real PostgresRepository against a
+// disposable test database, seeds two DIFFERENT humans (each owning one
+// endpoint) so the directory-link gate in accept-envelope.mjs's same-owner
+// exemption never kicks in, and returns everything the scenario needs to
+// drive the relay over real HTTP with real bearer tokens.
+async function bootstrapLiveRelay(t) {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  assertDisposableTestDatabase(connectionString);
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  const sqlFiles = (await fsPromises.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
+  for (const file of sqlFiles) {
+    await pool.query(await fsPromises.readFile(path.join(migrationsDir, file), 'utf8'));
+  }
+
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const ids = { a: `usr_a_${suffix}`, b: `usr_b_${suffix}`, epA: `ep_a_${suffix}`, epB: `ep_b_${suffix}` };
+  const keyA = crypto.generateKeyPairSync('ed25519');
+  const keyIdA = `key_a_${suffix}`;
+
+  await pool.query(`
+    INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.a}', 'active', NOW()), ('${ids.b}', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
+      VALUES ('${ids.epA}', '${ids.a}', 'claude', 'install_a_${suffix}', 'A', 'active', NOW()),
+             ('${ids.epB}', '${ids.b}', 'codex', 'install_b_${suffix}', 'B', 'active', NOW());
+    INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
+      VALUES ('${keyIdA}', '${ids.epA}', 'Ed25519', decode('00', 'hex'), 'active', NOW());
+  `);
+
+  const repository = new PostgresRepository({ pool });
+
+  // In-memory registry used solely for signature verification and the
+  // sender/recipient owner_id resolution in accept-envelope.mjs -- separate
+  // from the DB endpoint_keys row above, which only exists to satisfy the
+  // envelopes.signature_key_id foreign key.
+  const registry = new Map([
+    [ids.epA, { owner_id: ids.a, key_id: keyIdA, status: 'active', public_key: keyA.publicKey }],
+    [ids.epB, { owner_id: ids.b, key_id: `key_b_${suffix}`, status: 'active', public_key: crypto.generateKeyPairSync('ed25519').publicKey }]
+  ]);
+
+  const tokenHashToEndpoint = new Map();
+  const endpointToToken = new Map();
+  function tokenFor(endpointId) {
+    if (!endpointToToken.has(endpointId)) {
+      const token = `test_token_${endpointId}_${crypto.randomUUID()}`;
+      endpointToToken.set(endpointId, token);
+      tokenHashToEndpoint.set(hashBearerToken(token), endpointId);
+    }
+    return endpointToToken.get(endpointId);
+  }
+  tokenFor(ids.epA);
+  tokenFor(ids.epB);
+
+  async function authenticate(request) {
+    const authorization = request.headers?.authorization;
+    const token = typeof authorization === 'string' && authorization.startsWith('Bearer ') ? authorization.slice(7) : null;
+    if (!token) return null;
+    const endpointId = tokenHashToEndpoint.get(hashBearerToken(token));
+    if (!endpointId) return null;
+    const endpoint = registry.get(endpointId);
+    return { endpoint_id: endpointId, owner_id: endpoint?.owner_id, human_id: endpoint?.owner_id };
+  }
+
+  const server = createRelayServer({ registry, repository, authenticate, relayOrigin: 'https://relay.local' });
+  const port = await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => resolve(server.address().port));
+  });
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  return { baseUrl, server, pool, ids, tokenFor, senderPrivateKey: keyA.privateKey, senderKeyId: keyIdA };
+}
+
+function buildDirectEnvelope({ from, to, ids, privateKey, keyId }) {
+  const ownerOf = { [ids.epA]: ids.a, [ids.epB]: ids.b };
+  const envelope = {
+    protocol: 'sigil/1',
+    message_id: `msg_${crypto.randomUUID()}`,
+    conversation_id: `conv_${crypto.randomUUID()}`,
+    message_type: 'chat.message',
+    sender: { endpoint_id: from, owner_id: ownerOf[from] },
+    recipient: { endpoint_id: to },
+    body: { text: 'hello' },
+    context_refs: [],
+    capabilities: [],
+    correlation_id: null,
+    idempotency_key: `send_${crypto.randomUUID()}`,
+    expires_at: new Date(Date.now() + 3600_000).toISOString(),
+    created_at: new Date().toISOString(),
+    signature: { algorithm: 'Ed25519', key_id: keyId, value: '' }
+  };
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
+  return envelope;
+}
 
 test('Codex -> relay -> Claude -> relay -> Codex vertical slice', () => {
   const codexKeys = crypto.generateKeyPairSync('ed25519');
@@ -102,4 +209,39 @@ test('a RATE_LIMITED rejection never consumes its own reservation (rollback-on-r
   // never incremented past what #1/#2 already reserved) -- not 3 or 4.
   const fourthOverLimit = await send(4);
   assert.equal(fourthOverLimit.status, 429);
+});
+
+test('directory trust: invite issued, redeemed, confirmed, then direct delivery succeeds; revocation blocks it again', { skip: !connectionString }, async (t) => {
+  const { baseUrl, server, ids, tokenFor, senderPrivateKey, senderKeyId } = await bootstrapLiveRelay(t);
+  t.after(() => server.close());
+
+  const sendEnvelope = () => buildDirectEnvelope({ from: ids.epA, to: ids.epB, ids, privateKey: senderPrivateKey, keyId: senderKeyId });
+
+  const inviteResponse = await fetch(`${baseUrl}/v1/directory/invites`, { method: 'POST', headers: { authorization: `Bearer ${tokenFor(ids.epA)}` }, body: '{}' });
+  assert.equal(inviteResponse.status, 201);
+  const { invite } = await inviteResponse.json();
+
+  const redeemResponse = await fetch(`${baseUrl}/v1/directory/invites/redeem`, { method: 'POST', headers: { authorization: `Bearer ${tokenFor(ids.epB)}` }, body: JSON.stringify({ code: invite.code }) });
+  assert.equal(redeemResponse.status, 201);
+  const { link } = await redeemResponse.json();
+  assert.equal(link.status, 'pending');
+
+  const preConfirmDelivery = await fetch(`${baseUrl}/v1/envelopes`, { method: 'POST', headers: { authorization: `Bearer ${tokenFor(ids.epA)}` }, body: JSON.stringify(sendEnvelope()) });
+  assert.equal(preConfirmDelivery.status, 403);
+  const preConfirmBody = await preConfirmDelivery.json();
+  assert.equal(preConfirmBody.code, 'DIRECTORY_LINK_REQUIRED');
+
+  const confirmResponse = await fetch(`${baseUrl}/v1/directory/links/${link.link_id}/confirm`, { method: 'POST', headers: { authorization: `Bearer ${tokenFor(ids.epA)}` }, body: '{}' });
+  assert.equal(confirmResponse.status, 200);
+  const { link: activated } = await confirmResponse.json();
+  assert.equal(activated.status, 'active');
+
+  const postConfirmDelivery = await fetch(`${baseUrl}/v1/envelopes`, { method: 'POST', headers: { authorization: `Bearer ${tokenFor(ids.epA)}` }, body: JSON.stringify(sendEnvelope()) });
+  assert.equal(postConfirmDelivery.status, 202);
+
+  const revokeResponse = await fetch(`${baseUrl}/v1/directory/links/${link.link_id}/revoke`, { method: 'POST', headers: { authorization: `Bearer ${tokenFor(ids.epB)}` }, body: '{}' });
+  assert.equal(revokeResponse.status, 200);
+
+  const postRevokeDelivery = await fetch(`${baseUrl}/v1/envelopes`, { method: 'POST', headers: { authorization: `Bearer ${tokenFor(ids.epA)}` }, body: JSON.stringify(sendEnvelope()) });
+  assert.equal(postRevokeDelivery.status, 403);
 });

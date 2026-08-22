@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { signedBytes } from './validate-envelope.mjs';
 import { createRelayServer } from './http-server.mjs';
+import { hashBearerToken } from './transport-auth.mjs';
 import { parseAttestationObject } from './approval-ceremony.mjs';
 
 function cborInt(value) { return value >= 0 ? Buffer.from([value]) : Buffer.from([0x20 + (-1 - value)]); }
@@ -557,11 +558,135 @@ test('GET /v1/audit requires conversation_id and membership, then returns the co
   assert.deepEqual(calls, [['isConversationMember', 'ep_claude', 'conv_2'], ['isConversationMember', 'ep_claude', 'conv_1'], ['listAuditEventsForConversation', 'conv_1']]);
 });
 
-function request(port, { method, path, body }) {
+test('POST /v1/directory/invites requires an authenticated human context', async () => {
+  const { server, baseUrl } = await startServer({ authenticate: async () => ({ endpoint_id: 'ep_a' }) });
+  try {
+    const response = await request(baseUrl, 'POST', '/v1/directory/invites', {});
+    assert.equal(response.status, 403);
+    assert.equal(response.body.code, 'HUMAN_CONTEXT_REQUIRED');
+  } finally { server.close(); }
+});
+
+test('POST /v1/directory/invites issues a code once', async () => {
+  const repository = { createDirectoryInvite: async () => ({ invite_id: 'invite_1', code: 'plaintext-code', expires_at: '2026-08-22T00:00:00Z' }), recordAuditEvent: async () => {} };
+  const { server, baseUrl } = await startServer({ authenticate: async () => ({ endpoint_id: 'ep_a', human_id: 'usr_a' }), repository, relayOrigin: 'https://relay.local' });
+  try {
+    const response = await request(baseUrl, 'POST', '/v1/directory/invites', {});
+    assert.equal(response.status, 201);
+    assert.equal(response.body.code, 'OK');
+    assert.equal(response.body.invite.code, 'plaintext-code');
+  } finally { server.close(); }
+});
+
+test('POST /v1/directory/invites/redeem maps INVITE_UNAVAILABLE to a generic 404', async () => {
+  const repository = { redeemDirectoryInvite: async () => { throw Object.assign(new Error('Invite code is invalid or expired'), { code: 'INVITE_UNAVAILABLE' }); } };
+  const { server, baseUrl } = await startServer({ authenticate: async () => ({ endpoint_id: 'ep_b', human_id: 'usr_b' }), repository });
+  try {
+    const response = await request(baseUrl, 'POST', '/v1/directory/invites/redeem', { code: 'wrong' });
+    assert.equal(response.status, 404);
+    assert.equal(response.body.code, 'INVITE_UNAVAILABLE');
+  } finally { server.close(); }
+});
+
+test('POST /v1/directory/links/:linkId/confirm requires human context and forwards actor mismatch', async () => {
+  const repository = { confirmDirectoryLink: async () => { throw Object.assign(new Error('Confirming human is not a party to this link'), { code: 'CONFIRMATION_ACTOR_MISMATCH' }); } };
+  const { server, baseUrl } = await startServer({ authenticate: async () => ({ endpoint_id: 'ep_c', human_id: 'usr_c' }), repository });
+  try {
+    const response = await request(baseUrl, 'POST', '/v1/directory/links/link_1/confirm', {});
+    assert.equal(response.status, 403);
+    assert.equal(response.body.code, 'CONFIRMATION_ACTOR_MISMATCH');
+  } finally { server.close(); }
+});
+
+test('POST /v1/directory/links/:linkId/revoke succeeds for either party', async () => {
+  const repository = { revokeDirectoryLink: async () => ({ link_id: 'link_1', status: 'revoked' }), recordAuditEvent: async () => {} };
+  const { server, baseUrl } = await startServer({ authenticate: async () => ({ endpoint_id: 'ep_a', human_id: 'usr_a' }), repository });
+  try {
+    const response = await request(baseUrl, 'POST', '/v1/directory/links/link_1/revoke', {});
+    assert.equal(response.status, 200);
+    assert.equal(response.body.link.status, 'revoked');
+  } finally { server.close(); }
+});
+
+test('POST /v1/directory/invites is rate-limited per issuing endpoint/human', async () => {
+  const reservations = [];
+  const repository = {
+    createDirectoryInvite: async () => ({ invite_id: 'invite_1', code: 'x', expires_at: '2026-08-22T00:00:00Z' }),
+    reserveRateLimit: async (scopeKind, scopeId) => { reservations.push({ scopeKind, scopeId }); return { count: 21, allowed: false }; },
+    recordAuditEvent: async () => {}
+  };
+  const { server, baseUrl } = await startServer({ authenticate: async () => ({ endpoint_id: 'ep_a', human_id: 'usr_a' }), repository });
+  try {
+    const response = await request(baseUrl, 'POST', '/v1/directory/invites', {});
+    assert.equal(response.status, 429);
+    assert.equal(response.body.code, 'RATE_LIMITED');
+    assert.equal(reservations[0].scopeKind, 'directory_invite_create');
+  } finally { server.close(); }
+});
+
+test('POST /v1/directory/invites is reachable under the CLI\'s real bearer authenticator, with human_id resolved from the registry', async () => {
+  const repository = { createDirectoryInvite: async () => ({ invite_id: 'invite_1', code: 'plaintext-code', expires_at: '2026-08-22T00:00:00Z' }), recordAuditEvent: async () => {} };
+  const tokenHashes = new Map([[hashBearerToken('token_a'), 'ep_a']]);
+  const registry = new Map([['ep_a', { owner_id: 'usr_a', endpoint_id: 'ep_a', status: 'active' }]]);
+  const { server, baseUrl } = await startServer({ tokenHashes, registry, repository });
+  try {
+    const url = new URL(baseUrl);
+    const response = await new Promise((resolve, reject) => {
+      const req = http.request({ port: url.port, method: 'POST', path: '/v1/directory/invites', headers: { 'content-type': 'application/json', authorization: 'Bearer token_a' } }, (res) => {
+        let text = ''; res.on('data', (chunk) => text += chunk); res.on('end', () => resolve({ status: res.statusCode, body: text ? JSON.parse(text) : null }));
+      });
+      req.on('error', reject); req.end('{}');
+    });
+    assert.equal(response.status, 201);
+    assert.equal(response.body.code, 'OK');
+  } finally { server.close(); }
+});
+
+test('POST /v1/directory/invites/redeem consumes quota on a guessed (invalid) code, not on infra failure', async () => {
+  const reservations = [];
+  const repository = {
+    reserveRateLimit: async (scopeKind, scopeId) => { reservations.push({ scopeKind, scopeId }); return { count: 1, allowed: true }; },
+    redeemDirectoryInvite: async () => { throw Object.assign(new Error('Invite code is invalid or expired'), { code: 'INVITE_UNAVAILABLE' }); }
+  };
+  const { server, baseUrl } = await startServer({ authenticate: async () => ({ endpoint_id: 'ep_b', human_id: 'usr_b' }), repository });
+  try {
+    await request(baseUrl, 'POST', '/v1/directory/invites/redeem', { code: 'guess' });
+    assert.equal(reservations.length, 1);
+    assert.equal(reservations[0].scopeKind, 'directory_invite_redeem');
+  } finally { server.close(); }
+});
+
+function startServer({ authenticate, repository, relayOrigin, oidcIssuerAllowList = new Set(), tokenHashes, registry } = {}) {
+  return new Promise((resolve) => {
+    const server = createRelayServer({ authenticate, repository, relayOrigin, oidcIssuerAllowList, tokenHashes, registry, now: new Date('2026-08-22T00:00:00Z') });
+    server.listen(0, () => {
+      const { port } = server.address();
+      const baseUrl = `http://127.0.0.1:${port}`;
+      resolve({ server, baseUrl });
+    });
+  });
+}
+
+function request(portOrBaseUrl, methodOrOptions, path, body) {
+  // Handle both signatures:
+  // 1. (port, { method, path, body }) - original
+  // 2. (baseUrl, method, path, body) - directory tests
+  if (typeof portOrBaseUrl === 'string' && portOrBaseUrl.startsWith('http')) {
+    // New signature: (baseUrl, method, path, body)
+    const url = new URL(portOrBaseUrl);
+    return new Promise((resolve, reject) => {
+      const req = http.request({ port: parseInt(url.port, 10), method: methodOrOptions, path, headers: { 'content-type': 'application/json' } }, (response) => {
+        let text = ''; response.on('data', (chunk) => text += chunk); response.on('end', () => resolve({ status: response.statusCode, body: text ? JSON.parse(text) : null }));
+      });
+      req.on('error', reject); req.end(body ? JSON.stringify(body) : undefined);
+    });
+  }
+  // Original signature: (port, { method, path, body })
+  const { method, path: p, body: b } = methodOrOptions;
   return new Promise((resolve, reject) => {
-    const request = http.request({ port, method, path, headers: { 'content-type': 'application/json' } }, (response) => {
+    const req = http.request({ port: portOrBaseUrl, method, path: p, headers: { 'content-type': 'application/json' } }, (response) => {
       let text = ''; response.on('data', (chunk) => text += chunk); response.on('end', () => resolve({ status: response.statusCode, body: text ? JSON.parse(text) : null }));
     });
-    request.on('error', reject); request.end(body ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined);
+    req.on('error', reject); req.end(b ? (typeof b === 'string' ? b : JSON.stringify(b)) : undefined);
   });
 }

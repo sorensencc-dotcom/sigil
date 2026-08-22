@@ -17,9 +17,16 @@ test('real HTTP relay send, inbox reconcile, and acknowledgement round-trip', as
   const endpoint = (identity, keys) => ({ owner_id: identity.owner_id, endpoint_id: identity.endpoint_id, key_id: identity.key_id, kind: identity.kind, status: 'active', public_key: keys.publicKey });
   const senderEndpoint = endpoint(sender, senderKeys);
   const recipientEndpoint = endpoint(recipient, recipientKeys);
+  const repository = createMemoryRepository();
+  // sender and recipient are owned by different humans (usr_codex/usr_antigravity),
+  // so the directory-link gate (spec §8) applies -- seed an active link via
+  // the same invite/redeem/confirm flow a real deployment would use.
+  const invite = await repository.createDirectoryInvite({ issuerEndpointId: sender.endpoint_id, issuerHumanId: sender.owner_id, expiresAt: new Date(Date.now() + 7200000).toISOString(), homeRelay: 'relay_test' });
+  const redemption = await repository.redeemDirectoryInvite({ code: invite.code, redeemerEndpointId: recipient.endpoint_id, redeemerHumanId: recipient.owner_id, homeRelay: 'relay_test' });
+  await repository.confirmDirectoryLink({ linkId: redemption.link_id, confirmingHumanId: sender.owner_id });
   const server = createRelayServer({
     registry: new Map([[sender.endpoint_id, senderEndpoint], [recipient.endpoint_id, recipientEndpoint]]),
-    repository: createMemoryRepository(),
+    repository,
     tokenHashes: new Map([[hashBearerToken(sender.relay_token), sender.endpoint_id], [hashBearerToken(recipient.relay_token), recipient.endpoint_id]]),
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));

@@ -1,8 +1,9 @@
 import pg from 'pg';
 import crypto from 'node:crypto';
 import { canTransition } from './delivery-state.mjs';
-import { assertAssurance } from './auth-policy.mjs';
+import { assertAssurance, boundedDirectoryExpiry } from './auth-policy.mjs';
 import { withTransaction } from './with-transaction.mjs';
+import { generateInviteCode, hashMatchTarget } from './directory-trust.mjs';
 
 export class PostgresRepository {
   constructor({ pool = new pg.Pool(), schema = 'public' } = {}) { this.pool = pool; this.schema = schema; }
@@ -184,6 +185,208 @@ export class PostgresRepository {
       return endpoint.rows[0];
     } catch (error) { if (error.code === '23505' && error.constraint === 'endpoints_owner_display_name_idx') throw Object.assign(new Error('An endpoint with this display name already exists for this owner'), { code: 'DISPLAY_NAME_COLLISION' }); throw error; } });
   }
+  async createDirectoryInvite({ issuerEndpointId, issuerHumanId, expiresAt, homeRelay, now = new Date() } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const { code, codeHash } = generateInviteCode();
+    const inviteId = `invite_${crypto.randomUUID()}`;
+    // expiresAt is optional at the repository layer -- boundedDirectoryExpiry
+    // (Task 2, auth-policy.mjs) supplies and validates the spec §7 [1h, 7d]
+    // default/bound so callers (this test, and the HTTP route in Task 7)
+    // don't have to compute it themselves.
+    const expiry = boundedDirectoryExpiry({ now, expiresAt });
+    const result = await this.pool.query(
+      `INSERT INTO directory_invites (invite_id, issuer_endpoint_id, issuer_human_id, code_hash, status, expires_at, home_relay, created_at)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7)
+       RETURNING invite_id, expires_at`,
+      [inviteId, issuerEndpointId, issuerHumanId, codeHash, expiry.toISOString(), homeRelay, timestamp]
+    );
+    return { invite_id: result.rows[0].invite_id, code, expires_at: result.rows[0].expires_at };
+  }
+  // Spec §3.1 step 3/4: single generic error for wrong/expired/revoked/
+  // unknown code, and an explicit endpoint-ownership check (round 1 review
+  // finding) before any code check is treated as successful.
+  async redeemDirectoryInvite({ code, redeemerEndpointId, redeemerHumanId, homeRelay, now = new Date() } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+    return this.withTransaction(async (client) => {
+      const ownership = await client.query('SELECT owner_id FROM endpoints WHERE endpoint_id = $1', [redeemerEndpointId]);
+      if (!ownership.rows[0] || ownership.rows[0].owner_id !== redeemerHumanId) {
+        throw Object.assign(new Error('Invite code is invalid or expired'), { code: 'INVITE_UNAVAILABLE' });
+      }
+      const invite = await client.query(
+        `SELECT * FROM directory_invites WHERE code_hash = $1 AND status = 'pending' AND expires_at > $2 FOR UPDATE`,
+        [codeHash, timestamp]
+      );
+      if (!invite.rows[0]) throw Object.assign(new Error('Invite code is invalid or expired'), { code: 'INVITE_UNAVAILABLE' });
+      const row = invite.rows[0];
+      // A human can't link to their own other endpoint via their own invite
+      // (directory_links' human_a <> human_b CHECK enforces this at the DB
+      // layer too) -- reject before mutating the invite so a self-redeem
+      // attempt doesn't burn a code the issuer could otherwise still use.
+      if (row.issuer_human_id === redeemerHumanId) {
+        throw Object.assign(new Error('Invite code is invalid or expired'), { code: 'INVITE_UNAVAILABLE' });
+      }
+      await client.query(`UPDATE directory_invites SET status = 'redeemed', redeemed_by_human_id = $1, redeemed_at = $2 WHERE invite_id = $3`, [redeemerHumanId, timestamp, row.invite_id]);
+      const [endpointA, endpointB] = [row.issuer_endpoint_id, redeemerEndpointId].sort();
+      const [humanA, humanB] = endpointA === row.issuer_endpoint_id ? [row.issuer_human_id, redeemerHumanId] : [redeemerHumanId, row.issuer_human_id];
+      const aConfirmedAt = endpointA === row.issuer_endpoint_id ? null : timestamp;
+      const bConfirmedAt = endpointA === row.issuer_endpoint_id ? timestamp : null;
+      const bConfirmedBy = endpointA === row.issuer_endpoint_id ? redeemerHumanId : null;
+      const aConfirmedBy = endpointA === row.issuer_endpoint_id ? null : redeemerHumanId;
+      let link;
+      try {
+        link = await client.query(
+          `INSERT INTO directory_links (link_id, endpoint_a, endpoint_b, human_a, human_b, status, initiated_via, source_invite_id, a_confirmed_at, b_confirmed_at, a_confirmed_by, b_confirmed_by, home_relay, created_at)
+           VALUES ($1, $2, $3, $4, $5, 'pending', 'invite', $6, $7, $8, $9, $10, $11, $12)
+           RETURNING link_id, status`,
+          [`link_${crypto.randomUUID()}`, endpointA, endpointB, humanA, humanB, row.invite_id, aConfirmedAt, bConfirmedAt, aConfirmedBy, bConfirmedBy, homeRelay, timestamp]
+        );
+      } catch (error) {
+        if (error.code === '23505') throw Object.assign(new Error('A directory link already exists or is pending between these endpoints'), { code: 'DIRECTORY_LINK_CONFLICT' });
+        throw error;
+      }
+      return { link_id: link.rows[0].link_id, status: link.rows[0].status };
+    });
+  }
+  async createDirectoryMatchRequest({ issuerEndpointId, issuerHumanId, issuer, matchTarget, expiresAt, homeRelay, now = new Date() } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const requestId = `dreq_${crypto.randomUUID()}`;
+    // Same [1h, 7d] bound and Date-coercion as createDirectoryInvite's
+    // expiresAt handling (boundedDirectoryExpiry's own error message names
+    // both invite and match expiry) -- the brief's literal snippet called
+    // expiresAt.toISOString() directly, which throws on an undefined/string
+    // expiresAt and skips the spec §7 bound entirely.
+    const expiry = boundedDirectoryExpiry({ now, expiresAt });
+    await this.pool.query(
+      `INSERT INTO directory_match_requests (request_id, issuer_endpoint_id, issuer_human_id, issuer, match_target_hash, status, expires_at, home_relay, created_at)
+       VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8)`,
+      [requestId, issuerEndpointId, issuerHumanId, issuer, hashMatchTarget(matchTarget), expiry.toISOString(), homeRelay, timestamp]
+    );
+    return { request_id: requestId };
+  }
+  // Spec §3.2 step 2: single-client row-locking claim, same pattern as
+  // lookupActiveCapabilityGrants's FOR UPDATE. SKIP LOCKED (not plain FOR
+  // UPDATE) is required here: with plain FOR UPDATE a second concurrent
+  // caller would block on the first caller's lock, then -- once the first
+  // caller commits and flips the row to 'matched' -- re-evaluate the WHERE
+  // clause and see zero pending rows, which is correct but only after an
+  // unnecessary wait. SKIP LOCKED instead lets the second caller skip the
+  // locked-but-still-pending row immediately and see "no pending row" (and
+  // return null) without blocking at all. Only the first caller to reach
+  // this transaction for a given pending row wins; a second caller for the
+  // same (issuer, target) sees no pending row and gets null, never an
+  // error -- the caller maps null to the same generic non-match failure as
+  // an invalid invite (spec §3.2 step 4).
+  async claimDirectoryMatch({ issuer, matchTarget, matchedHumanId, now = new Date() } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const targetHash = hashMatchTarget(matchTarget);
+    return this.withTransaction(async (client) => {
+      const candidate = await client.query(
+        `SELECT request_id FROM directory_match_requests
+         WHERE issuer = $1 AND match_target_hash = $2 AND status = 'pending' AND expires_at > $3
+         FOR UPDATE SKIP LOCKED LIMIT 1`,
+        [issuer, targetHash, timestamp]
+      );
+      if (!candidate.rows[0]) return null;
+      await client.query(`UPDATE directory_match_requests SET status = 'matched', matched_human_id = $1, matched_at = $2 WHERE request_id = $3`, [matchedHumanId, timestamp, candidate.rows[0].request_id]);
+      return { request_id: candidate.rows[0].request_id };
+    });
+  }
+  async nominateDirectoryLinkEndpoint({ requestId, nominatedEndpointId, nominatedHumanId, homeRelay, now = new Date() } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    return this.withTransaction(async (client) => {
+      const ownership = await client.query('SELECT owner_id FROM endpoints WHERE endpoint_id = $1', [nominatedEndpointId]);
+      if (!ownership.rows[0] || ownership.rows[0].owner_id !== nominatedHumanId) {
+        throw Object.assign(new Error('Match request is invalid or already consumed'), { code: 'MATCH_UNAVAILABLE' });
+      }
+      const request = await client.query(`SELECT * FROM directory_match_requests WHERE request_id = $1 AND status = 'matched' AND matched_human_id = $2 FOR UPDATE`, [requestId, nominatedHumanId]);
+      if (!request.rows[0]) throw Object.assign(new Error('Match request is invalid or already consumed'), { code: 'MATCH_UNAVAILABLE' });
+      const row = request.rows[0];
+      // Mirrors redeemDirectoryInvite's human_a <> human_b guard: without
+      // this check, a human who matched their own request from a second
+      // endpoint they own would hit directory_links' CHECK (human_a <>
+      // human_b) constraint on INSERT below and get a raw, unhandled
+      // Postgres error instead of the generic application error code.
+      // Checked before the request is marked consumed, same as the invite
+      // path checks before marking the invite redeemed.
+      if (row.issuer_human_id === nominatedHumanId) {
+        throw Object.assign(new Error('Match request is invalid or already consumed'), { code: 'MATCH_UNAVAILABLE' });
+      }
+      await client.query(`UPDATE directory_match_requests SET status = 'consumed', consumed_at = $1 WHERE request_id = $2`, [timestamp, requestId]);
+      const [endpointA, endpointB] = [row.issuer_endpoint_id, nominatedEndpointId].sort();
+      const [humanA, humanB] = endpointA === row.issuer_endpoint_id ? [row.issuer_human_id, nominatedHumanId] : [nominatedHumanId, row.issuer_human_id];
+      let link;
+      try {
+        link = await client.query(
+          `INSERT INTO directory_links (link_id, endpoint_a, endpoint_b, human_a, human_b, status, initiated_via, source_request_id, a_confirmed_at, b_confirmed_at, a_confirmed_by, b_confirmed_by, home_relay, created_at)
+           VALUES ($1, $2, $3, $4, $5, 'pending', 'oidc_match', $6, $7, $8, $9, $10, $11, $12)
+           RETURNING link_id, status`,
+          [`link_${crypto.randomUUID()}`, endpointA, endpointB, humanA, humanB, row.request_id,
+            endpointA === row.issuer_endpoint_id ? null : timestamp,
+            endpointA === row.issuer_endpoint_id ? timestamp : null,
+            endpointA === row.issuer_endpoint_id ? null : nominatedHumanId,
+            endpointA === row.issuer_endpoint_id ? nominatedHumanId : null,
+            homeRelay, timestamp]
+        );
+      } catch (error) {
+        if (error.code === '23505') throw Object.assign(new Error('A directory link already exists or is pending between these endpoints'), { code: 'DIRECTORY_LINK_CONFLICT' });
+        throw error;
+      }
+      return { link_id: link.rows[0].link_id, status: link.rows[0].status };
+    });
+  }
+  // Confirmation is actor-bound (spec §5): confirmingHumanId must equal
+  // human_a or human_b of the row, never inferred from endpoint-key auth.
+  async confirmDirectoryLink({ linkId, confirmingHumanId, now = new Date() } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    return this.withTransaction(async (client) => {
+      const current = await client.query('SELECT * FROM directory_links WHERE link_id = $1 FOR UPDATE', [linkId]);
+      if (!current.rows[0]) throw Object.assign(new Error('Directory link not found'), { code: 'LINK_UNAVAILABLE' });
+      const row = current.rows[0];
+      if (row.status !== 'pending') return { link_id: linkId, status: row.status };
+      if (confirmingHumanId !== row.human_a && confirmingHumanId !== row.human_b) {
+        throw Object.assign(new Error('Confirming human is not a party to this link'), { code: 'CONFIRMATION_ACTOR_MISMATCH' });
+      }
+      const isA = confirmingHumanId === row.human_a;
+      if (isA && row.a_confirmed_at) return { link_id: linkId, status: row.status };
+      if (!isA && row.b_confirmed_at) return { link_id: linkId, status: row.status };
+      const otherConfirmed = isA ? row.b_confirmed_at : row.a_confirmed_at;
+      const nextStatus = otherConfirmed ? 'active' : 'pending';
+      const result = await client.query(
+        isA
+          ? `UPDATE directory_links SET a_confirmed_at = $1, a_confirmed_by = $2, status = $3 WHERE link_id = $4 RETURNING link_id, status`
+          : `UPDATE directory_links SET b_confirmed_at = $1, b_confirmed_by = $2, status = $3 WHERE link_id = $4 RETURNING link_id, status`,
+        [timestamp, confirmingHumanId, nextStatus, linkId]
+      );
+      return result.rows[0];
+    });
+  }
+  // Unilateral (spec §5): either party revokes without the other's consent.
+  async revokeDirectoryLink({ linkId, revokingHumanId, now = new Date() } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    return this.withTransaction(async (client) => {
+      const current = await client.query('SELECT * FROM directory_links WHERE link_id = $1 FOR UPDATE', [linkId]);
+      if (!current.rows[0]) throw Object.assign(new Error('Directory link not found'), { code: 'LINK_UNAVAILABLE' });
+      const row = current.rows[0];
+      if (row.status === 'revoked') return { link_id: linkId, status: 'revoked', duplicate: true };
+      if (revokingHumanId !== row.human_a && revokingHumanId !== row.human_b) {
+        throw Object.assign(new Error('Revoking human is not a party to this link'), { code: 'CONFIRMATION_ACTOR_MISMATCH' });
+      }
+      const result = await client.query(`UPDATE directory_links SET status = 'revoked', revoked_at = $1, revoked_by = $2 WHERE link_id = $3 RETURNING link_id, status`, [timestamp, revokingHumanId, linkId]);
+      return { ...result.rows[0], duplicate: false };
+    });
+  }
+  // No `client = this.pool` default -- same reasoning as
+  // lookupActiveCapabilityGrants: this participates in accept-envelope's
+  // transaction (Task 6) and must run on that transaction's client.
+  async lookupActiveDirectoryLink(endpointIdA, endpointIdB, client) {
+    const result = await client.query(
+      `SELECT link_id, status FROM directory_links
+       WHERE status = 'active' AND ((endpoint_a = $1 AND endpoint_b = $2) OR (endpoint_a = $2 AND endpoint_b = $1))`,
+      [endpointIdA, endpointIdB]
+    );
+    return result.rows[0] ?? null;
+  }
   async getDelivery(deliveryId, endpointId) {
     const result = await this.pool.query('SELECT * FROM deliveries WHERE delivery_id = $1 AND recipient_endpoint_id = $2', [deliveryId, endpointId]);
     if (!result.rows[0]) throw Object.assign(new Error('Delivery not found'), { code: 'DELIVERY_UNAVAILABLE' });
@@ -256,7 +459,7 @@ export class PostgresRepository {
     );
     return Number(result.rows[0].count);
   }
-  async reserveRateLimit(scopeKind, scopeId, windowStart, limit, client) {
+  async reserveRateLimit(scopeKind, scopeId, windowStart, limit, client = this.pool) {
     const result = await client.query(
       `INSERT INTO quota_usage (scope_kind, scope_id, window_start, count) VALUES ($1, $2, $3, 1)
        ON CONFLICT (scope_kind, scope_id, window_start) DO UPDATE SET count = quota_usage.count + 1
