@@ -335,6 +335,58 @@ export class PostgresRepository {
       return { link_id: link.rows[0].link_id, status: link.rows[0].status };
     });
   }
+  // Confirmation is actor-bound (spec §5): confirmingHumanId must equal
+  // human_a or human_b of the row, never inferred from endpoint-key auth.
+  async confirmDirectoryLink({ linkId, confirmingHumanId, now = new Date() } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    return this.withTransaction(async (client) => {
+      const current = await client.query('SELECT * FROM directory_links WHERE link_id = $1 FOR UPDATE', [linkId]);
+      if (!current.rows[0]) throw Object.assign(new Error('Directory link not found'), { code: 'LINK_UNAVAILABLE' });
+      const row = current.rows[0];
+      if (row.status !== 'pending') return { link_id: linkId, status: row.status };
+      if (confirmingHumanId !== row.human_a && confirmingHumanId !== row.human_b) {
+        throw Object.assign(new Error('Confirming human is not a party to this link'), { code: 'CONFIRMATION_ACTOR_MISMATCH' });
+      }
+      const isA = confirmingHumanId === row.human_a;
+      if (isA && row.a_confirmed_at) return { link_id: linkId, status: row.status };
+      if (!isA && row.b_confirmed_at) return { link_id: linkId, status: row.status };
+      const otherConfirmed = isA ? row.b_confirmed_at : row.a_confirmed_at;
+      const nextStatus = otherConfirmed ? 'active' : 'pending';
+      const result = await client.query(
+        isA
+          ? `UPDATE directory_links SET a_confirmed_at = $1, a_confirmed_by = $2, status = $3 WHERE link_id = $4 RETURNING link_id, status`
+          : `UPDATE directory_links SET b_confirmed_at = $1, b_confirmed_by = $2, status = $3 WHERE link_id = $4 RETURNING link_id, status`,
+        [timestamp, confirmingHumanId, nextStatus, linkId]
+      );
+      return result.rows[0];
+    });
+  }
+  // Unilateral (spec §5): either party revokes without the other's consent.
+  async revokeDirectoryLink({ linkId, revokingHumanId, now = new Date() } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    return this.withTransaction(async (client) => {
+      const current = await client.query('SELECT * FROM directory_links WHERE link_id = $1 FOR UPDATE', [linkId]);
+      if (!current.rows[0]) throw Object.assign(new Error('Directory link not found'), { code: 'LINK_UNAVAILABLE' });
+      const row = current.rows[0];
+      if (row.status === 'revoked') return { link_id: linkId, status: 'revoked', duplicate: true };
+      if (revokingHumanId !== row.human_a && revokingHumanId !== row.human_b) {
+        throw Object.assign(new Error('Revoking human is not a party to this link'), { code: 'CONFIRMATION_ACTOR_MISMATCH' });
+      }
+      const result = await client.query(`UPDATE directory_links SET status = 'revoked', revoked_at = $1, revoked_by = $2 WHERE link_id = $3 RETURNING link_id, status`, [timestamp, revokingHumanId, linkId]);
+      return { ...result.rows[0], duplicate: false };
+    });
+  }
+  // No `client = this.pool` default -- same reasoning as
+  // lookupActiveCapabilityGrants: this participates in accept-envelope's
+  // transaction (Task 6) and must run on that transaction's client.
+  async lookupActiveDirectoryLink(endpointIdA, endpointIdB, client) {
+    const result = await client.query(
+      `SELECT link_id, status FROM directory_links
+       WHERE status = 'active' AND ((endpoint_a = $1 AND endpoint_b = $2) OR (endpoint_a = $2 AND endpoint_b = $1))`,
+      [endpointIdA, endpointIdB]
+    );
+    return result.rows[0] ?? null;
+  }
   async getDelivery(deliveryId, endpointId) {
     const result = await this.pool.query('SELECT * FROM deliveries WHERE delivery_id = $1 AND recipient_endpoint_id = $2', [deliveryId, endpointId]);
     if (!result.rows[0]) throw Object.assign(new Error('Delivery not found'), { code: 'DELIVERY_UNAVAILABLE' });

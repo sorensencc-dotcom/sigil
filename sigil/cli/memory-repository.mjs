@@ -178,6 +178,35 @@ export function createMemoryRepository() {
       });
       return { link_id: linkId, status: 'pending' };
     },
+    async confirmDirectoryLink({ linkId, confirmingHumanId, now = new Date() }) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      const link = directoryLinks.get(linkId);
+      if (!link) throw Object.assign(new Error('Directory link not found'), { code: 'LINK_UNAVAILABLE' });
+      if (link.status !== 'pending') return { link_id: linkId, status: link.status };
+      if (confirmingHumanId !== link.human_a && confirmingHumanId !== link.human_b) {
+        throw Object.assign(new Error('Confirming human is not a party to this link'), { code: 'CONFIRMATION_ACTOR_MISMATCH' });
+      }
+      const isA = confirmingHumanId === link.human_a;
+      if (isA && link.a_confirmed_at) return { link_id: linkId, status: link.status };
+      if (!isA && link.b_confirmed_at) return { link_id: linkId, status: link.status };
+      if (isA) { link.a_confirmed_at = timestamp; link.a_confirmed_by = confirmingHumanId; } else { link.b_confirmed_at = timestamp; link.b_confirmed_by = confirmingHumanId; }
+      link.status = (link.a_confirmed_at && link.b_confirmed_at) ? 'active' : 'pending';
+      return { link_id: linkId, status: link.status };
+    },
+    async revokeDirectoryLink({ linkId, revokingHumanId, now = new Date() }) {
+      const link = directoryLinks.get(linkId);
+      if (!link) throw Object.assign(new Error('Directory link not found'), { code: 'LINK_UNAVAILABLE' });
+      if (link.status === 'revoked') return { link_id: linkId, status: 'revoked', duplicate: true };
+      if (revokingHumanId !== link.human_a && revokingHumanId !== link.human_b) {
+        throw Object.assign(new Error('Revoking human is not a party to this link'), { code: 'CONFIRMATION_ACTOR_MISMATCH' });
+      }
+      link.status = 'revoked'; link.revoked_at = (now instanceof Date ? now : new Date(now)).toISOString(); link.revoked_by = revokingHumanId;
+      return { link_id: linkId, status: 'revoked', duplicate: false };
+    },
+    async lookupActiveDirectoryLink(endpointIdA, endpointIdB) {
+      const found = [...directoryLinks.values()].find((l) => l.status === 'active' && ((l.endpoint_a === endpointIdA && l.endpoint_b === endpointIdB) || (l.endpoint_a === endpointIdB && l.endpoint_b === endpointIdA)));
+      return found ? { link_id: found.link_id, status: found.status } : null;
+    },
     async acknowledgeDelivery({ deliveryId, endpointId, now }) {
       const current = deliveries.get(deliveryId);
       if (!current || current.recipient_endpoint_id !== endpointId) throw Object.assign(new Error('Delivery not found'), { code: 'DELIVERY_UNAVAILABLE' });
