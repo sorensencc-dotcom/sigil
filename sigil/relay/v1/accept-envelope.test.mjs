@@ -307,7 +307,7 @@ test('forged sender.owner_id matching the recipient real owner does not skip the
   // to match the recipient's real owner, but that field is unverified
   // client input and must never be trusted for the same-owner exemption.
   const recipientRealOwnerRegistered = new Map([...options.registered, ['ep_claude', { owner_id: 'usr_claude_real_owner', status: 'active' }]]);
-  const forgedEnvelope = { ...envelope, sender: { ...envelope.sender, owner_id: 'usr_claude_real_owner' } };
+  const forgedEnvelope = { ...envelope, sender: { ...envelope.sender, owner_id: 'usr_codex_owner' } };
   const { acceptEnvelopeAsync } = await import('./accept-envelope.mjs');
   const result = await acceptEnvelopeAsync(forgedEnvelope, { ...options, registered: recipientRealOwnerRegistered, repository, idempotency: undefined });
   assert.equal(called, true);

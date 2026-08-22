@@ -231,8 +231,8 @@ export class PostgresRepository {
       const [humanA, humanB] = endpointA === row.issuer_endpoint_id ? [row.issuer_human_id, redeemerHumanId] : [redeemerHumanId, row.issuer_human_id];
       const aConfirmedAt = endpointA === row.issuer_endpoint_id ? null : timestamp;
       const bConfirmedAt = endpointA === row.issuer_endpoint_id ? timestamp : null;
-      const bConfirmedBy = endpointA === row.issuer_endpoint_id ? redeemerHumanId : row.issuer_human_id;
-      const aConfirmedBy = endpointA === row.issuer_endpoint_id ? null : row.issuer_human_id;
+      const bConfirmedBy = endpointA === row.issuer_endpoint_id ? redeemerHumanId : null;
+      const aConfirmedBy = endpointA === row.issuer_endpoint_id ? null : redeemerHumanId;
       let link;
       try {
         link = await client.query(
@@ -324,8 +324,8 @@ export class PostgresRepository {
           [`link_${crypto.randomUUID()}`, endpointA, endpointB, humanA, humanB, row.request_id,
             endpointA === row.issuer_endpoint_id ? null : timestamp,
             endpointA === row.issuer_endpoint_id ? timestamp : null,
-            endpointA === row.issuer_endpoint_id ? null : row.issuer_human_id,
-            endpointA === row.issuer_endpoint_id ? nominatedHumanId : row.issuer_human_id,
+            endpointA === row.issuer_endpoint_id ? null : nominatedHumanId,
+            endpointA === row.issuer_endpoint_id ? nominatedHumanId : null,
             homeRelay, timestamp]
         );
       } catch (error) {

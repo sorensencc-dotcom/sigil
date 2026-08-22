@@ -118,8 +118,8 @@ export function createMemoryRepository() {
         link_id: linkId, endpoint_a: endpointA, endpoint_b: endpointB, human_a: humanA, human_b: humanB, status: 'pending', initiated_via: 'invite',
         a_confirmed_at: endpointA === invite.issuer_endpoint_id ? null : timestamp,
         b_confirmed_at: endpointA === invite.issuer_endpoint_id ? timestamp : null,
-        a_confirmed_by: endpointA === invite.issuer_endpoint_id ? null : invite.issuer_human_id,
-        b_confirmed_by: endpointA === invite.issuer_endpoint_id ? redeemerHumanId : invite.issuer_human_id,
+        a_confirmed_by: endpointA === invite.issuer_endpoint_id ? null : redeemerHumanId,
+        b_confirmed_by: endpointA === invite.issuer_endpoint_id ? redeemerHumanId : null,
         revoked_at: null, home_relay: homeRelay, created_at: timestamp
       };
       directoryLinks.set(linkId, link);
@@ -172,8 +172,8 @@ export function createMemoryRepository() {
         link_id: linkId, endpoint_a: endpointA, endpoint_b: endpointB, human_a: humanA, human_b: humanB, status: 'pending', initiated_via: 'oidc_match',
         a_confirmed_at: endpointA === request.issuer_endpoint_id ? null : timestamp,
         b_confirmed_at: endpointA === request.issuer_endpoint_id ? timestamp : null,
-        a_confirmed_by: endpointA === request.issuer_endpoint_id ? null : request.issuer_human_id,
-        b_confirmed_by: endpointA === request.issuer_endpoint_id ? nominatedHumanId : request.issuer_human_id,
+        a_confirmed_by: endpointA === request.issuer_endpoint_id ? null : nominatedHumanId,
+        b_confirmed_by: endpointA === request.issuer_endpoint_id ? nominatedHumanId : null,
         revoked_at: null, home_relay: homeRelay, created_at: timestamp
       });
       return { link_id: linkId, status: 'pending' };
