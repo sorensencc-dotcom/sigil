@@ -37,7 +37,7 @@ function usage() {
 
 Commands:
   init <name> --owner <owner_id> [--registry path]        Create a local identity and register it
-  relay up [--registry path] [--port N]                    Run a local relay (blocks; Ctrl+C to stop)
+  relay up [--registry path] [--port N] [--enable-mock-oidc]        Run a local relay (blocks; Ctrl+C to stop)
   send [--identity path] [--relay-url url] [--stream-url url] [--wait-for-receipt] --to endpoint_id --to-owner owner_id --message "text" [--conversation id]
   inbox [--identity path] [--relay-url url] [--watch|--wait] [--loop] [--stream-url url] [--interval ms] [--timeout ms] [--local] [--ledger path]
 
@@ -78,11 +78,12 @@ async function cmdInit(argv) {
 }
 
 async function cmdRelayUp(argv) {
-  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' } } });
+  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' } } });
   const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
   const port = Number(opt(args, ['port']) ?? 0);
   const streamPort = Number(opt(args, ['stream-port']) ?? (port ? port + 1 : 0));
   const databaseUrl = opt(args, ['database-url']) ?? process.env.SIGIL_DATABASE_URL;
+  const enableMockOidc = Boolean(args.values['enable-mock-oidc']) || process.env.SIGIL_ENABLE_MOCK_OIDC === '1';
   const data = loadRegistryFile(registryPath);
   if (!data.endpoints.length) throw new Error(`No endpoints in ${registryPath}. Run "sigil init <name> --owner <owner_id>" first.`);
   const registry = toRegistryMap(data);
@@ -95,6 +96,11 @@ async function cmdRelayUp(argv) {
     const { default: pg } = await import('pg');
     const pool = new pg.Pool({ connectionString: databaseUrl });
     repository = new PostgresRepository({ pool });
+
+    if (enableMockOidc) {
+      const { FIXTURE_ISSUER } = await import('../relay/v1/mock-oidc.mjs');
+      await repository.upsertMockOidcIssuerAllowlist({ issuer: FIXTURE_ISSUER });
+    }
 
     for (const ep of data.endpoints) {
       await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW()) ON CONFLICT (human_id) DO NOTHING`, [ep.owner_id]);
@@ -129,9 +135,10 @@ async function cmdRelayUp(argv) {
     const addr = server?.address();
     return addr ? `http://127.0.0.1:${addr.port}` : `http://127.0.0.1:${port}`;
   };
-  server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin });
+  server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();
+  if (enableMockOidc) console.log('WARNING: mock-OIDC login is enabled (--enable-mock-oidc). This is for local development and CI only -- never expose this relay to untrusted networks.');
   console.log(`Sigil relay listening on http://127.0.0.1:${address.port}`);
   console.log(`Sigil stream (push notify) on ws://127.0.0.1:${streamAddress.port}/v1/stream`);
   console.log(`Registered endpoints: ${[...registry.keys()].join(', ')}`);
