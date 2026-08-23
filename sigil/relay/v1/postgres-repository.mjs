@@ -870,6 +870,30 @@ export class PostgresRepository {
     );
     return result.rows[0];
   }
+  // Replay guard for POST /v1/auth/mock-login: the primary-key uniqueness
+  // constraint on mock_login_replays.jti makes a second insert of the same
+  // jti fail with 23505, mapped here to TOKEN_REPLAYED.
+  async consumeMockLoginJti(jti, { now = new Date(), expiresAt, client = this.pool } = {}) {
+    const expires = expiresAt instanceof Date ? expiresAt.toISOString() : new Date(expiresAt).toISOString();
+    try {
+      await client.query('INSERT INTO mock_login_replays (jti, expires_at) VALUES ($1, $2)', [jti, expires]);
+    } catch (error) {
+      if (error.code === '23505') throw Object.assign(new Error('Mock ID token has already been used'), { code: 'TOKEN_REPLAYED' });
+      throw error;
+    }
+  }
+  // Scoped strictly to enableMockOidc's opt-in startup path (Task 7) -- a
+  // production relay that never sets --enable-mock-oidc never touches this
+  // table for the fixture issuer.
+  async upsertMockOidcIssuerAllowlist({ issuer, now = new Date() } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    await this.pool.query(
+      `INSERT INTO oidc_issuer_allowlist (issuer, display_label, enabled, assurance_level, added_at)
+       VALUES ($1, 'Mock OIDC (dev/test only)', TRUE, 'standard', $2)
+       ON CONFLICT (issuer) DO UPDATE SET enabled = TRUE, assurance_level = 'standard'`,
+      [issuer, timestamp]
+    );
+  }
   async isConversationMember(endpointId, conversationId, client = this.pool) {
     const result = await client.query(
       'SELECT 1 FROM conversation_members WHERE conversation_id = $1 AND endpoint_id = $2 AND removed_at IS NULL',
