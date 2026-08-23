@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sigil · Architecture</title>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400;1,700&family=Barlow+Condensed:wght@300;400;600;700;800&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f2ece2;
+      --color-ink:     #2c2420;
+      --color-muted:   #5c5349;
+      --color-accent:  #c4501a;
+      --font-sans:     'Barlow Condensed', system-ui, sans-serif;
+      --font-serif:    'Playfair Display', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .frame { max-width: 1280px; width: 100%; }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Architecture · Diagram Design</p>
+    <h1>Sigil: agents to relay</h1>
+
+    <svg viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="architecture-title architecture-desc">
+      <title id="architecture-title">Sigil: agents to relay</title>
+      <desc id="architecture-desc">Architecture diagram showing multi-model agent hosts and a human approval UI reaching the Sigil relay through a signing connector boundary, with capability checks, audit logging, and a Postgres store.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#5c5349"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#c4501a"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f2ece2"/>
+
+      <!-- ============ ZONES (bg → zones → arrows → nodes) ============ -->
+      <rect x="424" y="128" width="432" height="288" rx="8" fill="rgba(44,36,32,0.02)" stroke="rgba(44,36,32,0.10)" stroke-width="0.8"/>
+      <rect x="558" y="132" width="164" height="12" rx="2" fill="#f2ece2"/>
+      <text x="640" y="141" fill="rgba(44,36,32,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">CONNECTOR BOUNDARY</text>
+
+      <rect x="214" y="448" width="852" height="224" rx="8" fill="rgba(44,36,32,0.02)" stroke="rgba(44,36,32,0.10)" stroke-width="0.8"/>
+      <rect x="586" y="452" width="108" height="12" rx="2" fill="#f2ece2"/>
+      <text x="640" y="461" fill="rgba(44,36,32,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">SIGIL RELAY</text>
+
+      <!-- ============ ARROWS (drawn before nodes) ============ -->
+
+      <!-- Hosts -> MCP / DMN (straight, same column as targets) -->
+      <line x1="520" y1="112" x2="520" y2="160" stroke="#5c5349" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="760" y1="112" x2="760" y2="160" stroke="#5c5349" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- MCP/DMN -> Connector Policy -->
+      <path d="M520,224 V228 Q520,236 528,236 H605 Q613,236 613,244 V248" fill="none" stroke="#5c5349" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M760,224 V228 Q760,236 752,236 H675 Q667,236 667,244 V248" fill="none" stroke="#5c5349" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- Connector Policy -> Outbox (focal, accent) -->
+      <line x1="640" y1="312" x2="640" y2="336" stroke="#c4501a" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+
+      <!-- Outbox -> HTTP Intake / WebSocket Stream -->
+      <path d="M613,400 V432 Q613,440 605,440 H318 Q310,440 310,448 V480" fill="none" stroke="#5c5349" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M667,400 V432 Q667,440 659,440 H648 Q640,440 640,448 V480" fill="none" stroke="#5c5349" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- HTTP -> Capability Registry (straight, shared column) -->
+      <line x1="283" y1="544" x2="283" y2="592" stroke="#5c5349" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- WebSocket Stream -> PostgreSQL (straight, shared column) -->
+      <line x1="640" y1="544" x2="640" y2="592" stroke="#5c5349" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- HTTP -> Audit Logger (cross, staggered) -->
+      <path d="M337,544 V552 Q337,560 345,560 H962 Q970,560 970,568 V592" fill="none" stroke="#5c5349" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- Approval UI -> Capability Registry (cross, staggered) -->
+      <path d="M970,544 V564 Q970,572 962,572 H345 Q337,572 337,580 V592" fill="none" stroke="#5c5349" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- Capability Registry -> PostgreSQL (focal, accent) -->
+      <line x1="390" y1="624" x2="560" y2="624" stroke="#c4501a" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+      <!-- Audit Logger -> PostgreSQL -->
+      <line x1="890" y1="624" x2="720" y2="624" stroke="#5c5349" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- ============ NODES ============ -->
+
+      <!-- Hosts (external, entry) -->
+      <rect x="440" y="48" width="400" height="64" rx="6" fill="#f2ece2"/>
+      <rect x="440" y="48" width="400" height="64" rx="6" fill="rgba(44,36,32,0.03)" stroke="rgba(44,36,32,0.30)" stroke-width="1"/>
+      <rect x="448" y="56" width="28" height="12" rx="2" fill="transparent" stroke="rgba(44,36,32,0.22)" stroke-width="0.8"/>
+      <text x="462" y="65" fill="#8a8078" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">EXT</text>
+      <text x="640" y="84" fill="#2c2420" font-size="12" font-weight="600" font-family="'Barlow Condensed', sans-serif" text-anchor="middle">AI Agent Hosts</text>
+      <text x="640" y="100" fill="#5c5349" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Claude · Codex · Antigravity · Grok · local LLM</text>
+
+      <!-- MCP Stdio Bridge -->
+      <rect x="440" y="160" width="160" height="64" rx="6" fill="#f2ece2"/>
+      <rect x="440" y="160" width="160" height="64" rx="6" fill="#faf6f0" stroke="#2c2420" stroke-width="1"/>
+      <rect x="448" y="168" width="32" height="12" rx="2" fill="transparent" stroke="rgba(44,36,32,0.40)" stroke-width="0.8"/>
+      <text x="464" y="177" fill="#2c2420" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">MCP</text>
+      <text x="520" y="196" fill="#2c2420" font-size="12" font-weight="600" font-family="'Barlow Condensed', sans-serif" text-anchor="middle">MCP Stdio Bridge</text>
+
+      <!-- Autonomous Daemon -->
+      <rect x="680" y="160" width="160" height="64" rx="6" fill="#f2ece2"/>
+      <rect x="680" y="160" width="160" height="64" rx="6" fill="#faf6f0" stroke="#2c2420" stroke-width="1"/>
+      <rect x="688" y="168" width="32" height="12" rx="2" fill="transparent" stroke="rgba(44,36,32,0.40)" stroke-width="0.8"/>
+      <text x="704" y="177" fill="#2c2420" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SVC</text>
+      <text x="760" y="196" fill="#2c2420" font-size="12" font-weight="600" font-family="'Barlow Condensed', sans-serif" text-anchor="middle">Autonomous Daemon</text>
+
+      <!-- Connector Policy -->
+      <rect x="560" y="248" width="160" height="64" rx="6" fill="#f2ece2"/>
+      <rect x="560" y="248" width="160" height="64" rx="6" fill="#faf6f0" stroke="#2c2420" stroke-width="1"/>
+      <rect x="568" y="256" width="32" height="12" rx="2" fill="transparent" stroke="rgba(44,36,32,0.40)" stroke-width="0.8"/>
+      <text x="584" y="265" fill="#2c2420" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">POL</text>
+      <text x="640" y="284" fill="#2c2420" font-size="12" font-weight="600" font-family="'Barlow Condensed', sans-serif" text-anchor="middle">Connector Policy</text>
+
+      <!-- Outbox & Key Store (FOCAL) -->
+      <rect x="560" y="336" width="160" height="64" rx="6" fill="#f2ece2"/>
+      <rect x="560" y="336" width="160" height="64" rx="6" fill="rgba(196,80,26,0.08)" stroke="#c4501a" stroke-width="1"/>
+      <rect x="568" y="344" width="32" height="12" rx="2" fill="transparent" stroke="rgba(196,80,26,0.50)" stroke-width="0.8"/>
+      <text x="584" y="353" fill="#c4501a" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SIG</text>
+      <text x="640" y="372" fill="#2c2420" font-size="12" font-weight="600" font-family="'Barlow Condensed', sans-serif" text-anchor="middle">Outbox &amp; Key Store</text>
+      <text x="640" y="388" fill="#5c5349" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Ed25519 signing</text>
+
+      <!-- HTTP Intake -->
+      <rect x="230" y="480" width="160" height="64" rx="6" fill="#f2ece2"/>
+      <rect x="230" y="480" width="160" height="64" rx="6" fill="#faf6f0" stroke="#2c2420" stroke-width="1"/>
+      <rect x="238" y="488" width="28" height="12" rx="2" fill="transparent" stroke="rgba(44,36,32,0.40)" stroke-width="0.8"/>
+      <text x="252" y="497" fill="#2c2420" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">API</text>
+      <text x="310" y="516" fill="#2c2420" font-size="12" font-weight="600" font-family="'Barlow Condensed', sans-serif" text-anchor="middle">HTTP Intake</text>
+
+      <!-- WebSocket Stream -->
+      <rect x="560" y="480" width="160" height="64" rx="6" fill="#f2ece2"/>
+      <rect x="560" y="480" width="160" height="64" rx="6" fill="#faf6f0" stroke="#2c2420" stroke-width="1"/>
+      <rect x="568" y="488" width="24" height="12" rx="2" fill="transparent" stroke="rgba(44,36,32,0.40)" stroke-width="0.8"/>
+      <text x="580" y="497" fill="#2c2420" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">WS</text>
+      <text x="640" y="516" fill="#2c2420" font-size="12" font-weight="600" font-family="'Barlow Condensed', sans-serif" text-anchor="middle">WebSocket Stream</text>
+
+      <!-- Approval UI (external, human) -->
+      <rect x="890" y="480" width="160" height="64" rx="6" fill="#f2ece2"/>
+      <rect x="890" y="480" width="160" height="64" rx="6" fill="rgba(92,83,73,0.10)" stroke="#8a8078" stroke-width="1"/>
+      <rect x="898" y="488" width="28" height="12" rx="2" fill="transparent" stroke="rgba(138,128,120,0.40)" stroke-width="0.8"/>
+      <text x="912" y="497" fill="#8a8078" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">EXT</text>
+      <text x="970" y="516" fill="#2c2420" font-size="12" font-weight="600" font-family="'Barlow Condensed', sans-serif" text-anchor="middle">Approval UI</text>
+
+      <!-- Capability Registry -->
+      <rect x="230" y="592" width="160" height="64" rx="6" fill="#f2ece2"/>
+      <rect x="230" y="592" width="160" height="64" rx="6" fill="#faf6f0" stroke="#2c2420" stroke-width="1"/>
+      <rect x="238" y="600" width="32" height="12" rx="2" fill="transparent" stroke="rgba(44,36,32,0.40)" stroke-width="0.8"/>
+      <text x="254" y="609" fill="#2c2420" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">AUTH</text>
+      <text x="310" y="628" fill="#2c2420" font-size="12" font-weight="600" font-family="'Barlow Condensed', sans-serif" text-anchor="middle">Capability Registry</text>
+      <text x="310" y="644" fill="#5c5349" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">authz + rate limit</text>
+
+      <!-- PostgreSQL (FOCAL) -->
+      <rect x="560" y="592" width="160" height="64" rx="6" fill="#f2ece2"/>
+      <rect x="560" y="592" width="160" height="64" rx="6" fill="rgba(196,80,26,0.08)" stroke="#c4501a" stroke-width="1"/>
+      <rect x="568" y="600" width="24" height="12" rx="2" fill="transparent" stroke="rgba(196,80,26,0.50)" stroke-width="0.8"/>
+      <text x="580" y="609" fill="#c4501a" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">DB</text>
+      <text x="640" y="628" fill="#2c2420" font-size="12" font-weight="600" font-family="'Barlow Condensed', sans-serif" text-anchor="middle">PostgreSQL</text>
+      <text x="640" y="644" fill="#5c5349" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">durable store</text>
+
+      <!-- Audit Logger -->
+      <rect x="890" y="592" width="160" height="64" rx="6" fill="#f2ece2"/>
+      <rect x="890" y="592" width="160" height="64" rx="6" fill="#faf6f0" stroke="#2c2420" stroke-width="1"/>
+      <rect x="898" y="600" width="28" height="12" rx="2" fill="transparent" stroke="rgba(44,36,32,0.40)" stroke-width="0.8"/>
+      <text x="912" y="609" fill="#2c2420" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">LOG</text>
+      <text x="970" y="628" fill="#2c2420" font-size="12" font-weight="600" font-family="'Barlow Condensed', sans-serif" text-anchor="middle">Audit Logger</text>
+
+      <!-- ============ LEGEND ============ -->
+      <line x1="40" y1="688" x2="1240" y2="688" stroke="rgba(44,36,32,0.10)" stroke-width="0.8"/>
+      <text x="40" y="700" fill="#5c5349" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+
+      <rect x="40" y="706" width="14" height="10" rx="2" fill="rgba(196,80,26,0.08)" stroke="#c4501a" stroke-width="1"/>
+      <text x="60" y="714" fill="#5c5349" font-size="8.5" font-family="'Barlow Condensed', sans-serif">Focal / signing &amp; store</text>
+
+      <rect x="230" y="706" width="14" height="10" rx="2" fill="#faf6f0" stroke="#2c2420" stroke-width="1"/>
+      <text x="250" y="714" fill="#5c5349" font-size="8.5" font-family="'Barlow Condensed', sans-serif">Relay / service</text>
+
+      <rect x="400" y="706" width="14" height="10" rx="2" fill="rgba(44,36,32,0.03)" stroke="rgba(44,36,32,0.30)" stroke-width="1"/>
+      <text x="420" y="714" fill="#5c5349" font-size="8.5" font-family="'Barlow Condensed', sans-serif">External agent host</text>
+
+      <rect x="600" y="706" width="14" height="10" rx="2" fill="rgba(92,83,73,0.10)" stroke="#8a8078" stroke-width="1"/>
+      <text x="620" y="714" fill="#5c5349" font-size="8.5" font-family="'Barlow Condensed', sans-serif">Human input</text>
+
+      <line x1="780" y1="712" x2="808" y2="712" stroke="#c4501a" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+      <text x="816" y="714" fill="#5c5349" font-size="8.5" font-family="'Barlow Condensed', sans-serif">Signed / capability-checked write</text>
+    </svg>
+  </div>
+</body>
+</html>

@@ -37,6 +37,9 @@ jobs:
           node-version: '22.x'
           cache: 'npm'
 
+      - name: Verify wiki diagram exports are current
+        run: node sigil/scripts/verify-wiki-diagrams.mjs
+
       - name: Configure Git identity
         run: |
           git config --global user.name "github-actions[bot]"

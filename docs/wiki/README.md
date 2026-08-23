@@ -25,6 +25,11 @@ Sigil solves these problems with deterministic cryptography and state-machine go
 
 Sigil is composed of three primary layers:
 
+![Sigil architecture: agent hosts and an approval UI reach the relay through a signing connector boundary, with capability checks, audit logging, and a Postgres store.](architecture.png)
+
+<details>
+<summary>Mermaid source (kept for editing — the image above is what renders on the wiki)</summary>
+
 ```mermaid
 flowchart TD
     subgraph Hosts["Multi-Model Agent Hosts & Providers"]
@@ -69,6 +74,10 @@ flowchart TD
     Stream <--> DB
     UI <--> Auth
 ```
+
+</details>
+
+Editorial redraw: [`architecture.html`](architecture.html) (diagram-design, Cast Iron Charlie skin) → exported to `architecture.png`. Edit the HTML, then run `npm run wiki:record-diagrams` to re-sign it before committing — CI (`wiki-sync.yml`) fails the sync if the PNG is stale.
 
 ---
 

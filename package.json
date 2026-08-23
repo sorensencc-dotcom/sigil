@@ -37,7 +37,9 @@
     "prepack": "node sigil-dep-audit.mjs && node sigil-jcs-audit.mjs && node --test",
     "pack:check": "npm pack --dry-run",
     "release:check": "npm run audit:deps && npm run audit:jcs && npm test && npm pack --dry-run",
-    "wiki:sync": "node sigil/scripts/sync-wiki.mjs"
+    "wiki:sync": "node sigil/scripts/sync-wiki.mjs",
+    "wiki:verify-diagrams": "node sigil/scripts/verify-wiki-diagrams.mjs",
+    "wiki:record-diagrams": "node sigil/scripts/verify-wiki-diagrams.mjs --write"
   },
   "license": "MIT",
   "main": "index.js",

@@ -52,18 +52,35 @@ function sync() {
   const files = fs.readdirSync(docsDir);
   let changed = 0;
 
+  // Image assets referenced by wiki markdown (e.g. exported diagram-design
+  // PNGs/SVGs) — copied byte-for-byte, never renamed. `.html` diagram
+  // *sources* are intentionally excluded: GitHub wikis sanitize <style>/
+  // <script>/most inline SVG, so the source of truth stays in docs/wiki/ and
+  // only its exported raster ships to the wiki.
+  const ASSET_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg']);
+
   for (const file of files) {
-    if (!file.endsWith('.md')) continue;
+    const ext = path.extname(file).toLowerCase();
+    const isMarkdown = ext === '.md';
+    const isAsset = ASSET_EXTENSIONS.has(ext);
+    if (!isMarkdown && !isAsset) continue;
+
     const srcPath = path.join(docsDir, file);
     // GitHub Wiki treats Home.md as the landing page
-    const targetFileName = file.toLowerCase() === 'readme.md' ? 'Home.md' : file;
+    const targetFileName = isMarkdown && file.toLowerCase() === 'readme.md' ? 'Home.md' : file;
     const destPath = path.join(wikiDir, targetFileName);
 
-    const srcContent = fs.readFileSync(srcPath, 'utf8');
-    const existingContent = fs.existsSync(destPath) ? fs.readFileSync(destPath, 'utf8') : null;
+    const srcContent = fs.readFileSync(isMarkdown ? srcPath : srcPath, isMarkdown ? 'utf8' : null);
+    const existingContent = fs.existsSync(destPath)
+      ? fs.readFileSync(destPath, isMarkdown ? 'utf8' : null)
+      : null;
 
-    if (srcContent !== existingContent) {
-      fs.writeFileSync(destPath, srcContent, 'utf8');
+    const same = isMarkdown
+      ? srcContent === existingContent
+      : existingContent !== null && Buffer.compare(srcContent, existingContent) === 0;
+
+    if (!same) {
+      fs.writeFileSync(destPath, srcContent);
       console.log(`  ✓ Updated ${targetFileName} (from ${file})`);
       changed += 1;
     } else {
