@@ -277,20 +277,21 @@ export class PostgresRepository {
   // same (issuer, target) sees no pending row and gets null, never an
   // error -- the caller maps null to the same generic non-match failure as
   // an invalid invite (spec §3.2 step 4).
-  async claimDirectoryMatch({ issuer, matchTarget, matchedHumanId, now = new Date() } = {}) {
+  async claimDirectoryMatch({ issuer, matchTarget, matchedHumanId, now = new Date(), client } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     const targetHash = hashMatchTarget(matchTarget);
-    return this.withTransaction(async (client) => {
-      const candidate = await client.query(
+    const run = async (txClient) => {
+      const candidate = await txClient.query(
         `SELECT request_id FROM directory_match_requests
          WHERE issuer = $1 AND match_target_hash = $2 AND status = 'pending' AND expires_at > $3
          FOR UPDATE SKIP LOCKED LIMIT 1`,
         [issuer, targetHash, timestamp]
       );
       if (!candidate.rows[0]) return null;
-      await client.query(`UPDATE directory_match_requests SET status = 'matched', matched_human_id = $1, matched_at = $2 WHERE request_id = $3`, [matchedHumanId, timestamp, candidate.rows[0].request_id]);
+      await txClient.query(`UPDATE directory_match_requests SET status = 'matched', matched_human_id = $1, matched_at = $2 WHERE request_id = $3`, [matchedHumanId, timestamp, candidate.rows[0].request_id]);
       return { request_id: candidate.rows[0].request_id };
-    });
+    };
+    return client ? run(client) : this.withTransaction(run);
   }
   async nominateDirectoryLinkEndpoint({ requestId, nominatedEndpointId, nominatedHumanId, homeRelay, now = new Date() } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
@@ -625,11 +626,11 @@ export class PostgresRepository {
       return { ...updated.rows[0], duplicate: false };
     });
   }
-  async createHumanSession({ sessionId, humanId, authenticationMethod, assurance, deviceContext = {}, issuedAt = new Date(), expiresAt, now = new Date() } = {}) {
+  async createHumanSession({ sessionId, humanId, authenticationMethod, assurance, deviceContext = {}, issuedAt = new Date(), expiresAt, now = new Date(), client = this.pool } = {}) {
     assertAssurance(assurance);
     const issued = issuedAt instanceof Date ? issuedAt.toISOString() : new Date(issuedAt).toISOString();
     const expires = expiresAt instanceof Date ? expiresAt.toISOString() : new Date(expiresAt).toISOString();
-    const result = await this.pool.query(
+    const result = await client.query(
       `INSERT INTO human_sessions (session_id, human_id, authentication_method, assurance, device_context, issued_at, expires_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING session_id, human_id, authentication_method, assurance, device_context, issued_at, version, expires_at, revoked_at`,
@@ -859,9 +860,9 @@ export class PostgresRepository {
       return { ...updated.rows[0], duplicate: false };
     });
   }
-  async recordAuditEvent({ eventId = `audit_${crypto.randomUUID()}`, eventType, subjectId, actorId = null, actorHumanId = null, endpointId = null, objectType = null, objectId = null, actionHash = null, outcome = null, reason = null, payload = {}, metadataRedacted = null, now = new Date() } = {}) {
+  async recordAuditEvent({ eventId = `audit_${crypto.randomUUID()}`, eventType, subjectId, actorId = null, actorHumanId = null, endpointId = null, objectType = null, objectId = null, actionHash = null, outcome = null, reason = null, payload = {}, metadataRedacted = null, now = new Date(), client = this.pool } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
-    const result = await this.pool.query(
+    const result = await client.query(
       `INSERT INTO audit_events (event_id, event_type, subject_id, actor_id, actor_human_id, endpoint_id, object_type, object_id, action_hash, outcome, reason, payload, metadata_redacted, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        RETURNING event_id, event_type, subject_id, actor_id, actor_human_id, endpoint_id, object_type, object_id, action_hash, outcome, reason, created_at`,
