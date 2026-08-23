@@ -1,6 +1,6 @@
 # Sigil CLI — status and roadmap
 
-## What exists (2026-08-21)
+## What exists (2026-08-22)
 
 A packaged CLI (`@sorensencc/sigil`, `bin/sigil.mjs`), installable via
 `npm install --global github:sorensencc-dotcom/sigil` — no local checkout
@@ -37,13 +37,30 @@ build record (all 8 workstreams closed, no open items).
 CI: GitHub Actions matrix (Node 22.x/24.x, Ubuntu/Windows, live PostgreSQL
 16 service container). 366 tests passing (336 unit/contract + 30 live DB).
 
+Endpoint directory/trust also now implemented per
+`docs/specs/sigil-endpoint-directory-trust-spec-v1.0.md`: invite
+create/redeem and OIDC-match create/claim/nominate flows, actor-bound
+confirmation, unilateral revocation, active-link lookup, a same-owner
+exemption on the accept-envelope gate (both sides resolved from the
+trusted registry, not unverified envelope fields), dedicated
+invite/match rate-limit scopes, and end-to-end integration coverage
+(invite → confirm → deliver → revoke). The `attemptDirectoryMatchOnOidcLogin`
+claim hook exists but is **not yet wired to any login route** — OIDC
+first-contact match is implemented but not reachable through a real
+login flow yet.
+
+A `VaultIsolationLayer` connector helper (`sigil/connectors/v1/vault-isolation-layer.mjs`,
+exported as `@sorensencc/sigil/vault-isolation`) confines connector
+filesystem access to a configured root: path containment, null-byte,
+symlink, and URL-decode checks before delegating to fs read/write/
+stream/list/unlink/stat.
+
 ## What this is not
 
-- **Not multi-user in the trust sense.** The registry is still a local
-  JSON file populated by `init`. There's no directory service and no way
-  for two people who've never met to discover or authorize each other's
-  endpoints — WebAuthn covers *approving a capability request from an
-  already-known endpoint*, not *first contact*.
+- **First-contact trust exists but isn't wired to a real login flow.**
+  Invite-code redemption is fully usable end-to-end today. OIDC-based
+  match/claim is implemented and tested, but `attemptDirectoryMatchOnOidcLogin`
+  has no caller — no login route invokes it yet.
 - **Not centrally hosted.** `sigil relay up` runs on whatever host you
   start it on. The PostgreSQL repository gives restart durability, but
   nobody operates a shared, reachable, TLS-terminated instance of it —
@@ -60,12 +77,12 @@ CI: GitHub Actions matrix (Node 22.x/24.x, Ubuntu/Windows, live PostgreSQL
 2. **A relay someone actually hosts** — the PostgreSQL repository exists;
    nobody has deployed a shared, reachable instance with TLS/backups/uptime.
    Still open.
-3. **Real identity/directory** — first-contact trust between strangers.
-   `docs/specs/sigil-human-approval-auth-spec-v1.0.md` and
-   `sigil-plugin-connector-auth-spec-v1.0.md` cover approving an already-
-   registered endpoint's capability requests (WebAuthn) and connector-level
-   auth, but neither specs a "here's a stranger's endpoint, decide whether
-   to trust them" flow. Still open.
+3. ~~**Real identity/directory**~~ — mostly done. Invite-code first-contact
+   trust is fully built and wired end-to-end (create, redeem, confirm,
+   revoke, active-link gate on message delivery). OIDC-match first-contact
+   trust is implemented and tested but the `attemptDirectoryMatchOnOidcLogin`
+   claim hook isn't wired to any login route yet — remaining open work is
+   that wiring, not the trust model itself.
 4. ~~**Push, not poll**~~ — done. WebSocket delivery-notify stream backs
    `sigil inbox --wait`; `sigil agent run` daemonizes it further.
 5. **Actual chat-surface integration** — still the hard, unbuilt part.
@@ -79,9 +96,9 @@ CI: GitHub Actions matrix (Node 22.x/24.x, Ubuntu/Windows, live PostgreSQL
 
 ## Immediate next candidates (not started)
 
-- Spec out first-contact identity/directory trust (item 3) — what proves
-  a stranger's endpoint claim is real, and what the human-approval flow
-  looks like for *adding* an endpoint, not just approving its requests.
+- Wire `attemptDirectoryMatchOnOidcLogin` to an actual login route so
+  OIDC-based first-contact match is reachable outside tests (item 3
+  remainder).
 - Decide whether a shared hosted relay (item 2) is in scope at all, or
   whether Sigil stays self-hosted-per-pair by design; if in scope, spec
   deployment/ops (TLS, backups, uptime) this repo doesn't address yet.
