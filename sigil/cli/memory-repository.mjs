@@ -27,6 +27,8 @@ export function createMemoryRepository() {
   const directoryInvites = new Map(); // code -> invite row (memory repo has no separate hash step -- single process, nothing to hide from itself)
   const directoryLinks = new Map();
   const directoryMatchRequests = new Map();
+  const humanSessions = new Map();
+  const consumedMockLoginJtis = new Map();
   return {
     // Single-process, no real client/connection -- the transaction wrapper
     // exists so acceptEnvelopeAsync's repository-aware path works unchanged
@@ -254,6 +256,20 @@ export function createMemoryRepository() {
       if (grant.revoked_at) return { ...grant, duplicate: true };
       grant.revoked_at = (now instanceof Date ? now : new Date(now)).toISOString();
       return { ...grant, duplicate: false };
+    },
+    async createHumanSession({ sessionId, humanId, authenticationMethod, assurance, deviceContext = {}, issuedAt = new Date(), expiresAt, now = new Date() }) {
+      const issued = (issuedAt instanceof Date ? issuedAt : new Date(issuedAt)).toISOString();
+      const expires = (expiresAt instanceof Date ? expiresAt : new Date(expiresAt)).toISOString();
+      const session = { session_id: sessionId, human_id: humanId, authentication_method: authenticationMethod, assurance, device_context: deviceContext, issued_at: issued, version: 1, expires_at: expires, revoked_at: null };
+      humanSessions.set(sessionId, session);
+      return session;
+    },
+    async consumeMockLoginJti(jti, { now = new Date(), expiresAt }) {
+      if (consumedMockLoginJtis.has(jti)) {
+        throw Object.assign(new Error('Mock ID token has already been used'), { code: 'TOKEN_REPLAYED' });
+      }
+      consumedMockLoginJtis.set(jti, (expiresAt instanceof Date ? expiresAt : new Date(expiresAt)).toISOString());
+      return undefined;
     }
   };
 }
