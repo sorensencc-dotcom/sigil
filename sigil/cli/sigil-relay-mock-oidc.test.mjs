@@ -1,20 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const sigilPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'sigil.mjs');
-
-function runCli(argv, { timeoutMs = 3000 } = {}) {
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [sigilPath, ...argv], { cwd: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..') });
-    let stdout = '';
-    child.stdout.on('data', (chunk) => { stdout += chunk; });
-    const timer = setTimeout(() => { child.kill(); resolve({ stdout }); }, timeoutMs);
-    child.on('exit', () => { clearTimeout(timer); resolve({ stdout }); });
-  });
-}
 
 test('sigil relay up --help-equivalent usage text mentions --enable-mock-oidc', async () => {
   // sigil.mjs has no --help flag; assert against the command's own usage

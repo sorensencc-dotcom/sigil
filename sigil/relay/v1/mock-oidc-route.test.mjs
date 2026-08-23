@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createRelayServer } from './http-server.mjs';
 import { signMockIdToken } from './mock-oidc.mjs';
+import { createMemoryRepository } from '../../cli/memory-repository.mjs';
 
 function request(port, { method, path, body }) {
   return new Promise((resolve, reject) => {
@@ -124,6 +125,40 @@ test('audit event payload matches the created session', async () => {
     assert.equal(audits[0].eventType, 'human_session.created');
     assert.equal(audits[0].actorHumanId, 'usr_1');
     assert.equal(audits[0].endpointId, 'ep_1');
+    assert.equal(audits[0].outcome, 'success');
+  });
+});
+
+test('a token signed with a different issuer is rejected with 401 INVALID_ID_TOKEN', async () => {
+  let writes = 0;
+  const repository = fakeRepository({ async consumeMockLoginJti() { writes++; }, async createHumanSession() { writes++; return {}; } });
+  await withServer({ enableMockOidc: true, repository, authenticate: async () => ({ endpoint_id: 'ep_1', human_id: 'usr_1' }), now: () => FIXED_NOW }, async (port) => {
+    const token = signMockIdToken({ subject: 'sub_1', email: 'a@example.com', issuer: 'https://attacker.example/forged', now: FIXED_NOW });
+    const result = await request(port, { method: 'POST', path: '/v1/auth/mock-login', body: { id_token: token } });
+    assert.equal(result.status, 401);
+    assert.equal(result.body.code, 'INVALID_ID_TOKEN');
+    assert.equal(writes, 0);
+  });
+});
+
+// Regression test for a bug the hand-rolled fakeRepository() above hid: it
+// already defines recordAuditEvent, so it never exercised the real
+// createMemoryRepository() (sigil/cli/memory-repository.mjs) -- the
+// no-Postgres default `sigil relay up --enable-mock-oidc` uses -- which had
+// no recordAuditEvent method at all, throwing a TypeError on every call.
+test('full success flow against the real in-memory repository records an audit event', async () => {
+  const repository = createMemoryRepository();
+  await withServer({ enableMockOidc: true, repository, authenticate: async () => ({ endpoint_id: 'ep_1', human_id: 'usr_1' }), now: () => FIXED_NOW }, async (port) => {
+    const token = signMockIdToken({ subject: 'sub_1', email: 'a@example.com', now: FIXED_NOW });
+    const result = await request(port, { method: 'POST', path: '/v1/auth/mock-login', body: { id_token: token } });
+    assert.equal(result.status, 201);
+    assert.equal(result.body.code, 'OK');
+    assert.equal(result.body.session.human_id, 'usr_1');
+    const audits = repository._debugGetAuditEvents();
+    assert.equal(audits.length, 1);
+    assert.equal(audits[0].event_type, 'human_session.created');
+    assert.equal(audits[0].actor_human_id, 'usr_1');
+    assert.equal(audits[0].endpoint_id, 'ep_1');
     assert.equal(audits[0].outcome, 'success');
   });
 });

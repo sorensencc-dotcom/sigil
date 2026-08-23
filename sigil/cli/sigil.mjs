@@ -37,7 +37,7 @@ function usage() {
 
 Commands:
   init <name> --owner <owner_id> [--registry path]        Create a local identity and register it
-  relay up [--registry path] [--port N] [--enable-mock-oidc]        Run a local relay (blocks; Ctrl+C to stop)
+  relay up [--registry path] [--port N] [--enable-mock-oidc] Run a local relay (blocks; Ctrl+C to stop)
   send [--identity path] [--relay-url url] [--stream-url url] [--wait-for-receipt] --to endpoint_id --to-owner owner_id --message "text" [--conversation id]
   inbox [--identity path] [--relay-url url] [--watch|--wait] [--loop] [--stream-url url] [--interval ms] [--timeout ms] [--local] [--ledger path]
 

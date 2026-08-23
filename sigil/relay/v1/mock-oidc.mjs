@@ -49,9 +49,7 @@ export function verifyMockIdToken(token, { now = () => new Date() } = {}) {
   // is ever touched, per spec's header/algorithm-hardening requirement.
   if (header.alg !== 'ES256') throw invalidToken(`Unsupported or missing alg: ${header.alg}`);
 
-  let signature;
-  try { signature = Buffer.from(signatureSegment, 'base64url'); }
-  catch { throw invalidToken('Malformed JWS signature'); }
+  const signature = Buffer.from(signatureSegment, 'base64url');
   const signingInput = `${headerSegment}.${payloadSegment}`;
   let signatureValid;
   try { signatureValid = crypto.verify('sha256', Buffer.from(signingInput), { key: publicKey, dsaEncoding: 'ieee-p1363' }, signature); }
@@ -68,6 +66,13 @@ export function verifyMockIdToken(token, { now = () => new Date() } = {}) {
     }
   }
   if (payload.email_verified !== true) throw invalidToken('email_verified must be true');
+  // The mock signing key is committed to this repository, so anyone able to
+  // call the route can self-sign a token with any `iss` they like. Postgres
+  // incidentally catches this via the oidc_issuer_allowlist FK, but the
+  // in-memory repository's claimDirectoryMatch does no issuer enforcement --
+  // so it's checked here, against the one issuer this fixture keypair is
+  // ever allowed to assert.
+  if (payload.iss !== FIXTURE_ISSUER) throw invalidToken('Unexpected issuer for mock ID token');
 
   const nowSeconds = Math.floor((typeof now === 'function' ? now() : now).getTime() / 1000);
   if (nowSeconds > payload.exp + CLOCK_SKEW_SECONDS) throw invalidToken('ID token has expired');

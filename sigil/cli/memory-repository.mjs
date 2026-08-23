@@ -29,6 +29,7 @@ export function createMemoryRepository() {
   const directoryMatchRequests = new Map();
   const humanSessions = new Map();
   const consumedMockLoginJtis = new Map();
+  const auditEvents = [];
   return {
     // Single-process, no real client/connection -- the transaction wrapper
     // exists so acceptEnvelopeAsync's repository-aware path works unchanged
@@ -270,6 +271,21 @@ export function createMemoryRepository() {
       }
       consumedMockLoginJtis.set(jti, (expiresAt instanceof Date ? expiresAt : new Date(expiresAt)).toISOString());
       return undefined;
+    },
+    // Mirrors postgres-repository.mjs's recordAuditEvent row shape (minus
+    // the actual persistence -- single process, nothing to query it back
+    // out of besides this array).
+    async recordAuditEvent({ eventId = `audit_${crypto.randomUUID()}`, eventType, subjectId, actorId = null, actorHumanId = null, endpointId = null, objectType = null, objectId = null, actionHash = null, outcome = null, reason = null, payload = {}, metadataRedacted = null, now = new Date() } = {}) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      const event = { event_id: eventId, event_type: eventType, subject_id: subjectId, actor_id: actorId, actor_human_id: actorHumanId, endpoint_id: endpointId, object_type: objectType, object_id: objectId, action_hash: actionHash, outcome, reason, payload, metadata_redacted: metadataRedacted, created_at: timestamp };
+      auditEvents.push(event);
+      return event;
+    },
+    // Test-only: exposes recorded audit events (mirrors _debugGetDirectoryLink
+    // above) so regression tests can assert an event was recorded without a
+    // real audit_events table to query.
+    _debugGetAuditEvents() {
+      return auditEvents;
     }
   };
 }
