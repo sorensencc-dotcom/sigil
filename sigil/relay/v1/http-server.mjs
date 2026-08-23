@@ -8,6 +8,8 @@ import { renderApprovalPage } from './approval-ui.mjs';
 import { computeActionHash } from './action-hash.mjs';
 import { normalizeIssuer } from './issuer-normalization.mjs';
 import { assertAccountLinkCeremony, assertAllowedIssuer, boundedDirectoryExpiry, boundedTokenExpiry } from './auth-policy.mjs';
+import { verifyMockIdToken } from './mock-oidc.mjs';
+import { attemptDirectoryMatchOnOidcLogin } from './directory-trust.mjs';
 import { resolveDirectoryRateLimits } from './relay-config.mjs';
 
 function normalizeIssuerOrRespond(rawIssuer, response, requestId) {
@@ -26,7 +28,7 @@ async function readBody(request, maxBytes = 1024 * 1024) {
   return raw;
 }
 
-export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion } = {}) {
+export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false } = {}) {
   const authenticateRequest = authenticate ?? (tokenHashes ? createBearerAuthenticator(tokenHashes, registry) : null);
   const resolveHumanCredential = lookupHumanCredential ?? repository?.lookupHumanCredential?.bind(repository);
   const assertionRateLimits = new Map();
@@ -636,6 +638,39 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       } catch (error) {
         response.writeHead(error.code === 'LINK_UNAVAILABLE' ? 404 : 403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'LINK_UNAVAILABLE', message: error.message, details: {} }));
+      }
+    }
+    if (request.method === 'POST' && request.url === '/v1/auth/mock-login' && enableMockOidc) {
+      if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
+      let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      let body; try { body = JSON.parse(raw); } catch { body = null; }
+      if (!body?.id_token) { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'id_token is required', details: {} })); }
+
+      let claims;
+      try { claims = verifyMockIdToken(body.id_token, { now: () => now }); }
+      catch (error) {
+        response.writeHead(401, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'INVALID_ID_TOKEN', message: error.message, details: {} }));
+      }
+
+      if (!repository?.consumeMockLoginJti || !repository?.createHumanSession) return response.writeHead(503).end();
+
+      try {
+        const sessionId = `sess_${crypto.randomUUID()}`;
+        const sessionTtlMs = 5 * 60 * 1000;
+        const expiresAt = new Date(now.getTime() + sessionTtlMs);
+        const result = await repository.withTransaction(async (client) => {
+          await repository.consumeMockLoginJti(claims.jti, { now, expiresAt, client });
+          const session = await repository.createHumanSession({ sessionId, humanId: principal.human_id, authenticationMethod: 'mock_oidc', assurance: 'standard', issuedAt: now, expiresAt, now, client });
+          await repository.recordAuditEvent({ eventType: 'human_session.created', subjectId: sessionId, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'human_session', objectId: sessionId, outcome: 'success', now, client });
+          const match = await attemptDirectoryMatchOnOidcLogin({ repository: { claimDirectoryMatch: (args) => repository.claimDirectoryMatch({ ...args, client }) }, issuer: claims.issuer, verifiedEmail: claims.email, matchedHumanId: principal.human_id, now });
+          return { session, match };
+        });
+        response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', session: result.session, match: result.match ?? null }));
+      } catch (error) {
+        response.writeHead(error.code === 'TOKEN_REPLAYED' ? 401 : 500, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'MOCK_LOGIN_FAILED', message: error.message, details: {} }));
       }
     }
     response.writeHead(404, { 'content-type': 'application/json' });
