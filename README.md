@@ -72,6 +72,16 @@ sigil init claude --owner usr_soren
 sigil relay up
 sigil relay up --port 8791 --stream-port 8793 --database-url postgres://sigil:password@127.0.0.1:55432/sigil
 
+### Mock-OIDC login (local dev / CI only)
+
+`sigil relay up --enable-mock-oidc` (or `SIGIL_ENABLE_MOCK_OIDC=1`) turns on
+`POST /v1/auth/mock-login`, a fully local, fixture-signed OIDC login route
+used to exercise the directory-match-on-login flow without a real identity
+provider. **This is never real authentication** — the ID token is signed
+with a keypair committed to this repository
+(`sigil/relay/v1/fixtures/mock-oidc-keys.json`) and must never be enabled on
+a relay reachable from untrusted networks.
+
 # Start autonomous background worker daemon (listens for tasks and auto-replies)
 sigil agent run
 sigil agent run --worker sigil/scripts/claude-worker.mjs
