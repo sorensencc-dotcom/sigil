@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 function invalidToken(message) {
   return Object.assign(new Error(message), { code: 'INVALID_ID_TOKEN' });
 }
@@ -84,4 +86,66 @@ export function createJwksCache({ fetchImpl = fetch, ttlMs = 3600_000, missCoold
       return key ?? null;
     }
   };
+}
+
+const REQUIRED_CLAIMS = ['iss', 'sub', 'email', 'email_verified', 'iat', 'exp'];
+const CLOCK_SKEW_SECONDS = 30;
+const ALG_TO_KTY = { RS256: 'RSA', ES256: 'EC' };
+
+function jwkToKeyObject(jwk) {
+  if (jwk.kty !== 'RSA' && jwk.kty !== 'EC') throw invalidToken(`Unsupported JWK key type: ${jwk.kty}`);
+  return crypto.createPublicKey({ key: jwk, format: 'jwk' });
+}
+
+export async function verifyRealIdToken(token, { issuer, clientId, jwksCache, jwksUri, now = () => new Date() } = {}) {
+  if (typeof token !== 'string') throw invalidToken('ID token must be a string');
+  const segments = token.split('.');
+  if (segments.length !== 3) throw invalidToken('Malformed compact JWS');
+  const [headerSegment, payloadSegment, signatureSegment] = segments;
+
+  let header;
+  try { header = JSON.parse(Buffer.from(headerSegment, 'base64url').toString()); }
+  catch { throw invalidToken('Malformed JWS header'); }
+
+  const expectedKty = ALG_TO_KTY[header.alg];
+  if (!expectedKty) throw invalidToken(`Unsupported or missing alg: ${header.alg}`);
+
+  const jwk = await jwksCache.getKey(jwksUri, header.kid, typeof now === 'function' ? now() : now);
+  if (!jwk) throw invalidToken(`No matching JWKS key for kid: ${header.kid}`);
+  // Alg/kty confusion guard: a header claiming RS256 must resolve to an
+  // RSA key, ES256 to an EC key. Checked before the signature is touched.
+  if (jwk.kty !== expectedKty) throw invalidToken('Token alg does not match resolved key type');
+  const publicKey = jwkToKeyObject(jwk);
+
+  const signature = Buffer.from(signatureSegment, 'base64url');
+  const signingInput = `${headerSegment}.${payloadSegment}`;
+  const verifyOptions = header.alg === 'ES256' ? { key: publicKey, dsaEncoding: 'ieee-p1363' } : { key: publicKey };
+  let signatureValid;
+  try { signatureValid = crypto.verify(header.alg === 'ES256' ? 'sha256' : 'RSA-SHA256', Buffer.from(signingInput), verifyOptions, signature); }
+  catch { throw invalidToken('Signature verification failed'); }
+  if (!signatureValid) throw invalidToken('Signature verification failed');
+
+  let payload;
+  try { payload = JSON.parse(Buffer.from(payloadSegment, 'base64url').toString()); }
+  catch { throw invalidToken('Malformed JWS payload'); }
+
+  for (const claim of REQUIRED_CLAIMS) {
+    if (!(claim in payload) || payload[claim] === null || payload[claim] === undefined) {
+      throw invalidToken(`Missing required claim: ${claim}`);
+    }
+  }
+  if (payload.email_verified !== true) throw invalidToken('email_verified must be true');
+  if (payload.iss !== issuer) throw invalidToken('Unexpected issuer');
+
+  const audiences = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+  if (!audiences.includes(clientId)) throw invalidToken('aud does not include the expected client_id');
+  // azp pins the actual requesting client when an IdP puts a broader value
+  // in aud -- Google notably does this. Only enforced when present.
+  if ('azp' in payload && payload.azp !== clientId) throw invalidToken('azp does not match the expected client_id');
+
+  const nowSeconds = Math.floor((typeof now === 'function' ? now() : now).getTime() / 1000);
+  if (nowSeconds > payload.exp + CLOCK_SKEW_SECONDS) throw invalidToken('ID token has expired');
+  if (nowSeconds < payload.iat - CLOCK_SKEW_SECONDS) throw invalidToken('ID token is not yet valid');
+
+  return { issuer: payload.iss, subject: payload.sub, email: payload.email, jti: payload.jti };
 }
