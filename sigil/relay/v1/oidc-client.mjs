@@ -144,8 +144,8 @@ export async function verifyRealIdToken(token, { issuer, clientId, jwksCache, jw
   if ('azp' in payload && payload.azp !== clientId) throw invalidToken('azp does not match the expected client_id');
 
   const nowSeconds = Math.floor((typeof now === 'function' ? now() : now).getTime() / 1000);
-  if (nowSeconds > payload.exp + CLOCK_SKEW_SECONDS) throw invalidToken('ID token has expired');
-  if (nowSeconds < payload.iat - CLOCK_SKEW_SECONDS) throw invalidToken('ID token is not yet valid');
+  if (nowSeconds > Number(payload.exp) + CLOCK_SKEW_SECONDS) throw invalidToken('ID token has expired');
+  if (nowSeconds < Number(payload.iat) - CLOCK_SKEW_SECONDS) throw invalidToken('ID token is not yet valid');
 
   return { issuer: payload.iss, subject: payload.sub, email: payload.email, jti: payload.jti };
 }

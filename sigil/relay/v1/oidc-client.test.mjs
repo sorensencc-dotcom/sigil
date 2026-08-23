@@ -232,6 +232,20 @@ test('verifyRealIdToken: rejects an expired token outside the 30s skew window', 
   );
 });
 
+test('verifyRealIdToken: rejects a token whose iat is in the future outside the 30s skew window', async () => {
+  const futureIat = Math.floor(FIXED_NOW.getTime() / 1000) + 31;
+  const token = signToken({
+    privateKey: rsaKeyPair.privateKey,
+    alg: 'RS256',
+    header: { kid: rsaJwk.kid },
+    payload: basePayload({ iat: futureIat, exp: futureIat + 300 })
+  });
+  await assert.rejects(
+    () => verifyRealIdToken(token, { issuer: ISSUER, clientId: CLIENT_ID, jwksCache: makeCache([rsaJwk]), jwksUri: JWKS_URI, now: () => FIXED_NOW }),
+    { code: 'INVALID_ID_TOKEN' }
+  );
+});
+
 test('verifyRealIdToken: rejects email_verified: false', async () => {
   const token = signToken({ privateKey: rsaKeyPair.privateKey, alg: 'RS256', header: { kid: rsaJwk.kid }, payload: basePayload({ email_verified: false }) });
   await assert.rejects(
