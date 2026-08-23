@@ -89,6 +89,11 @@ An **Envelope** is the atomic transmission unit in Sigil. It wraps payload bodie
 ### Delivery Lifecycle
 Messages move through a deterministic state machine:
 
+![Delivery lifecycle: an envelope moves from queued through delivery, acknowledgement, and processing to success, with rejection and retry-then-dead-letter branches off the happy path.](delivery-lifecycle.png)
+
+<details>
+<summary>Mermaid source (kept for editing — the image above is what renders on the wiki)</summary>
+
 ```mermaid
 stateDiagram-v2
     [*] --> queued: Envelope Accepted
@@ -107,6 +112,10 @@ stateDiagram-v2
     delivery_rejected --> [*]
     dead_letter --> [*]
 ```
+
+</details>
+
+Editorial redraw: [`delivery-lifecycle.html`](delivery-lifecycle.html) (diagram-design, Cast Iron Charlie skin) → exported to `delivery-lifecycle.png`. Same re-export/`wiki:record-diagrams` discipline as the architecture diagram above.
 
 ### Capability Boundary & Risk Tiers
 Every operation requires explicit capability authorization:

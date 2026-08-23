@@ -2,5 +2,9 @@
   "architecture.html": {
     "svgHash": "9a8cdb0b07edbf74cd8d2cf88da32be50b06a4abbebf5892aa6b9db643e9fa4d",
     "png": "architecture.png"
+  },
+  "delivery-lifecycle.html": {
+    "svgHash": "9484edc2b6b01895e5e81ba5fdf34440d0d9b8909a343a2b32eca80250deb0fd",
+    "png": "delivery-lifecycle.png"
   }
 }
