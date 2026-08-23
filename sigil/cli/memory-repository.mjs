@@ -28,7 +28,7 @@ export function createMemoryRepository() {
   const directoryLinks = new Map();
   const directoryMatchRequests = new Map();
   const humanSessions = new Map();
-  const consumedMockLoginJtis = new Map();
+  const consumedLoginJtis = new Map();
   const auditEvents = [];
   return {
     // Single-process, no real client/connection -- the transaction wrapper
@@ -265,11 +265,11 @@ export function createMemoryRepository() {
       humanSessions.set(sessionId, session);
       return session;
     },
-    async consumeMockLoginJti(jti, { now = new Date(), expiresAt }) {
-      if (consumedMockLoginJtis.has(jti)) {
-        throw Object.assign(new Error('Mock ID token has already been used'), { code: 'TOKEN_REPLAYED' });
+    async consumeLoginJti(jti, { now = new Date(), expiresAt }) {
+      if (consumedLoginJtis.has(jti)) {
+        throw Object.assign(new Error('ID token has already been used'), { code: 'TOKEN_REPLAYED' });
       }
-      consumedMockLoginJtis.set(jti, (expiresAt instanceof Date ? expiresAt : new Date(expiresAt)).toISOString());
+      consumedLoginJtis.set(jti, (expiresAt instanceof Date ? expiresAt : new Date(expiresAt)).toISOString());
       return undefined;
     },
     // Mirrors postgres-repository.mjs's recordAuditEvent row shape (minus

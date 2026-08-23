@@ -653,7 +653,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'INVALID_ID_TOKEN', message: error.message, details: {} }));
       }
 
-      if (!repository?.consumeMockLoginJti || !repository?.createHumanSession || !repository?.recordAuditEvent) {
+      if (!repository?.consumeLoginJti || !repository?.createHumanSession || !repository?.recordAuditEvent) {
         response.writeHead(503, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'MOCK_LOGIN_UNAVAILABLE', message: 'Repository does not support mock-OIDC login', details: {} }));
       }
@@ -663,7 +663,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         const sessionTtlMs = 5 * 60 * 1000;
         const expiresAt = new Date(now.getTime() + sessionTtlMs);
         const result = await repository.withTransaction(async (client) => {
-          await repository.consumeMockLoginJti(claims.jti, { now, expiresAt, client });
+          await repository.consumeLoginJti(claims.jti, { now, expiresAt, client });
           const session = await repository.createHumanSession({ sessionId, humanId: principal.human_id, authenticationMethod: 'mock_oidc', assurance: 'standard', issuedAt: now, expiresAt, now, client });
           await repository.recordAuditEvent?.({ eventType: 'human_session.created', subjectId: sessionId, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'human_session', objectId: sessionId, outcome: 'success', now, client });
           const match = await attemptDirectoryMatchOnOidcLogin({ repository: { claimDirectoryMatch: (args) => repository.claimDirectoryMatch({ ...args, client }) }, issuer: claims.issuer, verifiedEmail: claims.email, matchedHumanId: principal.human_id, now });

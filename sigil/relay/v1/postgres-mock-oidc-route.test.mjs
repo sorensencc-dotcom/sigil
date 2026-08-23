@@ -90,15 +90,15 @@ test('replayed jti: retrying the exact same token after a simulated mid-sequence
   const sessionId = `sess_${crypto.randomUUID()}`;
   const expiresAt = new Date(now.getTime() + 300_000);
   await assert.rejects(repository.withTransaction(async (client) => {
-    await repository.consumeMockLoginJti(claims.jti, { now, expiresAt, client });
+    await repository.consumeLoginJti(claims.jti, { now, expiresAt, client });
     await repository.createHumanSession({ sessionId, humanId: 'irrelevant', authenticationMethod: 'mock_oidc', assurance: 'standard', issuedAt: now, expiresAt, now, client });
   }));
 
   // Retry: the jti must not have been left consumed by the rolled-back
-  // transaction -- a fresh consumeMockLoginJti for the same jti succeeds.
-  await repository.consumeMockLoginJti(claims.jti, { now, expiresAt });
+  // transaction -- a fresh consumeLoginJti for the same jti succeeds.
+  await repository.consumeLoginJti(claims.jti, { now, expiresAt });
 
-  const replayRow = await pool.query('SELECT count(*) FROM mock_login_replays WHERE jti = $1', [claims.jti]);
+  const replayRow = await pool.query('SELECT count(*) FROM login_jti_replays WHERE jti = $1', [claims.jti]);
   assert.equal(Number(replayRow.rows[0].count), 1);
 });
 
