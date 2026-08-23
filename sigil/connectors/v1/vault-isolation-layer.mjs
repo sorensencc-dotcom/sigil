@@ -36,12 +36,12 @@ export class VaultIsolationLayer {
       throw new SecurityBoundaryError('PATH_REJECTED: Null byte injection detected.');
     }
 
-    // 2. Decode URL Encoding
+    // 2. Decode URL Encoding, tolerating literal '%' in ordinary filenames
     let decodedPath;
     try {
       decodedPath = decodeURIComponent(userPath);
     } catch (_) {
-      throw new SecurityBoundaryError('PATH_REJECTED: Invalid URI encoding sequence.');
+      decodedPath = userPath;
     }
 
     // 3. Absolute path normalization relative to the vault root
@@ -63,7 +63,10 @@ export class VaultIsolationLayer {
 
     // 5. Boundary Containment Check
     const relativeFromVault = path.relative(this.vaultRoot, realTarget);
-    const escapesRoot = relativeFromVault.startsWith('..') || path.isAbsolute(relativeFromVault);
+    const escapesRoot =
+      relativeFromVault === '..' ||
+      relativeFromVault.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relativeFromVault);
 
     if (escapesRoot) {
       throw new SecurityBoundaryError(
