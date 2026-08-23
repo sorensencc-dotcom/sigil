@@ -1,6 +1,6 @@
 # Sigil CLI — status and roadmap
 
-## What exists (2026-08-22)
+## What exists (2026-08-23)
 
 A packaged CLI (`@sorensencc/sigil`, `bin/sigil.mjs`), installable via
 `npm install --global github:sorensencc-dotcom/sigil` — no local checkout
@@ -45,9 +45,13 @@ exemption on the accept-envelope gate (both sides resolved from the
 trusted registry, not unverified envelope fields), dedicated
 invite/match rate-limit scopes, and end-to-end integration coverage
 (invite → confirm → deliver → revoke). The `attemptDirectoryMatchOnOidcLogin`
-claim hook exists but is **not yet wired to any login route** — OIDC
-first-contact match is implemented but not reachable through a real
-login flow yet.
+claim hook is now wired to a real login route: `POST /v1/auth/mock-login`
+(per `docs/superpowers/specs/2026-08-22-sigil-mock-oidc-login.md`), gated
+behind `--enable-mock-oidc` / `SIGIL_ENABLE_MOCK_OIDC=1`, fixture-signed,
+local dev/CI only. This proves the OIDC first-contact match flow end-to-end
+(transactional atomicity, JTI replay prevention, issuer allow-listing) but
+is **not a real IdP integration** — no live/external OIDC client, no
+JWKS-over-HTTPS fetch. That remains open.
 
 A `VaultIsolationLayer` connector helper (`sigil/connectors/v1/vault-isolation-layer.mjs`,
 exported as `@sorensencc/sigil/vault-isolation`) confines connector
@@ -57,10 +61,12 @@ stream/list/unlink/stat.
 
 ## What this is not
 
-- **First-contact trust exists but isn't wired to a real login flow.**
+- **First-contact trust exists but isn't wired to a real IdP.**
   Invite-code redemption is fully usable end-to-end today. OIDC-based
-  match/claim is implemented and tested, but `attemptDirectoryMatchOnOidcLogin`
-  has no caller — no login route invokes it yet.
+  match/claim is implemented, tested, and now reachable through
+  `POST /v1/auth/mock-login` — but that route is a fixture-signed mock for
+  local dev/CI, not a real identity provider. No live/external OIDC client,
+  no JWKS-over-HTTPS fetch, no real IdP integration exists yet.
 - **Not centrally hosted.** `sigil relay up` runs on whatever host you
   start it on. The PostgreSQL repository gives restart durability, but
   nobody operates a shared, reachable, TLS-terminated instance of it —
@@ -80,9 +86,10 @@ stream/list/unlink/stat.
 3. ~~**Real identity/directory**~~ — mostly done. Invite-code first-contact
    trust is fully built and wired end-to-end (create, redeem, confirm,
    revoke, active-link gate on message delivery). OIDC-match first-contact
-   trust is implemented and tested but the `attemptDirectoryMatchOnOidcLogin`
-   claim hook isn't wired to any login route yet — remaining open work is
-   that wiring, not the trust model itself.
+   trust is implemented, tested, and wired to a real login route
+   (`POST /v1/auth/mock-login`) — but that route is a fixture-signed mock,
+   dev/CI-gated. Remaining open work is a real IdP integration (live OIDC
+   client, JWKS fetch), not the trust model or the wiring itself.
 4. ~~**Push, not poll**~~ — done. WebSocket delivery-notify stream backs
    `sigil inbox --wait`; `sigil agent run` daemonizes it further.
 5. **Actual chat-surface integration** — still the hard, unbuilt part.
@@ -96,9 +103,10 @@ stream/list/unlink/stat.
 
 ## Immediate next candidates (not started)
 
-- Wire `attemptDirectoryMatchOnOidcLogin` to an actual login route so
-  OIDC-based first-contact match is reachable outside tests (item 3
-  remainder).
+- Real IdP integration for OIDC first-contact match: a live/external OIDC
+  client, JWKS-over-HTTPS fetch, and a production login route to replace
+  `POST /v1/auth/mock-login` (item 3 remainder — the mock route proved the
+  trust model and wiring end-to-end, but is dev/CI-only by design).
 - Decide whether a shared hosted relay (item 2) is in scope at all, or
   whether Sigil stays self-hosted-per-pair by design; if in scope, spec
   deployment/ops (TLS, backups, uptime) this repo doesn't address yet.
