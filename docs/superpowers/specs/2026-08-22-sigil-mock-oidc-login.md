@@ -23,14 +23,33 @@ already expects.
 
 Add a mock-OIDC login route, `POST /v1/auth/mock-login`, backed by a committed local
 test keypair. No outbound network calls, no live IdP — the relay verifies the token
-against a keypair it already holds.
+against a keypair it already holds. **This route simulates an OIDC login for
+test/dev purposes; it is never real authentication.** Everywhere below that would
+otherwise say "verified email," read "fixture-asserted email" — the value is only as
+trustworthy as the fixture private key, which is committed to the repo and must never
+be treated as a production credential.
+
+### Production gate (default-off)
+
+A committed private key is readable by anyone with repository access. Combined with
+an authenticated bearer token for *any* human, that's enough to mint a
+fixture-asserted email claim and claim any pending directory match — this route must
+never be reachable unless someone has explicitly opted in.
+
+`createRelayServer` gets a new option, `enableMockOidc = false`. When falsy, `POST
+/v1/auth/mock-login` doesn't exist as a route at all (falls through to the normal
+404 path, not a 403 — don't reveal the route exists). `sigil relay up` exposes this
+as `--enable-mock-oidc` (or `SIGIL_ENABLE_MOCK_OIDC=1`), and the CLI/README must call
+out that this flag is for local development and CI only, never a relay reachable from
+untrusted networks. This mirrors how `oidcIssuerAllowList` is already an explicit
+opt-in set rather than "anything works by default."
 
 ### Auth model
 
 The route requires an already-authenticated `principal.human_id`, exactly like every
 other human-scoped route in `http-server.mjs` (`/v1/account-links`, `/v1/identities`,
 `/v1/identities/revoke`). The caller already holds an endpoint bearer token whose
-owner is the human in question; the mock ID-token supplies a verified email claim for
+owner is the human in question; the mock ID-token supplies a fixture-asserted email claim for
 *that already-known human*, not a fresh identity bootstrap. This matches the existing
 auth model exactly and needs no new session-establishment plumbing.
 
@@ -59,6 +78,61 @@ before touching the signature. Any other declared algorithm — `none`, `RS256`,
 `HS256`, or anything else — is a hard rejection (`INVALID_ID_TOKEN`), regardless of
 whether a signature is present. This is the standard alg-confusion/none-alg mitigation
 a hand-rolled verifier must not skip.
+
+**Required claims.** The payload must carry exactly: `iss`, `sub`, `email`,
+`email_verified`, `iat`, `exp`, `jti` (added below, for replay protection). All seven
+are mandatory — missing any of them is `INVALID_ID_TOKEN`. `email_verified` must be
+the literal boolean `true`; `false` or absent is rejected the same way a bad
+signature is. `signMockIdToken` always sets `email_verified: true` (there's no
+fixture use case for asserting an unverified email) and generates a fresh random
+`jti` (`crypto.randomUUID()`) per call.
+
+**Time semantics.** `iat`/`exp` are NumericDate (integer seconds since epoch), per
+JWT convention. `signMockIdToken({ ..., now, ttlSeconds = 300 })` sets `iat =
+floor(now / 1000)` and `exp = iat + ttlSeconds`; if a caller passes `ttlSeconds <= 0`
+the signer throws synchronously (never produces a token where `exp <= iat`).
+`verifyMockIdToken(token, { now })` takes `now` as an explicit, injectable parameter
+(defaulting to `() => new Date()` like the rest of `http-server.mjs`) so tests can
+control time without real delays. Verification applies ±30s clock-skew leeway on
+both bounds — reject if `nowSeconds > exp + 30` or `nowSeconds < iat - 30` — matching
+the tolerance a real OIDC verifier would apply, even though skew is largely moot for
+a same-process time source.
+
+### Issuer allow-listing (PostgreSQL)
+
+`directory_match_requests.issuer` has a hard foreign key to
+`oidc_issuer_allowlist(issuer)` (`sigil/migrations/012_directory_trust.sql:35`). The
+fixture issuer (`https://mock-oidc.sigil.local`) must exist in that table or
+`claimDirectoryMatch` never has a row to match against on PostgreSQL — the whole
+route would silently no-op (`match: null` always) against a real repository, which
+would look like a bug, not the advertised success path.
+
+Handling: when `enableMockOidc` is true, `createRelayServer`'s startup path
+`UPSERT`s the fixture issuer into `oidc_issuer_allowlist` (`enabled = true,
+assurance_level = 'standard'`) before serving requests — scoped strictly to the
+opt-in flag, so a production relay that never sets `--enable-mock-oidc` never touches
+this table for the fixture issuer. `memory-repository.mjs`'s `claimDirectoryMatch`
+has no allow-list enforcement at all today (matches on raw issuer-string equality),
+so no memory-side change is needed there. Tests that exercise the PostgreSQL path
+seed the row directly with `INSERT INTO oidc_issuer_allowlist ...`, matching the
+existing convention in `postgres-repository.directory-match.test.mjs:30`.
+
+### Replay protection
+
+The directory-match claim itself is already single-use (`claimDirectoryMatch` only
+matches `status = 'pending'` rows), but nothing stops the *same valid token* from
+being replayed to mint unlimited five-minute sessions before it expires — session
+creation has no idempotency of its own.
+
+Add a `jti` uniqueness guard: a new table, `mock_login_replays (jti TEXT PRIMARY
+KEY, expires_at TIMESTAMPTZ NOT NULL)`, and the route inserts the token's `jti`
+before/alongside creating the session. The primary-key uniqueness constraint makes
+a second use of the same token fail the insert; the route reports `401
+TOKEN_REPLAYED` in that case. A cheap periodic or lazy delete of rows past
+`expires_at` keeps the table bounded (out of scope to spec the sweep mechanism here
+— any of the repo's existing rate-window-style cleanup patterns applies).
+`memory-repository.mjs` gets a matching `consumedMockLoginJtis` `Map<jti,
+expiresAt>`, checked and inserted the same way.
 
 ### Impersonation: already closed, not new work
 
@@ -89,7 +163,7 @@ being created twice for the same pair. A second claim attempt against an
 already-matched or expired request simply returns `null`. This route relies on that
 existing guarantee; it does not need its own locking.
 
-### Session record
+### Session record and atomicity
 
 The route also calls `repository.createHumanSession`, which exists in
 `postgres-repository.mjs` today but is unused. Adding a call here gives the mock
@@ -97,6 +171,19 @@ login route a durable audit record (`human_sessions` row + `human_session.create
 audit event, mirroring the pattern at `http-server.mjs:360`), not just a bare match
 attempt. Session TTL: 5 minutes, matching the mock ID-token's own TTL — short enough
 that a test/dev session doesn't linger.
+
+The route performs four writes per successful call: consume the `jti` (replay guard),
+create the human session, record the audit event, and (conditionally) claim a
+directory match. These must not partially apply — a mid-sequence failure must not
+leave a consumed `jti` with no session, or a session with no audit row. On
+PostgreSQL, the whole sequence runs inside one `repository.withTransaction(...)`
+(already used elsewhere in this file, e.g. `acceptEnvelopeAsync`'s repository-aware
+path), so any thrown error rolls back all four writes together and the route
+responds with the underlying error's status instead of a partial `201`.
+`memory-repository.mjs`'s `withTransaction` is `async (fn) => fn(null)` — a no-op
+passthrough — which is safe here because every memory-repository write in this route
+is a synchronous, single-process `Map` mutation with no `await` between them, so
+there is no window in which a partial-failure interleaving is observable.
 
 `memory-repository.mjs` gets a matching `createHumanSession` (and a `humanSessions`
 Map) for backend parity — `claimDirectoryMatch` already exists there, so only the
@@ -111,16 +198,20 @@ Authorization: <endpoint bearer token>   (principal.human_id required)
 { "id_token": "<compact ES256 JWS>" }
 ```
 
+- `enableMockOidc` false → route does not exist (`404`, same as any unmatched path
+  — never reveal the feature is present but gated).
 - Missing `principal.human_id` → `403 HUMAN_CONTEXT_REQUIRED` (matches every other
   human-scoped route's error shape).
-- Malformed / bad-alg / bad-signature / expired token → `401 INVALID_ID_TOKEN`.
+- Malformed / bad-alg / bad-signature / expired / missing-required-claim /
+  `email_verified !== true` token → `401 INVALID_ID_TOKEN`.
+- Already-consumed `jti` → `401 TOKEN_REPLAYED`.
 - Success → `201`:
   ```json
   { "request_id": "...", "code": "OK", "session": { ... }, "match": { "request_id": "..." } | null }
   ```
   `match` is `null` when no pending, unexpired `directory_match_requests` row exists
-  for that issuer + verified email — this is not an error, just "nothing to claim
-  yet."
+  for that issuer + fixture-asserted email — this is not an error, just "nothing to
+  claim yet."
 
 ## Components
 
@@ -128,23 +219,47 @@ Authorization: <endpoint bearer token>   (principal.human_id required)
   string.
 - `sigil/relay/v1/mock-oidc.mjs`:
   - `signMockIdToken({ subject, email, issuer, now, ttlSeconds = 300 })` → compact
-    JWS string. Exported for tests/dev tooling only; not reachable over HTTP.
-  - `verifyMockIdToken(token, { now })` → `{ issuer, subject, email }` or throws
+    JWS string, `email_verified: true` and a fresh `jti` always set. Exported for
+    tests/dev tooling only; not reachable over HTTP.
+  - `verifyMockIdToken(token, { now })` → `{ issuer, subject, email, jti }` or throws
     `{ code: 'INVALID_ID_TOKEN', message }`.
-- `sigil/relay/v1/http-server.mjs`: new `POST /v1/auth/mock-login` route, placed
-  alongside the other human-scoped routes.
-- `sigil/cli/memory-repository.mjs`: `humanSessions` Map + `createHumanSession`.
+- `sigil/relay/v1/http-server.mjs`: new `POST /v1/auth/mock-login` route (gated
+  behind `enableMockOidc`), placed alongside the other human-scoped routes. New
+  `createRelayServer` option `enableMockOidc = false`.
+- `sigil/migrations/0NN_mock_login_replays.sql` (or folded into the mock-oidc work
+  as its own migration): `mock_login_replays (jti TEXT PRIMARY KEY, expires_at
+  TIMESTAMPTZ NOT NULL)`.
+- `sigil/relay/v1/postgres-repository.mjs`: `consumeMockLoginJti(jti, { now,
+  expiresAt })` (insert-or-throw-on-conflict) and the `oidc_issuer_allowlist` upsert
+  run at startup when `enableMockOidc` is true.
+- `sigil/cli/memory-repository.mjs`: `humanSessions` Map + `createHumanSession`;
+  `consumedMockLoginJtis` Map + `consumeMockLoginJti`.
 
 ## Testing
 
 - `mock-oidc.test.mjs`: sign/verify round trip; tampered signature rejected;
-  expired token rejected; wrong/missing `alg` (including `none`) rejected; malformed
-  compact-JWS rejected.
+  expired token rejected (including exactly-at-skew-boundary cases); `exp <= iat`
+  rejected at sign time; wrong/missing `alg` (including `none`) rejected; malformed
+  compact-JWS rejected; missing any of the seven required claims rejected;
+  `email_verified: false` and `email_verified` absent both rejected.
 - `http-server` integration tests, run against both repositories:
+  - `enableMockOidc: false` (default) → route returns `404`.
   - success path creates a session and fires a match when one is pending.
   - success path with no pending match → `match: null`, session still created.
-  - missing `principal.human_id` → `403`.
-  - bad token → `401`, no session created.
+  - missing `principal.human_id` → `403`, no writes performed.
+  - bad token (signature/alg/claims) → `401 INVALID_ID_TOKEN`, no writes performed.
+  - replayed token (same `jti` twice) → second call `401 TOKEN_REPLAYED`, only one
+    session/audit row exists.
+  - wrong issuer (not the fixture issuer, or — PostgreSQL only — not present in
+    `oidc_issuer_allowlist`) → token still verifies (signature is what's checked),
+    but the match half returns `null` rather than erroring.
+  - oversized request body → same `413` handling as every other route (via
+    `readBody`), asserted for this route specifically.
+  - simulated mid-sequence failure (e.g. `createHumanSession` rejects) on
+    PostgreSQL → the transaction rolls back; the `jti` is *not* left consumed, so
+    retrying the exact same token afterward succeeds.
+  - audit event payload assertion: `human_session.created` row's `actor_human_id`,
+    `endpoint_id`, `subject_id`, `outcome` match the created session.
 
 ## Out of scope
 
