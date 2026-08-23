@@ -1,0 +1,16 @@
+{
+  "issuer": "https://mock-oidc.sigil.local",
+  "publicJwk": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "7nAUYSGDtTNO9N8VBEL5ICiqROIn5uD4U9H47dgfy64",
+    "y": "hHYJrvqaMiGwzJWdpyiVMKHvB8Eoo5cwsK_zPdAkXJo"
+  },
+  "privateJwk": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "7nAUYSGDtTNO9N8VBEL5ICiqROIn5uD4U9H47dgfy64",
+    "y": "hHYJrvqaMiGwzJWdpyiVMKHvB8Eoo5cwsK_zPdAkXJo",
+    "d": "otqA-vFCwvc430v-aHAD47DlGb4Kk-2X3_oc7bkHQr8"
+  }
+}
