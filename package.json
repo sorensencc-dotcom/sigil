@@ -49,6 +49,7 @@
     "./relay": "./sigil/relay/v1/http-server.mjs",
     "./daemon": "./sigil/cli/agent-daemon.mjs",
     "./identity": "./sigil/cli/identity.mjs",
+    "./vault-isolation": "./sigil/connectors/v1/vault-isolation-layer.mjs",
     "./contracts/*": "./sigil/contracts/v1/*"
   },
   "directories": {

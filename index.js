@@ -7,6 +7,7 @@ export { ConnectorDatabase } from './sigil/connectors/v1/connector-db-adapter.mj
 export { ConnectorWebSocketManager, WebSocketConnectionManager } from './sigil/connectors/v1/connector-ws-manager.mjs';
 export { createCodexHostRuntime, createClaudeHostRuntime } from './sigil/connectors/v1/host-runtimes.mjs';
 export { createMcpHandler, startMcpStdioServer } from './sigil/connectors/v1/mcp-stdio-server.mjs';
+export { VaultIsolationLayer, SecurityBoundaryError } from './sigil/connectors/v1/vault-isolation-layer.mjs';
 
 export { createRelayServer } from './sigil/relay/v1/http-server.mjs';
 export { createMemoryRepository } from './sigil/cli/memory-repository.mjs';
