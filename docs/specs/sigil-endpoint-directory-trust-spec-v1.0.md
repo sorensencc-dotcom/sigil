@@ -197,9 +197,13 @@ half-known link.
 Self-links are rejected outright (`endpoint_a <> endpoint_b` is always
 true given distinct primary keys, but the explicit `CHECK` documents
 intent). Links between two endpoints owned by the same human are rejected
-in v1 via `CHECK (human_a <> human_b)` — no concrete use case for a human
-directory-linking their own endpoints has surfaced; revisit only if one
-does, since the constraint is additive to relax later.
+in v1 via `CHECK (human_a <> human_b)`: a `directory_links` row exists to
+record trust *between* humans, and same-owner endpoints don't need one to
+talk to each other — the accept-envelope gate exempts same-owner pairs
+directly, resolving both sender and recipient owner from the trusted
+registry (never from unverified envelope fields) so the exemption can't
+be reached via a forged owner id. The constraint stays additive to relax
+later if a use case for an actual same-owner `directory_links` row shows up.
 
 `directory_links` rows are stored with `endpoint_a < endpoint_b` (a fixed
 lexical ordering) so the unique index catches both link directions
