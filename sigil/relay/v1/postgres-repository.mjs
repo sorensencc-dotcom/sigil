@@ -895,6 +895,12 @@ export class PostgresRepository {
       [issuer, timestamp]
     );
   }
+  async getOidcIssuerAllowlistEntry(issuer) {
+    const result = await this.pool.query('SELECT issuer, client_id, enabled FROM oidc_issuer_allowlist WHERE issuer = $1', [issuer]);
+    const row = result.rows[0];
+    if (!row) return null;
+    return { issuer: row.issuer, clientId: row.client_id, enabled: row.enabled };
+  }
   async isConversationMember(endpointId, conversationId, client = this.pool) {
     const result = await client.query(
       'SELECT 1 FROM conversation_members WHERE conversation_id = $1 AND endpoint_id = $2 AND removed_at IS NULL',
