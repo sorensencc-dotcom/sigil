@@ -1,0 +1,145 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import crypto from 'node:crypto';
+import { createRelayServer } from './http-server.mjs';
+import { createMemoryRepository } from '../../cli/memory-repository.mjs';
+
+function request(port, { method, path, body }) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ port, method, path, headers: { 'content-type': 'application/json' } }, (response) => {
+      let text = ''; response.on('data', (chunk) => text += chunk); response.on('end', () => resolve({ status: response.statusCode, body: text ? JSON.parse(text) : null }));
+    });
+    req.on('error', reject); req.end(body ? JSON.stringify(body) : undefined);
+  });
+}
+
+async function withServer(options, fn) {
+  const server = createRelayServer(options);
+  await new Promise((resolve) => server.listen(0, resolve));
+  const { port } = server.address();
+  try { return await fn(port); } finally { await new Promise((resolve) => server.close(resolve)); }
+}
+
+const FIXED_NOW = new Date('2026-08-23T00:00:00Z');
+const ISSUER = 'https://idp.example';
+const CLIENT_ID = 'sigil-client-1';
+const JWKS_URI = 'https://idp.example/jwks.json';
+
+function b64url(buffer) { return buffer.toString('base64url'); }
+function signToken({ privateKey, alg = 'RS256', header = {}, payload }) {
+  const fullHeader = { alg, typ: 'JWT', ...header };
+  const signingInput = `${b64url(Buffer.from(JSON.stringify(fullHeader)))}.${b64url(Buffer.from(JSON.stringify(payload)))}`;
+  const options = alg === 'ES256' ? { key: privateKey, dsaEncoding: 'ieee-p1363' } : { key: privateKey };
+  const signature = crypto.sign(alg === 'ES256' ? 'sha256' : 'RSA-SHA256', Buffer.from(signingInput), options);
+  return `${signingInput}.${b64url(signature)}`;
+}
+
+const rsaKeyPair = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+const rsaJwk = { ...rsaKeyPair.publicKey.export({ format: 'jwk' }), kid: 'rsa-key-1' };
+
+function basePayload(overrides = {}) {
+  const iat = Math.floor(FIXED_NOW.getTime() / 1000);
+  return { iss: ISSUER, sub: 'sub_1', email: 'a@example.com', email_verified: true, aud: CLIENT_ID, iat, exp: iat + 300, jti: crypto.randomUUID(), ...overrides };
+}
+
+function makeToken(overrides = {}) {
+  return signToken({ privateKey: rsaKeyPair.privateKey, header: { kid: rsaJwk.kid }, payload: basePayload(overrides) });
+}
+
+function fetchImplFor(keys = [rsaJwk]) {
+  return async (url) => {
+    if (url === `${ISSUER}/.well-known/openid-configuration`) {
+      return { ok: true, status: 200, json: async () => ({ issuer: ISSUER, jwks_uri: JWKS_URI }) };
+    }
+    if (url === JWKS_URI) {
+      return { ok: true, status: 200, json: async () => ({ keys }) };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+}
+
+async function repositoryWithIssuer() {
+  const repository = createMemoryRepository();
+  repository._debugSeedOidcIssuer({ issuer: ISSUER, clientId: CLIENT_ID, enabled: true });
+  return repository;
+}
+
+test('unrecognized issuer -- 401, no outbound fetch attempted', async () => {
+  const repository = createMemoryRepository(); // no issuer seeded
+  let fetchCalls = 0;
+  const fetchImpl = async (...args) => { fetchCalls++; return fetchImplFor()(...args); };
+  await withServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_1', human_id: 'usr_1' }), now: () => FIXED_NOW, oidcFetchImpl: fetchImpl }, async (port) => {
+    const result = await request(port, { method: 'POST', path: '/v1/auth/login', body: { id_token: makeToken() } });
+    assert.equal(result.status, 401);
+    assert.equal(result.body.code, 'INVALID_ID_TOKEN');
+    assert.equal(fetchCalls, 0);
+  });
+});
+
+test('success path creates a session and returns match: null when nothing pending', async () => {
+  const repository = await repositoryWithIssuer();
+  await withServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_1', human_id: 'usr_1' }), now: () => FIXED_NOW, oidcFetchImpl: fetchImplFor() }, async (port) => {
+    const result = await request(port, { method: 'POST', path: '/v1/auth/login', body: { id_token: makeToken() } });
+    assert.equal(result.status, 201);
+    assert.equal(result.body.session.human_id, 'usr_1');
+    assert.equal(result.body.match, null);
+  });
+});
+
+test('missing principal.human_id -- 403, no writes performed', async () => {
+  const repository = await repositoryWithIssuer();
+  await withServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_1' }), now: () => FIXED_NOW, oidcFetchImpl: fetchImplFor() }, async (port) => {
+    const result = await request(port, { method: 'POST', path: '/v1/auth/login', body: { id_token: makeToken() } });
+    assert.equal(result.status, 403);
+    assert.equal(result.body.code, 'HUMAN_CONTEXT_REQUIRED');
+  });
+});
+
+test('bad token (wrong aud) -- 401 INVALID_ID_TOKEN', async () => {
+  const repository = await repositoryWithIssuer();
+  await withServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_1', human_id: 'usr_1' }), now: () => FIXED_NOW, oidcFetchImpl: fetchImplFor() }, async (port) => {
+    const result = await request(port, { method: 'POST', path: '/v1/auth/login', body: { id_token: makeToken({ aud: 'someone-else' }) } });
+    assert.equal(result.status, 401);
+    assert.equal(result.body.code, 'INVALID_ID_TOKEN');
+  });
+});
+
+test('replayed token (same jti twice) -- second call 401 TOKEN_REPLAYED', async () => {
+  const repository = await repositoryWithIssuer();
+  await withServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_1', human_id: 'usr_1' }), now: () => FIXED_NOW, oidcFetchImpl: fetchImplFor() }, async (port) => {
+    const token = makeToken();
+    const first = await request(port, { method: 'POST', path: '/v1/auth/login', body: { id_token: token } });
+    assert.equal(first.status, 201);
+    const second = await request(port, { method: 'POST', path: '/v1/auth/login', body: { id_token: token } });
+    assert.equal(second.status, 401);
+    assert.equal(second.body.code, 'TOKEN_REPLAYED');
+  });
+});
+
+test('token with no jti: first login succeeds, replaying the same token fails, a fresh token for the same subject succeeds', async () => {
+  const repository = await repositoryWithIssuer();
+  await withServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_1', human_id: 'usr_1' }), now: () => FIXED_NOW, oidcFetchImpl: fetchImplFor() }, async (port) => {
+    const payload = basePayload(); delete payload.jti;
+    const token = signToken({ privateKey: rsaKeyPair.privateKey, header: { kid: rsaJwk.kid }, payload });
+    const first = await request(port, { method: 'POST', path: '/v1/auth/login', body: { id_token: token } });
+    assert.equal(first.status, 201);
+    const replay = await request(port, { method: 'POST', path: '/v1/auth/login', body: { id_token: token } });
+    assert.equal(replay.status, 401);
+    assert.equal(replay.body.code, 'TOKEN_REPLAYED');
+    const payload2 = basePayload({ iat: payload.iat + 1, exp: payload.exp + 1 }); delete payload2.jti;
+    const token2 = signToken({ privateKey: rsaKeyPair.privateKey, header: { kid: rsaJwk.kid }, payload: payload2 });
+    const second = await request(port, { method: 'POST', path: '/v1/auth/login', body: { id_token: token2 } });
+    assert.equal(second.status, 201);
+  });
+});
+
+test('IdP discovery endpoint unreachable -- 401, not a 5xx', async () => {
+  const repository = await repositoryWithIssuer();
+  const fetchImpl = async () => { throw new Error('ECONNREFUSED'); };
+  await withServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_1', human_id: 'usr_1' }), now: () => FIXED_NOW, oidcFetchImpl: fetchImpl }, async (port) => {
+    const result = await request(port, { method: 'POST', path: '/v1/auth/login', body: { id_token: makeToken() } });
+    assert.equal(result.status, 401);
+    assert.equal(result.body.code, 'INVALID_ID_TOKEN');
+  });
+});
