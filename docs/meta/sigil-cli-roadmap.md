@@ -61,12 +61,12 @@ stream/list/unlink/stat.
 
 ## What this is not
 
-- **First-contact trust exists but isn't wired to a real IdP.**
-  Invite-code redemption is fully usable end-to-end today. OIDC-based
-  match/claim is implemented, tested, and now reachable through
-  `POST /v1/auth/mock-login` — but that route is a fixture-signed mock for
-  local dev/CI, not a real identity provider. No live/external OIDC client,
-  no JWKS-over-HTTPS fetch, no real IdP integration exists yet.
+- **First-contact trust is now wired to real IdPs.** `POST /v1/auth/login`
+  verifies real ID tokens (RS256/ES256) against a live, JWKS-backed IdP
+  keyset, validated against a per-issuer `client_id`
+  (`oidc_issuer_allowlist.client_id`). `POST /v1/auth/mock-login` remains for
+  local dev/CI only. See
+  `docs/superpowers/specs/2026-08-23-sigil-real-oidc-login.md`.
 - **Not centrally hosted.** `sigil relay up` runs on whatever host you
   start it on. The PostgreSQL repository gives restart durability, but
   nobody operates a shared, reachable, TLS-terminated instance of it —
@@ -103,10 +103,6 @@ stream/list/unlink/stat.
 
 ## Immediate next candidates (not started)
 
-- Real IdP integration for OIDC first-contact match: a live/external OIDC
-  client, JWKS-over-HTTPS fetch, and a production login route to replace
-  `POST /v1/auth/mock-login` (item 3 remainder — the mock route proved the
-  trust model and wiring end-to-end, but is dev/CI-only by design).
 - Decide whether a shared hosted relay (item 2) is in scope at all, or
   whether Sigil stays self-hosted-per-pair by design; if in scope, spec
   deployment/ops (TLS, backups, uptime) this repo doesn't address yet.
