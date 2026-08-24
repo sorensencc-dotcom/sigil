@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { discoverIssuer, createJwksCache, verifyRealIdToken } from './oidc-client.mjs';
+import { discoverIssuer, createJwksCache, verifyRealIdToken, createDiscoveryCache } from './oidc-client.mjs';
 
 function jsonResponse(body, { ok = true, status = 200 } = {}) {
   return { ok, status, json: async () => body, text: async () => JSON.stringify(body) };
@@ -72,6 +72,32 @@ test('discoverIssuer rejects on a non-ok HTTP status', async () => {
 test('discoverIssuer rejects on malformed JSON', async () => {
   const fetchImpl = async () => ({ ok: true, status: 200, json: async () => { throw new Error('bad json'); } });
   await assert.rejects(() => discoverIssuer('https://idp.example', { fetchImpl }), { code: 'INVALID_ID_TOKEN' });
+});
+
+test('discoverIssuer accepts a discovery doc issuer that differs only by trailing slash from the (already-normalized) requested issuer', async () => {
+  const fetchImpl = async (url) => {
+    assert.equal(url, 'https://idp.example/.well-known/openid-configuration');
+    return jsonResponse({ issuer: 'https://idp.example/', jwks_uri: 'https://idp.example/jwks.json' });
+  };
+  const result = await discoverIssuer('https://idp.example', { fetchImpl });
+  assert.equal(result.jwksUri, 'https://idp.example/jwks.json');
+});
+
+test('discoverIssuer and fetchJwks pass a timeout signal and redirect:"error" through to fetchImpl', async () => {
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    calls.push({ url, options });
+    if (url.endsWith('/.well-known/openid-configuration')) return jsonResponse({ issuer: 'https://idp.example', jwks_uri: 'https://idp.example/jwks.json' });
+    return jsonResponse({ keys: [{ kid: 'some-kid', kty: 'RSA' }] });
+  };
+  await discoverIssuer('https://idp.example', { fetchImpl });
+  const cache = createJwksCache({ fetchImpl });
+  await cache.getKey('https://idp.example/jwks.json', 'some-kid', new Date());
+  assert.equal(calls.length, 2);
+  for (const call of calls) {
+    assert.equal(call.options.redirect, 'error');
+    assert.ok(call.options.signal instanceof AbortSignal);
+  }
 });
 
 function jwksResponse(keys) {
@@ -260,4 +286,77 @@ test('verifyRealIdToken: accepts a token with no jti claim, returning jti: undef
   const token = signToken({ privateKey: rsaKeyPair.privateKey, alg: 'RS256', header: { kid: rsaJwk.kid }, payload });
   const claims = await verifyRealIdToken(token, { issuer: ISSUER, clientId: CLIENT_ID, jwksCache: makeCache([rsaJwk]), jwksUri: JWKS_URI, now: () => FIXED_NOW });
   assert.equal(claims.jti, undefined);
+});
+
+test('verifyRealIdToken: returns exp as a number, for the caller to size the replay-guard TTL from', async () => {
+  const payload = basePayload();
+  const token = signToken({ privateKey: rsaKeyPair.privateKey, alg: 'RS256', header: { kid: rsaJwk.kid }, payload });
+  const claims = await verifyRealIdToken(token, { issuer: ISSUER, clientId: CLIENT_ID, jwksCache: makeCache([rsaJwk]), jwksUri: JWKS_URI, now: () => FIXED_NOW });
+  assert.equal(claims.exp, payload.exp);
+});
+
+// Regression test for the issuer-normalization gap: a real token's raw
+// `iss` claim can differ from its normalized form only in ways
+// normalizeIssuer treats as identical (here, a trailing slash). The caller
+// (the /v1/auth/login route) normalizes the issuer once up front and passes
+// that normalized value in as `issuer`; verifyRealIdToken must normalize
+// payload.iss the same way before comparing, or every real token whose raw
+// iss has a trailing slash would be rejected.
+test('verifyRealIdToken: accepts a raw iss claim with a trailing slash when issuer is already normalized', async () => {
+  const token = signToken({ privateKey: rsaKeyPair.privateKey, alg: 'RS256', header: { kid: rsaJwk.kid }, payload: basePayload({ iss: `${ISSUER}/` }) });
+  const claims = await verifyRealIdToken(token, { issuer: ISSUER, clientId: CLIENT_ID, jwksCache: makeCache([rsaJwk]), jwksUri: JWKS_URI, now: () => FIXED_NOW });
+  assert.equal(claims.issuer, ISSUER);
+});
+
+test('verifyRealIdToken: rejects a malformed iss claim instead of crashing', async () => {
+  const token = signToken({ privateKey: rsaKeyPair.privateKey, alg: 'RS256', header: { kid: rsaJwk.kid }, payload: basePayload({ iss: 'not-a-url' }) });
+  await assert.rejects(
+    () => verifyRealIdToken(token, { issuer: ISSUER, clientId: CLIENT_ID, jwksCache: makeCache([rsaJwk]), jwksUri: JWKS_URI, now: () => FIXED_NOW }),
+    { code: 'INVALID_ID_TOKEN' }
+  );
+});
+
+// --- createDiscoveryCache -- mirrors createJwksCache's TTL/reuse tests ----
+
+test('createDiscoveryCache fetches and returns a jwksUri', async () => {
+  let fetchCount = 0;
+  const fetchImpl = async () => { fetchCount++; return jsonResponse({ issuer: ISSUER, jwks_uri: JWKS_URI }); };
+  const cache = createDiscoveryCache({ fetchImpl });
+  const jwksUri = await cache.getJwksUri(ISSUER, new Date());
+  assert.equal(jwksUri, JWKS_URI);
+  assert.equal(fetchCount, 1);
+});
+
+test('createDiscoveryCache serves from cache within TTL without a second discovery fetch', async () => {
+  let fetchCount = 0;
+  const fetchImpl = async () => { fetchCount++; return jsonResponse({ issuer: ISSUER, jwks_uri: JWKS_URI }); };
+  const cache = createDiscoveryCache({ fetchImpl, ttlMs: 3600_000 });
+  const t0 = new Date('2026-08-23T00:00:00Z');
+  await cache.getJwksUri(ISSUER, t0);
+  await cache.getJwksUri(ISSUER, new Date(t0.getTime() + 1000));
+  assert.equal(fetchCount, 1);
+});
+
+test('createDiscoveryCache refetches after TTL expiry', async () => {
+  let fetchCount = 0;
+  const fetchImpl = async () => { fetchCount++; return jsonResponse({ issuer: ISSUER, jwks_uri: JWKS_URI }); };
+  const cache = createDiscoveryCache({ fetchImpl, ttlMs: 1000 });
+  const t0 = new Date('2026-08-23T00:00:00Z');
+  await cache.getJwksUri(ISSUER, t0);
+  await cache.getJwksUri(ISSUER, new Date(t0.getTime() + 1001));
+  assert.equal(fetchCount, 2);
+});
+
+test('createDiscoveryCache caches per issuer independently', async () => {
+  let fetchCount = 0;
+  const otherIssuer = 'https://other.example';
+  const fetchImpl = async (url) => {
+    fetchCount++;
+    return jsonResponse({ issuer: url.includes('other.example') ? otherIssuer : ISSUER, jwks_uri: JWKS_URI });
+  };
+  const cache = createDiscoveryCache({ fetchImpl, ttlMs: 3600_000 });
+  const t0 = new Date('2026-08-23T00:00:00Z');
+  await cache.getJwksUri(ISSUER, t0);
+  await cache.getJwksUri(otherIssuer, t0);
+  assert.equal(fetchCount, 2);
 });

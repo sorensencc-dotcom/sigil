@@ -143,3 +143,69 @@ test('IdP discovery endpoint unreachable -- 401, not a 5xx', async () => {
     assert.equal(result.body.code, 'INVALID_ID_TOKEN');
   });
 });
+
+// Regression test for the issuer-normalization gap (finding #1): the
+// allow-list is seeded under the *normalized* issuer (as the real
+// oidc_issuer_allowlist table always is), but the raw token's `iss` claim
+// carries a trailing slash -- a form normalizeIssuer treats as identical to
+// ISSUER, but which the pre-fix route compared un-normalized. Login must
+// still succeed, proving the route normalizes the issuer before every
+// downstream use (allow-list lookup, discovery, directory-match).
+test('token iss claim has a trailing slash (non-normalized) but allow-list is seeded under the normalized issuer -- login still succeeds', async () => {
+  const repository = await repositoryWithIssuer(); // seeded under ISSUER = 'https://idp.example' (normalized)
+  const fetchImpl = async (url) => {
+    if (url === `${ISSUER}/.well-known/openid-configuration`) {
+      return { ok: true, status: 200, json: async () => ({ issuer: `${ISSUER}/`, jwks_uri: JWKS_URI }) };
+    }
+    if (url === JWKS_URI) return { ok: true, status: 200, json: async () => ({ keys: [rsaJwk] }) };
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  await withServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_1', human_id: 'usr_1' }), now: () => FIXED_NOW, oidcFetchImpl: fetchImpl }, async (port) => {
+    const token = makeToken({ iss: `${ISSUER}/` });
+    const result = await request(port, { method: 'POST', path: '/v1/auth/login', body: { id_token: token } });
+    assert.equal(result.status, 201);
+    assert.equal(result.body.session.human_id, 'usr_1');
+  });
+});
+
+// Regression test for finding #2: proves the directory-match hook actually
+// fires end-to-end through the real /v1/auth/login route (not just at the
+// normalization-function level) -- mirrors mock-oidc-route.test.mjs's
+// "success path fires a match when one is pending" pattern, but against a
+// real, in-memory-repository-backed pending match request.
+test('success path fires a pending directory match when one exists for this issuer/target', async () => {
+  const repository = await repositoryWithIssuer();
+  const pending = await repository.createDirectoryMatchRequest({
+    issuerEndpointId: 'ep_other', issuerHumanId: 'usr_other', issuer: ISSUER, matchTarget: 'a@example.com',
+    expiresAt: new Date(FIXED_NOW.getTime() + 3600_000), homeRelay: 'local', now: FIXED_NOW,
+  });
+  await withServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_1', human_id: 'usr_1' }), now: () => FIXED_NOW, oidcFetchImpl: fetchImplFor() }, async (port) => {
+    const result = await request(port, { method: 'POST', path: '/v1/auth/login', body: { id_token: makeToken({ email: 'a@example.com' }) } });
+    assert.equal(result.status, 201);
+    assert.ok(result.body.match);
+    assert.equal(result.body.match.request_id, pending.request_id);
+  });
+});
+
+// Regression test for finding #4: discovery must be cached the same way
+// JWKS is -- a second login for the same issuer must not trigger a second
+// outbound discovery fetch.
+test('a second login for the same issuer does not trigger a second discovery fetch', async () => {
+  const repository = await repositoryWithIssuer();
+  let discoveryCalls = 0;
+  const fetchImpl = async (url) => {
+    if (url === `${ISSUER}/.well-known/openid-configuration`) {
+      discoveryCalls++;
+      return { ok: true, status: 200, json: async () => ({ issuer: ISSUER, jwks_uri: JWKS_URI }) };
+    }
+    if (url === JWKS_URI) return { ok: true, status: 200, json: async () => ({ keys: [rsaJwk] }) };
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  await withServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_1', human_id: 'usr_1' }), now: () => FIXED_NOW, oidcFetchImpl: fetchImpl }, async (port) => {
+    const first = await request(port, { method: 'POST', path: '/v1/auth/login', body: { id_token: makeToken() } });
+    assert.equal(first.status, 201);
+    const second = await request(port, { method: 'POST', path: '/v1/auth/login', body: { id_token: makeToken() } });
+    assert.equal(second.status, 201);
+    assert.equal(discoveryCalls, 1);
+  });
+});

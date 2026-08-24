@@ -45,13 +45,12 @@ exemption on the accept-envelope gate (both sides resolved from the
 trusted registry, not unverified envelope fields), dedicated
 invite/match rate-limit scopes, and end-to-end integration coverage
 (invite → confirm → deliver → revoke). The `attemptDirectoryMatchOnOidcLogin`
-claim hook is now wired to a real login route: `POST /v1/auth/mock-login`
+claim hook is wired to two login routes: `POST /v1/auth/mock-login`
 (per `docs/superpowers/specs/2026-08-22-sigil-mock-oidc-login.md`), gated
 behind `--enable-mock-oidc` / `SIGIL_ENABLE_MOCK_OIDC=1`, fixture-signed,
-local dev/CI only. This proves the OIDC first-contact match flow end-to-end
-(transactional atomicity, JTI replay prevention, issuer allow-listing) but
-is **not a real IdP integration** — no live/external OIDC client, no
-JWKS-over-HTTPS fetch. That remains open.
+local dev/CI only; and `POST /v1/auth/login`, a real IdP integration —
+live OIDC discovery, JWKS-over-HTTPS fetch, and RS256/ES256 ID-token
+verification — per `docs/superpowers/specs/2026-08-23-sigil-real-oidc-login.md`.
 
 A `VaultIsolationLayer` connector helper (`sigil/connectors/v1/vault-isolation-layer.mjs`,
 exported as `@sorensencc/sigil/vault-isolation`) confines connector
@@ -67,6 +66,25 @@ stream/list/unlink/stat.
   (`oidc_issuer_allowlist.client_id`). `POST /v1/auth/mock-login` remains for
   local dev/CI only. See
   `docs/superpowers/specs/2026-08-23-sigil-real-oidc-login.md`.
+- **Provisioning a real issuer today requires two separate registrations,
+  undocumented until now.** There is no admin/migration path that writes
+  both at once. First, insert a row into the Postgres
+  `oidc_issuer_allowlist` table with `client_id` set (the only existing
+  write path, `upsertMockOidcIssuerAllowlist`, does not set `client_id`, so
+  it cannot provision a real issuer on its own):
+  ```sql
+  INSERT INTO oidc_issuer_allowlist
+    (issuer, display_label, enabled, assurance_level, client_id, added_at)
+  VALUES
+    ('https://idp.example', 'Example IdP', TRUE, 'standard', 'sigil-client-1', NOW());
+  ```
+  Second, the same issuer must *also* be added to the relay's in-memory
+  `oidcIssuerAllowList` startup `Set` (`createRelayServer`'s
+  `oidcIssuerAllowList` parameter, `sigil/relay/v1/http-server.mjs`) — this
+  is a completely separate registry that only the `/v1/directory/matches`-
+  family routes read; `POST /v1/auth/login` never consults it. Until these
+  two registries are unified (a separate future architecture item, not
+  addressed here), an operator standing up a real IdP must update both.
 - **Not centrally hosted.** `sigil relay up` runs on whatever host you
   start it on. The PostgreSQL repository gives restart durability, but
   nobody operates a shared, reachable, TLS-terminated instance of it —
@@ -83,13 +101,13 @@ stream/list/unlink/stat.
 2. **A relay someone actually hosts** — the PostgreSQL repository exists;
    nobody has deployed a shared, reachable instance with TLS/backups/uptime.
    Still open.
-3. ~~**Real identity/directory**~~ — mostly done. Invite-code first-contact
+3. ~~**Real identity/directory**~~ — done. Invite-code first-contact
    trust is fully built and wired end-to-end (create, redeem, confirm,
    revoke, active-link gate on message delivery). OIDC-match first-contact
-   trust is implemented, tested, and wired to a real login route
-   (`POST /v1/auth/mock-login`) — but that route is a fixture-signed mock,
-   dev/CI-gated. Remaining open work is a real IdP integration (live OIDC
-   client, JWKS fetch), not the trust model or the wiring itself.
+   trust is implemented, tested, and wired to both `POST /v1/auth/mock-login`
+   (fixture-signed, dev/CI-gated) and `POST /v1/auth/login` (a real IdP
+   integration — live OIDC discovery, JWKS-over-HTTPS fetch, RS256/ES256
+   verification).
 4. ~~**Push, not poll**~~ — done. WebSocket delivery-notify stream backs
    `sigil inbox --wait`; `sigil agent run` daemonizes it further.
 5. **Actual chat-surface integration** — still the hard, unbuilt part.

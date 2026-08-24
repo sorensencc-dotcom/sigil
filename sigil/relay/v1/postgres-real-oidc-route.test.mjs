@@ -104,13 +104,43 @@ test('replayed token -- second call 401 TOKEN_REPLAYED, only one session row exi
   assert.equal(Number(sessions.rows[0].count), 1);
 });
 
+// Regression test for finding #5: the login_jti_replays row's expiry must
+// track the token's own `exp` claim (+ the same clock-skew tolerance
+// verifyRealIdToken applies), not the much shorter 5-minute session TTL.
+// A real ID token (Google: up to 1h) staying replay-guarded only 5 minutes
+// would become replayable again for the rest of its real lifetime once a
+// future sweeper reaps "expired" replay-guard rows.
+test('replay-guard row expiry tracks the token exp claim, not the 5-minute session TTL', { skip: !connectionString }, async (t) => {
+  const { pool, baseUrl } = await bootstrap(t);
+  const iat = Math.floor(FIXED_NOW.getTime() / 1000);
+  const exp = iat + 3600; // 1h -- well past the 5-minute session TTL
+  const jti = crypto.randomUUID();
+  const token = makeToken({ iat, exp, jti });
+  const result = await post(baseUrl, token);
+  assert.equal(result.status, 201);
+  const rows = await pool.query('SELECT expires_at FROM login_jti_replays WHERE jti = $1', [jti]);
+  assert.equal(rows.rows.length, 1);
+  const expectedExpiresAtMs = (exp + 30) * 1000; // +30s clock-skew tolerance, same as verifyRealIdToken
+  const sessionTtlExpiresAtMs = FIXED_NOW.getTime() + 5 * 60 * 1000;
+  const actualExpiresAtMs = new Date(rows.rows[0].expires_at).getTime();
+  assert.equal(actualExpiresAtMs, expectedExpiresAtMs);
+  assert.notEqual(actualExpiresAtMs, sessionTtlExpiresAtMs);
+});
+
 test('simulated mid-sequence failure rolls back the transaction; retrying the same token afterward succeeds', { skip: !connectionString }, async (t) => {
   const { pool, humanId, endpointId } = await bootstrap(t);
   const repository = new PostgresRepository({ pool });
+  // `calls` must be hoisted outside the `get` trap and shared across the
+  // whole Proxy's lifetime: the route handler accesses
+  // `repository.createHumanSession` as a property on every call, and the
+  // trap re-runs on each access. Declaring `let calls = 0` inside the trap
+  // (as opposed to closed over it from outside) would hand back a fresh
+  // closure with calls reset to 0 every time the property is read, making
+  // the injected function throw on every call instead of only the first.
+  let calls = 0;
   const failingRepository = new Proxy(repository, {
     get(target, prop) {
       if (prop === 'createHumanSession') {
-        let calls = 0;
         return async (...args) => { calls++; if (calls === 1) throw new Error('simulated failure'); return target.createHumanSession(...args); };
       }
       return target[prop];

@@ -1,7 +1,19 @@
 import crypto from 'node:crypto';
+import { normalizeIssuer } from './issuer-normalization.mjs';
 
 function invalidToken(message) {
   return Object.assign(new Error(message), { code: 'INVALID_ID_TOKEN' });
+}
+
+// Both outbound fetches (discovery + JWKS) get a fixed timeout and a hard
+// no-follow redirect policy: without these, a hung IdP holds the request
+// open indefinitely, and fetch's default redirect:'follow' would let an
+// allow-listed issuer's endpoint redirect to an arbitrary internal URL,
+// defeating the SSRF allow-list guard. AbortSignal.timeout(...) is called
+// fresh per request -- a single shared signal would fire once and then be
+// permanently "already aborted" for every call after its first 5s.
+function outboundFetchOptions() {
+  return { signal: AbortSignal.timeout(5000), redirect: 'error' };
 }
 
 export async function discoverIssuer(issuer, { fetchImpl = fetch } = {}) {
@@ -10,7 +22,7 @@ export async function discoverIssuer(issuer, { fetchImpl = fetch } = {}) {
   }
   let response;
   try {
-    response = await fetchImpl(`${issuer}/.well-known/openid-configuration`);
+    response = await fetchImpl(`${issuer}/.well-known/openid-configuration`, outboundFetchOptions());
   } catch {
     throw invalidToken('Failed to reach OIDC discovery endpoint');
   }
@@ -24,8 +36,18 @@ export async function discoverIssuer(issuer, { fetchImpl = fetch } = {}) {
   // RFC 8414 SS3.3: the discovery document's own issuer must exactly match
   // the issuer it was requested from -- otherwise a doc served from (or
   // proxied through) an unexpected host could redirect trust to a jwks_uri
-  // the caller never vetted.
-  if (doc.issuer !== issuer) throw invalidToken('OIDC discovery document issuer mismatch');
+  // the caller never vetted. `issuer` here is already normalized by the
+  // caller; doc.issuer is the IdP's own self-reported raw string, which can
+  // differ from its normalized form the same way a raw `iss` claim can
+  // (trailing slash, non-default port, host case) -- normalize it before
+  // comparing so that harmless variance doesn't fail discovery.
+  let normalizedDocIssuer;
+  try {
+    normalizedDocIssuer = normalizeIssuer(doc.issuer);
+  } catch {
+    throw invalidToken('OIDC discovery document issuer mismatch');
+  }
+  if (normalizedDocIssuer !== issuer) throw invalidToken('OIDC discovery document issuer mismatch');
   if (typeof doc.jwks_uri !== 'string' || !doc.jwks_uri.startsWith('https://')) {
     throw invalidToken('OIDC discovery document missing a valid https jwks_uri');
   }
@@ -38,7 +60,7 @@ async function fetchJwks(jwksUri, fetchImpl) {
   }
   let response;
   try {
-    response = await fetchImpl(jwksUri);
+    response = await fetchImpl(jwksUri, outboundFetchOptions());
   } catch {
     throw invalidToken('Failed to reach JWKS endpoint');
   }
@@ -89,7 +111,7 @@ export function createJwksCache({ fetchImpl = fetch, ttlMs = 3600_000, missCoold
 }
 
 const REQUIRED_CLAIMS = ['iss', 'sub', 'email', 'email_verified', 'iat', 'exp'];
-const CLOCK_SKEW_SECONDS = 30;
+export const CLOCK_SKEW_SECONDS = 30;
 const ALG_TO_KTY = { RS256: 'RSA', ES256: 'EC' };
 
 function jwkToKeyObject(jwk) {
@@ -135,7 +157,19 @@ export async function verifyRealIdToken(token, { issuer, clientId, jwksCache, jw
     }
   }
   if (payload.email_verified !== true) throw invalidToken('email_verified must be true');
-  if (payload.iss !== issuer) throw invalidToken('Unexpected issuer');
+  // `issuer` here is the caller's already-normalized issuer (the route
+  // normalizes it before doing the allow-list lookup and passing it in
+  // here); payload.iss is the token's raw, un-normalized claim, which for a
+  // real IdP can differ only in ways normalizeIssuer treats as identical
+  // (trailing slash, non-default port, host case). Normalize it before
+  // comparing so that harmless variance doesn't fail a legitimate token.
+  let normalizedTokenIssuer;
+  try {
+    normalizedTokenIssuer = normalizeIssuer(payload.iss);
+  } catch {
+    throw invalidToken('Unexpected issuer');
+  }
+  if (normalizedTokenIssuer !== issuer) throw invalidToken('Unexpected issuer');
 
   const audiences = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
   if (!audiences.includes(clientId)) throw invalidToken('aud does not include the expected client_id');
@@ -147,5 +181,27 @@ export async function verifyRealIdToken(token, { issuer, clientId, jwksCache, jw
   if (nowSeconds > Number(payload.exp) + CLOCK_SKEW_SECONDS) throw invalidToken('ID token has expired');
   if (nowSeconds < Number(payload.iat) - CLOCK_SKEW_SECONDS) throw invalidToken('ID token is not yet valid');
 
-  return { issuer: payload.iss, subject: payload.sub, email: payload.email, jti: payload.jti };
+  return { issuer: normalizedTokenIssuer, subject: payload.sub, email: payload.email, jti: payload.jti, exp: Number(payload.exp) };
+}
+
+// Cache keyed by (normalized) issuer -- mirrors createJwksCache's shape and
+// TTL default so the two caches read the same way. Without this, discovery
+// (a second outbound fetch, separate from the JWKS one) ran on every single
+// /v1/auth/login call, before token verification, letting any caller with
+// an allow-listed issuer string drive one outbound HTTPS request per HTTP
+// request even for tokens that will fail signature verification.
+export function createDiscoveryCache({ fetchImpl = fetch, ttlMs = 3600_000 } = {}) {
+  const cache = new Map(); // issuer -> { jwksUri, fetchedAt }
+
+  return {
+    async getJwksUri(issuer, now = new Date()) {
+      const entry = cache.get(issuer);
+      if (entry && now.getTime() - entry.fetchedAt <= ttlMs) {
+        return entry.jwksUri;
+      }
+      const { jwksUri } = await discoverIssuer(issuer, { fetchImpl });
+      cache.set(issuer, { jwksUri, fetchedAt: now.getTime() });
+      return jwksUri;
+    }
+  };
 }
