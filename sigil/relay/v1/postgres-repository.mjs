@@ -870,15 +870,16 @@ export class PostgresRepository {
     );
     return result.rows[0];
   }
-  // Replay guard for POST /v1/auth/mock-login: the primary-key uniqueness
-  // constraint on mock_login_replays.jti makes a second insert of the same
-  // jti fail with 23505, mapped here to TOKEN_REPLAYED.
-  async consumeMockLoginJti(jti, { now = new Date(), expiresAt, client = this.pool } = {}) {
+  // Replay guard shared by POST /v1/auth/mock-login and POST /v1/auth/login:
+  // the primary-key uniqueness constraint on login_jti_replays.jti makes a
+  // second insert of the same jti fail with 23505, mapped here to
+  // TOKEN_REPLAYED.
+  async consumeLoginJti(jti, { now = new Date(), expiresAt, client = this.pool } = {}) {
     const expires = expiresAt instanceof Date ? expiresAt.toISOString() : new Date(expiresAt).toISOString();
     try {
-      await client.query('INSERT INTO mock_login_replays (jti, expires_at) VALUES ($1, $2)', [jti, expires]);
+      await client.query('INSERT INTO login_jti_replays (jti, expires_at) VALUES ($1, $2)', [jti, expires]);
     } catch (error) {
-      if (error.code === '23505') throw Object.assign(new Error('Mock ID token has already been used'), { code: 'TOKEN_REPLAYED' });
+      if (error.code === '23505') throw Object.assign(new Error('ID token has already been used'), { code: 'TOKEN_REPLAYED' });
       throw error;
     }
   }
@@ -893,6 +894,12 @@ export class PostgresRepository {
        ON CONFLICT (issuer) DO UPDATE SET enabled = TRUE, assurance_level = 'standard'`,
       [issuer, timestamp]
     );
+  }
+  async getOidcIssuerAllowlistEntry(issuer) {
+    const result = await this.pool.query('SELECT issuer, client_id, enabled FROM oidc_issuer_allowlist WHERE issuer = $1', [issuer]);
+    const row = result.rows[0];
+    if (!row) return null;
+    return { issuer: row.issuer, clientId: row.client_id, enabled: row.enabled };
   }
   async isConversationMember(endpointId, conversationId, client = this.pool) {
     const result = await client.query(

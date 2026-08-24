@@ -26,7 +26,7 @@ const FIXED_NOW = new Date('2026-08-22T00:00:00Z');
 function fakeRepository(overrides = {}) {
   return {
     async withTransaction(fn) { return fn(null); },
-    async consumeMockLoginJti() {},
+    async consumeLoginJti() {},
     async createHumanSession({ sessionId, humanId }) { return { session_id: sessionId, human_id: humanId, authentication_method: 'mock_oidc', assurance: 'standard', issued_at: FIXED_NOW.toISOString(), expires_at: FIXED_NOW.toISOString(), revoked_at: null }; },
     async recordAuditEvent() { return {}; },
     async claimDirectoryMatch() { return null; },
@@ -66,7 +66,7 @@ test('success path fires a match when one is pending', async () => {
 
 test('missing principal.human_id -- 403 HUMAN_CONTEXT_REQUIRED, no writes performed', async () => {
   let writes = 0;
-  const repository = fakeRepository({ async consumeMockLoginJti() { writes++; }, async createHumanSession() { writes++; return {}; } });
+  const repository = fakeRepository({ async consumeLoginJti() { writes++; }, async createHumanSession() { writes++; return {}; } });
   await withServer({ enableMockOidc: true, repository, authenticate: async () => ({ endpoint_id: 'ep_1' }), now: () => FIXED_NOW }, async (port) => {
     const token = signMockIdToken({ subject: 'sub_1', email: 'a@example.com', now: FIXED_NOW });
     const result = await request(port, { method: 'POST', path: '/v1/auth/mock-login', body: { id_token: token } });
@@ -78,7 +78,7 @@ test('missing principal.human_id -- 403 HUMAN_CONTEXT_REQUIRED, no writes perfor
 
 test('bad token (tampered signature) -- 401 INVALID_ID_TOKEN, no writes performed', async () => {
   let writes = 0;
-  const repository = fakeRepository({ async consumeMockLoginJti() { writes++; }, async createHumanSession() { writes++; return {}; } });
+  const repository = fakeRepository({ async consumeLoginJti() { writes++; }, async createHumanSession() { writes++; return {}; } });
   await withServer({ enableMockOidc: true, repository, authenticate: async () => ({ endpoint_id: 'ep_1', human_id: 'usr_1' }), now: () => FIXED_NOW }, async (port) => {
     const token = signMockIdToken({ subject: 'sub_1', email: 'a@example.com', now: FIXED_NOW });
     const tampered = token.slice(0, -4) + (token.slice(-4) === 'AAAA' ? 'BBBB' : 'AAAA');
@@ -92,7 +92,7 @@ test('bad token (tampered signature) -- 401 INVALID_ID_TOKEN, no writes performe
 test('replayed jti -- second call returns 401 TOKEN_REPLAYED', async () => {
   const usedJtis = new Set();
   const repository = fakeRepository({
-    async consumeMockLoginJti(jti) {
+    async consumeLoginJti(jti) {
       if (usedJtis.has(jti)) throw Object.assign(new Error('replayed'), { code: 'TOKEN_REPLAYED' });
       usedJtis.add(jti);
     },
@@ -131,7 +131,7 @@ test('audit event payload matches the created session', async () => {
 
 test('a token signed with a different issuer is rejected with 401 INVALID_ID_TOKEN', async () => {
   let writes = 0;
-  const repository = fakeRepository({ async consumeMockLoginJti() { writes++; }, async createHumanSession() { writes++; return {}; } });
+  const repository = fakeRepository({ async consumeLoginJti() { writes++; }, async createHumanSession() { writes++; return {}; } });
   await withServer({ enableMockOidc: true, repository, authenticate: async () => ({ endpoint_id: 'ep_1', human_id: 'usr_1' }), now: () => FIXED_NOW }, async (port) => {
     const token = signMockIdToken({ subject: 'sub_1', email: 'a@example.com', issuer: 'https://attacker.example/forged', now: FIXED_NOW });
     const result = await request(port, { method: 'POST', path: '/v1/auth/mock-login', body: { id_token: token } });

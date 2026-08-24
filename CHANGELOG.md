@@ -4,6 +4,13 @@ All notable changes to the Sigil governed task relay and connector are documente
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Added `POST /v1/auth/login`: production OIDC login backed by live IdP
+  discovery and JWKS fetch (RS256/ES256, aud/azp validation, JWKS caching
+  with rotation refetch). Closes the "real IdP integration" roadmap item.
+
 ## [0.2.1] - 2026-08-21
 
 ### Added

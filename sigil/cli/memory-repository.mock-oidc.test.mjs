@@ -13,13 +13,13 @@ test('memory relay createHumanSession returns a session row shaped like the Post
   assert.equal(session.revoked_at, null);
 });
 
-test('memory relay consumeMockLoginJti allows first use, rejects replay', async () => {
+test('memory relay consumeLoginJti allows first use, rejects replay', async () => {
   const repository = createMemoryRepository();
   const now = new Date('2026-08-22T00:00:00Z');
   const expiresAt = new Date(now.getTime() + 300_000);
-  await repository.consumeMockLoginJti('jti_1', { now, expiresAt });
+  await repository.consumeLoginJti('jti_1', { now, expiresAt });
   await assert.rejects(
-    () => repository.consumeMockLoginJti('jti_1', { now, expiresAt }),
+    () => repository.consumeLoginJti('jti_1', { now, expiresAt }),
     { code: 'TOKEN_REPLAYED' }
   );
 });

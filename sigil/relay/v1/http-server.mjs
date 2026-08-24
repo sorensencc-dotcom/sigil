@@ -9,6 +9,7 @@ import { computeActionHash } from './action-hash.mjs';
 import { normalizeIssuer } from './issuer-normalization.mjs';
 import { assertAccountLinkCeremony, assertAllowedIssuer, boundedDirectoryExpiry, boundedTokenExpiry } from './auth-policy.mjs';
 import { verifyMockIdToken } from './mock-oidc.mjs';
+import { verifyRealIdToken, createJwksCache, createDiscoveryCache, CLOCK_SKEW_SECONDS } from './oidc-client.mjs';
 import { attemptDirectoryMatchOnOidcLogin } from './directory-trust.mjs';
 import { resolveDirectoryRateLimits } from './relay-config.mjs';
 
@@ -28,7 +29,9 @@ async function readBody(request, maxBytes = 1024 * 1024) {
   return raw;
 }
 
-export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false } = {}) {
+export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch } = {}) {
+  const jwksCache = createJwksCache({ fetchImpl: oidcFetchImpl });
+  const discoveryCache = createDiscoveryCache({ fetchImpl: oidcFetchImpl });
   const authenticateRequest = authenticate ?? (tokenHashes ? createBearerAuthenticator(tokenHashes, registry) : null);
   const resolveHumanCredential = lookupHumanCredential ?? repository?.lookupHumanCredential?.bind(repository);
   const assertionRateLimits = new Map();
@@ -653,7 +656,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'INVALID_ID_TOKEN', message: error.message, details: {} }));
       }
 
-      if (!repository?.consumeMockLoginJti || !repository?.createHumanSession || !repository?.recordAuditEvent) {
+      if (!repository?.consumeLoginJti || !repository?.createHumanSession || !repository?.recordAuditEvent) {
         response.writeHead(503, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'MOCK_LOGIN_UNAVAILABLE', message: 'Repository does not support mock-OIDC login', details: {} }));
       }
@@ -663,7 +666,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         const sessionTtlMs = 5 * 60 * 1000;
         const expiresAt = new Date(now.getTime() + sessionTtlMs);
         const result = await repository.withTransaction(async (client) => {
-          await repository.consumeMockLoginJti(claims.jti, { now, expiresAt, client });
+          await repository.consumeLoginJti(claims.jti, { now, expiresAt, client });
           const session = await repository.createHumanSession({ sessionId, humanId: principal.human_id, authenticationMethod: 'mock_oidc', assurance: 'standard', issuedAt: now, expiresAt, now, client });
           await repository.recordAuditEvent?.({ eventType: 'human_session.created', subjectId: sessionId, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'human_session', objectId: sessionId, outcome: 'success', now, client });
           const match = await attemptDirectoryMatchOnOidcLogin({ repository: { claimDirectoryMatch: (args) => repository.claimDirectoryMatch({ ...args, client }) }, issuer: claims.issuer, verifiedEmail: claims.email, matchedHumanId: principal.human_id, now });
@@ -674,6 +677,103 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       } catch (error) {
         response.writeHead(error.code === 'TOKEN_REPLAYED' ? 401 : 500, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'MOCK_LOGIN_FAILED', message: error.message, details: {} }));
+      }
+    }
+    if (request.method === 'POST' && request.url === '/v1/auth/login') {
+      if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
+      let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      let body; try { body = JSON.parse(raw); } catch { body = null; }
+      if (!body?.id_token) { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'id_token is required', details: {} })); }
+
+      if (!repository?.getOidcIssuerAllowlistEntry || !repository?.consumeLoginJti || !repository?.createHumanSession || !repository?.recordAuditEvent) {
+        response.writeHead(503, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'REAL_LOGIN_UNAVAILABLE', message: 'Repository does not support real OIDC login', details: {} }));
+      }
+
+      // Read the issuer from the token's unverified payload purely to do the
+      // allow-list lookup -- it is not trusted until verifyRealIdToken
+      // confirms the signature against that same issuer's own JWKS below.
+      // Rejecting an unrecognized issuer here, before any outbound fetch,
+      // is what keeps discoverIssuer/JWKS fetch from ever running against
+      // an attacker-supplied host.
+      // Normalized once, immediately, and reused for every downstream use of
+      // this issuer in the route (allow-list lookup, discovery, and the
+      // directory-match call below) -- the /v1/directory/matches route
+      // stores match requests under the *normalized* issuer, so comparing a
+      // raw, un-normalized `iss` claim against that store would silently
+      // never match on a real IdP whose raw `iss` differs from its
+      // normalized form only in ways normalizeIssuer treats as identical
+      // (trailing slash, non-default port, host case).
+      let unverifiedIssuer;
+      try {
+        const segments = body.id_token.split('.');
+        const rawIssuer = JSON.parse(Buffer.from(segments[1], 'base64url').toString()).iss;
+        unverifiedIssuer = normalizeIssuer(rawIssuer);
+      } catch {
+        response.writeHead(401, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ID_TOKEN', message: 'Malformed ID token', details: {} }));
+      }
+
+      let allowlistEntry;
+      try {
+        allowlistEntry = await repository.getOidcIssuerAllowlistEntry(unverifiedIssuer);
+      } catch {
+        response.writeHead(503, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'REAL_LOGIN_UNAVAILABLE', message: 'Repository does not support real OIDC login', details: {} }));
+      }
+      if (!allowlistEntry || !allowlistEntry.enabled || !allowlistEntry.clientId) {
+        response.writeHead(401, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ID_TOKEN', message: 'Issuer is not allow-listed for real OIDC login', details: {} }));
+      }
+
+      let claims;
+      try {
+        const jwksUri = await discoveryCache.getJwksUri(unverifiedIssuer, now);
+        claims = await verifyRealIdToken(body.id_token, { issuer: unverifiedIssuer, clientId: allowlistEntry.clientId, jwksCache, jwksUri, now: () => now });
+      } catch (error) {
+        response.writeHead(401, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'INVALID_ID_TOKEN', message: error.message, details: {} }));
+      }
+
+      // Real IdPs are inconsistent about including jti (Google's standard ID
+      // tokens omit it). When absent, derive a stable replay key from the
+      // signature segment: same token replayed -> same key -> collides; a
+      // fresh token for the same subject has a different signature -> no
+      // false-positive block on legitimate re-logins.
+      const replayKey = claims.jti ?? crypto.createHash('sha256').update(`${claims.issuer}:${claims.subject}:${body.id_token.split('.')[2]}`).digest('hex');
+
+      try {
+        const sessionId = `sess_${crypto.randomUUID()}`;
+        const sessionTtlMs = 5 * 60 * 1000;
+        const expiresAt = new Date(now.getTime() + sessionTtlMs);
+        // The replay-guard row must outlive the token's own lifetime, not
+        // the (much shorter) session TTL -- otherwise a sweeper that reaps
+        // expired login_jti_replays rows would make a still-valid real ID
+        // token (Google tokens live up to 1h) replayable again once its
+        // guard row is prematurely swept. +CLOCK_SKEW_SECONDS mirrors the
+        // same clock-skew tolerance verifyRealIdToken applies to `exp`.
+        const replayExpiresAt = new Date((claims.exp + CLOCK_SKEW_SECONDS) * 1000);
+        const result = await repository.withTransaction(async (client) => {
+          await repository.consumeLoginJti(replayKey, { now, expiresAt: replayExpiresAt, client });
+          const session = await repository.createHumanSession({ sessionId, humanId: principal.human_id, authenticationMethod: 'oidc', assurance: 'standard', issuedAt: now, expiresAt, now, client });
+          await repository.recordAuditEvent?.({ eventType: 'human_session.created', subjectId: sessionId, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'human_session', objectId: sessionId, outcome: 'success', now, client });
+          const match = await attemptDirectoryMatchOnOidcLogin({ repository: { claimDirectoryMatch: (args) => repository.claimDirectoryMatch({ ...args, client }) }, issuer: claims.issuer, verifiedEmail: claims.email, matchedHumanId: principal.human_id, now });
+          return { session, match };
+        });
+        response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', session: result.session, match: result.match ?? null }));
+      } catch (error) {
+        if (error.code === 'TOKEN_REPLAYED') {
+          response.writeHead(401, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+          return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} }));
+        }
+        // Anything else here can be a raw Postgres error string / bare
+        // SQLSTATE code -- never pass those through. Every other route in
+        // this file uses a Sigil symbol for `code`; this 500 branch is no
+        // exception.
+        console.error('POST /v1/auth/login failed:', error);
+        response.writeHead(500, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'REAL_LOGIN_FAILED', message: 'Login failed', details: {} }));
       }
     }
     response.writeHead(404, { 'content-type': 'application/json' });

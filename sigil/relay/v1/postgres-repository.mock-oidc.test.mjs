@@ -22,15 +22,15 @@ async function freshDb(t) {
   return pool;
 }
 
-test('consumeMockLoginJti allows first use, rejects replay with TOKEN_REPLAYED', { skip: !connectionString }, async (t) => {
+test('consumeLoginJti allows first use, rejects replay with TOKEN_REPLAYED', { skip: !connectionString }, async (t) => {
   const pool = await freshDb(t);
   const repository = new PostgresRepository({ pool });
   const now = new Date('2026-08-22T00:00:00Z');
   const expiresAt = new Date(now.getTime() + 300_000);
   const jti = `jti_${crypto.randomUUID()}`;
-  await repository.consumeMockLoginJti(jti, { now, expiresAt });
+  await repository.consumeLoginJti(jti, { now, expiresAt });
   await assert.rejects(
-    () => repository.consumeMockLoginJti(jti, { now, expiresAt }),
+    () => repository.consumeLoginJti(jti, { now, expiresAt }),
     { code: 'TOKEN_REPLAYED' }
   );
 });
