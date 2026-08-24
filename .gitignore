@@ -9,3 +9,4 @@ graft/
 ijfw/
 
 .worktrees/
+.gstack/
