@@ -37,6 +37,28 @@ export function reject(code, message, details = {}) {
   return error;
 }
 
+// Pure recipient-locality check (design: federated addressing). No
+// registry/client/transaction lookup needed -- just string parsing against
+// envelope.recipient.endpoint_id and relayDomain -- so it's callable both
+// from validateEnvelope (legacy/no-repository accept path) and, standalone,
+// from the repository-backed accept path (accept-envelope.mjs), where it
+// must run before the directory-link/rate-limit/inbox-depth pre-checks so a
+// foreign-domain recipient (which normally has no directory_links row) gets
+// the correct RECIPIENT_NOT_LOCAL/MALFORMED_FEDERATED_ID diagnostic instead
+// of a misleading DIRECTORY_LINK_REQUIRED.
+export function checkRecipientLocality(envelope, relayDomain) {
+  if (!envelope?.recipient || !relayDomain) return;
+  let recipientId;
+  try {
+    recipientId = parseFederatedId(envelope.recipient.endpoint_id);
+  } catch {
+    throw reject('MALFORMED_FEDERATED_ID', `recipient.endpoint_id "${envelope.recipient.endpoint_id}" is not a well-formed federated id, required by this relay's --domain configuration`, { recipient_endpoint_id: envelope.recipient.endpoint_id });
+  }
+  if (!isLocalDomain(envelope.recipient.endpoint_id, relayDomain)) {
+    throw reject('RECIPIENT_NOT_LOCAL', `recipient domain "${recipientId.domain}" does not match this relay's domain "${relayDomain}"`, { recipientDomain: recipientId.domain, relayDomain });
+  }
+}
+
 export function validateEnvelope(envelope, { now = new Date(), registered = new Map(), idempotency = new Map(), broadcastAuthorizer, requiresApproval, approvedActionHashes = new Set(), capabilityGrants: capabilityGrants_ = [], relayDomain } = {}) {
   if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) {
     throw reject('INVALID_ENVELOPE', 'Envelope must be an object');
@@ -69,17 +91,7 @@ export function validateEnvelope(envelope, { now = new Date(), registered = new 
   const hasRecipient = Boolean(envelope.recipient);
   const hasBroadcast = Boolean(envelope.broadcast_scope);
   if (hasRecipient === hasBroadcast) throw reject('INVALID_ENVELOPE', 'Exactly one recipient or broadcast scope is required');
-  if (hasRecipient && relayDomain) {
-    let recipientId;
-    try {
-      recipientId = parseFederatedId(envelope.recipient.endpoint_id);
-    } catch {
-      throw reject('MALFORMED_FEDERATED_ID', `recipient.endpoint_id "${envelope.recipient.endpoint_id}" is not a well-formed federated id, required by this relay's --domain configuration`, { recipient_endpoint_id: envelope.recipient.endpoint_id });
-    }
-    if (!isLocalDomain(envelope.recipient.endpoint_id, relayDomain)) {
-      throw reject('RECIPIENT_NOT_LOCAL', `recipient domain "${recipientId.domain}" does not match this relay's domain "${relayDomain}"`, { recipientDomain: recipientId.domain, relayDomain });
-    }
-  }
+  if (hasRecipient) checkRecipientLocality(envelope, relayDomain);
   if (hasBroadcast && (typeof broadcastAuthorizer !== 'function' || !broadcastAuthorizer(envelope.broadcast_scope, envelope))) throw reject('ROUTE_NOT_AUTHORIZED', 'Broadcast scope is not authorized for this conversation');
   if (!Array.isArray(envelope.context_refs) || !Array.isArray(envelope.capabilities)) throw reject('INVALID_ENVELOPE', 'context_refs and capabilities must be arrays');
   if (envelope.message_type === 'task.request') validateTaskRequestBody(envelope.body);

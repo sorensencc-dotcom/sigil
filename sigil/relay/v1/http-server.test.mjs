@@ -94,6 +94,40 @@ test('HTTP relay defaults to repository persistence with canonical acceptance da
   assert.equal(persisted[0].action_hash, persisted[0].canonical_hash);
 });
 
+test('a relay with --domain configured rejects a foreign-domain recipient with RECIPIENT_NOT_LOCAL via the repository-backed accept path, before the directory-link gate', async () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
+  envelope.created_at = '2026-08-25T12:00:00.000Z'; envelope.expires_at = '2026-08-25T13:00:00.000Z';
+  envelope.recipient = { endpoint_id: 'ep_claude@other.example.com', owner_id: 'usr_claude_owner' };
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
+  const repository = {
+    async withTransaction(fn) { return fn(null); },
+    async lookupIdempotency() { return null; },
+    async lookupAcceptedMessageId() { return null; },
+    async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
+    async lookupActiveCapabilityGrants() { return []; },
+    async reserveRateLimit() { return { count: 1, allowed: true }; },
+    async countOpenDeliveries() { return 0; },
+    // No directory link exists for this foreign recipient -- if the
+    // recipient-locality check did not run before this gate, the request
+    // would be rejected with DIRECTORY_LINK_REQUIRED instead of the correct
+    // RECIPIENT_NOT_LOCAL diagnostic.
+    async lookupActiveDirectoryLink() { return null; },
+    async persistAcceptedEnvelope(row) { return { message_id: row.envelope.message_id }; }
+  };
+  const server = createRelayServer({
+    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    repository, now: new Date('2026-08-25T12:01:00Z'), relayDomain: 'relay.example.com',
+  });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const result = await request(port, { method: 'POST', path: '/v1/envelopes', body: envelope });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(result.status, 400);
+  assert.equal(result.body.code, 'RECIPIENT_NOT_LOCAL');
+  assert.equal(result.body.details.recipientDomain, 'other.example.com');
+  assert.equal(result.body.details.relayDomain, 'relay.example.com');
+});
+
 test('HTTP relay does not notify when durable persistence fails', async () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
