@@ -76,10 +76,14 @@ async function cmdInit(argv) {
   if (!name) throw new Error('usage: sigil init <name> --owner <owner_id> [--domain domain]');
   if (!NAME_CHARSET.test(name)) throw new Error(`sigil init: <name> "${name}" must match ${NAME_CHARSET} (it becomes the federated id's local part)`);
   const domain = opt(args, ['domain']) ?? 'local';
-  const { parseDomain, resolveDomainOrThrow } = await import('../relay/v1/federated-id.mjs');
+  const { parseDomain, parseFederatedId, isLocalDomain, resolveDomainOrThrow } = await import('../relay/v1/federated-id.mjs');
   parseDomain(domain);
   if (domain !== 'local') await resolveDomainOrThrow(domain);
   const owner = opt(args, ['owner']) ?? `usr_${name}@${domain}`;
+  if (opt(args, ['owner']) !== undefined) {
+    parseFederatedId(owner);
+    if (!isLocalDomain(owner, domain)) throw Object.assign(new Error(`sigil init: --owner domain must match --domain`), { code: 'OWNER_DOMAIN_MISMATCH' });
+  }
   const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
   const identityPath = path.join('.sigil', `${name}.identity.json`);
   const identity = createIdentity({ ownerId: owner, endpointId: `ep_${name}@${domain}`, kind: opt(args, ['kind']) ?? 'human' });

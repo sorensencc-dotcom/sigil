@@ -64,3 +64,37 @@ test('sigil init --domain aborts identity creation when the domain does not reso
     fs.rmSync(cwd, { recursive: true, force: true });
   }
 });
+
+test('sigil init preserves an explicit --owner whose domain matches --domain', () => {
+  // Uses the "local" sentinel domain for both --domain and the owner's
+  // federated domain so this test never depends on real DNS resolution.
+  const cwd = tmpCwd();
+  try {
+    runInit(['alice', '--domain', 'local', '--owner', 'usr_alice@local'], cwd);
+    const identity = readIdentity(cwd, 'alice');
+    assert.equal(identity.owner_id, 'usr_alice@local');
+    assert.equal(identity.endpoint_id, 'ep_alice@local');
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('sigil init rejects a bare --owner (no "@domain") and writes no identity file', () => {
+  const cwd = tmpCwd();
+  try {
+    assert.throws(() => runInit(['alice', '--owner', 'usr_alice'], cwd));
+    assert.equal(fs.existsSync(path.join(cwd, '.sigil', 'alice.identity.json')), false);
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('sigil init rejects an --owner whose domain does not match --domain (OWNER_DOMAIN_MISMATCH), writing no identity file', () => {
+  const cwd = tmpCwd();
+  try {
+    assert.throws(() => runInit(['alice', '--domain', 'local', '--owner', 'usr_alice@other.example.com'], cwd));
+    assert.equal(fs.existsSync(path.join(cwd, '.sigil', 'alice.identity.json')), false);
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
