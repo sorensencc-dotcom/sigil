@@ -36,7 +36,7 @@ function usage() {
   console.log(`sigil <command> [options]
 
 Commands:
-  init <name> --owner <owner_id> [--registry path]        Create a local identity and register it
+  init <name> --owner <owner_id> [--registry path] [--domain domain]      Create a local identity and register it (domain defaults to "local")
   relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] Run a local relay (blocks; Ctrl+C to stop)
   oidc-issuer add <issuer> --client-id id [--label text] [--assurance level] [--database-url url]
                                                             Provision a real OIDC issuer for /v1/auth/login (requires --database-url or SIGIL_DATABASE_URL; restart the relay, or wait for the next poll, to pick it up)
@@ -68,14 +68,21 @@ function flushPrint(line) {
   });
 }
 
+const NAME_CHARSET = /^[a-z0-9_-]+$/;
+
 async function cmdInit(argv) {
-  const args = parseArgs({ args: argv, options: { owner: { type: 'string' }, registry: { type: 'string' }, kind: { type: 'string' } }, allowPositionals: true });
+  const args = parseArgs({ args: argv, options: { owner: { type: 'string' }, registry: { type: 'string' }, kind: { type: 'string' }, domain: { type: 'string' } }, allowPositionals: true });
   const name = args.positionals[0];
-  if (!name) throw new Error('usage: sigil init <name> --owner <owner_id>');
-  const owner = opt(args, ['owner']) ?? `usr_${name}`;
+  if (!name) throw new Error('usage: sigil init <name> --owner <owner_id> [--domain domain]');
+  if (!NAME_CHARSET.test(name)) throw new Error(`sigil init: <name> "${name}" must match ${NAME_CHARSET} (it becomes the federated id's local part)`);
+  const domain = opt(args, ['domain']) ?? 'local';
+  const { parseDomain, resolveDomainOrThrow } = await import('../relay/v1/federated-id.mjs');
+  parseDomain(domain);
+  if (domain !== 'local') await resolveDomainOrThrow(domain);
+  const owner = opt(args, ['owner']) ?? `usr_${name}@${domain}`;
   const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
   const identityPath = path.join('.sigil', `${name}.identity.json`);
-  const identity = createIdentity({ ownerId: owner, endpointId: `ep_${name}`, kind: opt(args, ['kind']) ?? 'human' });
+  const identity = createIdentity({ ownerId: owner, endpointId: `ep_${name}@${domain}`, kind: opt(args, ['kind']) ?? 'human' });
   saveIdentity(identityPath, identity);
   addEndpointToRegistry(registryPath, identity);
   console.log(`Created identity: ${identityPath}`);
