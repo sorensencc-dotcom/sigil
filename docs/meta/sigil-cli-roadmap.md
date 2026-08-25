@@ -1,6 +1,6 @@
 # Sigil CLI — status and roadmap
 
-## What exists (2026-08-23)
+## What exists (2026-08-24)
 
 A packaged CLI (`@sorensencc/sigil`, `bin/sigil.mjs`), installable via
 `npm install --global github:sorensencc-dotcom/sigil` — no local checkout
@@ -66,20 +66,30 @@ stream/list/unlink/stat.
   (`oidc_issuer_allowlist.client_id`). `POST /v1/auth/mock-login` remains for
   local dev/CI only. See
   `docs/superpowers/specs/2026-08-23-sigil-real-oidc-login.md`.
-- **Provisioning a real issuer is now a single command.**
-  `sigil oidc-issuer add <issuer> --client-id <id> [--label text]
-  [--assurance level] --database-url <url>` writes the Postgres
-  `oidc_issuer_allowlist` row (via a new `upsertOidcIssuerAllowlist`
-  repository method, distinct from the mock-only `upsertMockOidcIssuerAllowlist`,
-  which never sets `client_id`). `sigil relay up` now loads
-  `oidcIssuerAllowList` (the in-memory `Set` `createRelayServer` uses for
-  the `/v1/directory/matches` family) from that same table at startup via
-  `repository.listOidcIssuerAllowlist()`, instead of always starting with
-  an empty, hand-wired `Set` as it did before. `POST /v1/auth/login` still
+- **Provisioning a real issuer is now a single command, with list/remove
+  and live reload.** `sigil oidc-issuer add <issuer> --client-id <id>
+  [--label text] [--assurance level] --database-url <url>` writes the
+  Postgres `oidc_issuer_allowlist` row (via `upsertOidcIssuerAllowlist`,
+  distinct from the mock-only `upsertMockOidcIssuerAllowlist`, which never
+  sets `client_id`). `sigil oidc-issuer list [--database-url url]` prints
+  issuer/client_id/enabled/assurance_level per row (add
+  `includeDisabled: true` to see soft-disabled entries too).
+  `sigil oidc-issuer remove <issuer> [--database-url url]` soft-disables
+  via `disableOidcIssuerAllowlist` (sets `enabled = FALSE`; re-adding goes
+  back through `oidc-issuer add`'s upsert — no hard delete). `sigil relay
+  up` loads `oidcIssuerAllowList` (the in-memory `Set` `createRelayServer`
+  uses for the `/v1/directory/matches` family) from that same table at
+  startup via `repository.listOidcIssuerAllowlist()`, and — when
+  `--database-url` is set — now polls it on an interval (default 30s,
+  `--oidc-issuer-refresh-interval-ms` to override) and mutates the Set's
+  contents in place, so a newly added or removed issuer is picked up
+  without a relay restart. A DB hiccup during a poll logs and keeps the
+  last-known Set rather than clearing it. `POST /v1/auth/login` still
   reads the Postgres table directly and never consults the `Set`, but
   since the `Set` is now *derived from* the table rather than a second
-  hand-maintained registry, there is only one write path left. A relay
-  restart is required to pick up a newly added issuer (no live reload).
+  hand-maintained registry, there is only one write path left. Landed in
+  `0618282` (feat) + `5617c39` (test fixture fix, deferred 500/503
+  leak-guard coverage).
 - **Not centrally hosted.** `sigil relay up` runs on whatever host you
   start it on. The PostgreSQL repository gives restart durability, but
   nobody operates a shared, reachable, TLS-terminated instance of it —
@@ -121,3 +131,52 @@ stream/list/unlink/stat.
   deployment/ops (TLS, backups, uptime) this repo doesn't address yet.
 - Chat-surface integration (item 5) is blocked on host products exposing
   a hook; track but don't spec until one does.
+
+## Future direction: H2H / A2H / multi-agent group chats (not started, not spec'd)
+
+Sigil today is pairwise (agent↔agent or agent↔human, one relay per pair).
+Group chat — several humans and agents in one thread — is an unbuilt
+protocol expansion. Raised 2026-08-24 by analogy to the
+[Slack CLI](https://docs.slack.dev/tools/slack-cli/guides/running-slack-cli-commands)
+command surface, which solves a structurally similar problem (many bots,
+many event sources, one workspace) in a centralized SaaS. The primitives
+below are candidate adaptations into Sigil's cryptographic, mailbox-based
+model — none designed or scoped yet, listed here so they aren't lost:
+
+- **`sigil trigger` (create/list/delete)** — explicit, signed subscription
+  contracts instead of unconstrained listening, to stop group threads
+  from causing agent reply-loops/token exhaustion. Static (@mention,
+  keyword regex, direct DM), reaction/emoji (human reaction → signed
+  approval envelope), and dynamic (agent subscribes to a thread,
+  auto-unsubscribes when its task resolves).
+- **`sigil dev` / `sigil run`** — local-first debugging: an authenticated
+  outbound WebSocket from a local agent runtime to the relay, so testing
+  doesn't need a public webhook or deployed relay. Plus a mock-event
+  injector (`sigil emit --mock-chat`) to simulate multi-agent cascades
+  offline. Distinct from the existing `sigil relay up` (which *is* the
+  relay); this would be a client-side dev harness against a relay.
+  Naming would need to avoid colliding with `sigil agent run`, which
+  already exists as the production daemon.
+- **`sigil trace` / `sigil activity`** — live terminal stream of envelope
+  lineage in a group thread: JCS canonicalization/signature verification
+  status, parent→child delegation chains, per-turn cost accounting (ties
+  to the separate Cost Enforcement design doc), and step-up approval gate
+  state (pending/approved/rejected).
+- **`sigil manifest [validate]`** — declarative agent identity as a
+  version-controlled file: key references, display handle/avatar,
+  explicit capability grants (`chat:read_channel`, `chat:write_thread`,
+  `task:delegate`, `memory:write`), and context boundaries (which
+  channels/threads/memory namespaces an agent may touch). Would formalize
+  what's currently spread across identity JSON + ad hoc capability checks.
+- **`sigil doctor`** — productize the existing standalone JCS/dependency
+  audit tooling into one conformance-check command: pinned crypto deps,
+  RFC 8785 library, local SQLite schema checks, Ed25519 keypair validity,
+  WebAuthn hardware-token availability, relay connectivity/latency.
+- **`sigil delegate`** — manage authorized human delegates / co-operator
+  keys (relevant once approval gates and group membership aren't 1:1).
+
+None of this is scoped against Sigil's actual envelope/capability model
+yet (e.g. how `sigil trigger` subscriptions interact with the existing
+fail-closed capability registry, or whether group membership is a new
+registry table or reuses the endpoint-directory-trust design). Treat as
+raw material for a future spec pass, not a committed plan.
