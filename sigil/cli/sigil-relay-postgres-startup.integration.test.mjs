@@ -100,3 +100,32 @@ test('sigil relay up auto-migrates fresh database and registers endpoints', { sk
   assert.equal(keysResult.rows[0].algorithm, 'Ed25519');
   assert.equal(keysResult.rows[0].status, 'active');
 });
+
+test('startOidcIssuerAllowlistPolling picks up an issuer added after startup on the next tick', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  assertDisposableTestDatabase(connectionString);
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
+
+  const { applyMigrations } = await import('../scripts/apply-migrations.mjs');
+  await applyMigrations(connectionString);
+  const { PostgresRepository } = await import('../relay/v1/postgres-repository.mjs');
+  const { startOidcIssuerAllowlistPolling } = await import('./sigil.mjs');
+  const repository = new PostgresRepository({ pool });
+
+  const allowlistSet = new Set();
+  const handle = startOidcIssuerAllowlistPolling({ repository, allowlistSet, intervalMs: 20 });
+  t.after(() => clearInterval(handle));
+
+  const issuer = `https://poll-test-${crypto.randomUUID().replaceAll('-', '_')}.example`;
+  await repository.upsertOidcIssuerAllowlist({ issuer, clientId: 'poll-client' });
+
+  await new Promise((resolve, reject) => {
+    const check = setInterval(() => {
+      if (allowlistSet.has(issuer)) { clearInterval(check); resolve(); }
+    }, 10);
+    setTimeout(() => { clearInterval(check); reject(new Error('timed out waiting for poll tick to pick up new issuer')); }, 2000);
+  });
+
+  assert.ok(allowlistSet.has(issuer));
+});

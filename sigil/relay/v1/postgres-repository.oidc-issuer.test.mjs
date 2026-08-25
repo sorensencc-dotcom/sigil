@@ -64,7 +64,7 @@ test('listOidcIssuerAllowlist returns only enabled issuers', { skip: !connection
     [disabledIssuer]
   );
   const entries = await repository.listOidcIssuerAllowlist();
-  assert.deepEqual(entries.find((e) => e.issuer === enabledIssuer), { issuer: enabledIssuer, clientId: 'client_a', enabled: true });
+  assert.deepEqual(entries.find((e) => e.issuer === enabledIssuer), { issuer: enabledIssuer, clientId: 'client_a', enabled: true, assuranceLevel: 'standard' });
   assert.equal(entries.some((e) => e.issuer === disabledIssuer), false);
 });
 
@@ -85,4 +85,32 @@ test('upsertOidcIssuerAllowlist overwrites client_id on conflict', { skip: !conn
   await repository.upsertOidcIssuerAllowlist({ issuer, clientId: 'new-client' });
   const entry = await repository.getOidcIssuerAllowlistEntry(issuer);
   assert.equal(entry.clientId, 'new-client');
+});
+
+test('listOidcIssuerAllowlist({ includeDisabled: true }) returns both enabled and disabled issuers with assuranceLevel', { skip: !connectionString }, async (t) => {
+  const { pool, repository } = await bootstrap(t);
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const enabledIssuer = `https://enabled-${suffix}.example`;
+  const disabledIssuer = `https://disabled-${suffix}.example`;
+  await pool.query(
+    `INSERT INTO oidc_issuer_allowlist (issuer, display_label, enabled, assurance_level, client_id, added_at) VALUES ($1, 'Enabled IdP', TRUE, 'standard', 'client_a', NOW())`,
+    [enabledIssuer]
+  );
+  await pool.query(
+    `INSERT INTO oidc_issuer_allowlist (issuer, display_label, enabled, assurance_level, client_id, added_at) VALUES ($1, 'Disabled IdP', FALSE, 'strong', 'client_b', NOW())`,
+    [disabledIssuer]
+  );
+  const entries = await repository.listOidcIssuerAllowlist({ includeDisabled: true });
+  assert.deepEqual(entries.find((e) => e.issuer === enabledIssuer), { issuer: enabledIssuer, clientId: 'client_a', enabled: true, assuranceLevel: 'standard' });
+  assert.deepEqual(entries.find((e) => e.issuer === disabledIssuer), { issuer: disabledIssuer, clientId: 'client_b', enabled: false, assuranceLevel: 'strong' });
+});
+
+test('disableOidcIssuerAllowlist flips enabled to false without deleting the row', { skip: !connectionString }, async (t) => {
+  const { repository } = await bootstrap(t);
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const issuer = `https://idp-${suffix}.example`;
+  await repository.upsertOidcIssuerAllowlist({ issuer, clientId: 'sigil-client-1' });
+  await repository.disableOidcIssuerAllowlist(issuer);
+  const entry = await repository.getOidcIssuerAllowlistEntry(issuer);
+  assert.deepEqual(entry, { issuer, clientId: 'sigil-client-1', enabled: false });
 });

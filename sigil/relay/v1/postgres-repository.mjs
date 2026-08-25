@@ -901,9 +901,12 @@ export class PostgresRepository {
     if (!row) return null;
     return { issuer: row.issuer, clientId: row.client_id, enabled: row.enabled };
   }
-  async listOidcIssuerAllowlist() {
-    const result = await this.pool.query('SELECT issuer, client_id, enabled FROM oidc_issuer_allowlist WHERE enabled = TRUE');
-    return result.rows.map((row) => ({ issuer: row.issuer, clientId: row.client_id, enabled: row.enabled }));
+  async listOidcIssuerAllowlist({ includeDisabled = false } = {}) {
+    const result = await this.pool.query(
+      `SELECT issuer, client_id, enabled, assurance_level FROM oidc_issuer_allowlist WHERE $1 OR enabled = TRUE`,
+      [includeDisabled]
+    );
+    return result.rows.map((row) => ({ issuer: row.issuer, clientId: row.client_id, enabled: row.enabled, assuranceLevel: row.assurance_level }));
   }
   async upsertOidcIssuerAllowlist({ issuer, clientId, displayLabel = issuer, assuranceLevel = 'standard', enabled = true, now = new Date() } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
@@ -913,6 +916,11 @@ export class PostgresRepository {
        ON CONFLICT (issuer) DO UPDATE SET display_label = $2, enabled = $3, assurance_level = $4, client_id = $5`,
       [issuer, displayLabel, enabled, assuranceLevel, clientId, timestamp]
     );
+  }
+  // User explicitly chose soft-disable over hard delete -- re-adding goes
+  // back through upsertOidcIssuerAllowlist's existing upsert.
+  async disableOidcIssuerAllowlist(issuer) {
+    await this.pool.query('UPDATE oidc_issuer_allowlist SET enabled = FALSE WHERE issuer = $1', [issuer]);
   }
   async isConversationMember(endpointId, conversationId, client = this.pool) {
     const result = await client.query(

@@ -277,19 +277,25 @@ export function createMemoryRepository() {
       const entry = oidcIssuerAllowlist.get(issuer);
       return entry ? { issuer, clientId: entry.clientId ?? null, enabled: entry.enabled } : null;
     },
-    async listOidcIssuerAllowlist() {
+    async listOidcIssuerAllowlist({ includeDisabled = false } = {}) {
       return [...oidcIssuerAllowlist.entries()]
-        .filter(([, entry]) => entry.enabled)
-        .map(([issuer, entry]) => ({ issuer, clientId: entry.clientId ?? null, enabled: entry.enabled }));
+        .filter(([, entry]) => includeDisabled || entry.enabled)
+        .map(([issuer, entry]) => ({ issuer, clientId: entry.clientId ?? null, enabled: entry.enabled, assuranceLevel: entry.assuranceLevel ?? 'standard' }));
     },
-    async upsertOidcIssuerAllowlist({ issuer, clientId = null, enabled = true } = {}) {
-      oidcIssuerAllowlist.set(issuer, { clientId, enabled });
+    async upsertOidcIssuerAllowlist({ issuer, clientId = null, assuranceLevel = 'standard', enabled = true } = {}) {
+      oidcIssuerAllowlist.set(issuer, { clientId, enabled, assuranceLevel });
+    },
+    // Soft-disable, mirroring postgres-repository.mjs's UPDATE ... SET
+    // enabled = FALSE -- re-adding goes back through upsertOidcIssuerAllowlist.
+    async disableOidcIssuerAllowlist(issuer) {
+      const entry = oidcIssuerAllowlist.get(issuer);
+      if (entry) entry.enabled = false;
     },
     // Test-only: memory-repository has no admin/migration path, so tests
     // that exercise the real-login route seed allow-list rows directly,
     // mirroring how Postgres tests INSERT into oidc_issuer_allowlist.
-    _debugSeedOidcIssuer({ issuer, clientId = null, enabled = true }) {
-      oidcIssuerAllowlist.set(issuer, { clientId, enabled });
+    _debugSeedOidcIssuer({ issuer, clientId = null, enabled = true, assuranceLevel = 'standard' }) {
+      oidcIssuerAllowlist.set(issuer, { clientId, enabled, assuranceLevel });
     },
     // Mirrors postgres-repository.mjs's recordAuditEvent row shape (minus
     // the actual persistence -- single process, nothing to query it back

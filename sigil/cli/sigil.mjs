@@ -37,9 +37,11 @@ function usage() {
 
 Commands:
   init <name> --owner <owner_id> [--registry path]        Create a local identity and register it
-  relay up [--registry path] [--port N] [--enable-mock-oidc] Run a local relay (blocks; Ctrl+C to stop)
+  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] Run a local relay (blocks; Ctrl+C to stop)
   oidc-issuer add <issuer> --client-id id [--label text] [--assurance level] [--database-url url]
-                                                            Provision a real OIDC issuer for /v1/auth/login (requires --database-url or SIGIL_DATABASE_URL; restart the relay to pick it up)
+                                                            Provision a real OIDC issuer for /v1/auth/login (requires --database-url or SIGIL_DATABASE_URL; restart the relay, or wait for the next poll, to pick it up)
+  oidc-issuer list [--database-url url]                    List all OIDC issuer allow-list entries, including disabled ones
+  oidc-issuer remove <issuer> [--database-url url]         Disable an OIDC issuer (soft-disable; re-add with "oidc-issuer add" to re-enable)
   send [--identity path] [--relay-url url] [--stream-url url] [--wait-for-receipt] --to endpoint_id --to-owner owner_id --message "text" [--conversation id]
   inbox [--identity path] [--relay-url url] [--watch|--wait] [--loop] [--stream-url url] [--interval ms] [--timeout ms] [--local] [--ledger path]
 
@@ -79,13 +81,38 @@ async function cmdInit(argv) {
   console.log(`\nKeep ${identityPath} private -- it holds this endpoint's private key and tokens.`);
 }
 
+// Refreshes `allowlistSet` in place from `repository.listOidcIssuerAllowlist()`
+// on an interval, so `sigil oidc-issuer add`/`remove` take effect without a
+// relay restart. Fetches into a temp array first and only clears+repopulates
+// the real Set on success -- a DB hiccup during a poll logs and keeps the
+// last-known Set rather than emptying it. Only meaningful when polling a
+// shared Postgres allow-list; callers should not start this against the
+// in-memory repository. Returns the interval handle (already unref()'d) so a
+// test can clearInterval it instead of waiting for process exit.
+export function startOidcIssuerAllowlistPolling({ repository, allowlistSet, intervalMs = 30_000 }) {
+  return setInterval(async () => {
+    try {
+      const entries = await repository.listOidcIssuerAllowlist();
+      allowlistSet.clear();
+      for (const entry of entries) allowlistSet.add(entry.issuer);
+    } catch (error) {
+      console.error(`sigil: OIDC issuer allow-list poll failed, keeping last-known list: ${error.message}`);
+    }
+  }, intervalMs).unref();
+}
+
 async function cmdRelayUp(argv) {
-  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' } } });
+  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' }, 'oidc-issuer-refresh-interval-ms': { type: 'string' } } });
   const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
   const port = Number(opt(args, ['port']) ?? 0);
   const streamPort = Number(opt(args, ['stream-port']) ?? (port ? port + 1 : 0));
   const databaseUrl = opt(args, ['database-url']) ?? process.env.SIGIL_DATABASE_URL;
   const enableMockOidc = Boolean(args.values['enable-mock-oidc']) || process.env.SIGIL_ENABLE_MOCK_OIDC === '1';
+  const oidcIssuerRefreshIntervalMsRaw = opt(args, ['oidc-issuer-refresh-interval-ms']);
+  const oidcIssuerRefreshIntervalMs = oidcIssuerRefreshIntervalMsRaw === undefined ? 30_000 : Number(oidcIssuerRefreshIntervalMsRaw);
+  if (!Number.isInteger(oidcIssuerRefreshIntervalMs) || oidcIssuerRefreshIntervalMs <= 0) {
+    throw new Error(`--oidc-issuer-refresh-interval-ms must be a positive integer, got "${oidcIssuerRefreshIntervalMsRaw}"`);
+  }
   const data = loadRegistryFile(registryPath);
   if (!data.endpoints.length) throw new Error(`No endpoints in ${registryPath}. Run "sigil init <name> --owner <owner_id>" first.`);
   const registry = toRegistryMap(data);
@@ -133,6 +160,9 @@ async function cmdRelayUp(argv) {
   const streamAddress = streamHttpServer.address();
 
   const oidcIssuerAllowList = new Set((await repository.listOidcIssuerAllowlist()).map((entry) => entry.issuer));
+  // Only meaningful when persisting to Postgres -- polling a single-process
+  // in-memory repository for changes nothing else can make is pointless.
+  if (databaseUrl) startOidcIssuerAllowlistPolling({ repository, allowlistSet: oidcIssuerAllowList, intervalMs: oidcIssuerRefreshIntervalMs });
 
   let server;
   const relayOrigin = () => {
@@ -288,6 +318,40 @@ async function cmdOidcIssuerAdd(argv) {
   }
 }
 
+async function cmdOidcIssuerList(argv) {
+  const args = parseArgs({ args: argv, options: { 'database-url': { type: 'string' } } });
+  const databaseUrl = opt(args, ['database-url']) ?? process.env.SIGIL_DATABASE_URL;
+  if (!databaseUrl) throw new Error('sigil oidc-issuer list requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable allow-list to list');
+  const { PostgresRepository } = await import('../relay/v1/postgres-repository.mjs');
+  const { default: pg } = await import('pg');
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  try {
+    const repository = new PostgresRepository({ pool });
+    const entries = await repository.listOidcIssuerAllowlist({ includeDisabled: true });
+    for (const entry of entries) console.log(`${entry.issuer}\t${entry.clientId ?? ''}\t${entry.enabled}\t${entry.assuranceLevel}`);
+  } finally {
+    await pool.end();
+  }
+}
+
+async function cmdOidcIssuerRemove(argv) {
+  const args = parseArgs({ args: argv, options: { 'database-url': { type: 'string' } }, allowPositionals: true });
+  const issuer = args.positionals[0];
+  if (!issuer) throw new Error('usage: sigil oidc-issuer remove <issuer> [--database-url url]');
+  const databaseUrl = opt(args, ['database-url']) ?? process.env.SIGIL_DATABASE_URL;
+  if (!databaseUrl) throw new Error('sigil oidc-issuer remove requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable allow-list to modify');
+  const { PostgresRepository } = await import('../relay/v1/postgres-repository.mjs');
+  const { default: pg } = await import('pg');
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  try {
+    const repository = new PostgresRepository({ pool });
+    await repository.disableOidcIssuerAllowlist(issuer);
+    console.log(`Disabled ${issuer} in the OIDC issuer allow-list. Restart the relay, or wait for the next poll, to pick it up.`);
+  } finally {
+    await pool.end();
+  }
+}
+
 async function cmdAgentRun(argv) {
   const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, worker: { type: 'string' }, config: { type: 'string' } } });
   const config = loadConfigFile(opt(args, ['config']) ?? DEFAULT_CLI_CONFIG);
@@ -319,6 +383,8 @@ export async function main() {
     if (command === 'init') await cmdInit(process.argv.slice(3));
     else if (command === 'relay' && sub === 'up') await cmdRelayUp(rest);
     else if (command === 'oidc-issuer' && sub === 'add') await cmdOidcIssuerAdd(rest);
+    else if (command === 'oidc-issuer' && sub === 'list') await cmdOidcIssuerList(rest);
+    else if (command === 'oidc-issuer' && sub === 'remove') await cmdOidcIssuerRemove(rest);
     else if (command === 'agent' && sub === 'run') await cmdAgentRun(rest);
     else if (command === 'send') await cmdSend(process.argv.slice(3));
     else if (command === 'inbox') await cmdInbox(process.argv.slice(3));

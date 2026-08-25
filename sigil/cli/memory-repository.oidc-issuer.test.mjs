@@ -31,7 +31,7 @@ test('listOidcIssuerAllowlist returns only enabled issuers', async () => {
   repository._debugSeedOidcIssuer({ issuer: 'https://enabled.example', clientId: 'client_1', enabled: true });
   repository._debugSeedOidcIssuer({ issuer: 'https://disabled.example', clientId: 'client_2', enabled: false });
   const entries = await repository.listOidcIssuerAllowlist();
-  assert.deepEqual(entries, [{ issuer: 'https://enabled.example', clientId: 'client_1', enabled: true }]);
+  assert.deepEqual(entries, [{ issuer: 'https://enabled.example', clientId: 'client_1', enabled: true, assuranceLevel: 'standard' }]);
 });
 
 test('upsertOidcIssuerAllowlist adds a real issuer with a client_id that getOidcIssuerAllowlistEntry can read back', async () => {
@@ -47,4 +47,21 @@ test('upsertOidcIssuerAllowlist overwrites an existing row for the same issuer',
   await repository.upsertOidcIssuerAllowlist({ issuer: 'https://idp.example', clientId: 'new-client' });
   const entry = await repository.getOidcIssuerAllowlistEntry('https://idp.example');
   assert.equal(entry.clientId, 'new-client');
+});
+
+test('listOidcIssuerAllowlist({ includeDisabled: true }) returns both enabled and disabled issuers with assuranceLevel', async () => {
+  const repository = createMemoryRepository();
+  repository._debugSeedOidcIssuer({ issuer: 'https://enabled.example', clientId: 'client_1', enabled: true, assuranceLevel: 'standard' });
+  repository._debugSeedOidcIssuer({ issuer: 'https://disabled.example', clientId: 'client_2', enabled: false, assuranceLevel: 'strong' });
+  const entries = await repository.listOidcIssuerAllowlist({ includeDisabled: true });
+  assert.deepEqual(entries.find((e) => e.issuer === 'https://enabled.example'), { issuer: 'https://enabled.example', clientId: 'client_1', enabled: true, assuranceLevel: 'standard' });
+  assert.deepEqual(entries.find((e) => e.issuer === 'https://disabled.example'), { issuer: 'https://disabled.example', clientId: 'client_2', enabled: false, assuranceLevel: 'strong' });
+});
+
+test('disableOidcIssuerAllowlist flips enabled to false without deleting the entry', async () => {
+  const repository = createMemoryRepository();
+  await repository.upsertOidcIssuerAllowlist({ issuer: 'https://idp.example', clientId: 'sigil-client-1' });
+  await repository.disableOidcIssuerAllowlist('https://idp.example');
+  const entry = await repository.getOidcIssuerAllowlistEntry('https://idp.example');
+  assert.deepEqual(entry, { issuer: 'https://idp.example', clientId: 'sigil-client-1', enabled: false });
 });
