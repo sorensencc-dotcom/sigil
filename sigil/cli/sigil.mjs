@@ -44,6 +44,8 @@ Commands:
   oidc-issuer remove <issuer> [--database-url url]         Disable an OIDC issuer (soft-disable; re-add with "oidc-issuer add" to re-enable)
   send [--identity path] [--relay-url url] [--stream-url url] [--wait-for-receipt] --to endpoint_id --to-owner owner_id --message "text" [--conversation id]
   inbox [--identity path] [--relay-url url] [--watch|--wait] [--loop] [--stream-url url] [--interval ms] [--timeout ms] [--local] [--ledger path]
+  doctor [--identity path] [--relay-url url]               Conformance check: JCS/dependency audits, plus a keypair check (if --identity)
+                                                            and a relay connectivity/latency check (if --relay-url)
 
 send/inbox resolve --identity/--relay-url/--stream-url from, in order: the flag, then
 SIGIL_IDENTITY/SIGIL_RELAY_URL/SIGIL_STREAM_URL env vars, then .sigil/config.json
@@ -352,6 +354,36 @@ async function cmdOidcIssuerRemove(argv) {
   }
 }
 
+function printDoctorReport(result) {
+  const printCheck = (label, check) => {
+    if (!check) return console.log(`${label}: skipped`);
+    const ok = check.pass ?? check.ok;
+    console.log(`${label}: ${ok ? 'PASS' : 'FAIL'}`);
+    if (check.issues) for (const issue of check.issues) console.log(`  [${issue.severity}] ${issue.code} (${issue.file}): ${issue.message}`);
+    if (check.keyId) console.log(`  key_id: ${check.keyId}`);
+    if (typeof check.latencyMs === 'number') console.log(`  latency: ${check.latencyMs}ms`);
+    if (check.error) console.log(`  error: ${check.error}`);
+  };
+  printCheck('JCS conformance', result.checks.jcs);
+  printCheck('Dependency audit', result.checks.dep);
+  printCheck('Keypair', result.checks.keypair);
+  printCheck('Relay connectivity', result.checks.relay);
+  console.log(result.pass ? 'sigil doctor: PASS' : 'sigil doctor: FAIL');
+}
+
+async function cmdDoctor(argv) {
+  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, config: { type: 'string' } } });
+  const config = loadConfigFile(opt(args, ['config']) ?? DEFAULT_CLI_CONFIG);
+  const resolved = resolveConfig({ flags: { identity: opt(args, ['identity']) }, config });
+  const { runDoctor } = await import('./doctor.mjs');
+  const result = await runDoctor({
+    identityPath: resolved.identityPath ?? undefined,
+    relayUrl: opt(args, ['relay-url']),
+  });
+  printDoctorReport(result);
+  if (!result.pass) process.exitCode = 1;
+}
+
 async function cmdAgentRun(argv) {
   const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, worker: { type: 'string' }, config: { type: 'string' } } });
   const config = loadConfigFile(opt(args, ['config']) ?? DEFAULT_CLI_CONFIG);
@@ -386,6 +418,7 @@ export async function main() {
     else if (command === 'oidc-issuer' && sub === 'list') await cmdOidcIssuerList(rest);
     else if (command === 'oidc-issuer' && sub === 'remove') await cmdOidcIssuerRemove(rest);
     else if (command === 'agent' && sub === 'run') await cmdAgentRun(rest);
+    else if (command === 'doctor') await cmdDoctor(process.argv.slice(3));
     else if (command === 'send') await cmdSend(process.argv.slice(3));
     else if (command === 'inbox') await cmdInbox(process.argv.slice(3));
     else usage();

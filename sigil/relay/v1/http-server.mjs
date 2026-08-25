@@ -143,6 +143,11 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       }
     }
 
+    if (request.method === 'GET' && parsedUrl.pathname === '/v1/health') {
+      response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+      return response.end(JSON.stringify({ status: 'ok' }));
+    }
+
     const principal = authenticateRequest ? await authenticateRequest(request) : null;
     if (authenticateRequest && !principal) {
       response.writeHead(401, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });

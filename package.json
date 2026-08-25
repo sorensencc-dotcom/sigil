@@ -11,6 +11,8 @@
   },
   "files": [
     "index.js",
+    "jcs-audit-lib.mjs",
+    "dep-audit-lib.mjs",
     "bin/",
     "sigil/connectors/v1/*.mjs",
     "sigil/connectors/v1/*.sql",

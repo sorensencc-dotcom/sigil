@@ -39,6 +39,16 @@ test('relay clock function is evaluated for each request', async () => {
   assert.equal(second.status, 202);
   assert.equal(calls, 2);
 });
+test('GET /v1/health returns 200 with status ok and requires no authentication', async () => {
+  const server = createRelayServer({ registry: new Map(), tokenHashes: new Map([['nonexistent', 'ep_someone']]) });
+  await new Promise((resolve) => server.listen(0, resolve));
+  const { port } = server.address();
+  const result = await request(port, { method: 'GET', path: '/v1/health' });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body, { status: 'ok' });
+});
+
 test('HTTP relay accepts signed envelope and returns request ID', async () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));

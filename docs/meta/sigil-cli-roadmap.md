@@ -168,10 +168,17 @@ model — none designed or scoped yet, listed here so they aren't lost:
   `task:delegate`, `memory:write`), and context boundaries (which
   channels/threads/memory namespaces an agent may touch). Would formalize
   what's currently spread across identity JSON + ad hoc capability checks.
-- **`sigil doctor`** — productize the existing standalone JCS/dependency
-  audit tooling into one conformance-check command: pinned crypto deps,
-  RFC 8785 library, local SQLite schema checks, Ed25519 keypair validity,
-  WebAuthn hardware-token availability, relay connectivity/latency.
+- ~~**`sigil doctor`**~~ — done, landed 2026-08-24. `sigil doctor
+  [--identity path] [--relay-url url]` runs the JCS conformance and
+  dependency audits (now pure `runJcsAudit`/`runDepAudit` functions in
+  `jcs-audit-lib.mjs`/`dep-audit-lib.mjs`, shared with the standalone
+  `sigil-jcs-audit.mjs`/`sigil-dep-audit.mjs` pre-commit/CI scripts, which
+  are now thin CLI-printing shells over the same logic), plus an Ed25519
+  keypair sign/verify round-trip check when `--identity` is given, and a
+  relay connectivity/latency check against a new unauthenticated `GET
+  /v1/health` route when `--relay-url` is given. No SQLite or WebAuthn
+  checks -- this repo uses Postgres/in-memory, not SQLite, and WebAuthn
+  needs a real browser ceremony, not something scriptable.
 - **`sigil delegate`** — manage authorized human delegates / co-operator
   keys (relevant once approval gates and group membership aren't 1:1).
 
