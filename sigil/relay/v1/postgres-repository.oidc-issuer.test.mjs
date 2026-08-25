@@ -97,12 +97,12 @@ test('listOidcIssuerAllowlist({ includeDisabled: true }) returns both enabled an
     [enabledIssuer]
   );
   await pool.query(
-    `INSERT INTO oidc_issuer_allowlist (issuer, display_label, enabled, assurance_level, client_id, added_at) VALUES ($1, 'Disabled IdP', FALSE, 'strong', 'client_b', NOW())`,
+    `INSERT INTO oidc_issuer_allowlist (issuer, display_label, enabled, assurance_level, client_id, added_at) VALUES ($1, 'Disabled IdP', FALSE, 'standard', 'client_b', NOW())`,
     [disabledIssuer]
   );
   const entries = await repository.listOidcIssuerAllowlist({ includeDisabled: true });
   assert.deepEqual(entries.find((e) => e.issuer === enabledIssuer), { issuer: enabledIssuer, clientId: 'client_a', enabled: true, assuranceLevel: 'standard' });
-  assert.deepEqual(entries.find((e) => e.issuer === disabledIssuer), { issuer: disabledIssuer, clientId: 'client_b', enabled: false, assuranceLevel: 'strong' });
+  assert.deepEqual(entries.find((e) => e.issuer === disabledIssuer), { issuer: disabledIssuer, clientId: 'client_b', enabled: false, assuranceLevel: 'standard' });
 });
 
 test('disableOidcIssuerAllowlist flips enabled to false without deleting the row', { skip: !connectionString }, async (t) => {

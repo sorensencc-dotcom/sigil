@@ -52,10 +52,10 @@ test('upsertOidcIssuerAllowlist overwrites an existing row for the same issuer',
 test('listOidcIssuerAllowlist({ includeDisabled: true }) returns both enabled and disabled issuers with assuranceLevel', async () => {
   const repository = createMemoryRepository();
   repository._debugSeedOidcIssuer({ issuer: 'https://enabled.example', clientId: 'client_1', enabled: true, assuranceLevel: 'standard' });
-  repository._debugSeedOidcIssuer({ issuer: 'https://disabled.example', clientId: 'client_2', enabled: false, assuranceLevel: 'strong' });
+  repository._debugSeedOidcIssuer({ issuer: 'https://disabled.example', clientId: 'client_2', enabled: false, assuranceLevel: 'standard' });
   const entries = await repository.listOidcIssuerAllowlist({ includeDisabled: true });
   assert.deepEqual(entries.find((e) => e.issuer === 'https://enabled.example'), { issuer: 'https://enabled.example', clientId: 'client_1', enabled: true, assuranceLevel: 'standard' });
-  assert.deepEqual(entries.find((e) => e.issuer === 'https://disabled.example'), { issuer: 'https://disabled.example', clientId: 'client_2', enabled: false, assuranceLevel: 'strong' });
+  assert.deepEqual(entries.find((e) => e.issuer === 'https://disabled.example'), { issuer: 'https://disabled.example', clientId: 'client_2', enabled: false, assuranceLevel: 'standard' });
 });
 
 test('disableOidcIssuerAllowlist flips enabled to false without deleting the entry', async () => {

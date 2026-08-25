@@ -96,6 +96,31 @@ test('missing principal.human_id -- 403, no writes performed', async () => {
   });
 });
 
+test('disabled issuer -- 401 and no outbound fetch attempted', async () => {
+  const repository = createMemoryRepository();
+  repository._debugSeedOidcIssuer({ issuer: ISSUER, clientId: CLIENT_ID, enabled: false });
+  let fetchCalls = 0;
+  const fetchImpl = async (...args) => { fetchCalls++; return fetchImplFor()(...args); };
+  await withServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_1', human_id: 'usr_1' }), now: () => FIXED_NOW, oidcFetchImpl: fetchImpl }, async (port) => {
+    const result = await request(port, { method: 'POST', path: '/v1/auth/login', body: { id_token: makeToken() } });
+    assert.equal(result.status, 401);
+    assert.equal(result.body.code, 'INVALID_ID_TOKEN');
+    assert.equal(fetchCalls, 0);
+  });
+});
+
+test('allow-listed issuer without client ID -- 401 and no outbound fetch attempted', async () => {
+  const repository = createMemoryRepository();
+  repository._debugSeedOidcIssuer({ issuer: ISSUER, enabled: true });
+  let fetchCalls = 0;
+  const fetchImpl = async (...args) => { fetchCalls++; return fetchImplFor()(...args); };
+  await withServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_1', human_id: 'usr_1' }), now: () => FIXED_NOW, oidcFetchImpl: fetchImpl }, async (port) => {
+    const result = await request(port, { method: 'POST', path: '/v1/auth/login', body: { id_token: makeToken() } });
+    assert.equal(result.status, 401);
+    assert.equal(result.body.code, 'INVALID_ID_TOKEN');
+    assert.equal(fetchCalls, 0);
+  });
+});
 test('bad token (wrong aud) -- 401 INVALID_ID_TOKEN', async () => {
   const repository = await repositoryWithIssuer();
   await withServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_1', human_id: 'usr_1' }), now: () => FIXED_NOW, oidcFetchImpl: fetchImplFor() }, async (port) => {
@@ -144,6 +169,31 @@ test('IdP discovery endpoint unreachable -- 401, not a 5xx', async () => {
   });
 });
 
+test('login transaction failure returns a generic 500 without leaking raw database error text', async () => {
+  const repository = await repositoryWithIssuer();
+  repository.withTransaction = async () => { throw new Error('secret postgres connection string and SQLSTATE 23505'); };
+  await withServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_1', human_id: 'usr_1' }), now: () => FIXED_NOW, oidcFetchImpl: fetchImplFor() }, async (port) => {
+    const result = await request(port, { method: 'POST', path: '/v1/auth/login', body: { id_token: makeToken() } });
+    assert.equal(result.status, 500);
+    assert.equal(result.body.code, 'REAL_LOGIN_FAILED');
+    assert.equal(result.body.message, 'Login failed');
+    assert.deepEqual(result.body.details, {});
+    assert.doesNotMatch(JSON.stringify(result.body), /secret postgres connection string|23505/);
+  });
+});
+
+test('allow-list lookup failure returns 503 without leaking raw database error text', async () => {
+  const repository = createMemoryRepository();
+  repository.getOidcIssuerAllowlistEntry = async () => { throw new Error('secret database host:5432 password=not-for-clients'); };
+  await withServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_1', human_id: 'usr_1' }), now: () => FIXED_NOW, oidcFetchImpl: fetchImplFor() }, async (port) => {
+    const result = await request(port, { method: 'POST', path: '/v1/auth/login', body: { id_token: makeToken() } });
+    assert.equal(result.status, 503);
+    assert.equal(result.body.code, 'REAL_LOGIN_UNAVAILABLE');
+    assert.equal(result.body.message, 'OIDC issuer allowlist lookup failed');
+    assert.deepEqual(result.body.details, {});
+    assert.doesNotMatch(JSON.stringify(result.body), /secret database host|password=not-for-clients/);
+  });
+});
 // Regression test for the issuer-normalization gap (finding #1): the
 // allow-list is seeded under the *normalized* issuer (as the real
 // oidc_issuer_allowlist table always is), but the raw token's `iss` claim
