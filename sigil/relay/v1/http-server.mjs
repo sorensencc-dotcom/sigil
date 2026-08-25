@@ -719,7 +719,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         allowlistEntry = await repository.getOidcIssuerAllowlistEntry(unverifiedIssuer);
       } catch {
         response.writeHead(503, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
-        return response.end(JSON.stringify({ request_id: requestId, code: 'REAL_LOGIN_UNAVAILABLE', message: 'Repository does not support real OIDC login', details: {} }));
+        return response.end(JSON.stringify({ request_id: requestId, code: 'REAL_LOGIN_UNAVAILABLE', message: 'OIDC issuer allowlist lookup failed', details: {} }));
       }
       if (!allowlistEntry || !allowlistEntry.enabled || !allowlistEntry.clientId) {
         response.writeHead(401, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
