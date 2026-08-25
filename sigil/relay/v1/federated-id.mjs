@@ -1,3 +1,5 @@
+import dns from 'node:dns';
+
 const LABEL = /^[a-zA-Z0-9-]{1,63}$/;
 
 export function parseDomain(domain) {
@@ -63,4 +65,32 @@ export function isLocalDomain(id, thisRelayDomain) {
     return false;
   }
   return parsed.domain.toLowerCase() === thisRelayDomain.toLowerCase();
+}
+
+export async function resolveDomainOrThrow(domain, { timeoutMs = 5000, lookupImpl = dns.promises.lookup } = {}) {
+  if (domain === 'local') return;
+  const colonIndex = domain.lastIndexOf(':');
+  const host = colonIndex !== -1 ? domain.slice(0, colonIndex) : domain;
+
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ timedOut: true }), timeoutMs);
+  });
+  try {
+    const outcome = await Promise.race([
+      lookupImpl(host).then((result) => ({ result })),
+      timeout,
+    ]);
+    if (outcome.timedOut) {
+      throw Object.assign(new Error(`DNS lookup for "${host}" did not resolve within ${timeoutMs}ms`), { code: 'DNS_TIMEOUT', domain, timeoutMs });
+    }
+  } catch (error) {
+    if (error.code === 'DNS_TIMEOUT') throw error;
+    if (error.code === 'ENOTFOUND') {
+      throw Object.assign(new Error(`Domain "${host}" does not resolve`), { code: 'DNS_NOT_FOUND', domain, timeoutMs });
+    }
+    throw Object.assign(new Error(`DNS lookup for "${host}" failed: ${error.message}`), { code: 'DNS_LOOKUP_FAILED', domain, timeoutMs, cause: error });
+  } finally {
+    clearTimeout(timer);
+  }
 }

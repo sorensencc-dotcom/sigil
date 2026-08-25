@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseDomain, parseFederatedId, formatFederatedId, isLocalDomain } from './federated-id.mjs';
+import { parseDomain, parseFederatedId, formatFederatedId, isLocalDomain, resolveDomainOrThrow } from './federated-id.mjs';
 
 test('parseDomain accepts a simple dotted hostname', () => {
   assert.deepEqual(parseDomain('relay.example.com'), { host: 'relay.example.com', port: null });
@@ -112,4 +112,48 @@ test('isLocalDomain returns false, not a throw, for a malformed id', () => {
 test('isLocalDomain never treats local-part case as relevant to locality, but the local part is preserved verbatim by parse/format', () => {
   assert.equal(isLocalDomain('EP_Codex@relay.example.com', 'relay.example.com'), true);
   assert.equal(parseFederatedId('EP_Codex@relay.example.com').localPart, 'EP_Codex');
+});
+
+test('resolveDomainOrThrow resolves without throwing when lookupImpl succeeds', async () => {
+  await assert.doesNotReject(resolveDomainOrThrow('relay.example.com', {
+    lookupImpl: async (host) => { assert.equal(host, 'relay.example.com'); return { address: '10.0.0.1' }; },
+  }));
+});
+
+test('resolveDomainOrThrow strips the port before calling lookupImpl', async () => {
+  let receivedHost;
+  await resolveDomainOrThrow('relay.example.com:8443', {
+    lookupImpl: async (host) => { receivedHost = host; return { address: '10.0.0.1' }; },
+  });
+  assert.equal(receivedHost, 'relay.example.com');
+});
+
+test('resolveDomainOrThrow skips lookupImpl entirely for the "local" sentinel', async () => {
+  let called = false;
+  await resolveDomainOrThrow('local', { lookupImpl: async () => { called = true; return {}; } });
+  assert.equal(called, false);
+});
+
+test('resolveDomainOrThrow classifies ENOTFOUND as DNS_NOT_FOUND with structured fields', async () => {
+  await assert.rejects(
+    resolveDomainOrThrow('nowhere.example.com', {
+      lookupImpl: async () => { throw Object.assign(new Error('not found'), { code: 'ENOTFOUND' }); },
+    }),
+    (error) => error.code === 'DNS_NOT_FOUND' && error.domain === 'nowhere.example.com' && error.timeoutMs === 5000,
+  );
+});
+
+test('resolveDomainOrThrow classifies an unrelated lookup failure as DNS_LOOKUP_FAILED with cause', async () => {
+  const original = new Error('boom');
+  await assert.rejects(
+    resolveDomainOrThrow('relay.example.com', { lookupImpl: async () => { throw original; } }),
+    (error) => error.code === 'DNS_LOOKUP_FAILED' && error.cause === original,
+  );
+});
+
+test('resolveDomainOrThrow times out instead of hanging when lookupImpl never settles', async () => {
+  await assert.rejects(
+    resolveDomainOrThrow('relay.example.com', { timeoutMs: 20, lookupImpl: () => new Promise(() => {}) }),
+    (error) => error.code === 'DNS_TIMEOUT' && error.timeoutMs === 20,
+  );
 });
