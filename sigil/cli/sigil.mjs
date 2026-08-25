@@ -45,7 +45,8 @@ Commands:
   oidc-issuer remove <issuer> [--database-url url]         Disable an OIDC issuer (soft-disable; re-add with "oidc-issuer add" to re-enable)
   send [--identity path] [--relay-url url] [--stream-url url] [--wait-for-receipt] --to endpoint_id --to-owner owner_id --message "text" [--conversation id]
   inbox [--identity path] [--relay-url url] [--watch|--wait] [--loop] [--stream-url url] [--interval ms] [--timeout ms] [--local] [--ledger path]
-  verify-contract --contract path [--registry path]        Verify a TorqueQuery signed task contract`n  doctor [--identity path] [--relay-url url]               Conformance check: JCS/dependency audits, plus a keypair check (if --identity)
+  verify-contract --contract path [--registry path]        Verify a TorqueQuery signed task contract
+  doctor [--identity path] [--relay-url url]               Conformance check: JCS/dependency audits, plus a keypair check (if --identity)
                                                             and a relay connectivity/latency check (if --relay-url)
 
 send/inbox resolve --identity/--relay-url/--stream-url from, in order: the flag, then
