@@ -180,3 +180,36 @@ yet (e.g. how `sigil trigger` subscriptions interact with the existing
 fail-closed capability registry, or whether group membership is a new
 registry table or reuses the endpoint-directory-trust design). Treat as
 raw material for a future spec pass, not a committed plan.
+
+## Other future candidates: task-delegation hardening (not started, not spec'd)
+
+Raised 2026-08-24 alongside the group-chat ideas above, worth keeping
+even though they arrived bundled with claims about files/gaps that don't
+exist in this repo (verified against `git log` + a repo-wide search —
+no `whichllm`/`bfcl` files, no `watch-competitors`, no
+`trm-worker-server`, no `gated-climb-repair` here; mock-OIDC login and
+CLI `bin` packaging are already done, see above). The underlying ideas
+are independent of those false claims and are plausible extensions of
+Sigil's existing `sigil agent run` task request/result flow:
+
+- **Adversarial cross-audit on task failure** — when a delegated task's
+  execution fails, route the failure trace through an isolated "auditor"
+  persona/agent for a remediation recipe before the executing agent
+  regenerates and retries, instead of blind retry. Would sit inside the
+  existing task request/result envelope flow, not a new subsystem.
+- **Parallel delegation / merge-queue coordination** — for delegators
+  fanning a task out to multiple agents concurrently (parallel worktree
+  branches or equivalent), a serial merge-queue coordinator to reconcile
+  results deterministically instead of racing writes.
+- **Cost/quality-adjusted task routing** — a real design doc for this
+  exists (linked by the user as "Cost Enforcement Design", not yet
+  reviewed against this repo). Candidate shape: an operational-accounting
+  table for cost/latency per task, then a shadow-mode warning phase
+  (log violations of signed quality-floors/deadlines/resource limits in
+  task metadata without blocking) before any hard admission gate. Ties
+  into the `sigil trace`/`activity` cost-accounting field noted above.
+
+None of these are scoped against Sigil's actual task/capability schema.
+Before doing anything with the cost-routing item specifically, read the
+linked Cost Enforcement Design doc and confirm it's actually about this
+repo's protocol before building against it.
