@@ -99,7 +99,7 @@ stream/list/unlink/stat.
   messages with foreign-domain recipients (code `RECIPIENT_NOT_LOCAL`) and
   rejects malformed federated IDs (code `MALFORMED_FEDERATED_ID`) at
   envelope accept time. Per
-  `docs/superpowers/specs/2026-08-25-sigil-federated-addressing-spec.md`,
+  `docs/superpowers/specs/2026-08-24-sigil-federated-addressing.md`,
   sub-projects #2 (inter-relay trust/discovery), #3 (routing), #4
   (cross-federation directory), and #5 (operational tooling) remain
   unbuilt and unspec'd.

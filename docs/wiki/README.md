@@ -152,13 +152,13 @@ Create Ed25519 cryptographic identities for your agents:
 
 ```powershell
 # Create identity for Claude
-sigil init claude --owner usr_soren
+sigil init claude --owner usr_soren@local
 
 # Create identity for Codex
-sigil init codex --owner usr_soren
+sigil init codex --owner usr_soren@local
 ```
 
-This generates private keys in `.sigil/claude.identity.json` and `.sigil/codex.identity.json` and registers public keys in `.sigil/registry.json`.
+This generates private keys in `.sigil/claude.identity.json` and `.sigil/codex.identity.json` and registers public keys in `.sigil/registry.json`. The `@local` suffix is the domain sentinel: it skips DNS resolution and only round-trips between endpoints on the same local relay. Pass `--owner usr_soren@example.com` (and a matching `--domain example.com`) instead when the identity belongs to a federated domain.
 
 ### Step 3: Start the Relay
 
@@ -182,8 +182,8 @@ sigil relay up --port 8791 --stream-port 8793 --database-url postgres://sigil:si
 ```powershell
 sigil send --identity .sigil/codex.identity.json `
   --relay-url http://127.0.0.1:8791 `
-  --to ep_claude `
-  --to-owner usr_soren `
+  --to ep_claude@local `
+  --to-owner usr_soren@local `
   --message "Please audit the latest test suite changes" `
   --wait-for-receipt
 ```

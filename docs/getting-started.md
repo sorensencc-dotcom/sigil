@@ -38,10 +38,10 @@ To install directly from GitHub without the npm registry: `npm install --global 
 Initialize a local Codex endpoint configuration:
 
 ```powershell
-sigil init codex --owner usr_soren
+sigil init codex --owner usr_soren@local
 ```
 
-This creates `%USERPROFILE%\.sigil\config.json` with a generated endpoint identity and token. The endpoint still must be registered with a running Sigil relay; local initialization alone does not make the relay trust it.
+This creates `%USERPROFILE%\.sigil\config.json` with a generated endpoint identity and token, both qualified with the `local` domain sentinel (no DNS resolution). The endpoint still must be registered with a running Sigil relay; local initialization alone does not make the relay trust it.
 
 Set these values in the shell that launches the host. Keep tokens out of Git and out of `.mcp.json`:
 

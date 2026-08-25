@@ -68,9 +68,8 @@ export function isLocalDomain(id, thisRelayDomain) {
 }
 
 export async function resolveDomainOrThrow(domain, { timeoutMs = 5000, lookupImpl = dns.promises.lookup } = {}) {
-  if (domain === 'local') return;
-  const colonIndex = domain.lastIndexOf(':');
-  const host = colonIndex !== -1 ? domain.slice(0, colonIndex) : domain;
+  const { host } = parseDomain(domain);
+  if (host === 'local') return;
 
   let timer;
   const timeout = new Promise((resolve) => {

@@ -77,8 +77,8 @@ async function cmdInit(argv) {
   if (!NAME_CHARSET.test(name)) throw new Error(`sigil init: <name> "${name}" must match ${NAME_CHARSET} (it becomes the federated id's local part)`);
   const domain = opt(args, ['domain']) ?? 'local';
   const { parseDomain, parseFederatedId, isLocalDomain, resolveDomainOrThrow } = await import('../relay/v1/federated-id.mjs');
-  parseDomain(domain);
-  if (domain !== 'local') await resolveDomainOrThrow(domain);
+  const { host: domainHost } = parseDomain(domain);
+  if (domainHost !== 'local') await resolveDomainOrThrow(domain);
   const owner = opt(args, ['owner']) ?? `usr_${name}@${domain}`;
   if (opt(args, ['owner']) !== undefined) {
     parseFederatedId(owner);

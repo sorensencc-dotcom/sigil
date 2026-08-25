@@ -134,6 +134,12 @@ test('resolveDomainOrThrow skips lookupImpl entirely for the "local" sentinel', 
   assert.equal(called, false);
 });
 
+test('resolveDomainOrThrow skips lookupImpl entirely for "local:<port>" -- the sentinel check compares the parsed host, not the raw string', async () => {
+  let called = false;
+  await resolveDomainOrThrow('local:8080', { lookupImpl: async () => { called = true; return {}; } });
+  assert.equal(called, false);
+});
+
 test('resolveDomainOrThrow classifies ENOTFOUND as DNS_NOT_FOUND with structured fields', async () => {
   await assert.rejects(
     resolveDomainOrThrow('nowhere.example.com', {
