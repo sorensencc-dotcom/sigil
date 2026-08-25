@@ -30,6 +30,8 @@
     "npm": ">=10.0.0"
   },
   "scripts": {
+    "prepare": "node sigil/scripts/install-git-hooks.mjs",
+    "secret-scan": "node sigil/scripts/secret-scan.mjs",
     "test": "node sigil-dep-audit.mjs && node sigil-jcs-audit.mjs && node --test",
     "audit:deps": "node sigil-dep-audit.mjs",
     "audit:jcs": "node sigil-jcs-audit.mjs",

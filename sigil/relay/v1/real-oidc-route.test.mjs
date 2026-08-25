@@ -184,14 +184,14 @@ test('login transaction failure returns a generic 500 without leaking raw databa
 
 test('allow-list lookup failure returns 503 without leaking raw database error text', async () => {
   const repository = createMemoryRepository();
-  repository.getOidcIssuerAllowlistEntry = async () => { throw new Error('secret database host:5432 password=not-for-clients'); };
+  repository.getOidcIssuerAllowlistEntry = async () => { throw new Error('internal db-host-01 credential=FIXTURE-ONLY-not-a-real-secret'); };
   await withServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_1', human_id: 'usr_1' }), now: () => FIXED_NOW, oidcFetchImpl: fetchImplFor() }, async (port) => {
     const result = await request(port, { method: 'POST', path: '/v1/auth/login', body: { id_token: makeToken() } });
     assert.equal(result.status, 503);
     assert.equal(result.body.code, 'REAL_LOGIN_UNAVAILABLE');
     assert.equal(result.body.message, 'OIDC issuer allowlist lookup failed');
     assert.deepEqual(result.body.details, {});
-    assert.doesNotMatch(JSON.stringify(result.body), /secret database host|password=not-for-clients/);
+    assert.doesNotMatch(JSON.stringify(result.body), /db-host-01|FIXTURE-ONLY-not-a-real-secret/);
   });
 });
 // Regression test for the issuer-normalization gap (finding #1): the

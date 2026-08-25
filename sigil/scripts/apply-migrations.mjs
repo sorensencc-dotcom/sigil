@@ -7,7 +7,10 @@ import { assertDisposableTestDatabase } from './assert-disposable-test-db.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const migrationsDir = path.resolve(here, '../migrations');
 
-export async function applyMigrations(connectionString = process.env.SIGIL_DATABASE_URL || 'postgres://sigil:sigil_password@127.0.0.1:55432/sigil', { reset = false } = {}) {
+export async function applyMigrations(connectionString = process.env.SIGIL_DATABASE_URL, { reset = false } = {}) {
+  if (!connectionString) {
+    throw new Error('SIGIL_DATABASE_URL is not set. Copy .env.example to .env and fill in your local Postgres connection string.');
+  }
   console.log(`Connecting to PostgreSQL at ${connectionString.replace(/:[^:@]+@/, ':***@')}...`);
   const pool = new pg.Pool({ connectionString });
 

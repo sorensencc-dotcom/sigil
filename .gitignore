@@ -10,3 +10,10 @@ ijfw/
 
 .worktrees/
 .gstack/
+
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
