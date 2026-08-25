@@ -22,7 +22,9 @@ const statusByCode = Object.freeze({
   REPLAY_DETECTED: 409,
   RATE_LIMITED: 429,
   QUOTA_EXCEEDED: 429,
-  DIRECTORY_LINK_REQUIRED: 403
+  DIRECTORY_LINK_REQUIRED: 403,
+  MALFORMED_FEDERATED_ID: 400,
+  RECIPIENT_NOT_LOCAL: 400
 });
 
 function toResponse(options, error) {

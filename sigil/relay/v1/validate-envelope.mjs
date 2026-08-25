@@ -3,6 +3,7 @@ import { canonicalJsonBytes } from './jcs.mjs';
 import { validateTaskRequestBody } from '../../contracts/v1/task-request-schema.mjs';
 import { validateTaskResultBody } from '../../contracts/v1/task-result-schema.mjs';
 import { isAncestorScope } from './scope.mjs';
+import { parseFederatedId, isLocalDomain } from './federated-id.mjs';
 
 const MAX_LIFETIME_MS = 24 * 60 * 60 * 1000;
 
@@ -36,7 +37,7 @@ export function reject(code, message, details = {}) {
   return error;
 }
 
-export function validateEnvelope(envelope, { now = new Date(), registered = new Map(), idempotency = new Map(), broadcastAuthorizer, requiresApproval, approvedActionHashes = new Set(), capabilityGrants: capabilityGrants_ = [] } = {}) {
+export function validateEnvelope(envelope, { now = new Date(), registered = new Map(), idempotency = new Map(), broadcastAuthorizer, requiresApproval, approvedActionHashes = new Set(), capabilityGrants: capabilityGrants_ = [], relayDomain } = {}) {
   if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) {
     throw reject('INVALID_ENVELOPE', 'Envelope must be an object');
   }
@@ -68,6 +69,17 @@ export function validateEnvelope(envelope, { now = new Date(), registered = new 
   const hasRecipient = Boolean(envelope.recipient);
   const hasBroadcast = Boolean(envelope.broadcast_scope);
   if (hasRecipient === hasBroadcast) throw reject('INVALID_ENVELOPE', 'Exactly one recipient or broadcast scope is required');
+  if (hasRecipient && relayDomain) {
+    let recipientId;
+    try {
+      recipientId = parseFederatedId(envelope.recipient.endpoint_id);
+    } catch {
+      throw reject('MALFORMED_FEDERATED_ID', `recipient.endpoint_id "${envelope.recipient.endpoint_id}" is not a well-formed federated id, required by this relay's --domain configuration`, { recipient_endpoint_id: envelope.recipient.endpoint_id });
+    }
+    if (!isLocalDomain(envelope.recipient.endpoint_id, relayDomain)) {
+      throw reject('RECIPIENT_NOT_LOCAL', `recipient domain "${recipientId.domain}" does not match this relay's domain "${relayDomain}"`, { recipientDomain: recipientId.domain, relayDomain });
+    }
+  }
   if (hasBroadcast && (typeof broadcastAuthorizer !== 'function' || !broadcastAuthorizer(envelope.broadcast_scope, envelope))) throw reject('ROUTE_NOT_AUTHORIZED', 'Broadcast scope is not authorized for this conversation');
   if (!Array.isArray(envelope.context_refs) || !Array.isArray(envelope.capabilities)) throw reject('INVALID_ENVELOPE', 'context_refs and capabilities must be arrays');
   if (envelope.message_type === 'task.request') validateTaskRequestBody(envelope.body);

@@ -210,7 +210,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       let envelope; try { envelope = JSON.parse(raw); } catch { response.writeHead(400, { 'content-type': 'application/json' }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'Invalid JSON', details: {} })); }
       const result = await acceptEnvelopeAsync(envelope, {
-        registered: registry, request_id: requestId, now, repository,
+        registered: registry, request_id: requestId, now, repository, relayDomain, persist,
         onPersisted: async ({ envelope: accepted, persisted }) => {
           if (!stream || persisted?.duplicate) return;
           if (accepted.recipient?.endpoint_id) stream.notify(accepted.recipient.endpoint_id, persisted.message_id);
