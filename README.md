@@ -65,8 +65,8 @@ The package provides the unified `sigil` command (`bin/sigil.mjs`):
 
 ```powershell
 # Initialize local identity and endpoint configuration (.sigil/)
-sigil init codex --owner usr_soren
-sigil init claude --owner usr_soren
+sigil init codex --owner usr_soren@local
+sigil init claude --owner usr_soren@local
 
 # Start a local relay instance (in-memory or PostgreSQL-backed)
 sigil relay up
@@ -77,7 +77,7 @@ sigil agent run
 sigil agent run --worker sigil/scripts/claude-worker.mjs
 
 # Send a signed task envelope to an agent runtime
-sigil send --to ep_claude --to-owner usr_soren --message "Analyze test suite coverage" --wait-for-receipt
+sigil send --to ep_claude@local --to-owner usr_soren@local --message "Analyze test suite coverage" --wait-for-receipt
 
 # Inspect queued inbox messages, wait for incoming envelopes, or view local durable ledger
 sigil inbox

@@ -1,4 +1,4 @@
-import { validateEnvelope, reject, signedBytes } from './validate-envelope.mjs';
+import { validateEnvelope, reject, signedBytes, checkRecipientLocality } from './validate-envelope.mjs';
 import { resolveRateLimits, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
 import { writeRejectionAudit } from './rejection-audit.mjs';
 
@@ -22,7 +22,9 @@ const statusByCode = Object.freeze({
   REPLAY_DETECTED: 409,
   RATE_LIMITED: 429,
   QUOTA_EXCEEDED: 429,
-  DIRECTORY_LINK_REQUIRED: 403
+  DIRECTORY_LINK_REQUIRED: 403,
+  MALFORMED_FEDERATED_ID: 400,
+  RECIPIENT_NOT_LOCAL: 400
 });
 
 function toResponse(options, error) {
@@ -61,6 +63,15 @@ async function acceptWithRepository(envelope, options) {
     if (priorMessage && priorMessage.idempotency_key !== envelope.idempotency_key) {
       throw reject('REPLAY_DETECTED', 'message_id was already accepted under a different idempotency_key');
     }
+    // Recipient-locality check (design: federated addressing) runs here,
+    // before the directory-link gate below -- a foreign-domain recipient
+    // normally has no pre-existing directory_links row, so without this
+    // early check DIRECTORY_LINK_REQUIRED would fire first and mask the
+    // more specific RECIPIENT_NOT_LOCAL/MALFORMED_FEDERATED_ID diagnostic
+    // that validateEnvelope would otherwise produce on the legacy path.
+    // Pure string check -- needs only envelope + options.relayDomain, no
+    // client/transaction/registry lookup.
+    checkRecipientLocality(envelope, options.relayDomain);
     // Capability registry fail-closed check (design §7): a capability not
     // found in the registry is rejected outright here, before target-scope
     // matching even runs -- it does NOT fall through to the

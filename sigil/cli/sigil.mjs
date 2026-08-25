@@ -36,8 +36,8 @@ function usage() {
   console.log(`sigil <command> [options]
 
 Commands:
-  init <name> --owner <owner_id> [--registry path]        Create a local identity and register it
-  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] Run a local relay (blocks; Ctrl+C to stop)
+  init <name> --owner <owner_id> [--registry path] [--domain domain]      Create a local identity and register it (domain defaults to "local")
+  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] Run a local relay (blocks; Ctrl+C to stop)
   oidc-issuer add <issuer> --client-id id [--label text] [--assurance level] [--database-url url]
                                                             Provision a real OIDC issuer for /v1/auth/login (requires --database-url or SIGIL_DATABASE_URL; restart the relay, or wait for the next poll, to pick it up)
   oidc-issuer list [--database-url url]                    List all OIDC issuer allow-list entries, including disabled ones
@@ -68,14 +68,25 @@ function flushPrint(line) {
   });
 }
 
+const NAME_CHARSET = /^[a-z0-9_-]+$/;
+
 async function cmdInit(argv) {
-  const args = parseArgs({ args: argv, options: { owner: { type: 'string' }, registry: { type: 'string' }, kind: { type: 'string' } }, allowPositionals: true });
+  const args = parseArgs({ args: argv, options: { owner: { type: 'string' }, registry: { type: 'string' }, kind: { type: 'string' }, domain: { type: 'string' } }, allowPositionals: true });
   const name = args.positionals[0];
-  if (!name) throw new Error('usage: sigil init <name> --owner <owner_id>');
-  const owner = opt(args, ['owner']) ?? `usr_${name}`;
+  if (!name) throw new Error('usage: sigil init <name> --owner <owner_id> [--domain domain]');
+  if (!NAME_CHARSET.test(name)) throw new Error(`sigil init: <name> "${name}" must match ${NAME_CHARSET} (it becomes the federated id's local part)`);
+  const domain = opt(args, ['domain']) ?? 'local';
+  const { parseDomain, parseFederatedId, isLocalDomain, resolveDomainOrThrow } = await import('../relay/v1/federated-id.mjs');
+  const { host: domainHost } = parseDomain(domain);
+  if (domainHost !== 'local') await resolveDomainOrThrow(domain);
+  const owner = opt(args, ['owner']) ?? `usr_${name}@${domain}`;
+  if (opt(args, ['owner']) !== undefined) {
+    parseFederatedId(owner);
+    if (!isLocalDomain(owner, domain)) throw Object.assign(new Error(`sigil init: --owner domain must match --domain`), { code: 'OWNER_DOMAIN_MISMATCH' });
+  }
   const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
   const identityPath = path.join('.sigil', `${name}.identity.json`);
-  const identity = createIdentity({ ownerId: owner, endpointId: `ep_${name}`, kind: opt(args, ['kind']) ?? 'human' });
+  const identity = createIdentity({ ownerId: owner, endpointId: `ep_${name}@${domain}`, kind: opt(args, ['kind']) ?? 'human' });
   saveIdentity(identityPath, identity);
   addEndpointToRegistry(registryPath, identity);
   console.log(`Created identity: ${identityPath}`);
@@ -104,7 +115,7 @@ export function startOidcIssuerAllowlistPolling({ repository, allowlistSet, inte
 }
 
 async function cmdRelayUp(argv) {
-  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' }, 'oidc-issuer-refresh-interval-ms': { type: 'string' } } });
+  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' }, 'oidc-issuer-refresh-interval-ms': { type: 'string' }, domain: { type: 'string' } } });
   const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
   const port = Number(opt(args, ['port']) ?? 0);
   const streamPort = Number(opt(args, ['stream-port']) ?? (port ? port + 1 : 0));
@@ -114,6 +125,11 @@ async function cmdRelayUp(argv) {
   const oidcIssuerRefreshIntervalMs = oidcIssuerRefreshIntervalMsRaw === undefined ? 30_000 : Number(oidcIssuerRefreshIntervalMsRaw);
   if (!Number.isInteger(oidcIssuerRefreshIntervalMs) || oidcIssuerRefreshIntervalMs <= 0) {
     throw new Error(`--oidc-issuer-refresh-interval-ms must be a positive integer, got "${oidcIssuerRefreshIntervalMsRaw}"`);
+  }
+  const relayDomain = opt(args, ['domain']);
+  if (relayDomain !== undefined) {
+    const { parseDomain } = await import('../relay/v1/federated-id.mjs');
+    parseDomain(relayDomain); // throws INVALID_DOMAIN_SYNTAX / INVALID_PORT before anything else runs
   }
   const data = loadRegistryFile(registryPath);
   if (!data.endpoints.length) throw new Error(`No endpoints in ${registryPath}. Run "sigil init <name> --owner <owner_id>" first.`);
@@ -171,7 +187,7 @@ async function cmdRelayUp(argv) {
     const addr = server?.address();
     return addr ? `http://127.0.0.1:${addr.port}` : `http://127.0.0.1:${port}`;
   };
-  server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList });
+  server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();
   if (enableMockOidc) console.log('WARNING: mock-OIDC login is enabled (--enable-mock-oidc). This is for local development and CI only -- never expose this relay to untrusted networks.');

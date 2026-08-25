@@ -94,6 +94,40 @@ test('HTTP relay defaults to repository persistence with canonical acceptance da
   assert.equal(persisted[0].action_hash, persisted[0].canonical_hash);
 });
 
+test('a relay with --domain configured rejects a foreign-domain recipient with RECIPIENT_NOT_LOCAL via the repository-backed accept path, before the directory-link gate', async () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
+  envelope.created_at = '2026-08-25T12:00:00.000Z'; envelope.expires_at = '2026-08-25T13:00:00.000Z';
+  envelope.recipient = { endpoint_id: 'ep_claude@other.example.com', owner_id: 'usr_claude_owner' };
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
+  const repository = {
+    async withTransaction(fn) { return fn(null); },
+    async lookupIdempotency() { return null; },
+    async lookupAcceptedMessageId() { return null; },
+    async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
+    async lookupActiveCapabilityGrants() { return []; },
+    async reserveRateLimit() { return { count: 1, allowed: true }; },
+    async countOpenDeliveries() { return 0; },
+    // No directory link exists for this foreign recipient -- if the
+    // recipient-locality check did not run before this gate, the request
+    // would be rejected with DIRECTORY_LINK_REQUIRED instead of the correct
+    // RECIPIENT_NOT_LOCAL diagnostic.
+    async lookupActiveDirectoryLink() { return null; },
+    async persistAcceptedEnvelope(row) { return { message_id: row.envelope.message_id }; }
+  };
+  const server = createRelayServer({
+    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    repository, now: new Date('2026-08-25T12:01:00Z'), relayDomain: 'relay.example.com',
+  });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const result = await request(port, { method: 'POST', path: '/v1/envelopes', body: envelope });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(result.status, 400);
+  assert.equal(result.body.code, 'RECIPIENT_NOT_LOCAL');
+  assert.equal(result.body.details.recipientDomain, 'other.example.com');
+  assert.equal(result.body.details.relayDomain, 'relay.example.com');
+});
+
 test('HTTP relay does not notify when durable persistence fails', async () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
@@ -664,6 +698,83 @@ test('POST /v1/directory/invites/redeem consumes quota on a guessed (invalid) co
     assert.equal(reservations.length, 1);
     assert.equal(reservations[0].scopeKind, 'directory_invite_redeem');
   } finally { server.close(); }
+});
+
+test('a relay with --domain configured rejects a foreign-domain recipient with RECIPIENT_NOT_LOCAL', async () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
+  envelope.created_at = '2026-08-25T12:00:00.000Z'; envelope.expires_at = '2026-08-25T13:00:00.000Z';
+  envelope.recipient = { endpoint_id: 'ep_claude@other.example.com', owner_id: 'usr_claude_owner' };
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
+  const server = createRelayServer({
+    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    persist: () => {}, now: new Date('2026-08-25T12:01:00Z'), relayDomain: 'relay.example.com',
+  });
+  await new Promise((resolve) => server.listen(0, resolve));
+  const { port } = server.address();
+  const result = await request(port, { method: 'POST', path: '/v1/envelopes', body: envelope });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(result.status, 400);
+  assert.equal(result.body.code, 'RECIPIENT_NOT_LOCAL');
+  assert.equal(result.body.details.recipientDomain, 'other.example.com');
+  assert.equal(result.body.details.relayDomain, 'relay.example.com');
+});
+
+test('a relay with --domain configured rejects a bare recipient with MALFORMED_FEDERATED_ID', async () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
+  envelope.created_at = '2026-08-25T12:00:00.000Z'; envelope.expires_at = '2026-08-25T13:00:00.000Z';
+  envelope.recipient = { endpoint_id: 'ep_claude', owner_id: 'usr_claude_owner' };
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
+  const server = createRelayServer({
+    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    persist: () => {}, now: new Date('2026-08-25T12:01:00Z'), relayDomain: 'relay.example.com',
+  });
+  await new Promise((resolve) => server.listen(0, resolve));
+  const { port } = server.address();
+  const result = await request(port, { method: 'POST', path: '/v1/envelopes', body: envelope });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(result.status, 400);
+  assert.equal(result.body.code, 'MALFORMED_FEDERATED_ID');
+});
+
+test('a relay with no --domain still accepts a bare legacy recipient unchanged (regression)', async () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
+  envelope.created_at = '2026-08-25T12:00:00.000Z'; envelope.expires_at = '2026-08-25T13:00:00.000Z';
+  envelope.recipient = { endpoint_id: 'ep_claude', owner_id: 'usr_claude_owner' };
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
+  const server = createRelayServer({
+    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    persist: () => {}, now: new Date('2026-08-25T12:01:00Z'),
+  });
+  await new Promise((resolve) => server.listen(0, resolve));
+  const { port } = server.address();
+  const result = await request(port, { method: 'POST', path: '/v1/envelopes', body: envelope });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(result.status, 202);
+});
+
+test('local-part case is significant: ep_Foo@x.com and ep_foo@x.com are distinct recipients through the real accept path', async () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
+  envelope.created_at = '2026-08-25T12:00:00.000Z'; envelope.expires_at = '2026-08-25T13:00:00.000Z';
+  envelope.recipient = { endpoint_id: 'ep_Foo@relay.example.com', owner_id: 'usr_claude_owner' };
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
+  let persistedRecipient;
+  const server = createRelayServer({
+    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    persist: ({ envelope: accepted }) => { persistedRecipient = accepted.recipient.endpoint_id; },
+    now: new Date('2026-08-25T12:01:00Z'), relayDomain: 'relay.example.com',
+  });
+  await new Promise((resolve) => server.listen(0, resolve));
+  const { port } = server.address();
+  const result = await request(port, { method: 'POST', path: '/v1/envelopes', body: envelope });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(result.status, 202);
+  // proves the exact-case string reached persistence unmodified -- a lowercased
+  // "ep_foo@relay.example.com" here would silently merge two distinct endpoints.
+  assert.equal(persistedRecipient, 'ep_Foo@relay.example.com');
 });
 
 function startServer({ authenticate, repository, relayOrigin, oidcIssuerAllowList = new Set(), tokenHashes, registry } = {}) {

@@ -90,6 +90,19 @@ stream/list/unlink/stat.
   hand-maintained registry, there is only one write path left. Landed in
   `0618282` (feat) + `5617c39` (test fixture fix, deferred 500/503
   leak-guard coverage).
+- ~~**Federated addressing: sub-project #1 (addressing)**~~ — done, landed
+  2026-08-25. `sigil init <name> --owner <owner_id> [--domain <domain>]`
+  and `sigil relay up [--domain <domain>]` now accept an optional `--domain`
+  flag to enable federation support, making `endpoint_id` and `owner_id`
+  optionally domain-qualified (e.g., `endpoint@domain.com`). A
+  domain-configured relay enforces domain boundaries: rejects incoming
+  messages with foreign-domain recipients (code `RECIPIENT_NOT_LOCAL`) and
+  rejects malformed federated IDs (code `MALFORMED_FEDERATED_ID`) at
+  envelope accept time. Per
+  `docs/superpowers/specs/2026-08-24-sigil-federated-addressing.md`,
+  sub-projects #2 (inter-relay trust/discovery), #3 (routing), #4
+  (cross-federation directory), and #5 (operational tooling) remain
+  unbuilt and unspec'd.
 - **Not centrally hosted.** `sigil relay up` runs on whatever host you
   start it on. The PostgreSQL repository gives restart durability, but
   nobody operates a shared, reachable, TLS-terminated instance of it —

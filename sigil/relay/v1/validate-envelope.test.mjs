@@ -121,3 +121,37 @@ test('read_shared_context requires coverage for every referenced context scope',
   const fullGrants = [{ capability: 'sigil.core/read_shared_context', scope: 'scope:project' }];
   assert.equal(validateEnvelope(candidate, { ...options, capabilityGrants: fullGrants }).accepted, true);
 });
+
+test('accepts a federated recipient whose domain matches relayDomain', () => {
+  const candidate = structuredClone(base);
+  candidate.recipient = { endpoint_id: 'ep_claude@relay.example.com', owner_id: 'usr_claude_owner' };
+  candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
+  assert.equal(validateEnvelope(candidate, { ...options, relayDomain: 'relay.example.com' }).accepted, true);
+});
+
+test('rejects a federated recipient on a different domain with RECIPIENT_NOT_LOCAL', () => {
+  const candidate = structuredClone(base);
+  candidate.recipient = { endpoint_id: 'ep_claude@other.example.com', owner_id: 'usr_claude_owner' };
+  candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
+  assert.throws(
+    () => validateEnvelope(candidate, { ...options, relayDomain: 'relay.example.com' }),
+    (error) => error.code === 'RECIPIENT_NOT_LOCAL' && error.details.recipientDomain === 'other.example.com' && error.details.relayDomain === 'relay.example.com',
+  );
+});
+
+test('rejects a bare recipient on a domain-configured relay with MALFORMED_FEDERATED_ID', () => {
+  const candidate = structuredClone(base);
+  candidate.recipient = { endpoint_id: 'ep_claude', owner_id: 'usr_claude_owner' };
+  candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
+  assert.throws(
+    () => validateEnvelope(candidate, { ...options, relayDomain: 'relay.example.com' }),
+    (error) => error.code === 'MALFORMED_FEDERATED_ID',
+  );
+});
+
+test('accepts a bare recipient unchanged when relayDomain is not set (legacy/non-federated relay)', () => {
+  const candidate = structuredClone(base);
+  candidate.recipient = { endpoint_id: 'ep_claude', owner_id: 'usr_claude_owner' };
+  candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
+  assert.equal(validateEnvelope(candidate, options).accepted, true);
+});
