@@ -50,15 +50,22 @@ as it does today.
 
 Pure parsing/formatting/validation, no I/O except the one DNS check below.
 
+- **`parseDomain(domain)`** → validates only the domain half (no `@`,
+  no local part) against the grammar below, throwing the same
+  `INVALID_DOMAIN_SYNTAX`/`INVALID_PORT` errors `parseFederatedId` would.
+  This is the one shared validation primitive: `parseFederatedId` calls it
+  for the domain portion of a full ID, and `sigil relay up --domain`
+  calls it directly on the flag value (no local-part/`@` involved there).
+  No I/O.
 - **`parseFederatedId(id)`** → `{ localPart, domain }`. Throws `Error` with
   `.code` set to one of:
   - `MALFORMED_FEDERATED_ID` — not exactly one `@`, or empty local part.
-  - `INVALID_DOMAIN_SYNTAX` — domain fails the grammar below.
-  - `INVALID_PORT` — a `:port` suffix present but not numeric 1–65535.
-- **Domain grammar:** RFC 1035-style labels (letters, digits, hyphens; no
-  underscores), dot-separated, max 253 chars total / 63 per label, ASCII
-  only (no IDNA/punycode in v1). Two literal exceptions, valid without dots:
-  the sentinel `local` and the well-known name `localhost`.
+  - `INVALID_DOMAIN_SYNTAX` / `INVALID_PORT` — from `parseDomain`.
+- **Domain grammar (enforced by `parseDomain`):** RFC 1035-style labels
+  (letters, digits, hyphens; no underscores), dot-separated, max 253 chars
+  total / 63 per label, ASCII only (no IDNA/punycode in v1). Two literal
+  exceptions, valid without dots: the sentinel `local` and the well-known
+  name `localhost`.
   - **`local` is a reserved sentinel**: matched by exact string comparison
     *before* grammar/DNS validation. It skips DNS resolution entirely (see
     below) and is never treated as a routable network domain by any other
@@ -116,9 +123,9 @@ New `--domain <domain>` flag on `cmdInit`.
 
 ### `sigil relay up` (`sigil/relay/v1/http-server.mjs`)
 
-New `--domain <domain>` flag. Validated for syntax (the same grammar
-`parseFederatedId`'s domain-parsing enforces, including the `local`
-sentinel and port rules) **before** the relay starts listening — a
+New `--domain <domain>` flag. Validated via `parseDomain` (the shared
+helper above, including the `local` sentinel and port rules) **before**
+the relay starts listening — a
 malformed `--domain` aborts `cmdRelayUp` immediately with
 `INVALID_DOMAIN_SYNTAX`, rather than starting a relay that would then
 reject every single recipient unpredictably. **No DNS resolution at relay
@@ -205,8 +212,12 @@ accept time, replacing today's silent accept-and-never-deliver. It does
   leaves no partial identity file on disk).
 - `sigil relay up --domain` tests: a malformed `--domain` aborts startup
   with `INVALID_DOMAIN_SYNTAX` before the server binds a port (assert no
-  listener was created); no DNS lookup is attempted at startup (inject a
-  `lookupImpl`/resolver spy and assert it's never called).
+  listener was created); a syntactically valid `--domain` (including
+  `local`) starts up successfully. No resolver/DNS test here at all —
+  relay startup never calls `resolveDomainOrThrow`/`lookupImpl` by design,
+  so there's nothing to spy on; that boundary is covered by `parseDomain`
+  being a pure, I/O-free function (verified in the `federated-id.mjs`
+  unit tests above) that `cmdRelayUp` calls directly.
 - `http-server.test.mjs`: a relay with no `--domain` still accepts a bare
   legacy `endpoint_id` unchanged (regression); a relay with `--domain` set
   accepts a matching-domain federated recipient; rejects a
