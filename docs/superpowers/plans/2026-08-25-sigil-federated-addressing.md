@@ -488,6 +488,8 @@ Expected: FAIL — `endpoint_id` is `ep_alice`, not `ep_alice@local` (current be
 
 - [ ] **Step 3: Implement the flag and validation in `cmdInit`**
 
+Owner validation is part of this task, not a follow-up: supplied `--owner` values are complete federated IDs. `parseFederatedId` handles malformed/bare values; `isLocalDomain` mismatch becomes `OWNER_DOMAIN_MISMATCH`. Both failures occur before `saveIdentity` and `addEndpointToRegistry`.
+
 Replace `sigil/cli/sigil.mjs:71-84`:
 
 ```js
@@ -499,10 +501,14 @@ async function cmdInit(argv) {
   if (!name) throw new Error('usage: sigil init <name> --owner <owner_id> [--domain domain]');
   if (!NAME_CHARSET.test(name)) throw new Error(`sigil init: <name> "${name}" must match ${NAME_CHARSET} (it becomes the federated id's local part)`);
   const domain = opt(args, ['domain']) ?? 'local';
-  const { parseDomain, resolveDomainOrThrow } = await import('../relay/v1/federated-id.mjs');
+  const { parseDomain, parseFederatedId, isLocalDomain, resolveDomainOrThrow } = await import('../relay/v1/federated-id.mjs');
   parseDomain(domain);
   if (domain !== 'local') await resolveDomainOrThrow(domain);
   const owner = opt(args, ['owner']) ?? `usr_${name}@${domain}`;
+  if (opt(args, ['owner']) !== undefined) {
+    parseFederatedId(owner);
+    if (!isLocalDomain(owner, domain)) throw Object.assign(new Error(`sigil init: --owner domain must match --domain`), { code: 'OWNER_DOMAIN_MISMATCH' });
+  }
   const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
   const identityPath = path.join('.sigil', `${name}.identity.json`);
   const identity = createIdentity({ ownerId: owner, endpointId: `ep_${name}@${domain}`, kind: opt(args, ['kind']) ?? 'human' });

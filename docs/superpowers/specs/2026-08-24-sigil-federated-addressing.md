@@ -228,3 +228,9 @@ accept time, replacing today's silent accept-and-never-deliver. It does
   endpoints by the registry/delivery path, proving local-part
   case-sensitivity holds through actual registry lookup, not just inside
   the `federated-id.mjs` parser.
+
+## Revision: owner-ID contract (2026-08-25)
+
+The `--owner` flag supplies a complete owner ID, not a local-part. When supplied during `sigil init`, it must be a well-formed federated ID whose domain matches `--domain` case-insensitively, with ports remaining significant. Bare owners fail with the parser error; well-formed owners from another domain fail with stable code `OWNER_DOMAIN_MISMATCH`. Both are rejected before identity-file or registry writes. When omitted, the owner defaults to `usr_<name>@<domain>`.
+
+Required tests: matching-domain owner is preserved; bare owner is rejected; foreign-domain owner is rejected; all failures leave no partial identity file.
