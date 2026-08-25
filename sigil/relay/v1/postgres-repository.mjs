@@ -901,6 +901,19 @@ export class PostgresRepository {
     if (!row) return null;
     return { issuer: row.issuer, clientId: row.client_id, enabled: row.enabled };
   }
+  async listOidcIssuerAllowlist() {
+    const result = await this.pool.query('SELECT issuer, client_id, enabled FROM oidc_issuer_allowlist WHERE enabled = TRUE');
+    return result.rows.map((row) => ({ issuer: row.issuer, clientId: row.client_id, enabled: row.enabled }));
+  }
+  async upsertOidcIssuerAllowlist({ issuer, clientId, displayLabel = issuer, assuranceLevel = 'standard', enabled = true, now = new Date() } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    await this.pool.query(
+      `INSERT INTO oidc_issuer_allowlist (issuer, display_label, enabled, assurance_level, client_id, added_at)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (issuer) DO UPDATE SET display_label = $2, enabled = $3, assurance_level = $4, client_id = $5`,
+      [issuer, displayLabel, enabled, assuranceLevel, clientId, timestamp]
+    );
+  }
   async isConversationMember(endpointId, conversationId, client = this.pool) {
     const result = await client.query(
       'SELECT 1 FROM conversation_members WHERE conversation_id = $1 AND endpoint_id = $2 AND removed_at IS NULL',

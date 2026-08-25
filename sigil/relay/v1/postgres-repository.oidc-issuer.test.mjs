@@ -49,3 +49,40 @@ test('getOidcIssuerAllowlistEntry returns clientId: null for a row with no clien
   const entry = await repository.getOidcIssuerAllowlistEntry(`https://idp-${suffix}.example`);
   assert.equal(entry.clientId, null);
 });
+
+test('listOidcIssuerAllowlist returns only enabled issuers', { skip: !connectionString }, async (t) => {
+  const { pool, repository } = await bootstrap(t);
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const enabledIssuer = `https://enabled-${suffix}.example`;
+  const disabledIssuer = `https://disabled-${suffix}.example`;
+  await pool.query(
+    `INSERT INTO oidc_issuer_allowlist (issuer, display_label, enabled, assurance_level, client_id, added_at) VALUES ($1, 'Enabled IdP', TRUE, 'standard', 'client_a', NOW())`,
+    [enabledIssuer]
+  );
+  await pool.query(
+    `INSERT INTO oidc_issuer_allowlist (issuer, display_label, enabled, assurance_level, client_id, added_at) VALUES ($1, 'Disabled IdP', FALSE, 'standard', 'client_b', NOW())`,
+    [disabledIssuer]
+  );
+  const entries = await repository.listOidcIssuerAllowlist();
+  assert.deepEqual(entries.find((e) => e.issuer === enabledIssuer), { issuer: enabledIssuer, clientId: 'client_a', enabled: true });
+  assert.equal(entries.some((e) => e.issuer === disabledIssuer), false);
+});
+
+test('upsertOidcIssuerAllowlist inserts a real issuer with a client_id', { skip: !connectionString }, async (t) => {
+  const { repository } = await bootstrap(t);
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const issuer = `https://idp-${suffix}.example`;
+  await repository.upsertOidcIssuerAllowlist({ issuer, clientId: 'sigil-client-1', displayLabel: 'Example IdP', assuranceLevel: 'standard' });
+  const entry = await repository.getOidcIssuerAllowlistEntry(issuer);
+  assert.deepEqual(entry, { issuer, clientId: 'sigil-client-1', enabled: true });
+});
+
+test('upsertOidcIssuerAllowlist overwrites client_id on conflict', { skip: !connectionString }, async (t) => {
+  const { repository } = await bootstrap(t);
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const issuer = `https://idp-${suffix}.example`;
+  await repository.upsertOidcIssuerAllowlist({ issuer, clientId: 'old-client' });
+  await repository.upsertOidcIssuerAllowlist({ issuer, clientId: 'new-client' });
+  const entry = await repository.getOidcIssuerAllowlistEntry(issuer);
+  assert.equal(entry.clientId, 'new-client');
+});

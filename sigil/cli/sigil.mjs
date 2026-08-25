@@ -38,6 +38,8 @@ function usage() {
 Commands:
   init <name> --owner <owner_id> [--registry path]        Create a local identity and register it
   relay up [--registry path] [--port N] [--enable-mock-oidc] Run a local relay (blocks; Ctrl+C to stop)
+  oidc-issuer add <issuer> --client-id id [--label text] [--assurance level] [--database-url url]
+                                                            Provision a real OIDC issuer for /v1/auth/login (requires --database-url or SIGIL_DATABASE_URL; restart the relay to pick it up)
   send [--identity path] [--relay-url url] [--stream-url url] [--wait-for-receipt] --to endpoint_id --to-owner owner_id --message "text" [--conversation id]
   inbox [--identity path] [--relay-url url] [--watch|--wait] [--loop] [--stream-url url] [--interval ms] [--timeout ms] [--local] [--ledger path]
 
@@ -130,12 +132,14 @@ async function cmdRelayUp(argv) {
   await new Promise((resolve) => streamHttpServer.listen(streamPort, '127.0.0.1', resolve));
   const streamAddress = streamHttpServer.address();
 
+  const oidcIssuerAllowList = new Set((await repository.listOidcIssuerAllowlist()).map((entry) => entry.issuer));
+
   let server;
   const relayOrigin = () => {
     const addr = server?.address();
     return addr ? `http://127.0.0.1:${addr.port}` : `http://127.0.0.1:${port}`;
   };
-  server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc });
+  server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();
   if (enableMockOidc) console.log('WARNING: mock-OIDC login is enabled (--enable-mock-oidc). This is for local development and CI only -- never expose this relay to untrusted networks.');
@@ -263,6 +267,27 @@ async function cmdInbox(argv) {
   await new Promise(() => {});
 }
 
+async function cmdOidcIssuerAdd(argv) {
+  const args = parseArgs({ args: argv, options: { 'client-id': { type: 'string' }, label: { type: 'string' }, assurance: { type: 'string' }, 'database-url': { type: 'string' } }, allowPositionals: true });
+  const issuer = args.positionals[0];
+  const clientId = opt(args, ['client-id']);
+  if (!issuer || !clientId) throw new Error('usage: sigil oidc-issuer add <issuer> --client-id <id> [--label text] [--assurance level] [--database-url url]');
+  const databaseUrl = opt(args, ['database-url']) ?? process.env.SIGIL_DATABASE_URL;
+  if (!databaseUrl) throw new Error('sigil oidc-issuer add requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable allow-list to provision');
+  const { applyMigrations } = await import('../scripts/apply-migrations.mjs');
+  await applyMigrations(databaseUrl);
+  const { PostgresRepository } = await import('../relay/v1/postgres-repository.mjs');
+  const { default: pg } = await import('pg');
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  try {
+    const repository = new PostgresRepository({ pool });
+    await repository.upsertOidcIssuerAllowlist({ issuer, clientId, displayLabel: opt(args, ['label']) ?? issuer, assuranceLevel: opt(args, ['assurance']) ?? 'standard' });
+    console.log(`Added ${issuer} (client_id ${clientId}) to the OIDC issuer allow-list. Restart the relay to pick it up.`);
+  } finally {
+    await pool.end();
+  }
+}
+
 async function cmdAgentRun(argv) {
   const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, worker: { type: 'string' }, config: { type: 'string' } } });
   const config = loadConfigFile(opt(args, ['config']) ?? DEFAULT_CLI_CONFIG);
@@ -293,6 +318,7 @@ export async function main() {
   try {
     if (command === 'init') await cmdInit(process.argv.slice(3));
     else if (command === 'relay' && sub === 'up') await cmdRelayUp(rest);
+    else if (command === 'oidc-issuer' && sub === 'add') await cmdOidcIssuerAdd(rest);
     else if (command === 'agent' && sub === 'run') await cmdAgentRun(rest);
     else if (command === 'send') await cmdSend(process.argv.slice(3));
     else if (command === 'inbox') await cmdInbox(process.argv.slice(3));

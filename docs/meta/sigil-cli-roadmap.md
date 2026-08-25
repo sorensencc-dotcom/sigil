@@ -66,25 +66,20 @@ stream/list/unlink/stat.
   (`oidc_issuer_allowlist.client_id`). `POST /v1/auth/mock-login` remains for
   local dev/CI only. See
   `docs/superpowers/specs/2026-08-23-sigil-real-oidc-login.md`.
-- **Provisioning a real issuer today requires two separate registrations,
-  undocumented until now.** There is no admin/migration path that writes
-  both at once. First, insert a row into the Postgres
-  `oidc_issuer_allowlist` table with `client_id` set (the only existing
-  write path, `upsertMockOidcIssuerAllowlist`, does not set `client_id`, so
-  it cannot provision a real issuer on its own):
-  ```sql
-  INSERT INTO oidc_issuer_allowlist
-    (issuer, display_label, enabled, assurance_level, client_id, added_at)
-  VALUES
-    ('https://idp.example', 'Example IdP', TRUE, 'standard', 'sigil-client-1', NOW());
-  ```
-  Second, the same issuer must *also* be added to the relay's in-memory
-  `oidcIssuerAllowList` startup `Set` (`createRelayServer`'s
-  `oidcIssuerAllowList` parameter, `sigil/relay/v1/http-server.mjs`) — this
-  is a completely separate registry that only the `/v1/directory/matches`-
-  family routes read; `POST /v1/auth/login` never consults it. Until these
-  two registries are unified (a separate future architecture item, not
-  addressed here), an operator standing up a real IdP must update both.
+- **Provisioning a real issuer is now a single command.**
+  `sigil oidc-issuer add <issuer> --client-id <id> [--label text]
+  [--assurance level] --database-url <url>` writes the Postgres
+  `oidc_issuer_allowlist` row (via a new `upsertOidcIssuerAllowlist`
+  repository method, distinct from the mock-only `upsertMockOidcIssuerAllowlist`,
+  which never sets `client_id`). `sigil relay up` now loads
+  `oidcIssuerAllowList` (the in-memory `Set` `createRelayServer` uses for
+  the `/v1/directory/matches` family) from that same table at startup via
+  `repository.listOidcIssuerAllowlist()`, instead of always starting with
+  an empty, hand-wired `Set` as it did before. `POST /v1/auth/login` still
+  reads the Postgres table directly and never consults the `Set`, but
+  since the `Set` is now *derived from* the table rather than a second
+  hand-maintained registry, there is only one write path left. A relay
+  restart is required to pick up a newly added issuer (no live reload).
 - **Not centrally hosted.** `sigil relay up` runs on whatever host you
   start it on. The PostgreSQL repository gives restart durability, but
   nobody operates a shared, reachable, TLS-terminated instance of it —

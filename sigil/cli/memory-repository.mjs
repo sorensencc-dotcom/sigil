@@ -277,6 +277,14 @@ export function createMemoryRepository() {
       const entry = oidcIssuerAllowlist.get(issuer);
       return entry ? { issuer, clientId: entry.clientId ?? null, enabled: entry.enabled } : null;
     },
+    async listOidcIssuerAllowlist() {
+      return [...oidcIssuerAllowlist.entries()]
+        .filter(([, entry]) => entry.enabled)
+        .map(([issuer, entry]) => ({ issuer, clientId: entry.clientId ?? null, enabled: entry.enabled }));
+    },
+    async upsertOidcIssuerAllowlist({ issuer, clientId = null, enabled = true } = {}) {
+      oidcIssuerAllowlist.set(issuer, { clientId, enabled });
+    },
     // Test-only: memory-repository has no admin/migration path, so tests
     // that exercise the real-login route seed allow-list rows directly,
     // mirroring how Postgres tests INSERT into oidc_issuer_allowlist.
