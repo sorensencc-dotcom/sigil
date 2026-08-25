@@ -27,6 +27,7 @@ import { LocalOutbox } from '../connectors/v1/local-outbox.mjs';
 import { loadConfigFile, resolveConfig } from './config-resolver.mjs';
 import { formatInboxItem, INBOX_WAIT_EXIT_CODES, waitForOneInboxMessage, isRetryableInboxWaitExitCode } from './inbox-wait.mjs';
 import { appendInboxLedger, readInboxLedger } from './ledger.mjs';
+import { verifyContractFiles } from '../relay/v1/verify-contract.mjs';
 
 const DEFAULT_CLI_CONFIG = path.join('.sigil', 'config.json');
 
@@ -44,7 +45,7 @@ Commands:
   oidc-issuer remove <issuer> [--database-url url]         Disable an OIDC issuer (soft-disable; re-add with "oidc-issuer add" to re-enable)
   send [--identity path] [--relay-url url] [--stream-url url] [--wait-for-receipt] --to endpoint_id --to-owner owner_id --message "text" [--conversation id]
   inbox [--identity path] [--relay-url url] [--watch|--wait] [--loop] [--stream-url url] [--interval ms] [--timeout ms] [--local] [--ledger path]
-  doctor [--identity path] [--relay-url url]               Conformance check: JCS/dependency audits, plus a keypair check (if --identity)
+  verify-contract --contract path [--registry path]        Verify a TorqueQuery signed task contract`n  doctor [--identity path] [--relay-url url]               Conformance check: JCS/dependency audits, plus a keypair check (if --identity)
                                                             and a relay connectivity/latency check (if --relay-url)
 
 send/inbox resolve --identity/--relay-url/--stream-url from, in order: the flag, then
@@ -387,6 +388,15 @@ function printDoctorReport(result) {
   console.log(result.pass ? 'sigil doctor: PASS' : 'sigil doctor: FAIL');
 }
 
+async function cmdVerifyContract(argv) {
+  const args = parseArgs({ args: argv, options: { contract: { type: 'string' }, registry: { type: 'string' } } });
+  const contractPath = opt(args, ['contract']);
+  if (!contractPath) throw new Error('usage: sigil verify-contract --contract path [--registry path]');
+  const result = verifyContractFiles(contractPath, opt(args, ['registry']) ?? DEFAULT_REGISTRY);
+  await flushPrint(JSON.stringify(result));
+  if (!result.valid) process.exitCode = 1;
+}
+
 async function cmdDoctor(argv) {
   const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, config: { type: 'string' } } });
   const config = loadConfigFile(opt(args, ['config']) ?? DEFAULT_CLI_CONFIG);
@@ -435,6 +445,7 @@ export async function main() {
     else if (command === 'oidc-issuer' && sub === 'remove') await cmdOidcIssuerRemove(rest);
     else if (command === 'agent' && sub === 'run') await cmdAgentRun(rest);
     else if (command === 'doctor') await cmdDoctor(process.argv.slice(3));
+    else if (command === 'verify-contract') await cmdVerifyContract(process.argv.slice(3));
     else if (command === 'send') await cmdSend(process.argv.slice(3));
     else if (command === 'inbox') await cmdInbox(process.argv.slice(3));
     else usage();
