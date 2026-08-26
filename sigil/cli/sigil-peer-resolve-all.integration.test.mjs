@@ -15,6 +15,29 @@ import { assertDisposableTestDatabase } from '../scripts/assert-disposable-test-
 const execFileAsync = promisify(execFile);
 const sigilPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'sigil.mjs');
 const connectionString = process.env.SIGIL_TEST_DATABASE_URL;
+const fixturesDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+
+// discoverPeer's .well-known/sigil fetch is hardcoded to https:// (Task 1,
+// unchanged by this task -- a NODE_ENV-gated scheme carve-out was tried
+// during this task's implementation and reverted after review flagged it as
+// a real MITM/spoofing regression: it would have downgraded the actual
+// fetch that establishes TOFU trust to plaintext HTTP for any process with
+// NODE_ENV=test set, not just this test file). So a local peer double for
+// these tests must terminate real TLS. Self-signed fixture cert/key (CN and
+// SAN both 127.0.0.1, ~100-year validity) checked in alongside this file;
+// TLS verification is relaxed via NODE_TLS_REJECT_UNAUTHORIZED=0 passed only
+// into the CLI subprocess's own env by run(), never process-wide -- this
+// process (the test runner) still verifies certs normally.
+async function startHttpsPeerServer(handler) {
+  const https = await import('node:https');
+  const [cert, key] = await Promise.all([
+    fs.readFile(path.join(fixturesDir, 'self-signed-cert.pem')),
+    fs.readFile(path.join(fixturesDir, 'self-signed-key.pem')),
+  ]);
+  const server = https.createServer({ cert, key }, handler);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return server;
+}
 
 async function run(args, env = {}) {
   try {
@@ -50,16 +73,14 @@ test('sigil peer resolve --all prints a real OK line for a tofu peer that succes
   // Outside-voice finding (/plan-ceo-review, cross-model): the prior version of this
   // test file asserted only the static-peer no-op path -- the actual "<domain>\tOK"
   // success line (the feature's whole point) had zero coverage because it needs a
-  // real HTTPS peer to resolve against. A throwaway local http server, with
-  // NODE_ENV=test so the http:// (not https://) endpoint passes isValidEndpointUrl
-  // per Global Constraints, closes that gap without a live second Sigil relay.
-  const http = await import('node:http');
+  // real HTTPS peer to resolve against. A throwaway local HTTPS server (self-signed
+  // fixture cert, TLS verification relaxed only inside the CLI subprocess's own env)
+  // closes that gap without a live second Sigil relay.
   const KEYS = [{ kid: 'k1', alg: 'Ed25519', publicKey: 'pub-1' }];
-  const server = http.createServer((req, res) => {
+  const server = await startHttpsPeerServer((req, res) => {
     res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ domain: `127.0.0.1:${server.address().port}`, relay: { endpoint: `http://127.0.0.1:${server.address().port}/v1` }, keys: KEYS }));
+    res.end(JSON.stringify({ domain: `127.0.0.1:${server.address().port}`, relay: { endpoint: `https://127.0.0.1:${server.address().port}/v1` }, keys: KEYS }));
   });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const domain = `127.0.0.1:${server.address().port}`;
 
@@ -71,9 +92,9 @@ test('sigil peer resolve --all prints a real OK line for a tofu peer that succes
   await applyMigrations(connectionString);
   await pool.query(
     `INSERT INTO peer_relays (domain, relay_url, keys, trust_mode) VALUES ($1, $2, $3, 'tofu')`,
-    [domain, `http://127.0.0.1:${server.address().port}/v1`, JSON.stringify(KEYS)]
+    [domain, `https://127.0.0.1:${server.address().port}/v1`, JSON.stringify(KEYS)]
   );
-  const { stdout, exitCode } = await run(['peer', 'resolve', '--all'], { SIGIL_DATABASE_URL: connectionString, NODE_ENV: 'test' });
+  const { stdout, exitCode } = await run(['peer', 'resolve', '--all'], { SIGIL_DATABASE_URL: connectionString, NODE_TLS_REJECT_UNAUTHORIZED: '0' });
   assert.equal(exitCode, 0);
   assert.match(stdout, new RegExp(`${domain.replace('.', '\\.')}\\tOK`));
 
@@ -107,13 +128,11 @@ test('sigil peer resolve --all resolves a tofu peer against an unreachable domai
 });
 
 test('sigil peer resolve --all prints the rotate hint, not a duplicated error code, for a key-mismatch peer', { skip: !connectionString }, async (t) => {
-  const http = await import('node:http');
   const KEYS = [{ kid: 'k1', alg: 'Ed25519', publicKey: 'pub-1' }];
-  const server = http.createServer((req, res) => {
+  const server = await startHttpsPeerServer((req, res) => {
     res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ domain: `127.0.0.1:${server.address().port}`, relay: { endpoint: `http://127.0.0.1:${server.address().port}/v1` }, keys: [{ kid: 'k9', alg: 'Ed25519', publicKey: 'pub-9' }] }));
+    res.end(JSON.stringify({ domain: `127.0.0.1:${server.address().port}`, relay: { endpoint: `https://127.0.0.1:${server.address().port}/v1` }, keys: [{ kid: 'k9', alg: 'Ed25519', publicKey: 'pub-9' }] }));
   });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const domain = `127.0.0.1:${server.address().port}`;
 
@@ -126,9 +145,9 @@ test('sigil peer resolve --all prints the rotate hint, not a duplicated error co
   // Pinned key (k1/pub-1) differs from what the peer now serves (k9/pub-9) -- forces PEER_KEY_MISMATCH.
   await pool.query(
     `INSERT INTO peer_relays (domain, relay_url, keys, trust_mode) VALUES ($1, $2, $3, 'tofu')`,
-    [domain, `http://127.0.0.1:${server.address().port}/v1`, JSON.stringify(KEYS)]
+    [domain, `https://127.0.0.1:${server.address().port}/v1`, JSON.stringify(KEYS)]
   );
-  const { stdout, exitCode } = await run(['peer', 'resolve', '--all'], { SIGIL_DATABASE_URL: connectionString, NODE_ENV: 'test' });
+  const { stdout, exitCode } = await run(['peer', 'resolve', '--all'], { SIGIL_DATABASE_URL: connectionString, NODE_TLS_REJECT_UNAUTHORIZED: '0' });
   assert.equal(exitCode, 1);
   assert.match(stdout, new RegExp(`${domain.replace('.', '\\.')}\\tPEER_KEY_MISMATCH — run "sigil peer rotate ${domain.replace('.', '\\.')} --confirm"`));
 });

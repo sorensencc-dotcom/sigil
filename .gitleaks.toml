@@ -12,4 +12,6 @@ paths = [
   '''\.github/workflows/ci\.yml''',
   '''\.github/workflows/release\.yml''',
   '''docs/wiki/README\.md''',
+  '''sigil/cli/fixtures/self-signed-cert\.pem''',
+  '''sigil/cli/fixtures/self-signed-key\.pem''',
 ]

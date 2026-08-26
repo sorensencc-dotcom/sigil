@@ -10,18 +10,6 @@ function outboundFetchOptions() {
   return { signal: AbortSignal.timeout(5000), redirect: 'error' };
 }
 
-// The .well-known/sigil discovery request itself is https-only by default,
-// same production-safety posture as isValidEndpointUrl/isValidWsEndpointUrl.
-// Deliberately gated on the narrower NODE_ENV === 'test' (not the broader
-// "!== production" used for endpoint validation above) so this never
-// silently changes behavior for the default test suite (NODE_ENV is unset
-// there, same as production) or for real deployments -- only a caller that
-// explicitly opts in with NODE_ENV=test (e.g. the resolve --all integration
-// test's local HTTP peer double) sees the scheme flip.
-function discoveryScheme() {
-  return process.env.NODE_ENV === 'test' ? 'http' : 'https';
-}
-
 export function isValidEndpointUrl(url) {
   if (typeof url !== 'string') return false;
   let parsed;
@@ -73,12 +61,11 @@ export function validatePeerDocument(data, { expectedDomain } = {}) {
 export async function discoverPeer(domain, { fetchImpl = fetch } = {}) {
   const { parseDomain } = await import('./federated-id.mjs');
   parseDomain(domain); // throws INVALID_DOMAIN_SYNTAX / INVALID_PORT before any fetch or repository call
-  const wellKnownUrl = `${discoveryScheme()}://${domain}/.well-known/sigil`;
   let response;
   try {
-    response = await fetchImpl(wellKnownUrl, outboundFetchOptions());
+    response = await fetchImpl(`https://${domain}/.well-known/sigil`, outboundFetchOptions());
   } catch {
-    throw peerError(`Failed to reach ${wellKnownUrl}`, 'PEER_DISCOVERY_FAILED', { domain });
+    throw peerError(`Failed to reach https://${domain}/.well-known/sigil`, 'PEER_DISCOVERY_FAILED', { domain });
   }
   if (!response.ok) {
     throw peerError(`.well-known/sigil for "${domain}" returned HTTP ${response.status}`, 'PEER_DISCOVERY_FAILED', { domain, status: response.status });

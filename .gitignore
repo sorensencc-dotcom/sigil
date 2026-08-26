@@ -16,4 +16,9 @@ ijfw/
 .env.*.local
 *.pem
 *.key
+# Self-signed, 100-year, test-only TLS fixture for
+# sigil-peer-resolve-all.integration.test.mjs (CN/SAN both 127.0.0.1, no
+# real-world secret value) -- explicitly checked in, not a leaked credential.
+!sigil/cli/fixtures/self-signed-cert.pem
+!sigil/cli/fixtures/self-signed-key.pem
 secrets/
