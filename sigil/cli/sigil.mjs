@@ -45,8 +45,9 @@ Commands:
   peer resolve <domain> [--database-url url]               Discover and TOFU-pin a peer relay via https://<domain>/.well-known/sigil
   peer resolve --all [--database-url url]                  Re-resolve every tofu-pinned peer; continues past per-domain failure, exits non-zero if any failed
   peer validate-document <path> [--domain <domain>]        Validate a local .well-known/sigil JSON file offline -- no network, no database
-  peer add <domain> --relay-url url --public-key key --kid id [--ws-url url] [--database-url url]
+  peer add <domain> --relay-url url --public-key key --kid id [--ws-url url] [--confirm] [--database-url url]
                                                             Manually (statically) pin a peer relay -- never auto-updated by discovery
+                                                            (--confirm required to overwrite an existing pin)
   peer list [--database-url url]                           List all pinned peer relays
   peer get <domain> [--database-url url]                   Show one pinned peer relay
   peer remove <domain> [--database-url url]                Unpin a peer relay
@@ -489,7 +490,7 @@ async function cmdPeerAdd(argv) {
   if (!domain || !relayUrl || !publicKey || !kid) throw new Error('usage: sigil peer add <domain> --relay-url <url> --public-key <key> --kid <id> [--ws-url <url>] [--database-url url]');
   await requireValidPeerDomain(domain); // throws INVALID_DOMAIN_SYNTAX / INVALID_PORT before anything else runs
   const { isValidEndpointUrl, isValidWsEndpointUrl, isValidKeyEntry } = await import('../relay/v1/peer-discovery.mjs');
-  if (!isValidEndpointUrl(relayUrl)) throw new Error(`sigil peer add: --relay-url "${relayUrl}" is not a valid https:// URL`);
+  if (!isValidEndpointUrl(relayUrl)) throw new Error(`sigil peer add: --relay-url "${relayUrl}" is not a valid https:// URL (http:// only allowed outside NODE_ENV=production)`);
   const wsUrl = opt(args, ['ws-url']) ?? null;
   if (wsUrl !== null && !isValidWsEndpointUrl(wsUrl)) throw new Error(`sigil peer add: --ws-url "${wsUrl}" is not a valid wss:// URL`);
   if (!isValidKeyEntry({ kid, alg: 'Ed25519', publicKey })) throw new Error('sigil peer add: --kid/--public-key must be non-empty');

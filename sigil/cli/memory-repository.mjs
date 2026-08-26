@@ -308,7 +308,7 @@ export function createMemoryRepository() {
       return peerRelays.get(domain) ?? null;
     },
     async listPeers() {
-      return [...peerRelays.values()];
+      return [...peerRelays.values()].sort((a, b) => a.domain.localeCompare(b.domain));
     },
     async removePeer(domain) {
       return peerRelays.delete(domain);
