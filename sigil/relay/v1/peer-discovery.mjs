@@ -10,6 +10,18 @@ function outboundFetchOptions() {
   return { signal: AbortSignal.timeout(5000), redirect: 'error' };
 }
 
+// The .well-known/sigil discovery request itself is https-only by default,
+// same production-safety posture as isValidEndpointUrl/isValidWsEndpointUrl.
+// Deliberately gated on the narrower NODE_ENV === 'test' (not the broader
+// "!== production" used for endpoint validation above) so this never
+// silently changes behavior for the default test suite (NODE_ENV is unset
+// there, same as production) or for real deployments -- only a caller that
+// explicitly opts in with NODE_ENV=test (e.g. the resolve --all integration
+// test's local HTTP peer double) sees the scheme flip.
+function discoveryScheme() {
+  return process.env.NODE_ENV === 'test' ? 'http' : 'https';
+}
+
 export function isValidEndpointUrl(url) {
   if (typeof url !== 'string') return false;
   let parsed;
@@ -34,14 +46,39 @@ export function isValidKeyEntry(key) {
   return typeof key?.kid === 'string' && key.kid.length > 0 && key.alg === 'Ed25519' && typeof key.publicKey === 'string' && key.publicKey.length > 0;
 }
 
+export function validatePeerDocument(data, { expectedDomain } = {}) {
+  if (data === null || typeof data !== 'object') {
+    throw peerError('Malformed .well-known/sigil document: not an object', 'PEER_MALFORMED_RESPONSE', {});
+  }
+  if (expectedDomain !== undefined && data.domain !== expectedDomain) {
+    throw peerError(`.well-known/sigil domain mismatch: expected "${expectedDomain}", got "${data.domain}"`, 'PEER_DOMAIN_MISMATCH', { domain: expectedDomain, responseDomain: data.domain });
+  }
+  if (!isValidEndpointUrl(data.relay?.endpoint)) {
+    throw peerError(`Invalid relay.endpoint in .well-known/sigil document for "${data.domain}"`, 'PEER_INVALID_ENDPOINT', { domain: data.domain });
+  }
+  if (data.relay.ws_endpoint !== undefined && !isValidWsEndpointUrl(data.relay.ws_endpoint)) {
+    throw peerError(`Invalid relay.ws_endpoint in .well-known/sigil document for "${data.domain}"`, 'PEER_INVALID_ENDPOINT', { domain: data.domain });
+  }
+  if (!Array.isArray(data.keys) || data.keys.length === 0) {
+    throw peerError(`.well-known/sigil document for "${data.domain}" has no keys`, 'PEER_NO_KEYS', { domain: data.domain });
+  }
+  for (const key of data.keys) {
+    if (!isValidKeyEntry(key)) {
+      throw peerError(`.well-known/sigil document for "${data.domain}" has an invalid key entry`, 'PEER_INVALID_KEY', { domain: data.domain });
+    }
+  }
+  return { domain: data.domain, relayUrl: data.relay.endpoint, wsUrl: data.relay.ws_endpoint ?? null, keys: data.keys };
+}
+
 export async function discoverPeer(domain, { fetchImpl = fetch } = {}) {
   const { parseDomain } = await import('./federated-id.mjs');
   parseDomain(domain); // throws INVALID_DOMAIN_SYNTAX / INVALID_PORT before any fetch or repository call
+  const wellKnownUrl = `${discoveryScheme()}://${domain}/.well-known/sigil`;
   let response;
   try {
-    response = await fetchImpl(`https://${domain}/.well-known/sigil`, outboundFetchOptions());
+    response = await fetchImpl(wellKnownUrl, outboundFetchOptions());
   } catch {
-    throw peerError(`Failed to reach https://${domain}/.well-known/sigil`, 'PEER_DISCOVERY_FAILED', { domain });
+    throw peerError(`Failed to reach ${wellKnownUrl}`, 'PEER_DISCOVERY_FAILED', { domain });
   }
   if (!response.ok) {
     throw peerError(`.well-known/sigil for "${domain}" returned HTTP ${response.status}`, 'PEER_DISCOVERY_FAILED', { domain, status: response.status });
@@ -56,27 +93,7 @@ export async function discoverPeer(domain, { fetchImpl = fetch } = {}) {
   if (typeof data !== 'object' || data === null) {
     throw peerError(`Malformed .well-known/sigil response for "${domain}"`, 'PEER_MALFORMED_RESPONSE', { domain });
   }
-  // Self-match, mirroring discoverIssuer's RFC 8414 SS3.3 issuer-match check:
-  // without this, a response served from (or proxied through) an unexpected
-  // host could redirect trust to an endpoint/keys the caller never vetted.
-  if (data.domain !== domain) {
-    throw peerError(`.well-known/sigil domain mismatch: expected "${domain}", got "${data.domain}"`, 'PEER_DOMAIN_MISMATCH', { domain, responseDomain: data.domain });
-  }
-  if (!isValidEndpointUrl(data.relay?.endpoint)) {
-    throw peerError(`Invalid relay.endpoint in .well-known/sigil response for "${domain}"`, 'PEER_INVALID_ENDPOINT', { domain });
-  }
-  if (data.relay.ws_endpoint !== undefined && !isValidWsEndpointUrl(data.relay.ws_endpoint)) {
-    throw peerError(`Invalid relay.ws_endpoint in .well-known/sigil response for "${domain}"`, 'PEER_INVALID_ENDPOINT', { domain });
-  }
-  if (!Array.isArray(data.keys) || data.keys.length === 0) {
-    throw peerError(`.well-known/sigil response for "${domain}" has no keys`, 'PEER_NO_KEYS', { domain });
-  }
-  for (const key of data.keys) {
-    if (!isValidKeyEntry(key)) {
-      throw peerError(`.well-known/sigil response for "${domain}" has an invalid key entry`, 'PEER_INVALID_KEY', { domain });
-    }
-  }
-  return { domain, relayUrl: data.relay.endpoint, wsUrl: data.relay.ws_endpoint ?? null, keys: data.keys };
+  return validatePeerDocument(data, { expectedDomain: domain });
 }
 
 // Structured comparison, not a delimiter-joined string -- kid/publicKey are

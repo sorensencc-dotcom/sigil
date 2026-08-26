@@ -43,6 +43,8 @@ Commands:
   oidc-issuer list [--database-url url]                    List all OIDC issuer allow-list entries, including disabled ones
   oidc-issuer remove <issuer> [--database-url url]         Disable an OIDC issuer (soft-disable; re-add with "oidc-issuer add" to re-enable)
   peer resolve <domain> [--database-url url]               Discover and TOFU-pin a peer relay via https://<domain>/.well-known/sigil
+  peer resolve --all [--database-url url]                  Re-resolve every tofu-pinned peer; continues past per-domain failure, exits non-zero if any failed
+  peer validate-document <path> [--domain <domain>]        Validate a local .well-known/sigil JSON file offline -- no network, no database
   peer add <domain> --relay-url url --public-key key --kid id [--ws-url url] [--database-url url]
                                                             Manually (statically) pin a peer relay -- never auto-updated by discovery
   peer list [--database-url url]                           List all pinned peer relays
@@ -386,8 +388,70 @@ async function requireValidPeerDomain(domain) {
   }
 }
 
+async function cmdPeerValidateDocument(argv) {
+  const args = parseArgs({ args: argv, options: { domain: { type: 'string' } }, allowPositionals: true });
+  const filePath = args.positionals[0];
+  if (!filePath) throw new Error('usage: sigil peer validate-document <path> [--domain <domain>]');
+  const expectedDomain = opt(args, ['domain']);
+  if (expectedDomain !== undefined) await requireValidPeerDomain(expectedDomain); // keeps "every sigil peer subcommand validates domain input" true with no exception (/plan-ceo-review outside-voice finding OV2)
+  const { validatePeerDocument } = await import('../relay/v1/peer-discovery.mjs');
+  let raw;
+  try {
+    raw = await (await import('node:fs/promises')).readFile(filePath, 'utf8');
+  } catch (error) {
+    console.error(`sigil peer validate-document: cannot read "${filePath}": ${error.code ?? error.message}`);
+    process.exitCode = 1;
+    return;
+  }
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    console.error(`sigil peer validate-document: "${filePath}" is not valid JSON`);
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    const record = validatePeerDocument(data, { expectedDomain });
+    console.log(`Valid .well-known/sigil document for "${record.domain}".`);
+    console.log(JSON.stringify(record, null, 2));
+  } catch (error) {
+    console.error(`sigil peer validate-document: ${error.code} — ${error.message}`);
+    process.exitCode = 1;
+  }
+}
+
+// Pure formatting on an already-stored field -- no schema change. Surfaces
+// staleness for an operator, since this plan deliberately has no background
+// poller (see Global Constraints) to do it automatically.
+export function freshness(lastResolvedAt, now = new Date()) {
+  if (!lastResolvedAt) return 'never resolved';
+  const days = Math.floor((now - new Date(lastResolvedAt)) / 86400000);
+  return days <= 0 ? 'resolved today' : `resolved ${days}d ago`;
+}
+
+async function cmdPeerResolveAll(args) {
+  await withRepository(args, 'sigil peer resolve --all requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable peer directory', async (repository) => {
+    const { resolvePeer } = await import('../relay/v1/peer-discovery.mjs');
+    const peers = (await repository.listPeers()).filter((p) => p.trustMode === 'tofu');
+    let anyFailed = false;
+    for (const peer of peers) {
+      try {
+        await resolvePeer(peer.domain, repository);
+        console.log(`${peer.domain}\tOK`);
+      } catch (error) {
+        anyFailed = true;
+        const suffix = error.code === 'PEER_KEY_MISMATCH' ? ` — run "sigil peer rotate ${peer.domain} --confirm"` : ` (${error.message})`;
+        console.log(`${peer.domain}\t${error.code ?? 'ERROR'}${suffix}`);
+      }
+    }
+    if (anyFailed) process.exitCode = 1;
+  }, { migrate: true });
+}
+
 async function cmdPeerResolve(argv) {
-  const args = parseArgs({ args: argv, options: { 'database-url': { type: 'string' } }, allowPositionals: true });
+  const args = parseArgs({ args: argv, options: { 'database-url': { type: 'string' }, all: { type: 'boolean' } }, allowPositionals: true });
+  if (args.values.all) return cmdPeerResolveAll(args);
   const domain = args.positionals[0];
   if (!domain) throw new Error('usage: sigil peer resolve <domain> [--database-url url]');
   await requireValidPeerDomain(domain);
@@ -434,7 +498,7 @@ async function cmdPeerList(argv) {
   const args = parseArgs({ args: argv, options: { 'database-url': { type: 'string' } } });
   await withRepository(args, 'sigil peer list requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable peer directory', async (repository) => {
     const peers = await repository.listPeers();
-    for (const peer of peers) console.log(`${peer.domain}\t${peer.relayUrl}\t${peer.trustMode}\t${peer.keys.map((k) => k.kid).join(',')}`);
+    for (const peer of peers) console.log(`${peer.domain}\t${peer.relayUrl}\t${peer.trustMode}\t${peer.keys.map((k) => k.kid).join(',')}\t(${freshness(peer.lastResolvedAt)})`);
   });
 }
 
@@ -445,7 +509,7 @@ async function cmdPeerGet(argv) {
   await requireValidPeerDomain(domain);
   await withRepository(args, 'sigil peer get requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable peer directory', async (repository) => {
     const peer = await repository.getPeerByDomain(domain);
-    console.log(peer ? JSON.stringify(peer, null, 2) : `No peer pinned for "${domain}".`);
+    console.log(peer ? `${JSON.stringify(peer, null, 2)}\n(${freshness(peer.lastResolvedAt)})` : `No peer pinned for "${domain}".`);
   });
 }
 
@@ -547,6 +611,7 @@ export async function main() {
     else if (command === 'peer' && sub === 'get') await cmdPeerGet(rest);
     else if (command === 'peer' && sub === 'remove') await cmdPeerRemove(rest);
     else if (command === 'peer' && sub === 'rotate') await cmdPeerRotate(rest);
+    else if (command === 'peer' && sub === 'validate-document') await cmdPeerValidateDocument(rest);
     else if (command === 'agent' && sub === 'run') await cmdAgentRun(rest);
     else if (command === 'doctor') await cmdDoctor(process.argv.slice(3));
     else if (command === 'send') await cmdSend(process.argv.slice(3));

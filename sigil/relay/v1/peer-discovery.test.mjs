@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { discoverPeer } from './peer-discovery.mjs';
 import { createMemoryRepository } from '../../cli/memory-repository.mjs';
 import { resolvePeer, rotatePeer } from './peer-discovery.mjs';
+import { validatePeerDocument } from './peer-discovery.mjs';
 
 function jsonResponse(body, { ok = true, status = 200 } = {}) {
   return { ok, status, json: async () => body };
@@ -230,4 +231,27 @@ test('rotatePeer force-overwrites regardless of a prior key mismatch and audits 
   const events = repository._debugGetAuditEvents();
   assert.equal(events[events.length - 1].event_type, 'peer.rotated');
   assert.equal(events[events.length - 1].payload.forced, true);
+});
+
+test('validatePeerDocument accepts a well-formed document with no domain check', () => {
+  const result = validatePeerDocument(VALID_BODY);
+  assert.deepEqual(result, {
+    domain: 'relay.example.com',
+    relayUrl: 'https://relay.example.com:8443/v1',
+    wsUrl: 'wss://relay.example.com:8443/v1/stream',
+    keys: VALID_BODY.keys,
+  });
+});
+
+test('validatePeerDocument checks self-match only when expectedDomain is given', () => {
+  assert.throws(() => validatePeerDocument(VALID_BODY, { expectedDomain: 'attacker.example.com' }), { code: 'PEER_DOMAIN_MISMATCH' });
+  assert.doesNotThrow(() => validatePeerDocument(VALID_BODY, { expectedDomain: 'relay.example.com' }));
+});
+
+test('validatePeerDocument rejects an invalid key entry, same as discoverPeer', () => {
+  assert.throws(() => validatePeerDocument({ ...VALID_BODY, keys: [{ kid: 'k1', alg: 'RSA', publicKey: 'x' }] }), { code: 'PEER_INVALID_KEY' });
+});
+
+test('validatePeerDocument rejects a non-object/null input', () => {
+  assert.throws(() => validatePeerDocument(null), { code: 'PEER_MALFORMED_RESPONSE' });
 });
