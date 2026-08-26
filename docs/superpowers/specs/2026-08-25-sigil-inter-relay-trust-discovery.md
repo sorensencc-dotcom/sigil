@@ -77,19 +77,35 @@ decision, given a repository (memory or Postgres):
 3. Existing record with `trustMode: 'static'` → return it unchanged, no
    network call. Static pins are operator-authoritative and never
    auto-updated by discovery.
-4. Existing record with `trustMode: 'tofu'` → `discoverPeer`, then check
-   whether **any** key in the existing record matches **both** `kid` and
-   `publicKey` (exact string equality on both — matching `kid` alone is
-   not sufficient, since an attacker who controls the `.well-known`
-   response could reuse a known `kid` with a freshly generated key to
-   spoof past a `kid`-only check) against the newly fetched `keys` array:
-   - Match found → upsert with the new full `keys` array (rotation
-     grace — lets a peer add/retire keys as long as the previously
-     pinned key is still present in the new set), audit `peer.rotated`.
-   - No match → **do not** write the repository; throw
-     `PEER_KEY_MISMATCH` with `{ domain, pinnedKeys, fetchedKeys }`;
-     audit `peer.key_mismatch_rejected`. The stored record is left
-     exactly as it was.
+4. Existing record with `trustMode: 'tofu'` → `discoverPeer`, then compare
+   the fetched `keys`, `relayUrl`, and `wsUrl` against the pinned record
+   (structured comparison, not delimiter-joined strings — kid/publicKey
+   are untrusted response data):
+   - Nothing changed → silent re-confirmation (re-upsert, no new audit
+     event).
+   - **Anything changed** (key set, relay endpoint, or WebSocket
+     endpoint) → **do not** write the repository; throw
+     `PEER_KEY_MISMATCH` with `{ domain, pinnedKeys, fetchedKeys,
+     keysChanged, endpointChanged }`; audit `peer.key_mismatch_rejected`
+     with the same fields. The stored record is left exactly as it was.
+     **No rotation grace of any kind** — a changed `.well-known/sigil`
+     response is never auto-accepted, even when the previously pinned key
+     is still present in it, and even when only the endpoint moved and
+     the key set is untouched. Reasoning: every field in an unauthenticated
+     HTTP response is equally unauthenticated. "The old public key is
+     still present" proves nothing about who controls the domain right
+     now (public keys are, definitionally, public — trivially replayable
+     by an attacker who has taken over the domain). And an endpoint is no
+     more trustworthy than a key: silently accepting an endpoint change
+     with only an audit trail is authorization dressed as observation —
+     nobody is watching the audit log in real time. The only path to
+     accepting a changed `.well-known/sigil` response is an explicit,
+     human-initiated `sigil peer rotate <domain> --confirm`.
+     (This reverses an earlier draft of this spec, which described a
+     rotation-grace exception for the key-match case; that exception was
+     removed 2026-08-25 after `/plan-eng-review` + a Codex outside-voice
+     pass both identified it as effectively defeating TOFU during an
+     active domain compromise.)
 
 No background polling timer. Re-resolution only happens when an operator
 re-invokes `sigil peer resolve <domain>` — matches this repo's existing
@@ -143,9 +159,12 @@ standalone CLI invocations with no enclosing transaction to roll back, so
 a plain awaited `recordAuditEvent` call is sufficient and any repository
 failure surfaces directly as a CLI error.
 
-Event types: `peer.tofu_pinned`, `peer.rotated` (both grace-rotation and
-`--confirm` force-rotation, distinguished by `payload.forced`),
-`peer.static_pinned`, `peer.removed`, `peer.key_mismatch_rejected`.
+Event types: `peer.tofu_pinned`, `peer.rotated` (only ever `--confirm`
+force-rotation now — `payload.forced: true` always, since there is no
+other path to `peer.rotated`), `peer.static_pinned`, `peer.removed`,
+`peer.key_mismatch_rejected` (covers both a key-set change and an
+endpoint-only change — `payload.keysChanged`/`payload.endpointChanged`
+distinguish which).
 
 ### CLI — `sigil peer <subcommand>` (`sigil/cli/sigil.mjs`)
 
@@ -198,24 +217,35 @@ Event types: `peer.tofu_pinned`, `peer.rotated` (both grace-rotation and
   domain self-match failure; missing/empty `keys`; invalid key entry
   (wrong `alg`, empty `kid`/`publicKey`); `http://` endpoint rejected
   when simulating production, accepted otherwise; `https://` required for
-  the discovery request itself regardless of environment.
+  the discovery request itself regardless of environment; `wss://`
+  `ws_endpoint` accepted (a WebSocket scheme, validated by a dedicated
+  `isValidWsEndpointUrl`, not the https-only endpoint validator); a
+  malformed domain is rejected via `parseDomain` before any fetch.
 - `resolvePeer` unit tests (in-memory repository, mocked `fetchImpl`):
   first-ever resolve pins TOFU and audits `peer.tofu_pinned`; second
-  resolve with an unchanged key set is a no-op re-confirmation; second
-  resolve with a *rotated* key set where the old `kid`+`publicKey` pair
-  is still present in the new set succeeds and audits `peer.rotated`;
+  resolve with nothing changed is a no-op re-confirmation (no new audit
+  event); second resolve with a changed key set — **even one where the
+  previously pinned key is still present** — is rejected as
+  `PEER_KEY_MISMATCH` and leaves the stored record untouched (no grace
+  accept); second resolve with an unchanged key set but a changed
+  `relayUrl`/`wsUrl` is *also* rejected as `PEER_KEY_MISMATCH`
+  (`payload.endpointChanged: true`) and leaves the record untouched;
   second resolve where the old `kid` is reused with a *different*
-  `publicKey` is rejected as `PEER_KEY_MISMATCH` (the spoofing case) and
-  leaves the stored record untouched; second resolve where the old key is
-  entirely absent is rejected as `PEER_KEY_MISMATCH`; a `trustMode:
-  'static'` record is never overwritten and never triggers a fetch.
+  `publicKey` is rejected as `PEER_KEY_MISMATCH` (the spoofing case); a
+  `trustMode: 'static'` record is never overwritten and never triggers a
+  fetch.
 - Repository parity tests: `upsertPeer`/`getPeerByDomain`/`listPeers`/
   `removePeer` behave identically against `createMemoryRepository` and
   `PostgresRepository` (same pattern as existing `oidc_issuer_allowlist`
   parity tests).
-- `sigil peer` CLI tests: `add` writes a static record without any
-  network call; `resolve` on a fresh domain performs discovery and pins;
-  `resolve` on a mismatched domain exits non-zero with a fingerprint
-  diff, not a raw stack trace; `rotate --confirm` force-overwrites after
-  a prior mismatch; `rotate` without `--confirm` errors with a usage
-  message and does not mutate anything; `list`/`get`/`remove` round-trip.
+- `sigil peer` CLI tests: `add` validates `--relay-url`/`--ws-url`
+  through the same validators `discoverPeer` uses (a non-https
+  `--relay-url` or malformed domain is rejected before any write) and
+  writes a static record without any network call; `resolve` on a fresh
+  domain performs discovery and pins; `resolve` on a changed peer
+  (key or endpoint) exits non-zero with a fingerprint diff, not a raw
+  stack trace; `rotate --confirm` force-overwrites after a prior
+  mismatch; `rotate` without `--confirm` errors with a usage message and
+  does not mutate anything; `list`/`get`/`remove` round-trip; every
+  domain-taking command rejects a malformed domain via `parseDomain`
+  before touching the network or the repository.
