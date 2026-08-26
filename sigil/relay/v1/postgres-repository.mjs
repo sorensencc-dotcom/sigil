@@ -5,6 +5,19 @@ import { assertAssurance, boundedDirectoryExpiry } from './auth-policy.mjs';
 import { withTransaction } from './with-transaction.mjs';
 import { generateInviteCode, hashMatchTarget } from './directory-trust.mjs';
 
+function rowToPeerRecord(row) {
+  return {
+    domain: row.domain,
+    relayUrl: row.relay_url,
+    wsUrl: row.ws_url,
+    keys: row.keys,
+    trustMode: row.trust_mode,
+    discoveredAt: row.discovered_at,
+    updatedAt: row.updated_at,
+    lastResolvedAt: row.last_resolved_at,
+  };
+}
+
 export class PostgresRepository {
   constructor({ pool = new pg.Pool(), schema = 'public' } = {}) { this.pool = pool; this.schema = schema; }
   async query(text, values = []) { return this.pool.query(text, values); }
@@ -921,6 +934,34 @@ export class PostgresRepository {
   // back through upsertOidcIssuerAllowlist's existing upsert.
   async disableOidcIssuerAllowlist(issuer) {
     await this.pool.query('UPDATE oidc_issuer_allowlist SET enabled = FALSE WHERE issuer = $1', [issuer]);
+  }
+  async upsertPeer({ domain, relayUrl, wsUrl = null, keys, trustMode, now = new Date() } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const result = await this.pool.query(
+      `INSERT INTO peer_relays (domain, relay_url, ws_url, keys, trust_mode, discovered_at, updated_at, last_resolved_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $6, $6)
+       ON CONFLICT (domain) DO UPDATE SET relay_url = $2, ws_url = $3, keys = $4, trust_mode = $5, updated_at = $6, last_resolved_at = $6
+       RETURNING domain, relay_url, ws_url, keys, trust_mode, discovered_at, updated_at, last_resolved_at`,
+      [domain, relayUrl, wsUrl, JSON.stringify(keys), trustMode, timestamp]
+    );
+    return rowToPeerRecord(result.rows[0]);
+  }
+  async getPeerByDomain(domain) {
+    const result = await this.pool.query(
+      'SELECT domain, relay_url, ws_url, keys, trust_mode, discovered_at, updated_at, last_resolved_at FROM peer_relays WHERE domain = $1',
+      [domain]
+    );
+    return result.rows[0] ? rowToPeerRecord(result.rows[0]) : null;
+  }
+  async listPeers() {
+    const result = await this.pool.query(
+      'SELECT domain, relay_url, ws_url, keys, trust_mode, discovered_at, updated_at, last_resolved_at FROM peer_relays ORDER BY domain'
+    );
+    return result.rows.map(rowToPeerRecord);
+  }
+  async removePeer(domain) {
+    const result = await this.pool.query('DELETE FROM peer_relays WHERE domain = $1', [domain]);
+    return result.rowCount > 0;
   }
   async isConversationMember(endpointId, conversationId, client = this.pool) {
     const result = await client.query(
