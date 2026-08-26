@@ -42,6 +42,13 @@ Commands:
                                                             Provision a real OIDC issuer for /v1/auth/login (requires --database-url or SIGIL_DATABASE_URL; restart the relay, or wait for the next poll, to pick it up)
   oidc-issuer list [--database-url url]                    List all OIDC issuer allow-list entries, including disabled ones
   oidc-issuer remove <issuer> [--database-url url]         Disable an OIDC issuer (soft-disable; re-add with "oidc-issuer add" to re-enable)
+  peer resolve <domain> [--database-url url]               Discover and TOFU-pin a peer relay via https://<domain>/.well-known/sigil
+  peer add <domain> --relay-url url --public-key key --kid id [--ws-url url] [--database-url url]
+                                                            Manually (statically) pin a peer relay -- never auto-updated by discovery
+  peer list [--database-url url]                           List all pinned peer relays
+  peer get <domain> [--database-url url]                   Show one pinned peer relay
+  peer remove <domain> [--database-url url]                Unpin a peer relay
+  peer rotate <domain> --confirm [--database-url url]      Force-overwrite a pinned peer's key set, bypassing the TOFU mismatch check
   send [--identity path] [--relay-url url] [--stream-url url] [--wait-for-receipt] --to endpoint_id --to-owner owner_id --message "text" [--conversation id]
   inbox [--identity path] [--relay-url url] [--watch|--wait] [--loop] [--stream-url url] [--interval ms] [--timeout ms] [--local] [--ledger path]
   doctor [--identity path] [--relay-url url]               Conformance check: JCS/dependency audits, plus a keypair check (if --identity)
@@ -315,59 +322,147 @@ async function cmdInbox(argv) {
   await new Promise(() => {});
 }
 
-async function cmdOidcIssuerAdd(argv) {
-  const args = parseArgs({ args: argv, options: { 'client-id': { type: 'string' }, label: { type: 'string' }, assurance: { type: 'string' }, 'database-url': { type: 'string' } }, allowPositionals: true });
-  const issuer = args.positionals[0];
-  const clientId = opt(args, ['client-id']);
-  if (!issuer || !clientId) throw new Error('usage: sigil oidc-issuer add <issuer> --client-id <id> [--label text] [--assurance level] [--database-url url]');
+// Shared by every command that needs a durable (Postgres-backed) repository:
+// resolve --database-url/SIGIL_DATABASE_URL, optionally migrate, open a pool,
+// run fn(repository), always close the pool. `requireDatabaseUrl` is the
+// command-specific error message so each caller keeps its own wording.
+async function withRepository(args, requireDatabaseUrl, fn, { migrate = false } = {}) {
   const databaseUrl = opt(args, ['database-url']) ?? process.env.SIGIL_DATABASE_URL;
-  if (!databaseUrl) throw new Error('sigil oidc-issuer add requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable allow-list to provision');
-  const { applyMigrations } = await import('../scripts/apply-migrations.mjs');
-  await applyMigrations(databaseUrl);
+  if (!databaseUrl) throw new Error(requireDatabaseUrl);
+  if (migrate) {
+    const { applyMigrations } = await import('../scripts/apply-migrations.mjs');
+    await applyMigrations(databaseUrl);
+  }
   const { PostgresRepository } = await import('../relay/v1/postgres-repository.mjs');
   const { default: pg } = await import('pg');
   const pool = new pg.Pool({ connectionString: databaseUrl });
   try {
-    const repository = new PostgresRepository({ pool });
-    await repository.upsertOidcIssuerAllowlist({ issuer, clientId, displayLabel: opt(args, ['label']) ?? issuer, assuranceLevel: opt(args, ['assurance']) ?? 'standard' });
-    console.log(`Added ${issuer} (client_id ${clientId}) to the OIDC issuer allow-list. Restart the relay to pick it up.`);
+    return await fn(new PostgresRepository({ pool }));
   } finally {
     await pool.end();
   }
 }
 
+async function cmdOidcIssuerAdd(argv) {
+  const args = parseArgs({ args: argv, options: { 'client-id': { type: 'string' }, label: { type: 'string' }, assurance: { type: 'string' }, 'database-url': { type: 'string' } }, allowPositionals: true });
+  const issuer = args.positionals[0];
+  const clientId = opt(args, ['client-id']);
+  if (!issuer || !clientId) throw new Error('usage: sigil oidc-issuer add <issuer> --client-id <id> [--label text] [--assurance level] [--database-url url]');
+  await withRepository(args, 'sigil oidc-issuer add requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable allow-list to provision', async (repository) => {
+    await repository.upsertOidcIssuerAllowlist({ issuer, clientId, displayLabel: opt(args, ['label']) ?? issuer, assuranceLevel: opt(args, ['assurance']) ?? 'standard' });
+    console.log(`Added ${issuer} (client_id ${clientId}) to the OIDC issuer allow-list. Restart the relay to pick it up.`);
+  }, { migrate: true });
+}
+
 async function cmdOidcIssuerList(argv) {
   const args = parseArgs({ args: argv, options: { 'database-url': { type: 'string' } } });
-  const databaseUrl = opt(args, ['database-url']) ?? process.env.SIGIL_DATABASE_URL;
-  if (!databaseUrl) throw new Error('sigil oidc-issuer list requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable allow-list to list');
-  const { PostgresRepository } = await import('../relay/v1/postgres-repository.mjs');
-  const { default: pg } = await import('pg');
-  const pool = new pg.Pool({ connectionString: databaseUrl });
-  try {
-    const repository = new PostgresRepository({ pool });
+  await withRepository(args, 'sigil oidc-issuer list requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable allow-list to list', async (repository) => {
     const entries = await repository.listOidcIssuerAllowlist({ includeDisabled: true });
     for (const entry of entries) console.log(`${entry.issuer}\t${entry.clientId ?? ''}\t${entry.enabled}\t${entry.assuranceLevel}`);
-  } finally {
-    await pool.end();
-  }
+  });
 }
 
 async function cmdOidcIssuerRemove(argv) {
   const args = parseArgs({ args: argv, options: { 'database-url': { type: 'string' } }, allowPositionals: true });
   const issuer = args.positionals[0];
   if (!issuer) throw new Error('usage: sigil oidc-issuer remove <issuer> [--database-url url]');
-  const databaseUrl = opt(args, ['database-url']) ?? process.env.SIGIL_DATABASE_URL;
-  if (!databaseUrl) throw new Error('sigil oidc-issuer remove requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable allow-list to modify');
-  const { PostgresRepository } = await import('../relay/v1/postgres-repository.mjs');
-  const { default: pg } = await import('pg');
-  const pool = new pg.Pool({ connectionString: databaseUrl });
-  try {
-    const repository = new PostgresRepository({ pool });
+  await withRepository(args, 'sigil oidc-issuer remove requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable allow-list to modify', async (repository) => {
     await repository.disableOidcIssuerAllowlist(issuer);
     console.log(`Disabled ${issuer} in the OIDC issuer allow-list. Restart the relay, or wait for the next poll, to pick it up.`);
-  } finally {
-    await pool.end();
+  });
+}
+
+async function cmdPeerResolve(argv) {
+  const args = parseArgs({ args: argv, options: { 'database-url': { type: 'string' } }, allowPositionals: true });
+  const domain = args.positionals[0];
+  if (!domain) throw new Error('usage: sigil peer resolve <domain> [--database-url url]');
+  try {
+    await withRepository(args, 'sigil peer resolve requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable peer directory', async (repository) => {
+      const { resolvePeer } = await import('../relay/v1/peer-discovery.mjs');
+      const record = await resolvePeer(domain, repository);
+      console.log(JSON.stringify(record, null, 2));
+    }, { migrate: true });
+  } catch (error) {
+    if (error.code === 'PEER_KEY_MISMATCH') {
+      console.error(`sigil peer resolve: key set changed for "${domain}"`);
+      console.error(`  pinned:  ${error.pinnedKeys.map((k) => `${k.kid}=${k.publicKey}`).join(', ')}`);
+      console.error(`  fetched: ${error.fetchedKeys.map((k) => `${k.kid}=${k.publicKey}`).join(', ')}`);
+      console.error(`  Run "sigil peer rotate ${domain} --confirm" to accept the new key set.`);
+      process.exitCode = 1;
+      return;
+    }
+    throw error;
   }
+}
+
+async function cmdPeerAdd(argv) {
+  const args = parseArgs({ args: argv, options: { 'relay-url': { type: 'string' }, 'ws-url': { type: 'string' }, 'public-key': { type: 'string' }, kid: { type: 'string' }, 'database-url': { type: 'string' } }, allowPositionals: true });
+  const domain = args.positionals[0];
+  const relayUrl = opt(args, ['relay-url']);
+  const publicKey = opt(args, ['public-key']);
+  const kid = opt(args, ['kid']);
+  if (!domain || !relayUrl || !publicKey || !kid) throw new Error('usage: sigil peer add <domain> --relay-url <url> --public-key <key> --kid <id> [--ws-url <url>] [--database-url url]');
+  const { parseDomain } = await import('../relay/v1/federated-id.mjs');
+  parseDomain(domain); // throws INVALID_DOMAIN_SYNTAX / INVALID_PORT before anything else runs
+  const { isValidEndpointUrl, isValidWsEndpointUrl, isValidKeyEntry } = await import('../relay/v1/peer-discovery.mjs');
+  if (!isValidEndpointUrl(relayUrl)) throw new Error(`sigil peer add: --relay-url "${relayUrl}" is not a valid https:// URL`);
+  const wsUrl = opt(args, ['ws-url']) ?? null;
+  if (wsUrl !== null && !isValidWsEndpointUrl(wsUrl)) throw new Error(`sigil peer add: --ws-url "${wsUrl}" is not a valid wss:// URL`);
+  if (!isValidKeyEntry({ kid, alg: 'Ed25519', publicKey })) throw new Error('sigil peer add: --kid/--public-key must be non-empty');
+  await withRepository(args, 'sigil peer add requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable peer directory', async (repository) => {
+    await repository.upsertPeer({ domain, relayUrl, wsUrl, keys: [{ kid, alg: 'Ed25519', publicKey }], trustMode: 'static' });
+    await repository.recordAuditEvent({ eventType: 'peer.static_pinned', subjectId: domain, objectType: 'peer_relay', objectId: domain, outcome: 'accepted', payload: { relayUrl, kid } });
+    console.log(`Statically pinned ${domain} -> ${relayUrl} (kid ${kid}).`);
+  }, { migrate: true });
+}
+
+async function cmdPeerList(argv) {
+  const args = parseArgs({ args: argv, options: { 'database-url': { type: 'string' } } });
+  await withRepository(args, 'sigil peer list requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable peer directory', async (repository) => {
+    const peers = await repository.listPeers();
+    for (const peer of peers) console.log(`${peer.domain}\t${peer.relayUrl}\t${peer.trustMode}\t${peer.keys.map((k) => k.kid).join(',')}`);
+  });
+}
+
+async function cmdPeerGet(argv) {
+  const args = parseArgs({ args: argv, options: { 'database-url': { type: 'string' } }, allowPositionals: true });
+  const domain = args.positionals[0];
+  if (!domain) throw new Error('usage: sigil peer get <domain> [--database-url url]');
+  const { parseDomain: parseDomainGet } = await import('../relay/v1/federated-id.mjs');
+  parseDomainGet(domain);
+  await withRepository(args, 'sigil peer get requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable peer directory', async (repository) => {
+    const peer = await repository.getPeerByDomain(domain);
+    console.log(peer ? JSON.stringify(peer, null, 2) : `No peer pinned for "${domain}".`);
+  });
+}
+
+async function cmdPeerRemove(argv) {
+  const args = parseArgs({ args: argv, options: { 'database-url': { type: 'string' } }, allowPositionals: true });
+  const domain = args.positionals[0];
+  if (!domain) throw new Error('usage: sigil peer remove <domain> [--database-url url]');
+  const { parseDomain: parseDomainRemove } = await import('../relay/v1/federated-id.mjs');
+  parseDomainRemove(domain);
+  await withRepository(args, 'sigil peer remove requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable peer directory', async (repository) => {
+    const removed = await repository.removePeer(domain);
+    if (removed) {
+      await repository.recordAuditEvent({ eventType: 'peer.removed', subjectId: domain, objectType: 'peer_relay', objectId: domain, outcome: 'accepted', payload: {} });
+      console.log(`Removed peer pin for "${domain}".`);
+    } else {
+      console.log(`No peer pinned for "${domain}".`);
+    }
+  });
+}
+
+async function cmdPeerRotate(argv) {
+  const args = parseArgs({ args: argv, options: { confirm: { type: 'boolean' }, 'database-url': { type: 'string' } }, allowPositionals: true });
+  const domain = args.positionals[0];
+  if (!domain) throw new Error('usage: sigil peer rotate <domain> --confirm [--database-url url]');
+  if (!args.values.confirm) throw new Error('sigil peer rotate requires --confirm -- this force-overwrites a pinned peer key without the usual TOFU mismatch check');
+  await withRepository(args, 'sigil peer rotate requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable peer directory', async (repository) => {
+    const { rotatePeer } = await import('../relay/v1/peer-discovery.mjs');
+    const record = await rotatePeer(domain, repository);
+    console.log(JSON.stringify(record, null, 2));
+  }, { migrate: true });
 }
 
 function printDoctorReport(result) {
@@ -433,13 +528,19 @@ export async function main() {
     else if (command === 'oidc-issuer' && sub === 'add') await cmdOidcIssuerAdd(rest);
     else if (command === 'oidc-issuer' && sub === 'list') await cmdOidcIssuerList(rest);
     else if (command === 'oidc-issuer' && sub === 'remove') await cmdOidcIssuerRemove(rest);
+    else if (command === 'peer' && sub === 'resolve') await cmdPeerResolve(rest);
+    else if (command === 'peer' && sub === 'add') await cmdPeerAdd(rest);
+    else if (command === 'peer' && sub === 'list') await cmdPeerList(rest);
+    else if (command === 'peer' && sub === 'get') await cmdPeerGet(rest);
+    else if (command === 'peer' && sub === 'remove') await cmdPeerRemove(rest);
+    else if (command === 'peer' && sub === 'rotate') await cmdPeerRotate(rest);
     else if (command === 'agent' && sub === 'run') await cmdAgentRun(rest);
     else if (command === 'doctor') await cmdDoctor(process.argv.slice(3));
     else if (command === 'send') await cmdSend(process.argv.slice(3));
     else if (command === 'inbox') await cmdInbox(process.argv.slice(3));
     else usage();
   } catch (error) {
-    console.error(`sigil: ${error.message}`);
+    console.error(`sigil: ${error.message}${error.code ? ` (${error.code})` : ''}`);
     process.exitCode = Number.isInteger(error.exitCode) ? error.exitCode : 1;
   }
 }
