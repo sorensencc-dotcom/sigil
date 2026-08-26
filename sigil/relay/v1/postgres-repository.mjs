@@ -12,9 +12,9 @@ function rowToPeerRecord(row) {
     wsUrl: row.ws_url,
     keys: row.keys,
     trustMode: row.trust_mode,
-    discoveredAt: row.discovered_at,
-    updatedAt: row.updated_at,
-    lastResolvedAt: row.last_resolved_at,
+    discoveredAt: row.discovered_at?.toISOString() ?? row.discovered_at,
+    updatedAt: row.updated_at?.toISOString() ?? row.updated_at,
+    lastResolvedAt: row.last_resolved_at?.toISOString() ?? row.last_resolved_at,
   };
 }
 

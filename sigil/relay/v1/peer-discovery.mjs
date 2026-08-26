@@ -10,6 +10,11 @@ function outboundFetchOptions() {
   return { signal: AbortSignal.timeout(5000), redirect: 'error' };
 }
 
+// http/ws acceptance gates on NODE_ENV !== 'production', which is fail-open
+// by CLI default (an operator shell rarely sets NODE_ENV=production). This
+// is plan-sanctioned (see plan's Global Constraints) rather than an oversight
+// -- tracked as a deliberate decision, not silently inherited. Revisit if
+// sigil ever ships a production default NODE_ENV.
 export function isValidEndpointUrl(url) {
   if (typeof url !== 'string') return false;
   let parsed;
@@ -126,7 +131,7 @@ export async function resolvePeer(domain, repository, { fetchImpl = fetch, now =
   const endpointChanged = existing.relayUrl !== discovered.relayUrl || existing.wsUrl !== discovered.wsUrl;
   if (keysChanged || endpointChanged) {
     await repository.recordAuditEvent({ eventType: 'peer.key_mismatch_rejected', subjectId: domain, objectType: 'peer_relay', objectId: domain, outcome: 'rejected', payload: { pinnedKeys: existing.keys, fetchedKeys: discovered.keys, pinnedRelayUrl: existing.relayUrl, fetchedRelayUrl: discovered.relayUrl, pinnedWsUrl: existing.wsUrl, fetchedWsUrl: discovered.wsUrl, keysChanged, endpointChanged }, now });
-    throw peerError(`Peer "${domain}" changed: run "sigil peer rotate ${domain} --confirm" to accept it`, 'PEER_KEY_MISMATCH', { domain, pinnedKeys: existing.keys, fetchedKeys: discovered.keys, keysChanged, endpointChanged });
+    throw peerError(`Peer "${domain}" changed: run "sigil peer rotate ${domain} --confirm" to accept it`, 'PEER_KEY_MISMATCH', { domain, pinnedKeys: existing.keys, fetchedKeys: discovered.keys, keysChanged, endpointChanged, pinnedRelayUrl: existing.relayUrl, fetchedRelayUrl: discovered.relayUrl, pinnedWsUrl: existing.wsUrl, fetchedWsUrl: discovered.wsUrl });
   }
 
   // Nothing changed -- a silent re-confirmation, no new audit event.
@@ -136,8 +141,14 @@ export async function resolvePeer(domain, repository, { fetchImpl = fetch, now =
 export async function rotatePeer(domain, repository, { fetchImpl = fetch, now = new Date() } = {}) {
   const { parseDomain } = await import('./federated-id.mjs');
   parseDomain(domain);
+  const existing = await repository.getPeerByDomain(domain);
   const discovered = await discoverPeer(domain, { fetchImpl });
   const record = await repository.upsertPeer({ domain, relayUrl: discovered.relayUrl, wsUrl: discovered.wsUrl, keys: discovered.keys, trustMode: 'tofu', now });
-  await repository.recordAuditEvent({ eventType: 'peer.rotated', subjectId: domain, objectType: 'peer_relay', objectId: domain, outcome: 'accepted', payload: auditPayload(discovered, { forced: true }), now });
+  // A static pin force-overwritten via rotate silently downgrades to tofu
+  // trust (matches the brief: rotate force-overwrites regardless of any
+  // existing pin). Record the downgrade in the audit trail so it isn't
+  // invisible after the fact.
+  const downgradedFromStatic = existing?.trustMode === 'static';
+  await repository.recordAuditEvent({ eventType: 'peer.rotated', subjectId: domain, objectType: 'peer_relay', objectId: domain, outcome: 'accepted', payload: auditPayload(discovered, { forced: true, previousTrustMode: existing?.trustMode ?? null, downgradedFromStatic }), now });
   return record;
 }

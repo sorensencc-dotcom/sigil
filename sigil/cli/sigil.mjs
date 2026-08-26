@@ -463,10 +463,16 @@ async function cmdPeerResolve(argv) {
     }, { migrate: true });
   } catch (error) {
     if (error.code === 'PEER_KEY_MISMATCH') {
-      console.error(`sigil peer resolve: key set changed for "${domain}"`);
-      console.error(`  pinned:  ${error.pinnedKeys.map((k) => `${k.kid}=${k.publicKey}`).join(', ')}`);
-      console.error(`  fetched: ${error.fetchedKeys.map((k) => `${k.kid}=${k.publicKey}`).join(', ')}`);
-      console.error(`  Run "sigil peer rotate ${domain} --confirm" to accept the new key set.`);
+      console.error(`sigil peer resolve: peer "${domain}" changed`);
+      if (error.keysChanged) {
+        console.error(`  pinned keys:  ${error.pinnedKeys.map((k) => `${k.kid}=${k.publicKey}`).join(', ')}`);
+        console.error(`  fetched keys: ${error.fetchedKeys.map((k) => `${k.kid}=${k.publicKey}`).join(', ')}`);
+      }
+      if (error.endpointChanged) {
+        console.error(`  pinned relay:  ${error.pinnedRelayUrl} (ws: ${error.pinnedWsUrl ?? 'none'})`);
+        console.error(`  fetched relay: ${error.fetchedRelayUrl} (ws: ${error.fetchedWsUrl ?? 'none'})`);
+      }
+      console.error(`  Run "sigil peer rotate ${domain} --confirm" to accept the change.`);
       process.exitCode = 1;
       return;
     }
@@ -475,7 +481,7 @@ async function cmdPeerResolve(argv) {
 }
 
 async function cmdPeerAdd(argv) {
-  const args = parseArgs({ args: argv, options: { 'relay-url': { type: 'string' }, 'ws-url': { type: 'string' }, 'public-key': { type: 'string' }, kid: { type: 'string' }, 'database-url': { type: 'string' } }, allowPositionals: true });
+  const args = parseArgs({ args: argv, options: { 'relay-url': { type: 'string' }, 'ws-url': { type: 'string' }, 'public-key': { type: 'string' }, kid: { type: 'string' }, confirm: { type: 'boolean' }, 'database-url': { type: 'string' } }, allowPositionals: true });
   const domain = args.positionals[0];
   const relayUrl = opt(args, ['relay-url']);
   const publicKey = opt(args, ['public-key']);
@@ -488,8 +494,17 @@ async function cmdPeerAdd(argv) {
   if (wsUrl !== null && !isValidWsEndpointUrl(wsUrl)) throw new Error(`sigil peer add: --ws-url "${wsUrl}" is not a valid wss:// URL`);
   if (!isValidKeyEntry({ kid, alg: 'Ed25519', publicKey })) throw new Error('sigil peer add: --kid/--public-key must be non-empty');
   await withRepository(args, 'sigil peer add requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable peer directory', async (repository) => {
+    const existing = await repository.getPeerByDomain(domain);
+    if (existing && !args.values.confirm) {
+      throw new Error(`sigil peer add: "${domain}" is already pinned (trustMode=${existing.trustMode}) -- pass --confirm to overwrite`);
+    }
     await repository.upsertPeer({ domain, relayUrl, wsUrl, keys: [{ kid, alg: 'Ed25519', publicKey }], trustMode: 'static' });
-    await repository.recordAuditEvent({ eventType: 'peer.static_pinned', subjectId: domain, objectType: 'peer_relay', objectId: domain, outcome: 'accepted', payload: { relayUrl, kid } });
+    // Overwriting a prior pin can swap the key material under a reused kid --
+    // record what was there before so that swap is visible in the audit trail.
+    const payload = existing
+      ? { relayUrl, kid, previousRelayUrl: existing.relayUrl, previousKeys: existing.keys, previousTrustMode: existing.trustMode }
+      : { relayUrl, kid };
+    await repository.recordAuditEvent({ eventType: 'peer.static_pinned', subjectId: domain, objectType: 'peer_relay', objectId: domain, outcome: 'accepted', payload });
     console.log(`Statically pinned ${domain} -> ${relayUrl} (kid ${kid}).`);
   }, { migrate: true });
 }
@@ -537,6 +552,10 @@ async function cmdPeerRotate(argv) {
   await requireValidPeerDomain(domain);
   await withRepository(args, 'sigil peer rotate requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable peer directory', async (repository) => {
     const { rotatePeer } = await import('../relay/v1/peer-discovery.mjs');
+    const existing = await repository.getPeerByDomain(domain);
+    if (existing?.trustMode === 'static') {
+      console.error(`sigil peer rotate: WARNING - "${domain}" was statically pinned; this downgrades it to tofu trust.`);
+    }
     const record = await rotatePeer(domain, repository);
     console.log(JSON.stringify(record, null, 2));
   }, { migrate: true });
