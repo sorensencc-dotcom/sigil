@@ -52,6 +52,10 @@ export async function discoverPeer(domain, { fetchImpl = fetch } = {}) {
   } catch {
     throw peerError(`Malformed .well-known/sigil response for "${domain}"`, 'PEER_MALFORMED_RESPONSE', { domain });
   }
+  // Ensure the parsed JSON is a non-null object, not a primitive or null literal
+  if (typeof data !== 'object' || data === null) {
+    throw peerError(`Malformed .well-known/sigil response for "${domain}"`, 'PEER_MALFORMED_RESPONSE', { domain });
+  }
   // Self-match, mirroring discoverIssuer's RFC 8414 SS3.3 issuer-match check:
   // without this, a response served from (or proxied through) an unexpected
   // host could redirect trust to an endpoint/keys the caller never vetted.

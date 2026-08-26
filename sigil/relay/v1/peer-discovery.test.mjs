@@ -113,3 +113,18 @@ test('discoverPeer rejects a key entry with an empty kid', async () => {
   const fetchImpl = async () => jsonResponse({ ...VALID_BODY, keys: [{ kid: '', alg: 'Ed25519', publicKey: 'x' }] });
   await assert.rejects(() => discoverPeer('relay.example.com', { fetchImpl }), { code: 'PEER_INVALID_KEY' });
 });
+
+test('discoverPeer rejects when JSON parses to null', async () => {
+  const fetchImpl = async () => jsonResponse(null);
+  await assert.rejects(() => discoverPeer('relay.example.com', { fetchImpl }), { code: 'PEER_MALFORMED_RESPONSE' });
+});
+
+test('discoverPeer rejects when JSON parses to a primitive number', async () => {
+  const fetchImpl = async () => jsonResponse(42);
+  await assert.rejects(() => discoverPeer('relay.example.com', { fetchImpl }), { code: 'PEER_MALFORMED_RESPONSE' });
+});
+
+test('discoverPeer rejects when JSON parses to a primitive string', async () => {
+  const fetchImpl = async () => jsonResponse('not an object');
+  await assert.rejects(() => discoverPeer('relay.example.com', { fetchImpl }), { code: 'PEER_MALFORMED_RESPONSE' });
+});
