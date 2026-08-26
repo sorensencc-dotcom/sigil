@@ -30,6 +30,7 @@ export function createMemoryRepository() {
   const humanSessions = new Map();
   const consumedLoginJtis = new Map();
   const oidcIssuerAllowlist = new Map();
+  const peerRelays = new Map();
   const auditEvents = [];
   return {
     // Single-process, no real client/connection -- the transaction wrapper
@@ -290,6 +291,27 @@ export function createMemoryRepository() {
     async disableOidcIssuerAllowlist(issuer) {
       const entry = oidcIssuerAllowlist.get(issuer);
       if (entry) entry.enabled = false;
+    },
+    async upsertPeer({ domain, relayUrl, wsUrl = null, keys, trustMode, now = new Date() }) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      const existing = peerRelays.get(domain);
+      const record = {
+        domain, relayUrl, wsUrl, keys, trustMode,
+        discoveredAt: existing?.discoveredAt ?? timestamp,
+        updatedAt: timestamp,
+        lastResolvedAt: timestamp,
+      };
+      peerRelays.set(domain, record);
+      return record;
+    },
+    async getPeerByDomain(domain) {
+      return peerRelays.get(domain) ?? null;
+    },
+    async listPeers() {
+      return [...peerRelays.values()];
+    },
+    async removePeer(domain) {
+      return peerRelays.delete(domain);
     },
     // Test-only: memory-repository has no admin/migration path, so tests
     // that exercise the real-login route seed allow-list rows directly,

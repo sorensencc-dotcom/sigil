@@ -78,3 +78,62 @@ export async function discoverPeer(domain, { fetchImpl = fetch } = {}) {
   }
   return { domain, relayUrl: data.relay.endpoint, wsUrl: data.relay.ws_endpoint ?? null, keys: data.keys };
 }
+
+// Structured comparison, not a delimiter-joined string -- kid/publicKey are
+// untrusted response data, and a naive `${kid}:${publicKey}` join could let
+// two distinct key sets collide (or a mismatched set compare equal) if either
+// field ever contained the join delimiter. (Caught by Codex outside-voice.)
+function sameKeySet(a, b) {
+  if (a.length !== b.length) return false;
+  const normalize = (keys) => [...keys].map((k) => ({ kid: k.kid, alg: k.alg, publicKey: k.publicKey })).sort((x, y) => (x.kid < y.kid ? -1 : x.kid > y.kid ? 1 : 0));
+  const na = normalize(a);
+  const nb = normalize(b);
+  return na.every((k, i) => k.kid === nb[i].kid && k.alg === nb[i].alg && k.publicKey === nb[i].publicKey);
+}
+
+function auditPayload(discovered, extra = {}) {
+  return { relayUrl: discovered.relayUrl, keys: discovered.keys, ...extra };
+}
+
+export async function resolvePeer(domain, repository, { fetchImpl = fetch, now = new Date() } = {}) {
+  const { parseDomain } = await import('./federated-id.mjs');
+  parseDomain(domain);
+  const existing = await repository.getPeerByDomain(domain);
+  if (existing && existing.trustMode === 'static') return existing;
+
+  const discovered = await discoverPeer(domain, { fetchImpl });
+
+  if (!existing) {
+    const record = await repository.upsertPeer({ domain, relayUrl: discovered.relayUrl, wsUrl: discovered.wsUrl, keys: discovered.keys, trustMode: 'tofu', now });
+    await repository.recordAuditEvent({ eventType: 'peer.tofu_pinned', subjectId: domain, objectType: 'peer_relay', objectId: domain, outcome: 'accepted', payload: auditPayload(discovered), now });
+    return record;
+  }
+
+  // No grace-accept for ANY unauthenticated field -- keys, relayUrl, and
+  // wsUrl are all just data in an unauthenticated HTTP response. A public
+  // key being "still present" proves nothing about who controls the domain
+  // right now, and an endpoint is exactly as unauthenticated as a key --
+  // treating them differently (audit-only for endpoint, reject for keys) was
+  // an inconsistent security posture (eng review + Codex outside-voice,
+  // 2026-08-25). Any change to keys, relayUrl, or wsUrl is rejected exactly
+  // like a full mismatch; the operator must run
+  // `sigil peer rotate <domain> --confirm` to accept it.
+  const keysChanged = !sameKeySet(existing.keys, discovered.keys);
+  const endpointChanged = existing.relayUrl !== discovered.relayUrl || existing.wsUrl !== discovered.wsUrl;
+  if (keysChanged || endpointChanged) {
+    await repository.recordAuditEvent({ eventType: 'peer.key_mismatch_rejected', subjectId: domain, objectType: 'peer_relay', objectId: domain, outcome: 'rejected', payload: { pinnedKeys: existing.keys, fetchedKeys: discovered.keys, pinnedRelayUrl: existing.relayUrl, fetchedRelayUrl: discovered.relayUrl, pinnedWsUrl: existing.wsUrl, fetchedWsUrl: discovered.wsUrl, keysChanged, endpointChanged }, now });
+    throw peerError(`Peer "${domain}" changed: run "sigil peer rotate ${domain} --confirm" to accept it`, 'PEER_KEY_MISMATCH', { domain, pinnedKeys: existing.keys, fetchedKeys: discovered.keys, keysChanged, endpointChanged });
+  }
+
+  // Nothing changed -- a silent re-confirmation, no new audit event.
+  return repository.upsertPeer({ domain, relayUrl: discovered.relayUrl, wsUrl: discovered.wsUrl, keys: discovered.keys, trustMode: 'tofu', now });
+}
+
+export async function rotatePeer(domain, repository, { fetchImpl = fetch, now = new Date() } = {}) {
+  const { parseDomain } = await import('./federated-id.mjs');
+  parseDomain(domain);
+  const discovered = await discoverPeer(domain, { fetchImpl });
+  const record = await repository.upsertPeer({ domain, relayUrl: discovered.relayUrl, wsUrl: discovered.wsUrl, keys: discovered.keys, trustMode: 'tofu', now });
+  await repository.recordAuditEvent({ eventType: 'peer.rotated', subjectId: domain, objectType: 'peer_relay', objectId: domain, outcome: 'accepted', payload: auditPayload(discovered, { forced: true }), now });
+  return record;
+}
