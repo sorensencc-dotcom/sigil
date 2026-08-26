@@ -502,7 +502,7 @@ async function cmdPeerAdd(argv) {
     // Overwriting a prior pin can swap the key material under a reused kid --
     // record what was there before so that swap is visible in the audit trail.
     const payload = existing
-      ? { relayUrl, kid, previousRelayUrl: existing.relayUrl, previousKeys: existing.keys, previousTrustMode: existing.trustMode }
+      ? { relayUrl, kid, previousRelayUrl: existing.relayUrl, previousWsUrl: existing.wsUrl, previousKeys: existing.keys, previousTrustMode: existing.trustMode }
       : { relayUrl, kid };
     await repository.recordAuditEvent({ eventType: 'peer.static_pinned', subjectId: domain, objectType: 'peer_relay', objectId: domain, outcome: 'accepted', payload });
     console.log(`Statically pinned ${domain} -> ${relayUrl} (kid ${kid}).`);
