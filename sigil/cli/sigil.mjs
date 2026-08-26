@@ -372,10 +372,25 @@ async function cmdOidcIssuerRemove(argv) {
   });
 }
 
+// Validates `domain` via federated-id's parseDomain() before any peer
+// subcommand touches the repository or network, folding the thrown error's
+// `.code` (e.g. INVALID_DOMAIN_SYNTAX) into the message so it's visible on
+// stderr -- scoped to this task's `peer` commands only, not a change to how
+// errors are reported anywhere else in the CLI.
+async function requireValidPeerDomain(domain) {
+  const { parseDomain } = await import('../relay/v1/federated-id.mjs');
+  try {
+    parseDomain(domain);
+  } catch (error) {
+    throw new Error(`${error.message} (${error.code})`);
+  }
+}
+
 async function cmdPeerResolve(argv) {
   const args = parseArgs({ args: argv, options: { 'database-url': { type: 'string' } }, allowPositionals: true });
   const domain = args.positionals[0];
   if (!domain) throw new Error('usage: sigil peer resolve <domain> [--database-url url]');
+  await requireValidPeerDomain(domain);
   try {
     await withRepository(args, 'sigil peer resolve requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable peer directory', async (repository) => {
       const { resolvePeer } = await import('../relay/v1/peer-discovery.mjs');
@@ -402,8 +417,7 @@ async function cmdPeerAdd(argv) {
   const publicKey = opt(args, ['public-key']);
   const kid = opt(args, ['kid']);
   if (!domain || !relayUrl || !publicKey || !kid) throw new Error('usage: sigil peer add <domain> --relay-url <url> --public-key <key> --kid <id> [--ws-url <url>] [--database-url url]');
-  const { parseDomain } = await import('../relay/v1/federated-id.mjs');
-  parseDomain(domain); // throws INVALID_DOMAIN_SYNTAX / INVALID_PORT before anything else runs
+  await requireValidPeerDomain(domain); // throws INVALID_DOMAIN_SYNTAX / INVALID_PORT before anything else runs
   const { isValidEndpointUrl, isValidWsEndpointUrl, isValidKeyEntry } = await import('../relay/v1/peer-discovery.mjs');
   if (!isValidEndpointUrl(relayUrl)) throw new Error(`sigil peer add: --relay-url "${relayUrl}" is not a valid https:// URL`);
   const wsUrl = opt(args, ['ws-url']) ?? null;
@@ -428,8 +442,7 @@ async function cmdPeerGet(argv) {
   const args = parseArgs({ args: argv, options: { 'database-url': { type: 'string' } }, allowPositionals: true });
   const domain = args.positionals[0];
   if (!domain) throw new Error('usage: sigil peer get <domain> [--database-url url]');
-  const { parseDomain: parseDomainGet } = await import('../relay/v1/federated-id.mjs');
-  parseDomainGet(domain);
+  await requireValidPeerDomain(domain);
   await withRepository(args, 'sigil peer get requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable peer directory', async (repository) => {
     const peer = await repository.getPeerByDomain(domain);
     console.log(peer ? JSON.stringify(peer, null, 2) : `No peer pinned for "${domain}".`);
@@ -440,8 +453,7 @@ async function cmdPeerRemove(argv) {
   const args = parseArgs({ args: argv, options: { 'database-url': { type: 'string' } }, allowPositionals: true });
   const domain = args.positionals[0];
   if (!domain) throw new Error('usage: sigil peer remove <domain> [--database-url url]');
-  const { parseDomain: parseDomainRemove } = await import('../relay/v1/federated-id.mjs');
-  parseDomainRemove(domain);
+  await requireValidPeerDomain(domain);
   await withRepository(args, 'sigil peer remove requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable peer directory', async (repository) => {
     const removed = await repository.removePeer(domain);
     if (removed) {
@@ -458,6 +470,7 @@ async function cmdPeerRotate(argv) {
   const domain = args.positionals[0];
   if (!domain) throw new Error('usage: sigil peer rotate <domain> --confirm [--database-url url]');
   if (!args.values.confirm) throw new Error('sigil peer rotate requires --confirm -- this force-overwrites a pinned peer key without the usual TOFU mismatch check');
+  await requireValidPeerDomain(domain);
   await withRepository(args, 'sigil peer rotate requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable peer directory', async (repository) => {
     const { rotatePeer } = await import('../relay/v1/peer-discovery.mjs');
     const record = await rotatePeer(domain, repository);
@@ -540,7 +553,7 @@ export async function main() {
     else if (command === 'inbox') await cmdInbox(process.argv.slice(3));
     else usage();
   } catch (error) {
-    console.error(`sigil: ${error.message}${error.code ? ` (${error.code})` : ''}`);
+    console.error(`sigil: ${error.message}`);
     process.exitCode = Number.isInteger(error.exitCode) ? error.exitCode : 1;
   }
 }

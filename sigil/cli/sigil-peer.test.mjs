@@ -72,3 +72,15 @@ test('sigil peer add rejects a malformed domain', async () => {
   assert.equal(exitCode, 1);
   assert.match(stderr, /INVALID_DOMAIN_SYNTAX/);
 });
+
+test('sigil peer resolve rejects a malformed domain without attempting a live database connection', async () => {
+  const { stderr, exitCode } = await run(['peer', 'resolve', 'not a domain', '--database-url', 'postgres://placeholder']);
+  assert.equal(exitCode, 1);
+  assert.match(stderr, /INVALID_DOMAIN_SYNTAX/);
+});
+
+test('sigil peer rotate rejects a malformed domain without attempting a live database connection', async () => {
+  const { stderr, exitCode } = await run(['peer', 'rotate', 'not a domain', '--confirm', '--database-url', 'postgres://placeholder']);
+  assert.equal(exitCode, 1);
+  assert.match(stderr, /INVALID_DOMAIN_SYNTAX/);
+});
