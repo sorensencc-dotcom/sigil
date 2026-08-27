@@ -137,12 +137,17 @@ async function cmdRelayUp(argv) {
     throw new Error(`--oidc-issuer-refresh-interval-ms must be a positive integer, got "${oidcIssuerRefreshIntervalMsRaw}"`);
   }
   const relayDomain = opt(args, ['domain']);
+  let isLocalDomain;
   if (relayDomain !== undefined) {
-    const { parseDomain } = await import('../relay/v1/federated-id.mjs');
-    parseDomain(relayDomain); // throws INVALID_DOMAIN_SYNTAX / INVALID_PORT before anything else runs
+    const federatedId = await import('../relay/v1/federated-id.mjs');
+    federatedId.parseDomain(relayDomain); // throws INVALID_DOMAIN_SYNTAX / INVALID_PORT before anything else runs
+    isLocalDomain = federatedId.isLocalDomain;
   }
   const data = loadRegistryFile(registryPath);
   if (!data.endpoints.length) throw new Error(`No endpoints in ${registryPath}. Run "sigil init <name> --owner <owner_id>" first.`);
+  if (relayDomain !== undefined && !data.endpoints.some((ep) => isLocalDomain(ep.endpoint_id, relayDomain))) {
+    console.log(`WARNING: no endpoint in ${registryPath} belongs to domain "${relayDomain}" -- every envelope will be rejected with RECIPIENT_NOT_LOCAL. Register an endpoint with "sigil init <name> --owner <owner_id> --domain ${relayDomain}", or drop --domain.`);
+  }
   const registry = toRegistryMap(data);
   const tokenHashes = toTokenHashes(data);
   let repository;

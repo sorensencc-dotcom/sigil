@@ -26,6 +26,56 @@ test('sigil relay up rejects a malformed --domain before binding a port', () => 
   }
 });
 
+test('sigil relay up warns when no endpoint in the registry belongs to --domain', async () => {
+  const cwd = tmpCwdWithRegistry(); // alice is registered under the default "local" domain
+  const { spawn } = await import('node:child_process');
+  const child = spawn(process.execPath, [sigilCli, 'relay', 'up', '--port', '0', '--domain', 'relay.example.com'], { cwd });
+  try {
+    const output = await new Promise((resolve, reject) => {
+      let buf = '';
+      const onData = (chunk) => {
+        buf += chunk;
+        if (buf.includes('Sigil relay listening on')) { child.stdout.off('data', onData); resolve(buf); }
+      };
+      child.stdout.on('data', onData);
+      child.on('exit', (code) => reject(new Error(`sigil relay up exited early with code ${code}: ${buf}`)));
+      setTimeout(() => reject(new Error(`timed out waiting for relay to start: ${buf}`)), 5000);
+    });
+    assert.match(output, /WARNING: no endpoint in .+ belongs to domain "relay\.example\.com"/);
+  } finally {
+    await new Promise((resolve) => { child.once('exit', resolve); child.kill(); });
+    for (let attempt = 0; ; attempt++) {
+      try { fs.rmSync(cwd, { recursive: true, force: true }); break; }
+      catch (error) { if (attempt >= 10 || error.code !== 'EPERM') throw error; await new Promise((resolve) => setTimeout(resolve, 100)); }
+    }
+  }
+});
+
+test('sigil relay up does not warn when an endpoint already belongs to --domain', async () => {
+  const cwd = tmpCwdWithRegistry(); // alice is registered under the default "local" domain
+  const { spawn } = await import('node:child_process');
+  const child = spawn(process.execPath, [sigilCli, 'relay', 'up', '--port', '0', '--domain', 'local'], { cwd });
+  try {
+    const output = await new Promise((resolve, reject) => {
+      let buf = '';
+      const onData = (chunk) => {
+        buf += chunk;
+        if (buf.includes('Sigil relay listening on')) { child.stdout.off('data', onData); resolve(buf); }
+      };
+      child.stdout.on('data', onData);
+      child.on('exit', (code) => reject(new Error(`sigil relay up exited early with code ${code}: ${buf}`)));
+      setTimeout(() => reject(new Error(`timed out waiting for relay to start: ${buf}`)), 5000);
+    });
+    assert.doesNotMatch(output, /WARNING: no endpoint/);
+  } finally {
+    await new Promise((resolve) => { child.once('exit', resolve); child.kill(); });
+    for (let attempt = 0; ; attempt++) {
+      try { fs.rmSync(cwd, { recursive: true, force: true }); break; }
+      catch (error) { if (attempt >= 10 || error.code !== 'EPERM') throw error; await new Promise((resolve) => setTimeout(resolve, 100)); }
+    }
+  }
+});
+
 test('sigil relay up starts successfully with a syntactically valid --domain', async () => {
   const cwd = tmpCwdWithRegistry();
   const { spawn } = await import('node:child_process');
