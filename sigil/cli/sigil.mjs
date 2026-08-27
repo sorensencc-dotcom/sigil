@@ -10,6 +10,7 @@
 // what a real multi-user version would need.
 import { parseArgs } from 'node:util';
 import path from 'node:path';
+import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
@@ -27,6 +28,7 @@ import { LocalOutbox } from '../connectors/v1/local-outbox.mjs';
 import { loadConfigFile, resolveConfig } from './config-resolver.mjs';
 import { formatInboxItem, INBOX_WAIT_EXIT_CODES, waitForOneInboxMessage, isRetryableInboxWaitExitCode } from './inbox-wait.mjs';
 import { appendInboxLedger, readInboxLedger } from './ledger.mjs';
+import { signContract, verifyContract } from './contract-signing.mjs';
 
 const DEFAULT_CLI_CONFIG = path.join('.sigil', 'config.json');
 
@@ -37,6 +39,8 @@ function usage() {
 
 Commands:
   init <name> --owner <owner_id> [--registry path] [--domain domain]      Create a local identity and register it (domain defaults to "local")
+  sign-contract --contract path --identity path [--output path]          Sign a TorqueQuery agent dispatch contract
+  verify-contract --contract path --registry path                        Verify a signed TorqueQuery agent dispatch contract
   relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] Run a local relay (blocks; Ctrl+C to stop)
   oidc-issuer add <issuer> --client-id id [--label text] [--assurance level] [--database-url url]
                                                             Provision a real OIDC issuer for /v1/auth/login (requires --database-url or SIGIL_DATABASE_URL; restart the relay, or wait for the next poll, to pick it up)
@@ -597,6 +601,30 @@ async function cmdDoctor(argv) {
   if (!result.pass) process.exitCode = 1;
 }
 
+async function cmdSignContract(argv) {
+  const args = parseArgs({ args: argv, options: { contract: { type: 'string' }, identity: { type: 'string' }, output: { type: 'string' } } });
+  const contractPath = opt(args, ['contract']);
+  const identityPath = opt(args, ['identity']);
+  if (!contractPath || !identityPath) throw new Error('usage: sigil sign-contract --contract path --identity path [--output path]');
+  const identity = loadIdentity(identityPath);
+  const signed = signContract(JSON.parse(fs.readFileSync(contractPath, 'utf8')), { privateKey: identityKeys(identity).privateKey, keyId: identity.key_id });
+  const outputPath = opt(args, ['output']) ?? contractPath;
+  fs.writeFileSync(outputPath, JSON.stringify(signed, null, 2) + '\n');
+  console.log(JSON.stringify({ signed: true, contract: outputPath }));
+}
+
+async function cmdVerifyContract(argv) {
+  const args = parseArgs({ args: argv, options: { contract: { type: 'string' }, registry: { type: 'string' } } });
+  const contractPath = opt(args, ['contract']);
+  const registryPath = opt(args, ['registry']);
+  if (!contractPath || !registryPath) throw new Error('usage: sigil verify-contract --contract path --registry path');
+  const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+  const registry = loadRegistryFile(registryPath);
+  const entry = registry.endpoints.find((candidate) => candidate.key_id === contract?.signature?.key_id);
+  const valid = Boolean(entry) && verifyContract(contract, { publicKey: crypto.createPublicKey(entry.public_key_pem) });
+  console.log(JSON.stringify(valid ? { valid: true, key_id: contract.signature.key_id } : { valid: false, reason: entry ? 'SIGNATURE_INVALID' : 'SIGNING_KEY_NOT_REGISTERED' }));
+  if (!valid) process.exitCode = 1;
+}
 async function cmdAgentRun(argv) {
   const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, worker: { type: 'string' }, config: { type: 'string' } } });
   const config = loadConfigFile(opt(args, ['config']) ?? DEFAULT_CLI_CONFIG);
@@ -626,6 +654,8 @@ export async function main() {
   const [command, sub, ...rest] = process.argv.slice(2);
   try {
     if (command === 'init') await cmdInit(process.argv.slice(3));
+    else if (command === 'sign-contract') await cmdSignContract(process.argv.slice(3));
+    else if (command === 'verify-contract') await cmdVerifyContract(process.argv.slice(3));
     else if (command === 'relay' && sub === 'up') await cmdRelayUp(rest);
     else if (command === 'oidc-issuer' && sub === 'add') await cmdOidcIssuerAdd(rest);
     else if (command === 'oidc-issuer' && sub === 'list') await cmdOidcIssuerList(rest);
