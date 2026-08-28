@@ -20,3 +20,16 @@ Patch the relay recipient-not-found gate for domain-qualified envelope recipient
 
 ## Next action
 - Review and merge the patch.
+
+## Production packaging and host adapters (2026-08-27)
+
+### Completed work
+- Added `sigil/cli/package.json` with the global `sigil` binary mapping to `./sigil.mjs`.
+- Added Windows PowerShell, macOS/Linux shell, and callback guidance for one-shot inbox waits and safe re-arm behavior.
+
+### Tests
+- Package metadata validation passed.
+- Focused daemon test requires child-process execution; the restricted sandbox returned `spawn EPERM`.
+
+### Next action
+- Re-run the focused test outside the restricted sandbox or in CI.
