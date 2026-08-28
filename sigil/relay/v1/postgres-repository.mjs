@@ -53,6 +53,20 @@ export class PostgresRepository {
     const result = await client.query('SELECT sender_endpoint_id FROM envelopes WHERE message_id = $1', [messageId]);
     return result.rows[0] ? { endpoint_id: result.rows[0].sender_endpoint_id } : null;
   }
+  async lookupRecipientEndpoint(localPart, client) {
+    if (!client) throw new Error('Recipient lookup requires a transaction client');
+    const result = await client.query(
+      `SELECT e.endpoint_id, e.owner_id
+       FROM endpoints e
+       WHERE e.endpoint_id = $1 AND e.status = 'active'
+         AND EXISTS (
+           SELECT 1 FROM endpoint_keys k
+           WHERE k.endpoint_id = e.endpoint_id AND k.status = 'active'
+         )`,
+      [localPart]
+    );
+    return result.rows[0] ?? null;
+  }
   // No `client = this.pool` default here, unlike the other lookups above --
   // design §3 requires this one to always run on the transaction's client
   // since it takes a row lock; a lock taken on a throwaway pool connection

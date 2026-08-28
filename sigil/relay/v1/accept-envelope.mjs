@@ -1,6 +1,7 @@
 import { validateEnvelope, reject, signedBytes, checkRecipientLocality } from './validate-envelope.mjs';
 import { resolveRateLimits, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
 import { writeRejectionAudit } from './rejection-audit.mjs';
+import { parseFederatedId } from './federated-id.mjs';
 
 // Rejection codes that represent a real, attributable security-relevant
 // rejection worth auditing (design §9, round 3 blocker 5). A malformed-JSON
@@ -24,7 +25,8 @@ const statusByCode = Object.freeze({
   QUOTA_EXCEEDED: 429,
   DIRECTORY_LINK_REQUIRED: 403,
   MALFORMED_FEDERATED_ID: 400,
-  RECIPIENT_NOT_LOCAL: 400
+  RECIPIENT_NOT_LOCAL: 400,
+  RECIPIENT_NOT_FOUND: 400
 });
 
 function toResponse(options, error) {
@@ -72,6 +74,16 @@ async function acceptWithRepository(envelope, options) {
     // Pure string check -- needs only envelope + options.relayDomain, no
     // client/transaction/registry lookup.
     checkRecipientLocality(envelope, options.relayDomain);
+    // A local federated address is only deliverable when its local-part is
+    // present in durable directory state. Keep this lookup on the acceptance
+    // transaction's client so a concurrent endpoint/key change cannot turn an
+    // accepted envelope into a lost dead letter.
+    if (options.relayDomain && envelope.recipient?.endpoint_id) {
+      const { localPart } = parseFederatedId(envelope.recipient.endpoint_id);
+      if (!repository.lookupRecipientEndpoint || !(await repository.lookupRecipientEndpoint(localPart, client))) {
+        throw reject('RECIPIENT_NOT_FOUND', `Recipient local-part is not registered: ${localPart}`, { localPart });
+      }
+    }
     // Capability registry fail-closed check (design §7): a capability not
     // found in the registry is rejected outright here, before target-scope
     // matching even runs -- it does NOT fall through to the
