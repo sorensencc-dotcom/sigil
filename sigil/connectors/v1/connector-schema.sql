@@ -81,3 +81,42 @@ ON outbox_messages(profile_id, idempotency_key);
 
 CREATE INDEX IF NOT EXISTS idx_context_cache_ttl 
 ON context_cache(expires_at);
+
+-- Authenticated Local Endpoint Key Registry Cache
+CREATE TABLE IF NOT EXISTS endpoint_keys_cache (
+    profile_id TEXT NOT NULL REFERENCES connector_profiles(profile_id),
+    endpoint_id TEXT NOT NULL,
+    key_id TEXT NOT NULL,
+    algorithm TEXT NOT NULL CHECK(algorithm = 'Ed25519'),
+    public_key_base64url TEXT NOT NULL,
+    valid_from TEXT NOT NULL,
+    valid_until TEXT,
+    status TEXT NOT NULL CHECK(status IN ('active', 'revoked', 'retired')) DEFAULT 'active',
+    synced_sequence INTEGER NOT NULL DEFAULT 0,
+    synced_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (profile_id, endpoint_id, key_id)
+);
+
+-- Local Revocation Interval Cache Table
+CREATE TABLE IF NOT EXISTS endpoint_revocation_intervals (
+    revocation_event_id TEXT NOT NULL,
+    profile_id TEXT NOT NULL REFERENCES connector_profiles(profile_id),
+    endpoint_id TEXT NOT NULL,
+    key_id TEXT NOT NULL,
+    revoked_at TEXT NOT NULL,
+    reason TEXT NOT NULL CHECK(reason IN (
+        'compromised', 'rotation', 'decommissioned', 'administrative_invalidation'
+    )),
+    valid_from TEXT NOT NULL,
+    valid_until TEXT NOT NULL,
+    synced_sequence INTEGER NOT NULL DEFAULT 0,
+    synced_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (profile_id, endpoint_id, key_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_revocation_lookup 
+ON endpoint_revocation_intervals(profile_id, endpoint_id, key_id, revoked_at);
+
+CREATE INDEX IF NOT EXISTS idx_keys_cache_lookup 
+ON endpoint_keys_cache(profile_id, endpoint_id, key_id);
+

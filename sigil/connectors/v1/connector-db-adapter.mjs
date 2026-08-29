@@ -116,9 +116,45 @@ export class ConnectorDatabase {
         SET status = ?, decision_signature = ?, decided_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE approval_id = ?
       `),
-      getApproval: this.db.prepare(`SELECT * FROM local_approvals WHERE approval_id = ?`)
+      getApproval: this.db.prepare(`SELECT * FROM local_approvals WHERE approval_id = ?`),
+
+      // Authenticated Key Registry & Revocation Intervals Cache
+      upsertKeyCache: this.db.prepare(`
+        INSERT INTO endpoint_keys_cache (profile_id, endpoint_id, key_id, algorithm, public_key_base64url, valid_from, valid_until, status, synced_sequence)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(profile_id, endpoint_id, key_id) DO UPDATE SET
+          algorithm = EXCLUDED.algorithm,
+          public_key_base64url = EXCLUDED.public_key_base64url,
+          valid_from = EXCLUDED.valid_from,
+          valid_until = EXCLUDED.valid_until,
+          status = EXCLUDED.status,
+          synced_sequence = EXCLUDED.synced_sequence,
+          synced_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      `),
+      getKeyCache: this.db.prepare(`
+        SELECT * FROM endpoint_keys_cache WHERE profile_id = ? AND endpoint_id = ? AND key_id = ?
+      `),
+      upsertRevocationInterval: this.db.prepare(`
+        INSERT INTO endpoint_revocation_intervals (revocation_event_id, profile_id, endpoint_id, key_id, revoked_at, reason, valid_from, valid_until, synced_sequence)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(profile_id, endpoint_id, key_id) DO UPDATE SET
+          revocation_event_id = EXCLUDED.revocation_event_id,
+          revoked_at = EXCLUDED.revoked_at,
+          reason = EXCLUDED.reason,
+          valid_from = EXCLUDED.valid_from,
+          valid_until = EXCLUDED.valid_until,
+          synced_sequence = EXCLUDED.synced_sequence,
+          synced_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      `),
+      getRevocationInterval: this.db.prepare(`
+        SELECT * FROM endpoint_revocation_intervals WHERE profile_id = ? AND endpoint_id = ? AND key_id = ?
+      `),
+      listRevocationIntervalsForEndpoint: this.db.prepare(`
+        SELECT * FROM endpoint_revocation_intervals WHERE profile_id = ? AND endpoint_id = ? ORDER BY revoked_at DESC
+      `)
     };
   }
+
 
   /**
    * Registers or updates a local connector identity profile.
@@ -278,4 +314,65 @@ export class ConnectorDatabase {
   getApproval(approvalId) {
     return this.statements.getApproval.get(approvalId) || null;
   }
+
+  /**
+   * Registers or updates an authenticated endpoint public key cache entry.
+   */
+  upsertKeyCache(key) {
+    this.statements.upsertKeyCache.run(
+      key.profile_id,
+      key.endpoint_id,
+      key.key_id,
+      key.algorithm,
+      key.public_key_base64url,
+      key.valid_from,
+      key.valid_until || null,
+      key.status || 'active',
+      key.synced_sequence || 0
+    );
+  }
+
+  /**
+   * Fetches an endpoint public key from the local authenticated cache.
+   */
+  getKeyCache(profileId, endpointId, keyId) {
+    return this.statements.getKeyCache.get(profileId, endpointId, keyId) || null;
+  }
+
+  /**
+   * Atomically commits a batch of revocation intervals within a single transaction.
+   */
+  batchUpsertRevocationIntervals(profileId, revocations, syncedSequence = 0) {
+    const transaction = this.db.transaction((items) => {
+      for (const item of items) {
+        this.statements.upsertRevocationInterval.run(
+          item.revocation_event_id,
+          profileId,
+          item.endpoint_id,
+          item.key_id,
+          item.revoked_at,
+          item.reason,
+          item.valid_from,
+          item.valid_until,
+          syncedSequence
+        );
+      }
+    });
+    transaction(revocations);
+  }
+
+  /**
+   * Retrieves a specific revocation interval by profile, endpoint, and key.
+   */
+  getRevocationInterval(profileId, endpointId, keyId) {
+    return this.statements.getRevocationInterval.get(profileId, endpointId, keyId) || null;
+  }
+
+  /**
+   * Lists all revocation intervals recorded for a given endpoint.
+   */
+  listRevocationIntervalsForEndpoint(profileId, endpointId) {
+    return this.statements.listRevocationIntervalsForEndpoint.all(profileId, endpointId);
+  }
 }
+

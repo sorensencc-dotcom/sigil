@@ -101,3 +101,44 @@ test('outbox duplicate idempotency key is ignored and pending query excludes exp
   assert.deepEqual(pending.map((row) => row.message_id), ['msg_out_1']);
   assert.equal(db.db.prepare('SELECT COUNT(*) AS count FROM outbox_messages').get().count, 2);
 }));
+
+test('endpoint keys cache operations store, retrieve, and isolate by profile', () => withDatabase((db) => {
+  db.upsertKeyCache({
+    profile_id: 'prof_test',
+    endpoint_id: 'ep_test@relay.example',
+    key_id: 'key_1',
+    algorithm: 'Ed25519',
+    public_key_base64url: 'MCowBQYDK2VwAyEA1111111111111111111111111111111111111111111=',
+    valid_from: '2026-08-01T00:00:00.000Z',
+    valid_until: '2026-09-01T00:00:00.000Z',
+    status: 'active',
+    synced_sequence: 1
+  });
+
+  const key = db.getKeyCache('prof_test', 'ep_test@relay.example', 'key_1');
+  assert.equal(key.key_id, 'key_1');
+  assert.equal(key.status, 'active');
+  assert.equal(db.getKeyCache('prof_other', 'ep_test@relay.example', 'key_1'), null);
+}));
+
+test('batch revocation interval upsert atomically commits intervals within a transaction', () => withDatabase((db) => {
+  db.batchUpsertRevocationIntervals('prof_test', [
+    {
+      revocation_event_id: 'rev_1',
+      endpoint_id: 'ep_test@relay.example',
+      key_id: 'key_1',
+      revoked_at: '2026-08-28T12:00:00.000Z',
+      reason: 'compromised',
+      valid_from: '2026-08-01T00:00:00.000Z',
+      valid_until: '2026-09-01T00:00:00.000Z'
+    }
+  ], 10);
+
+  const record = db.getRevocationInterval('prof_test', 'ep_test@relay.example', 'key_1');
+  assert.equal(record.revoked_at, '2026-08-28T12:00:00.000Z');
+  assert.equal(record.reason, 'compromised');
+
+  const list = db.listRevocationIntervalsForEndpoint('prof_test', 'ep_test@relay.example');
+  assert.equal(list.length, 1);
+}));
+
