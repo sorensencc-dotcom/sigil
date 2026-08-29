@@ -53,7 +53,7 @@ export class PostgresRepository {
     const result = await client.query('SELECT sender_endpoint_id FROM envelopes WHERE message_id = $1', [messageId]);
     return result.rows[0] ? { endpoint_id: result.rows[0].sender_endpoint_id } : null;
   }
-  async lookupRecipientEndpoint(localPart, client) {
+  async lookupRecipientEndpoint(endpointId, client) {
     if (!client) throw new Error('Recipient lookup requires a transaction client');
     const result = await client.query(
       `SELECT e.endpoint_id, e.owner_id
@@ -63,7 +63,7 @@ export class PostgresRepository {
            SELECT 1 FROM endpoint_keys k
            WHERE k.endpoint_id = e.endpoint_id AND k.status = 'active'
          )`,
-      [localPart]
+      [endpointId]
     );
     return result.rows[0] ?? null;
   }

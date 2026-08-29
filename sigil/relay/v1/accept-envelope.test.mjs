@@ -122,7 +122,7 @@ test('task.result referencing an unaccepted task_id is rejected with INVALID_ENV
   assert.equal(result.body.details.reason, 'no visible task.request');
 });
 
-test('unregistered local-part is rejected with RECIPIENT_NOT_FOUND before persistence', async () => {
+test('unregistered federated recipient is rejected with RECIPIENT_NOT_FOUND before persistence', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
   const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
   const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'x' } });
@@ -136,7 +136,23 @@ test('unregistered local-part is rejected with RECIPIENT_NOT_FOUND before persis
   const result = await acceptEnvelopeAsync(envelope, { registered, repository, relayDomain: 'relay.example.com', now: new Date('2026-08-16T12:01:00Z') });
   assert.equal(result.status, 400);
   assert.equal(result.body.code, 'RECIPIENT_NOT_FOUND');
-  assert.equal(repository.calls.some((call) => call.op === 'lookupRecipientEndpoint' && call.localPart === 'missing' && call.client.id === 'client-1'), true);
+  assert.equal(repository.calls.some((call) => call.op === 'lookupRecipientEndpoint' && call.localPart === 'missing@relay.example.com' && call.client.id === 'client-1'), true);
+  assert.equal(repository.calls.some((call) => call.op === 'persistAcceptedEnvelope'), false);
+});
+
+test('non-federated recipient is checked by exact endpoint id before persistence', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'x' } });
+  envelope.recipient.endpoint_id = 'ep_missing';
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), keys.privateKey).toString('base64url');
+  const repository = fakeTransactionalRepository();
+  repository.lookupRecipientEndpoint = async (endpointId, client) => { repository.calls.push({ op: 'lookupRecipientEndpoint', endpointId, client }); return null; };
+  const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
+  assert.equal(result.status, 400);
+  assert.equal(result.body.code, 'RECIPIENT_NOT_FOUND');
+  assert.equal(result.body.details.recipient_id, 'ep_missing');
+  assert.equal(repository.calls.some((call) => call.endpointId === 'ep_missing'), true);
   assert.equal(repository.calls.some((call) => call.op === 'persistAcceptedEnvelope'), false);
 });
 

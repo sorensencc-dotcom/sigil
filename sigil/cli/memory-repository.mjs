@@ -17,7 +17,7 @@ const SEEDED_CAPABILITIES = new Map([
   ['sigil.approval/request', { namespace: 'sigil.approval', risk_tier: 'high' }],
 ]);
 
-export function createMemoryRepository() {
+export function createMemoryRepository({ registry = new Map() } = {}) {
   const envelopes = new Map();
   const deliveries = new Map();
   const idempotency = new Map();
@@ -65,6 +65,10 @@ export function createMemoryRepository() {
         }
       }
       return null;
+    },
+    async lookupRecipientEndpoint(endpointId) {
+      const endpoint = registry.get(endpointId);
+      return endpoint?.status === 'active' ? endpoint : null;
     },
     async persistAcceptedEnvelope(row) {
       envelopes.set(row.message_id, row);

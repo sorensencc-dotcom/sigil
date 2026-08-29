@@ -65,6 +65,26 @@ test('HTTP relay accepts signed envelope and returns request ID', async () => {
   assert.equal(result.status, 202); assert.equal(result.body.request_id, 'req_http_1');
 });
 
+test('HTTP relay rejects an unknown recipient before persistence', async () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
+  envelope.created_at = '2026-08-13T12:00:00.000Z'; envelope.expires_at = '2026-08-14T00:00:00.000Z';
+  envelope.recipient = { endpoint_id: 'ep_typo', owner_id: 'usr_unknown' };
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
+  let persisted = false;
+  const repository = {
+    async withTransaction(fn) { return fn(null); }, async lookupIdempotency() { return null; }, async lookupAcceptedMessageId() { return null; },
+    async lookupRecipientEndpoint() { return null; }, async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
+    async lookupActiveCapabilityGrants() { return []; }, async reserveRateLimit() { return { count: 1, allowed: true }; }, async countOpenDeliveries() { return 0; },
+    async persistAcceptedEnvelope() { persisted = true; return { message_id: envelope.message_id }; }
+  };
+  const server = createRelayServer({ registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]), repository, now: new Date('2026-08-13T12:01:00Z') });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const result = await request(port, { method: 'POST', path: '/v1/envelopes', body: envelope });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(result.status, 400); assert.equal(result.body.code, 'RECIPIENT_NOT_FOUND'); assert.equal(result.body.details.recipient_id, 'ep_typo'); assert.equal(persisted, false);
+});
+
 test('HTTP relay defaults to repository persistence with canonical acceptance data', async () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));

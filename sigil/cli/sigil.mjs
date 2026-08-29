@@ -185,7 +185,7 @@ async function cmdRelayUp(argv) {
       }
     }
   } else {
-    repository = createMemoryRepository();
+    repository = createMemoryRepository({ registry });
   }
 
   // Stream server needs its own http.Server (createRelayServer builds one

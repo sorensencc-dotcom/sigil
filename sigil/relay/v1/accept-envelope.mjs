@@ -1,7 +1,6 @@
 import { validateEnvelope, reject, signedBytes, checkRecipientLocality } from './validate-envelope.mjs';
 import { resolveRateLimits, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
 import { writeRejectionAudit } from './rejection-audit.mjs';
-import { parseFederatedId } from './federated-id.mjs';
 
 // Rejection codes that represent a real, attributable security-relevant
 // rejection worth auditing (design §9, round 3 blocker 5). A malformed-JSON
@@ -74,14 +73,17 @@ async function acceptWithRepository(envelope, options) {
     // Pure string check -- needs only envelope + options.relayDomain, no
     // client/transaction/registry lookup.
     checkRecipientLocality(envelope, options.relayDomain);
-    // A local federated address is only deliverable when its local-part is
-    // present in durable directory state. Keep this lookup on the acceptance
-    // transaction's client so a concurrent endpoint/key change cannot turn an
-    // accepted envelope into a lost dead letter.
-    if (options.relayDomain && envelope.recipient?.endpoint_id) {
-      const { localPart } = parseFederatedId(envelope.recipient.endpoint_id);
-      if (!repository.lookupRecipientEndpoint || !(await repository.lookupRecipientEndpoint(localPart, client))) {
-        throw reject('RECIPIENT_NOT_FOUND', `Recipient local-part is not registered: ${localPart}`, { localPart });
+    // Every direct recipient must exist in the relay's endpoint directory
+    // before any delivery row can be written. Keep this lookup on the
+    // acceptance transaction's client so a concurrent endpoint change cannot
+    // turn an accepted envelope into a lost dead letter. Federated addresses
+    // are checked only after locality validation; non-federated addresses use
+    // their exact bare endpoint id.
+    if (envelope.recipient?.endpoint_id && repository.lookupRecipientEndpoint) {
+      const recipientId = envelope.recipient.endpoint_id;
+      const registered = await repository.lookupRecipientEndpoint(recipientId, client);
+      if (!registered) {
+        throw reject('RECIPIENT_NOT_FOUND', 'The recipient endpoint does not exist in this relay\'s registry.', { recipient_id: recipientId });
       }
     }
     // Capability registry fail-closed check (design §7): a capability not
