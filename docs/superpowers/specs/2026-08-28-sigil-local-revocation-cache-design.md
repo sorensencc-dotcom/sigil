@@ -6,14 +6,19 @@ Under the Sigil Trust Engine, key revocation is epoch-bound: a signature generat
 
 When a local connector operates disconnected from the central PostgreSQL relay, it cannot query the relay's live database of registered and revoked keys. An attacker holding a compromised key could backdate message envelopes (setting `created_at < T_revocation`) and submit them to an offline connector. Without a local revocation interval cache, the offline connector accepts the forged envelope.
 
-This specification closes this temporal forgery vulnerability by adding an epoch-aware revocation interval cache directly to the connector's local SQLite database and introducing a fail-closed offline verification pipeline.
+This specification closes this temporal forgery vulnerability by:
+1. Adding an authenticated local endpoint key registry and epoch-aware revocation interval cache to the connector's SQLite database.
+2. Enforcing sequence-checked, Ed25519-signed relay revocation sync manifests (`manifest_type: revocation_sync`).
+3. Introducing a strict, fail-closed offline verification pipeline with two-tier rejection audit logging.
 
 ## Architectural boundaries and invariants
 
 1. **Zero relay payload access**: The relay stores only context pointers and metadata; it never receives raw filesystem contents or private keys. The connector stores private keys strictly in host credential stores (DPAPI on Windows, Keychain on macOS).
-2. **JCS canonicalization**: Every signature verification executes over the RFC 8785 JSON Canonicalization Scheme (JCS) canonical UTF-8 bytes of the envelope excluding the `signature` field.
-3. **Fail-closed verification**: If the local clock skew exceeds the tolerance window (±5 minutes) or any revocation status is indeterminate, verification halts and rejects the envelope.
-4. **Two-tier audit persistence**: Security rejections write first to the local SQLite audit tables; on database lock or error, they append to a local fallback log file.
+2. **JCS canonicalization**: Every signature verification executes over the RFC 8785 JSON Canonicalization Scheme (JCS) canonical UTF-8 bytes of the envelope or sync manifest excluding the `signature` field.
+3. **Fail-closed authority**: Unknown keys (not in local authenticated registry), clock skew > 5 minutes, expired messages, or indeterminate revocation status result in immediate fail-closed rejection.
+4. **Signed sync manifests**: Relay revocation pushes must carry an Ed25519 relay signature and monotonically increasing sequence numbers.
+5. **Compound identity isolation**: All key and revocation records are bound to `(profile_id, endpoint_id, key_id)` to prevent cross-profile collisions.
+6. **Data-directory audit persistence**: Security rejections write first to SQLite `audit_events`; on `SQLITE_BUSY` or database lock, they append sanitized JSON to `path.join(dataDir, "logs", "security-failures.log")`.
 
 ## Schema design
 
@@ -22,37 +27,85 @@ This specification closes this temporal forgery vulnerability by adding an epoch
 ```sql
 PRAGMA foreign_keys = ON;
 
+-- Authenticated Local Endpoint Key Registry Cache
+CREATE TABLE IF NOT EXISTS endpoint_keys_cache (
+    profile_id TEXT NOT NULL REFERENCES connector_profiles(profile_id),
+    endpoint_id TEXT NOT NULL,
+    key_id TEXT NOT NULL,
+    algorithm TEXT NOT NULL CHECK(algorithm = 'Ed25519'),
+    public_key_base64url TEXT NOT NULL,
+    valid_from TEXT NOT NULL,
+    valid_until TEXT,
+    status TEXT NOT NULL CHECK(status IN ('active', 'revoked', 'retired')) DEFAULT 'active',
+    synced_sequence INTEGER NOT NULL DEFAULT 0,
+    synced_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (profile_id, endpoint_id, key_id)
+);
+
 -- Local Revocation Interval Cache Table
 CREATE TABLE IF NOT EXISTS endpoint_revocation_intervals (
-    revocation_event_id TEXT PRIMARY KEY,                               -- UUIDv7 event identifier
-    profile_id TEXT NOT NULL REFERENCES connector_profiles(profile_id), -- Associated profile
-    endpoint_id TEXT NOT NULL,                                          -- Target endpoint ID (e.g. ep_codex@relay.example.com)
-    key_id TEXT NOT NULL,                                               -- Ed25519 key ID / fingerprint
-    revoked_at TEXT NOT NULL,                                           -- ISO 8601 UTC timestamp of revocation epoch
+    revocation_event_id TEXT NOT NULL,
+    profile_id TEXT NOT NULL REFERENCES connector_profiles(profile_id),
+    endpoint_id TEXT NOT NULL,
+    key_id TEXT NOT NULL,
+    revoked_at TEXT NOT NULL,
     reason TEXT NOT NULL CHECK(reason IN (
         'compromised', 'rotation', 'decommissioned', 'administrative_invalidation'
     )),
-    valid_from TEXT NOT NULL,                                           -- Original key activation timestamp
-    valid_until TEXT NOT NULL,                                          -- Original scheduled key expiration timestamp
+    valid_from TEXT NOT NULL,
+    valid_until TEXT NOT NULL,
+    synced_sequence INTEGER NOT NULL DEFAULT 0,
     synced_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    UNIQUE(endpoint_id, key_id)
+    PRIMARY KEY (profile_id, endpoint_id, key_id)
 );
 
 -- Performance Indexes
 CREATE INDEX IF NOT EXISTS idx_revocation_lookup 
-ON endpoint_revocation_intervals(key_id, revoked_at);
+ON endpoint_revocation_intervals(profile_id, endpoint_id, key_id, revoked_at);
 
-CREATE INDEX IF NOT EXISTS idx_revocation_sync_status 
-ON endpoint_revocation_intervals(synced_at);
+CREATE INDEX IF NOT EXISTS idx_keys_cache_lookup 
+ON endpoint_keys_cache(profile_id, endpoint_id, key_id);
+```
+
+## Signed relay revocation sync manifest contract
+
+Relay pushes to the connector MUST conform to the signed manifest schema:
+
+```json
+{
+  "protocol": "sigil/1",
+  "manifest_type": "revocation_sync",
+  "relay_id": "relay.example.com",
+  "sequence": 1042,
+  "issued_at": "2026-08-28T12:00:00.000Z",
+  "revocations": [
+    {
+      "revocation_event_id": "018e5f24-0000-7000-8000-000000000000",
+      "endpoint_id": "ep_codex@relay.example.com",
+      "key_id": "key_ed25519_abc123",
+      "revoked_at": "2026-08-28T12:00:00.000Z",
+      "reason": "compromised",
+      "valid_from": "2026-08-01T00:00:00.000Z",
+      "valid_until": "2026-09-01T00:00:00.000Z"
+    }
+  ],
+  "signature": {
+    "algorithm": "Ed25519",
+    "key_id": "relay-signing-key-1",
+    "value": "base64url..."
+  }
+}
 ```
 
 ## Database adapter methods (`sigil/connectors/v1/connector-db-adapter.mjs`)
 
-The `ConnectorDatabase` class provides prepared statements and accessors for revocation lifecycle management:
+The `ConnectorDatabase` class provides prepared statements and accessors:
 
-- `upsertRevocationInterval(record)`: Inserts or updates an entry in `endpoint_revocation_intervals` on conflict of `(endpoint_id, key_id)`.
-- `getRevocationInterval(keyId)`: Retrieves the revocation record for a given `key_id`.
-- `listRevocationIntervalsForEndpoint(endpointId)`: Lists all recorded revocation events associated with an `endpoint_id`.
+- `upsertKeyCache(record)`: Stores or updates key definitions in `endpoint_keys_cache`.
+- `getKeyCache(profileId, endpointId, keyId)`: Retrieves active key metadata.
+- `batchApplyRevocationSync(profileId, manifest, relayPublicKey)`: Verifies manifest signature, validates monotonic `sequence > last_synced_sequence`, and executes atomic batch upsert inside `this.db.transaction(...)`.
+- `getRevocationInterval(profileId, endpointId, keyId)`: Retrieves the revocation interval record.
+- `listRevocationIntervalsForEndpoint(profileId, endpointId)`: Lists all revocation events for an endpoint.
 
 ## Verification algorithm and decision pipeline
 
@@ -62,20 +115,24 @@ The connector executes offline envelope validation through `sigil/connectors/v1/
                        [ Inbound Envelope Received ]
                                      │
                                      ▼
-                      [ 1. Syntax & Timestamp Parsing ]
+                      [ 1. Syntax & Strict UTC Parsing ]
+                         - Validate ISO 8601 UTC regex
+                         - Reject if T_local >= T_expires
+                         - Reject if |T_local - T_created| > 5m
+                         - Reject if T_expires <= T_created or > 24h
                                      │
                                      ▼
-                   [ 2. Clock-Skew & Lifetime Evaluation ]
-                   (Rejects if |T_local - T_msg| > 5 min
-                    or expires_at > created_at + 24h)
+                      [ 2. Authenticated Key Registry Lookup ]
+                         - Query endpoint_keys_cache(profile, endpoint, key)
+                         - Reject UNKNOWN_KEY if absent or not active
                                      │
                                      ▼
-                   [ 3. Local Revocation Cache Lookup ]
-                    Query endpoint_revocation_intervals
+                      [ 3. Local Revocation Cache Lookup ]
+                         - Query endpoint_revocation_intervals
                                      │
             ┌────────────────────────┴────────────────────────┐
             ▼                                                 ▼
-   [ Key Record Found ]                              [ Key Not in Cache ]
+   [ Revocation Record Found ]                       [ Not in Revocation Cache ]
             │                                                 │
    ┌────────┴────────┐                                        │
    ▼                 ▼                                        │
@@ -101,64 +158,57 @@ The connector executes offline envelope validation through `sigil/connectors/v1/
 
 ### Verification steps
 
-1. **Clock-skew and timestamp check**:
-   To prevent replay and unbounded delay, evaluate $T_{msg} = \text{Date.parse}(envelope.created\_at)$. If $|T_{local} - T_{msg}| > 300{,}000\text{ ms}$ (5 minutes), reject with `CLOCK_SKEW_EXCEEDED`. If $envelope.expires\_at \le T_{msg}$ or $envelope.expires\_at > T_{msg} + 86{,}400{,}000\text{ ms}$, reject with `INVALID_ENVELOPE` or `MESSAGE_EXPIRED`.
+1. **Strict timestamp and lifetime parsing**:
+   - Assert `envelope.created_at` and `envelope.expires_at` match `/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/`. If not, throw `INVALID_ENVELOPE`.
+   - If $T_{local} \ge T_{expires}$, throw `MESSAGE_EXPIRED`.
+   - If $|T_{local} - T_{created}| > 300{,}000\text{ ms}$ (5 minutes), throw `CLOCK_SKEW_EXCEEDED`.
+   - If $T_{expires} \le T_{created}$ or $T_{expires} > T_{created} + 86{,}400{,}000\text{ ms}$, throw `INVALID_ENVELOPE`.
 
-2. **Revocation evaluation**:
-   Query `endpoint_revocation_intervals` using `envelope.signature.key_id`.
-   - **Case A (Key present in revocation cache)**:
+2. **Authenticated key registry lookup**:
+   - Query `endpoint_keys_cache` for `(profile_id, envelope.sender.endpoint_id, envelope.signature.key_id)`.
+   - If missing or `status !== 'active'`, throw `UNKNOWN_KEY`.
+
+3. **Revocation evaluation**:
+   - Query `endpoint_revocation_intervals` for `(profile_id, envelope.sender.endpoint_id, envelope.signature.key_id)`.
+   - **Case A (Key in revocation cache)**:
      - If $T_{msg} \ge \text{Date.parse}(record.revoked\_at)$, throw `KEY_REVOKED`.
-     - If $T_{msg} < \text{Date.parse}(record.revoked\_at)$, verify $T_{msg} \ge \text{Date.parse}(record.valid\_from)$ and $T_{msg} < \text{Date.parse}(record.valid\_until)$. If outside range, throw `INVALID_SIGNATURE`.
+     - If $T_{msg} < \text{Date.parse}(record.revoked\_at)$, assert $T_{msg} \ge \text{Date.parse}(record.valid\_from)$ and $T_{msg} < \text{Date.parse}(record.valid\_until)$. If outside range, throw `INVALID_SIGNATURE`.
    - **Case B (Key absent from revocation cache)**:
-     - Verify $T_{msg}$ is within the key's registered active operational window.
+     - Assert $T_{msg} \ge \text{Date.parse}(key.valid\_from)$ and $T_{msg} < \text{Date.parse}(key.valid\_until)$.
 
-3. **Canonicalization**:
-   Strip `envelope.signature` and serialize the remainder to canonical UTF-8 bytes using RFC 8785 JCS.
+4. **JCS canonicalization**:
+   - Strip top-level `envelope.signature` and serialize to canonical UTF-8 bytes using RFC 8785 JCS.
 
-4. **Cryptographic signature check**:
-   Verify the Ed25519 signature against the sender's public key. If verification fails, throw `INVALID_SIGNATURE`.
+5. **Ed25519 signature check**:
+   - Verify the signature value decoded from `base64url` against the public key from `endpoint_keys_cache`. If invalid, throw `INVALID_SIGNATURE`.
 
-5. **Capability and approval check**:
-   Intersect requested capabilities with local grants. For high-risk operations under offline conditions, require step-up local authorization via `local_approvals`.
+6. **Capability intersection**:
+   - Intersect requested capabilities with local grants. High-risk capabilities offline require local approval.
 
 ## Two-tier rejection-audit trail
 
 All security validation rejections execute two-tier audit logging:
 
-1. **Tier 1 (Database Transaction)**:
-   Write a structured audit entry to `audit_events`:
-   ```json
-   {
-     "event_id": "018e5f24-0000-7000-8000-000000000000",
-     "event_type": "security.verification_rejection",
-     "subject_id": "ep_codex@relay.example.com",
-     "actor_id": "ep_codex@relay.example.com",
-     "payload": {
-       "error_code": "KEY_REVOKED",
-       "key_id": "key_ed25519_abc123",
-       "message_id": "msg_018e...",
-       "created_at": "2026-08-28T12:05:00.000Z",
-       "revoked_at": "2026-08-28T12:00:00.000Z",
-       "action_hash": "sha256:7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
-     },
-     "created_at": "2026-08-28T12:06:00.000Z"
-   }
-   ```
+1. **Tier 1 (Database Transaction)**: Insert structured audit entry into `audit_events`.
+2. **Tier 2 (Fallback File Logging)**: If SQLite write throws `SQLITE_BUSY` or connection lock:
+   - Catch error immediately.
+   - Append sanitized single-line JSON to `path.join(dataDir, "logs", "security-failures.log")`.
+   - Increment metric `security_audit_fallback_total`.
+   - Re-throw original security error to maintain fail-closed execution.
 
-2. **Tier 2 (Fallback File Logging)**:
-   If SQLite write fails due to `SQLITE_BUSY`, database lock, or filesystem corruption:
-   - Catch the error immediately.
-   - Append the serialized JSON record to `logs/security-failures.log`.
-   - Increment the local failure metric counter.
-   - Re-throw the original security rejection error to maintain fail-closed execution.
+## Conformance and test matrix
 
-## Conformance and test plan
-
-| Test ID | Scenario | Input State | Expected Outcome |
+| Test ID | Scenario | Input State & Clock Mock | Expected Outcome |
 |---|---|---|---|
-| **TEST-REV-01** | Standard Active Key | Active key; valid timestamp within skew window. | Verification succeeds (`accepted: true`). |
-| **TEST-REV-02** | Pre-Revocation Validity | Key revoked at `12:00:00Z`; envelope created at `11:55:00Z`. | Signature validates; verification succeeds. |
-| **TEST-REV-03** | Post-Revocation Rejection | Key revoked at `12:00:00Z`; envelope created at `12:01:00Z`. | Rejects with `KEY_REVOKED`; logs audit event. |
-| **TEST-REV-04** | JCS Key Reordering | Envelope keys rearranged; valid signature over JCS canonical form. | Canonicalization normalizes payload; signature validates. |
+| **TEST-REV-01** | Standard Active Key | Active key in registry; valid timestamp within skew window. | Verification succeeds (`accepted: true`). |
+| **TEST-REV-02** | Pre-Revocation Validity | Key revoked at `12:00:00Z`; envelope created at `11:55:00Z`; mock clock `now = 11:57:00Z`. | Signature validates; verification succeeds. |
+| **TEST-REV-03** | Post-Revocation Rejection | Key revoked at `12:00:00Z`; envelope created at `12:01:00Z`; mock clock `now = 12:02:00Z`. | Rejects with `KEY_REVOKED`; logs audit event. |
+| **TEST-REV-04** | JCS Key Reordering | Envelope keys rearranged; valid signature over canonical form. | Canonicalization normalizes payload; signature validates. |
 | **TEST-REV-05** | Clock Skew Exceeded | Envelope `created_at` deviates > 5 minutes from local clock. | Rejects with `CLOCK_SKEW_EXCEEDED`. |
-| **TEST-REV-06** | Two-Tier Fallback | Database lock simulated during rejection logging. | Logs to `security-failures.log`; preserves fail-closed error. |
+| **TEST-REV-06** | Two-Tier Fallback | Force database error during rejection logging. | Logs to `security-failures.log`; preserves fail-closed error. |
+| **TEST-REV-07** | Strict UTC Format | Non-UTC timestamp (missing 'Z' or invalid format). | Rejects with `INVALID_ENVELOPE`. |
+| **TEST-REV-08** | Current-Time Expired | Current clock `now >= expires_at`. | Rejects with `MESSAGE_EXPIRED`. |
+| **TEST-REV-09** | Lifetime Exceeded | Message lifetime `expires_at > created_at + 24h`. | Rejects with `INVALID_ENVELOPE`. |
+| **TEST-REV-10** | Unknown Key | Key ID not present in authenticated local `endpoint_keys_cache`. | Rejects with `UNKNOWN_KEY`. |
+| **TEST-REV-11** | Malformed Signature | Invalid base64url or signature bit corruption. | Rejects with `INVALID_SIGNATURE`. |
+| **TEST-REV-12** | Signed Sync Manifest | Sync manifest with invalid relay signature or out-of-order sequence. | Rejects sync batch with `INVALID_SYNC_MANIFEST`. |
