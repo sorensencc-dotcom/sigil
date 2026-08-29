@@ -120,3 +120,17 @@ ON endpoint_revocation_intervals(profile_id, endpoint_id, key_id, revoked_at);
 CREATE INDEX IF NOT EXISTS idx_keys_cache_lookup 
 ON endpoint_keys_cache(profile_id, endpoint_id, key_id);
 
+-- Local Connector Audit Events Table
+CREATE TABLE IF NOT EXISTS audit_events (
+    event_id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    actor_id TEXT,
+    payload TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_subject 
+ON audit_events(subject_id, created_at);
+
+
