@@ -65,31 +65,32 @@ test('agent daemon handles fallback workflow with SQLite persistence when config
   const ollamaKeys = identityKeys(ollamaId);
 
   const registry = new Map([
-    ['ep_codex', {
+    [codexId.endpoint_id, {
       owner_id: codexId.owner_id, endpoint_id: codexId.endpoint_id,
       kind: codexId.kind, key_id: codexId.key_id, status: 'active', public_key: codexKeys.publicKey,
     }],
-    ['ep_ollama', {
+    [ollamaId.endpoint_id, {
       owner_id: ollamaId.owner_id, endpoint_id: ollamaId.endpoint_id,
       kind: ollamaId.kind, key_id: ollamaId.key_id, status: 'active', public_key: ollamaKeys.publicKey,
     }],
   ]);
 
   const tokenHashes = new Map([
-    [hashBearerToken(codexId.relay_token), 'ep_codex'],
-    [hashBearerToken(ollamaId.relay_token), 'ep_ollama'],
+    [hashBearerToken(codexId.relay_token), codexId.endpoint_id],
+    [hashBearerToken(ollamaId.relay_token), ollamaId.endpoint_id],
   ]);
 
-  const repository = createMemoryRepository();
+  const repository = createMemoryRepository({ registry });
   const expiresAt = new Date(Date.now() + 86400_000).toISOString();
   await repository.createCapabilityGrant({
     grantId: 'grant_codex_submit', capability: 'sigil.task/submit',
-    scope: 'scope:conversation', grantedTo: 'ep_codex', expiresAt,
+    scope: 'scope:conversation', grantedTo: codexId.endpoint_id, expiresAt,
   });
   await repository.createCapabilityGrant({
     grantId: 'grant_ollama_submit', capability: 'sigil.task/submit',
-    scope: 'scope:conversation', grantedTo: 'ep_ollama', expiresAt,
+    scope: 'scope:conversation', grantedTo: ollamaId.endpoint_id, expiresAt,
   });
+
 
   const relayServer = createRelayServer({ registry, repository, tokenHashes });
   await new Promise((resolve) => relayServer.listen(0, '127.0.0.1', resolve));
