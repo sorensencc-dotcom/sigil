@@ -134,8 +134,11 @@ not a special case in the relay protocol.
 ## Open items deferred past this lock
 
 - Bearer-token issuance/rotation: registration returns a one-time endpoint-scoped token over the authenticated bootstrap channel; rotation requires a request signed by the current endpoint key or approved recovery flow, invalidates the old token immediately, and audits the transition. Tokens are stored only in host-native secure storage and are never logged or returned after creation.
-- Rate/quota limit numbers (§14 requires them; this doc doesn't set thresholds).
-- Dead-letter queue mechanics for `processing_failed` (§9) — table shape only, no reaper policy yet.
+- Rate/quota limits and dead-letter reaper policy are defined in
+  `sigil-policy-parameters-v1.0.md`.
+- PII retention periods, deletion controls, and compliance ownership are
+  defined in `sigil-policy-parameters-v1.0.md`; deployment-specific counsel
+  and compliance approval remain required before production use.
 
 ## Amendment 2026-08-16 — Ed25519: stay on node:crypto
 
