@@ -35,7 +35,7 @@
   - `db.getRevocationInterval(profileId, endpointId, keyId)`
   - `db.listRevocationIntervalsForEndpoint(profileId, endpointId)`
 
-- [ ] **Step 1: Write the failing test for key cache and revocation interval operations**
+- [x] **Step 1: Write the failing test for key cache and revocation interval operations**
 
 Add tests to `sigil/connectors/v1/connector-db-adapter.test.mjs`:
 
@@ -81,12 +81,12 @@ test('batch revocation interval upsert atomically commits intervals within a tra
 }));
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test sigil/connectors/v1/connector-db-adapter.test.mjs`
 Expected: FAIL with `db.upsertKeyCache is not a function`.
 
-- [ ] **Step 3: Update schema and implement database adapter methods**
+- [x] **Step 3: Update schema and implement database adapter methods**
 
 Update `sigil/connectors/v1/connector-schema.sql`:
 ```sql
@@ -167,12 +167,12 @@ listRevocationIntervalsForEndpoint: this.db.prepare(`
 `)
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test sigil/connectors/v1/connector-db-adapter.test.mjs`
 Expected: PASS all tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add sigil/connectors/v1/connector-schema.sql sigil/connectors/v1/connector-db-adapter.mjs sigil/connectors/v1/connector-db-adapter.test.mjs
@@ -191,7 +191,7 @@ git commit -m "feat(connector): add key registry and revocation intervals SQLite
 - Consumes: `canonicalJsonBytes` from `sigil/relay/v1/jcs.mjs`, `ConnectorDatabase`.
 - Produces: `applySignedRevocationSync({ db, profileId, manifest, relayPublicKey, lastSequence })`
 
-- [ ] **Step 1: Write the failing test for signed revocation sync manifest**
+- [x] **Step 1: Write the failing test for signed revocation sync manifest**
 
 Create `sigil/connectors/v1/revocation-sync.test.mjs`:
 ```javascript
@@ -263,12 +263,12 @@ test('applySignedRevocationSync validates manifest signature and atomically comm
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test sigil/connectors/v1/revocation-sync.test.mjs`
 Expected: FAIL with `Cannot find module './revocation-sync.mjs'`.
 
-- [ ] **Step 3: Implement signed revocation sync processor**
+- [x] **Step 3: Implement signed revocation sync processor**
 
 Create `sigil/connectors/v1/revocation-sync.mjs`:
 ```javascript
@@ -309,12 +309,12 @@ export function applySignedRevocationSync({ db, profileId, manifest, relayPublic
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test sigil/connectors/v1/revocation-sync.test.mjs`
 Expected: PASS all tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add sigil/connectors/v1/revocation-sync.mjs sigil/connectors/v1/revocation-sync.test.mjs
@@ -333,7 +333,7 @@ git commit -m "feat(connector): add signed relay revocation sync manifest proces
 - Consumes: `ConnectorDatabase`, `canonicalJsonBytes` from `sigil/relay/v1/jcs.mjs`, `node:crypto`.
 - Produces: `verifyInboundEnvelopeOffline({ envelope, profileId, db, dataDir, now })`
 
-- [ ] **Step 1: Write the failing test suite covering TEST-REV-01 through TEST-REV-12**
+- [x] **Step 1: Write the failing test suite covering TEST-REV-01 through TEST-REV-12**
 
 Create `sigil/connectors/v1/connector-validator.test.mjs` implementing all 12 test cases in the Conformance Matrix:
 - TEST-REV-01: Standard Active Key verification
@@ -349,12 +349,12 @@ Create `sigil/connectors/v1/connector-validator.test.mjs` implementing all 12 te
 - TEST-REV-11: Malformed base64url signature rejected with `INVALID_SIGNATURE`)
 - TEST-REV-12: Signed sync manifest verification
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test sigil/connectors/v1/connector-validator.test.mjs`
 Expected: FAIL with `Cannot find module './connector-validator.mjs'`.
 
-- [ ] **Step 3: Implement connector validator and two-tier audit fallback**
+- [x] **Step 3: Implement connector validator and two-tier audit fallback**
 
 Create `sigil/connectors/v1/connector-validator.mjs`:
 ```javascript
@@ -542,12 +542,12 @@ export function verifyInboundEnvelopeOffline({ envelope, profileId, db, dataDir,
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test sigil/connectors/v1/connector-validator.test.mjs`
 Expected: PASS all 12 test cases.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add sigil/connectors/v1/connector-validator.mjs sigil/connectors/v1/connector-validator.test.mjs
@@ -561,19 +561,20 @@ git commit -m "feat(connector): implement fail-closed offline envelope validator
 **Files:**
 - Test: All connector test suites
 
-- [ ] **Step 1: Run complete connector test suite**
+- [x] **Step 1: Run complete connector test suite**
 
 Run: `node --test sigil/connectors/v1/*.test.mjs`
 Expected: PASS across all connector test suites with zero failures.
 
-- [ ] **Step 2: Run JCS Conformance preflight audit**
+- [x] **Step 2: Run JCS Conformance preflight audit**
 
 Run: `pwsh -NoProfile -File C:\dev\scripts\verify-repo-context.ps1 -Path C:\dev\sigil-repo`
 Expected: PREFLIGHT_PASS.
 
-- [ ] **Step 3: Commit and update STATUS.md**
+- [x] **Step 3: Commit and update STATUS.md**
 
 ```bash
 git status
 git commit -m "chore: complete local revocation cache and key registry offline validation"
 ```
+
