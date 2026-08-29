@@ -81,11 +81,12 @@ async function acceptWithRepository(envelope, options) {
     // their exact bare endpoint id.
     if (envelope.recipient?.endpoint_id && repository.lookupRecipientEndpoint) {
       const recipientId = envelope.recipient.endpoint_id;
-      const registered = await repository.lookupRecipientEndpoint(recipientId, client);
-      if (!registered) {
+      const registered = (await repository.lookupRecipientEndpoint(recipientId, client)) ?? options.registered?.get(recipientId);
+      if (!registered || registered.status !== 'active') {
         throw reject('RECIPIENT_NOT_FOUND', 'The recipient endpoint does not exist in this relay\'s registry.', { recipient_id: recipientId });
       }
     }
+
     // Capability registry fail-closed check (design §7): a capability not
     // found in the registry is rejected outright here, before target-scope
     // matching even runs -- it does NOT fall through to the
