@@ -1,25 +1,28 @@
 # Status
 
 ## Current goal
-Patch the relay recipient-not-found gate for domain-qualified envelope recipients.
+Implement Local Revocation Interval Cache & Key Registry in Sigil connectors for decentralized offline verification (`docs/superpowers/plans/2026-08-28-sigil-local-revocation-cache.md`).
 
 ## Completed work
-- Added a transaction-scoped durable recipient lookup before envelope persistence.
-- Added `RECIPIENT_NOT_FOUND` as a 400 response.
-- Added regression coverage proving unregistered local-parts fail closed.
+- Brainstormed and finalized design specification `docs/superpowers/specs/2026-08-28-sigil-local-revocation-cache-design.md`.
+- Executed `/plan-eng-review` with Codex outside-voice analysis, incorporating authenticated key registry cache, strict ISO 8601 UTC regex, anchored fallback logging, and signed relay revocation sync manifests.
+- Authored comprehensive implementation plan `docs/superpowers/plans/2026-08-28-sigil-local-revocation-cache.md` covering Tasks 1–4 with full 12-case test matrix (`TEST-REV-01` through `TEST-REV-12`).
 
 ## Tests
-- `node --test sigil/relay/v1/http-server.test.mjs sigil/relay/v1/accept-envelope.test.mjs sigil/relay/v1/postgres-repository.test.mjs` — 94 passed.
-- `git diff --check` — passed.
+- Design and implementation plans verified and committed.
+- JCS conformance preflight audit clean.
 
 ## Decisions
-- The active relay repository is PostgreSQL-backed; the lookup uses the repository transaction client and checks active `endpoints` plus an active `endpoint_keys` row.
+- Compound primary key scoping `(profile_id, endpoint_id, key_id)` to isolate connector profiles.
+- Strict RFC 3339 / ISO 8601 UTC timestamp checking and explicit current-time expiry ($T_{local} \ge T_{expires}$).
+- Ed25519-signed relay sync manifests with monotonic sequence enforcement.
+- Two-tier fail-closed rejection audit logging with append-only fallback to `path.join(dataDir, 'logs', 'security-failures.log')`.
 
 ## Blockers
 - None.
 
 ## Next action
-- Review and merge the patch.
+- Dispatch subagent-driven execution session to implement Tasks 1 through 4.
 
 ## Production packaging and host adapters (2026-08-27)
 
@@ -33,3 +36,17 @@ Patch the relay recipient-not-found gate for domain-qualified envelope recipient
 
 ### Next action
 - Re-run the focused test outside the restricted sandbox or in CI.
+
+## Policy parameters (2026-08-27)
+
+### Completed work
+- Defined endpoint, owner, conversation, and recipient inbox limits.
+- Defined bounded dead-letter retry and reaper behavior.
+- Defined PII, audit, credential, log, and backup retention periods with legal-hold controls.
+- Closed the deferred items in `docs/specs/sigil-implementation-decisions-v1.0.md`.
+
+### Tests
+- `git diff --check` passed.
+
+### Blockers
+- Tier 1, privacy/compliance-owner, and counsel approval remain required before production rollout.
