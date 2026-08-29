@@ -7,10 +7,15 @@ Implement Local Revocation Interval Cache & Key Registry in Sigil connectors for
 - Brainstormed and finalized design specification `docs/superpowers/specs/2026-08-28-sigil-local-revocation-cache-design.md`.
 - Executed `/plan-eng-review` with Codex outside-voice analysis, incorporating authenticated key registry cache, strict ISO 8601 UTC regex, anchored fallback logging, and signed relay revocation sync manifests.
 - Authored comprehensive implementation plan `docs/superpowers/plans/2026-08-28-sigil-local-revocation-cache.md` covering Tasks 1–4 with full 12-case test matrix (`TEST-REV-01` through `TEST-REV-12`).
+- Implemented Task 1: SQLite schema extension with `endpoint_keys_cache`, `endpoint_revocation_intervals`, and `audit_events` tables; prepared statements and transaction-isolated batch/lookup methods on `ConnectorDatabase`.
+- Implemented Task 2: Signed relay revocation sync manifest processor (`revocation-sync.mjs`) with Ed25519 signature verification, sequence monotonicity checks, and atomic batch interval storage.
+- Implemented Task 3: Fail-closed offline envelope validator (`connector-validator.mjs`) with two-tier rejection audit logging, clock skew enforcement, strict ISO 8601 UTC regex checks, JCS canonicalization, and active registry/revocation checks.
+- Implemented Task 4: Complete connector test suite execution (90 tests passing) and JCS / dependency audit verification.
 
 ## Tests
-- Design and implementation plans verified and committed.
-- JCS conformance preflight audit clean.
+- `node --test sigil/connectors/v1/*.test.mjs` (90/90 passing across all suites including all 12 `TEST-REV-01` through `TEST-REV-12` cases).
+- `npm run audit:deps` and `npm run audit:jcs` clean with zero dependency or canonicalization drift.
+- `pwsh -NoProfile -File C:\dev\scripts\verify-repo-context.ps1 -Path C:\dev\sigil-repo` preflight pass.
 
 ## Decisions
 - Compound primary key scoping `(profile_id, endpoint_id, key_id)` to isolate connector profiles.
@@ -22,7 +27,8 @@ Implement Local Revocation Interval Cache & Key Registry in Sigil connectors for
 - None.
 
 ## Next action
-- Dispatch subagent-driven execution session to implement Tasks 1 through 4.
+- Prepare release notes and coordinate downstream connector integration.
+
 
 ## Production packaging and host adapters (2026-08-27)
 
