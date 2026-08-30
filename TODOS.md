@@ -1,21 +1,5 @@
 # TODOS
 
-## Publish this relay's own `.well-known/sigil` document
-
-**What:** A `sigil relay well-known generate` (or similar) command/endpoint that emits this relay's own `.well-known/sigil` document, deriving it from the relay's existing identity keys (`sigil/cli/identity.mjs`).
-
-**Why:** The 2026-08-25 inter-relay trust/discovery sub-project (`sigil peer resolve`) only builds the discovery *consumer*. Two Sigil relays can't actually establish mutual trust today unless the operator on the other side hand-writes a compatible `.well-known/sigil` document by some other means. Without a publisher, `sigil peer resolve` has nothing real to discover except a manually-authored document.
-
-**Pros:** Completes the discovery loop end-to-end; makes the trust/discovery sub-project actually testable against another live Sigil relay instead of only a mocked `fetchImpl`.
-
-**Cons:** Expands scope beyond "trust/discovery consumer" into "trust/discovery producer" — a distinct concern with its own key-exposure questions (which of the relay's keys get published, how they're kept in sync with `identity.mjs`).
-
-**Context:** Surfaced by Codex outside-voice during `/plan-eng-review` of `docs/superpowers/plans/2026-08-25-sigil-inter-relay-trust-discovery.md`. Matches the existing roadmap decomposition (`docs/meta/sigil-cli-roadmap.md`): #2 trust/discovery, #3 routing, #4 cross-federation directory — this item is closer to #2's missing other half than to #3 or #4.
-
-**Depends on:** The 2026-08-25 plan landing first (needs `sigil/relay/v1/peer-discovery.mjs`'s validators as the shape reference for what a valid document looks like).
-
----
-
 ## Wrap mutation + audit-event writes in a transaction (repo-wide)
 
 **What:** Wrap each `repository.<mutate>(...)` + `repository.recordAuditEvent(...)` pair in `postgres-repository.mjs` in a single Postgres transaction, so a failure writing the audit event can't leave a mutation applied with no audit trail (or vice versa).

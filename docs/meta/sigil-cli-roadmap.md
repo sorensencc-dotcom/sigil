@@ -100,9 +100,12 @@ stream/list/unlink/stat.
   rejects malformed federated IDs (code `MALFORMED_FEDERATED_ID`) at
   envelope accept time. Per
   `docs/superpowers/specs/2026-08-24-sigil-federated-addressing.md`,
-  sub-projects #2 (inter-relay trust/discovery), #3 (routing), #4
-  (cross-federation directory), and #5 (operational tooling) remain
-  unbuilt and unspec'd.
+  sub-project #2 (inter-relay trust/discovery) is built end-to-end: the
+  discovery consumer (`sigil peer resolve`, TOFU pinning) and the
+  publisher (`sigil relay well-known generate`, which emits this relay's
+  `.well-known/sigil` document from a designated endpoint identity).
+  Sub-projects #3 (routing), #4 (cross-federation directory), and #5
+  (operational tooling) remain unbuilt and unspec'd.
 - **Not centrally hosted.** `sigil relay up` runs on whatever host you
   start it on. The PostgreSQL repository gives restart durability, but
   nobody operates a shared, reachable, TLS-terminated instance of it —

@@ -31,6 +31,8 @@ Usage:
   sigil init codex --owner <owner_id>    Create local Codex endpoint configuration
   sigil relay up [--port N] [--database-url url]
                                          Start a local Sigil relay
+  sigil relay well-known generate --identity path --domain d --endpoint url
+                                         Emit this relay's .well-known/sigil discovery document
   sigil send [options] --to <id> --to-owner <owner> --message <text>
                                          Send a signed task envelope
   sigil inbox [options] [--watch|--wait] Read/wait for incoming envelopes

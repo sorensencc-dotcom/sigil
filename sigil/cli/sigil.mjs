@@ -42,6 +42,8 @@ Commands:
   sign-contract --contract path --identity path [--output path]          Sign a TorqueQuery agent dispatch contract
   verify-contract --contract path --registry path                        Verify a signed TorqueQuery agent dispatch contract
   relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] Run a local relay (blocks; Ctrl+C to stop)
+  relay well-known generate --identity path --domain domain --endpoint url [--ws-endpoint url] [--output path]
+                                                            Emit this relay's .well-known/sigil discovery document from a designated endpoint identity
   oidc-issuer add <issuer> --client-id id [--label text] [--assurance level] [--database-url url]
                                                             Provision a real OIDC issuer for /v1/auth/login (requires --database-url or SIGIL_DATABASE_URL; restart the relay, or wait for the next poll, to pick it up)
   oidc-issuer list [--database-url url]                    List all OIDC issuer allow-list entries, including disabled ones
@@ -215,6 +217,77 @@ async function cmdRelayUp(argv) {
   console.log(`Registered endpoints: ${[...registry.keys()].join(', ')}`);
   console.log(databaseUrl ? `Persisting to PostgreSQL database (${databaseUrl.replace(/:[^:@]+@/, ':***@')}). Ctrl+C to stop.` : 'In-memory only -- state is lost when this process exits. Ctrl+C to stop.');
   await new Promise(() => {}); // keep the process alive
+}
+
+const RELAY_WELL_KNOWN_USAGE =
+  'usage: sigil relay well-known generate --identity path --domain domain --endpoint url [--ws-endpoint url] [--output path]';
+
+async function cmdRelayWellKnown(argv) {
+  if (argv[0] !== 'generate') throw new Error(RELAY_WELL_KNOWN_USAGE);
+  const args = parseArgs({
+    args: argv.slice(1),
+    options: {
+      identity: { type: 'string' },
+      domain: { type: 'string' },
+      endpoint: { type: 'string' },
+      'ws-endpoint': { type: 'string' },
+      output: { type: 'string' },
+    },
+  });
+  const identityPath = opt(args, ['identity']);
+  const domain = opt(args, ['domain']);
+  const endpoint = opt(args, ['endpoint']);
+  const wsEndpoint = opt(args, ['ws-endpoint']);
+  const outputPath = opt(args, ['output']);
+  if (!identityPath || !domain || !endpoint) throw new Error(RELAY_WELL_KNOWN_USAGE);
+
+  await requireValidPeerDomain(domain); // throws INVALID_DOMAIN_SYNTAX / INVALID_PORT before anything else
+
+  const identity = loadIdentity(identityPath);
+  const { buildPeerDocument } = await import('../relay/v1/well-known-document.mjs');
+  const { validatePeerDocument } = await import('../relay/v1/peer-discovery.mjs');
+  const { isLocalDomain } = await import('../relay/v1/federated-id.mjs');
+
+  const doc = buildPeerDocument({ identity, domain, endpoint, wsEndpoint });
+
+  // Non-blocking consistency warnings -- the consumer's validatePeerDocument
+  // checks none of these cross-field relationships, so a document that routes
+  // trust to a host other than the one it is published under would otherwise
+  // pass silently.
+  const hostOf = (url) => {
+    try { return new URL(url).host; } catch { return null; }
+  };
+  const endpointHost = hostOf(endpoint);
+  if (endpointHost && endpointHost !== domain) {
+    console.error(`WARNING: --endpoint host "${endpointHost}" does not match --domain "${domain}"`);
+  }
+  const wsHost = wsEndpoint ? hostOf(wsEndpoint) : null;
+  if (wsHost && wsHost !== domain) {
+    console.error(`WARNING: --ws-endpoint host "${wsHost}" does not match --domain "${domain}"`);
+  }
+  if (identity.endpoint_id && !isLocalDomain(identity.endpoint_id, domain)) {
+    console.error(`WARNING: identity endpoint "${identity.endpoint_id}" does not belong to domain "${domain}"`);
+  }
+
+  // Refuse to emit a document this repo's own discovery consumer would reject.
+  validatePeerDocument(doc, { expectedDomain: domain });
+
+  const serialized = JSON.stringify(doc, null, 2) + '\n';
+  if (!outputPath) {
+    process.stdout.write(serialized);
+    return;
+  }
+
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  const tmpPath = `${outputPath}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(tmpPath, serialized);
+    fs.renameSync(tmpPath, outputPath); // atomic replace on POSIX and on Windows (MoveFileEx)
+  } catch (error) {
+    try { fs.rmSync(tmpPath, { force: true }); } catch {}
+    throw error;
+  }
+  console.error(`wrote ${outputPath} -- verify with: sigil peer validate-document ${outputPath}`);
 }
 
 async function cmdSend(argv) {
@@ -657,6 +730,7 @@ export async function main() {
     else if (command === 'sign-contract') await cmdSignContract(process.argv.slice(3));
     else if (command === 'verify-contract') await cmdVerifyContract(process.argv.slice(3));
     else if (command === 'relay' && sub === 'up') await cmdRelayUp(rest);
+    else if (command === 'relay' && sub === 'well-known') await cmdRelayWellKnown(rest);
     else if (command === 'oidc-issuer' && sub === 'add') await cmdOidcIssuerAdd(rest);
     else if (command === 'oidc-issuer' && sub === 'list') await cmdOidcIssuerList(rest);
     else if (command === 'oidc-issuer' && sub === 'remove') await cmdOidcIssuerRemove(rest);
