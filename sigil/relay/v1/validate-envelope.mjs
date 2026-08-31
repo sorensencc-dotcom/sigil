@@ -68,12 +68,27 @@ export function validateEnvelope(envelope, { now = new Date(), registered = new 
   if (envelope.protocol !== 'sigil/1') throw reject('VERSION_UNSUPPORTED', 'Unsupported protocol version');
   if (!envelope.sender?.endpoint_id || !envelope.sender?.owner_id) throw reject('INVALID_ENVELOPE', 'Sender identity is required');
   const endpoint = registered.get(envelope.sender.endpoint_id);
+  /*
+   * skipSenderRegistration contract (federated-inbound path only):
+   *
+   * - Signature verification below remains mandatory and unconditional on
+   *   this path. The flag suppresses only the sender-registration lookups
+   *   (UNKNOWN_ENDPOINT / ENDPOINT_REVOKED / ROUTE_NOT_AUTHORIZED), never
+   *   the cryptographic checks or the trailing fail-closed guard.
+   * - A caller that sets `skipSenderRegistration: true` MUST supply a
+   *   `registered` Map containing exactly one synthetic entry keyed by
+   *   `envelope.sender.endpoint_id`, built from the peer-asserted signing
+   *   key, and MUST NOT pass the live relay registry.
+   * - On this path, enforcing ENDPOINT_REVOKED (synthetic entry status) and
+   *   the sender-owner match is the caller's responsibility -- they are
+   *   skipped here by design.
+   */
   if (!skipSenderRegistration) {
     if (!endpoint) throw reject('UNKNOWN_ENDPOINT', 'Sender endpoint is not registered');
     if (endpoint.status !== 'active') throw reject('ENDPOINT_REVOKED', 'Sender endpoint is not active');
     if (endpoint.owner_id !== envelope.sender.owner_id) throw reject('ROUTE_NOT_AUTHORIZED', 'Sender owner mismatch');
   }
-  if (!endpoint) throw reject('INVALID_SIGNATURE', 'Signature key is not registered for the endpoint');
+  if (!endpoint) throw reject('INVALID_SIGNATURE', 'Sender endpoint has no registered signing key');
   if (envelope.signature?.algorithm !== 'Ed25519' || !envelope.signature.key_id || !envelope.signature.value) throw reject('INVALID_SIGNATURE', 'Complete Ed25519 signature metadata is required');
   const timestamp = now instanceof Date ? now.getTime() : Date.parse(now);
   const keys = endpoint.keys instanceof Map ? [...endpoint.keys.values()] : Array.isArray(endpoint.keys) ? endpoint.keys : [];

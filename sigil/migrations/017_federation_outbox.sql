@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS federation_outbox (
   sender_owner_id   TEXT NOT NULL,
   state             TEXT NOT NULL DEFAULT 'pending'
                       CHECK (state IN ('pending', 'processing', 'forwarded', 'forward_rejected', 'dead_letter')),
-  attempt_count     INT NOT NULL DEFAULT 0,
+  attempt_count     INT NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
   next_attempt_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   claimed_at        TIMESTAMPTZ,
   claim_token       UUID,

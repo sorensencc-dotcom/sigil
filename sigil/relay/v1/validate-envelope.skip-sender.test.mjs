@@ -50,3 +50,33 @@ test('skipSenderRegistration still enforces the expiry window', () => {
     (err) => err.code === 'MESSAGE_EXPIRED',
   );
 });
+
+test('skipSenderRegistration still fails closed on signature when the synthetic entry is missing', () => {
+  const { privateKey } = crypto.generateKeyPairSync('ed25519');
+  const keyId = 'key_ep_codex@a.example';
+  const envelope = signedEnvelope(privateKey, keyId);
+  assert.throws(
+    () => validateEnvelope(envelope, {
+      now: new Date('2026-08-30T12:00:30.000Z'), registered: new Map(), relayDomain: 'b.example', skipSenderRegistration: true,
+    }),
+    (err) => err.code === 'INVALID_SIGNATURE',
+  );
+});
+
+test('skipSenderRegistration skips ENDPOINT_REVOKED for a non-active synthetic entry', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const keyId = 'key_ep_codex@a.example';
+  const envelope = signedEnvelope(privateKey, keyId);
+  const registered = new Map([[envelope.sender.endpoint_id, {
+    endpoint_id: envelope.sender.endpoint_id, owner_id: envelope.sender.owner_id, status: 'revoked',
+    keys: [{ key_id: keyId, public_key: publicKey, status: 'active' }],
+  }]]);
+  const result = validateEnvelope(envelope, {
+    now: new Date('2026-08-30T12:00:30.000Z'), registered, relayDomain: 'b.example', skipSenderRegistration: true,
+  });
+  assert.equal(result.accepted, true);
+  assert.throws(
+    () => validateEnvelope(envelope, { now: new Date('2026-08-30T12:00:30.000Z'), registered, relayDomain: 'b.example' }),
+    (err) => err.code === 'ENDPOINT_REVOKED',
+  );
+});
