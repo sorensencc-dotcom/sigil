@@ -4,7 +4,7 @@
 -- federation_hop: a stored envelope / delivery that arrived over the
 -- federated-inbound path (POST /v1/federation/envelopes). Set true by
 -- acceptFederatedEnvelope; treated as a hard "never forward onward" stop by
--- decideRoute. Nullable with a false default so existing rows are unaffected.
+-- decideRoute. NOT NULL with a false default so existing rows are unaffected.
 ALTER TABLE envelopes  ADD COLUMN IF NOT EXISTS federation_hop BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS federation_hop BOOLEAN NOT NULL DEFAULT FALSE;
 

@@ -20,8 +20,8 @@ test('persistAcceptedEnvelope stores federation_hop on the envelope record and d
   await repo.persistAcceptedEnvelope({ envelope, canonical_hash: 'h', message_id: envelope.message_id, federation_hop: true });
   const inbox = await repo.listInbox('ep_claude@b.example', '');
   assert.equal(inbox.length, 1);
-  const stored = repo._debugGetEnvelope ? repo._debugGetEnvelope(envelope.message_id) : null;
-  if (stored) assert.equal(stored.federation_hop, true);
+  const stored = repo._debugGetEnvelope(envelope.message_id);
+  assert.equal(stored.federation_hop, true);
 });
 
 test('persistAcceptedEnvelope defaults federation_hop to false', async () => {
@@ -29,4 +29,5 @@ test('persistAcceptedEnvelope defaults federation_hop to false', async () => {
   const envelope = envelopeFixture({ message_id: 'msg_hop_2', idempotency_key: 'idem_2' });
   const stored = await repo.persistAcceptedEnvelope({ envelope, canonical_hash: 'h', message_id: envelope.message_id });
   assert.equal(stored.duplicate, false);
+  assert.equal(repo._debugGetEnvelope('msg_hop_2').federation_hop, false);
 });
