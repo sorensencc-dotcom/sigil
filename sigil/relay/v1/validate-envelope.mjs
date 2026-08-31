@@ -59,7 +59,7 @@ export function checkRecipientLocality(envelope, relayDomain) {
   }
 }
 
-export function validateEnvelope(envelope, { now = new Date(), registered = new Map(), idempotency = new Map(), broadcastAuthorizer, requiresApproval, approvedActionHashes = new Set(), capabilityGrants: capabilityGrants_ = [], relayDomain } = {}) {
+export function validateEnvelope(envelope, { now = new Date(), registered = new Map(), idempotency = new Map(), broadcastAuthorizer, requiresApproval, approvedActionHashes = new Set(), capabilityGrants: capabilityGrants_ = [], relayDomain, skipSenderRegistration = false } = {}) {
   if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) {
     throw reject('INVALID_ENVELOPE', 'Envelope must be an object');
   }
@@ -68,9 +68,12 @@ export function validateEnvelope(envelope, { now = new Date(), registered = new 
   if (envelope.protocol !== 'sigil/1') throw reject('VERSION_UNSUPPORTED', 'Unsupported protocol version');
   if (!envelope.sender?.endpoint_id || !envelope.sender?.owner_id) throw reject('INVALID_ENVELOPE', 'Sender identity is required');
   const endpoint = registered.get(envelope.sender.endpoint_id);
-  if (!endpoint) throw reject('UNKNOWN_ENDPOINT', 'Sender endpoint is not registered');
-  if (endpoint.status !== 'active') throw reject('ENDPOINT_REVOKED', 'Sender endpoint is not active');
-  if (endpoint.owner_id !== envelope.sender.owner_id) throw reject('ROUTE_NOT_AUTHORIZED', 'Sender owner mismatch');
+  if (!skipSenderRegistration) {
+    if (!endpoint) throw reject('UNKNOWN_ENDPOINT', 'Sender endpoint is not registered');
+    if (endpoint.status !== 'active') throw reject('ENDPOINT_REVOKED', 'Sender endpoint is not active');
+    if (endpoint.owner_id !== envelope.sender.owner_id) throw reject('ROUTE_NOT_AUTHORIZED', 'Sender owner mismatch');
+  }
+  if (!endpoint) throw reject('INVALID_SIGNATURE', 'Signature key is not registered for the endpoint');
   if (envelope.signature?.algorithm !== 'Ed25519' || !envelope.signature.key_id || !envelope.signature.value) throw reject('INVALID_SIGNATURE', 'Complete Ed25519 signature metadata is required');
   const timestamp = now instanceof Date ? now.getTime() : Date.parse(now);
   const keys = endpoint.keys instanceof Map ? [...endpoint.keys.values()] : Array.isArray(endpoint.keys) ? endpoint.keys : [];
