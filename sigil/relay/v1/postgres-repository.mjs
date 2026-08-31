@@ -18,6 +18,28 @@ function rowToPeerRecord(row) {
   };
 }
 
+function rowToFederationOutboxRecord(row) {
+  const iso = (v) => (v instanceof Date ? v.toISOString() : v);
+  return {
+    id: row.id,
+    messageId: row.message_id,
+    idempotencyKey: row.idempotency_key,
+    recipientDomain: row.recipient_domain,
+    originDomain: row.origin_domain,
+    envelope: row.envelope,
+    senderKey: row.sender_key,
+    senderOwnerId: row.sender_owner_id,
+    state: row.state,
+    attemptCount: row.attempt_count,
+    nextAttemptAt: iso(row.next_attempt_at),
+    claimedAt: iso(row.claimed_at),
+    claimToken: row.claim_token,
+    lastReasonCode: row.last_reason_code,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
 export class PostgresRepository {
   constructor({ pool = new pg.Pool(), schema = 'public' } = {}) { this.pool = pool; this.schema = schema; }
   async query(text, values = []) { return this.pool.query(text, values); }
@@ -1019,6 +1041,123 @@ export class PostgresRepository {
       [conversationId]
     );
     return result.rows;
+  }
+  // --- federation_outbox (queue-mode forward jobs, migration 017) ---------
+  // All six methods live on PostgresRepository only: `queue` mode is rejected
+  // at relay startup before an in-memory repo could reach them. Methods that
+  // take an optional `client` run on it when passed (so they can join a
+  // caller's transaction), else on `this.pool` / a fresh `this.withTransaction`.
+  async enqueueFederationForward(row, client = this.pool) {
+    const ts = row.now == null
+      ? new Date().toISOString()
+      : (row.now instanceof Date ? row.now.toISOString() : new Date(row.now).toISOString());
+    const inserted = await client.query(
+      `INSERT INTO federation_outbox
+         (message_id, idempotency_key, recipient_domain, origin_domain, envelope, sender_key, sender_owner_id, next_attempt_at, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $8)
+       ON CONFLICT (message_id, idempotency_key) DO NOTHING
+       RETURNING *`,
+      [row.messageId, row.idempotencyKey, row.recipientDomain, row.originDomain,
+        JSON.stringify(row.envelope), JSON.stringify(row.senderKey), row.senderOwnerId, ts]
+    );
+    if (inserted.rows[0]) return { row: rowToFederationOutboxRecord(inserted.rows[0]), inserted: true };
+    const existing = await client.query(
+      'SELECT * FROM federation_outbox WHERE message_id = $1 AND idempotency_key = $2',
+      [row.messageId, row.idempotencyKey]
+    );
+    return { row: rowToFederationOutboxRecord(existing.rows[0]), inserted: false };
+  }
+  async claimDueFederationForwards(now = new Date(), limit = 10, leaseSeconds = 30, client) {
+    const ts = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const run = (c) => c.query(
+      `UPDATE federation_outbox SET
+         state = 'processing',
+         claimed_at = now(),
+         claim_token = gen_random_uuid(),
+         attempt_count = attempt_count + CASE WHEN state = 'processing' THEN 1 ELSE 0 END
+       WHERE id IN (
+         SELECT id FROM federation_outbox
+         WHERE (state = 'pending' AND next_attempt_at <= $1::timestamptz)
+            OR (state = 'processing' AND claimed_at < $1::timestamptz - make_interval(secs => $2::double precision))
+         ORDER BY next_attempt_at
+         LIMIT $3
+         FOR UPDATE SKIP LOCKED
+       )
+       RETURNING *`,
+      [ts, leaseSeconds, limit]
+    );
+    const result = client ? await run(client) : await this.withTransaction(run);
+    return result.rows.map(rowToFederationOutboxRecord);
+  }
+  async finalizeFederationForward(id, claimToken, state, { attemptCount = null, nextAttemptAt = null, reasonCode = null } = {}, client = this.pool) {
+    const nextTs = nextAttemptAt == null
+      ? null
+      : (nextAttemptAt instanceof Date ? nextAttemptAt.toISOString() : new Date(nextAttemptAt).toISOString());
+    const result = await client.query(
+      `UPDATE federation_outbox SET
+         state = $3,
+         claim_token = NULL,
+         claimed_at = NULL,
+         attempt_count = COALESCE($4, attempt_count),
+         next_attempt_at = COALESCE($5, next_attempt_at),
+         last_reason_code = $6,
+         updated_at = now()
+       WHERE id = $1 AND claim_token = $2`,
+      [id, claimToken, state, attemptCount, nextTs, reasonCode]
+    );
+    return { updated: result.rowCount > 0 };
+  }
+  async listFederationOutbox({ states } = {}) {
+    const counts = { pending: 0, processing: 0, forwarded: 0, forward_rejected: 0, dead_letter: 0 };
+    const countResult = await this.pool.query('SELECT state, count(*)::int AS n FROM federation_outbox GROUP BY state');
+    for (const r of countResult.rows) counts[r.state] = r.n;
+    const params = [];
+    let where = '';
+    if (Array.isArray(states) && states.length > 0) {
+      params.push(states);
+      where = 'WHERE state = ANY($1::text[])';
+    }
+    const rowResult = await this.pool.query(
+      `SELECT id, message_id, idempotency_key, recipient_domain, origin_domain, sender_owner_id,
+              state, attempt_count, next_attempt_at, claimed_at, claim_token, last_reason_code, created_at, updated_at
+       FROM federation_outbox ${where} ORDER BY created_at, id`,
+      params
+    );
+    const rows = rowResult.rows.map((r) => {
+      const { envelope, senderKey, ...rest } = rowToFederationOutboxRecord(r);
+      return rest;
+    });
+    return { counts, rows };
+  }
+  async getFederationOutboxRow(id) {
+    const result = await this.pool.query('SELECT * FROM federation_outbox WHERE id = $1', [id]);
+    return result.rows[0] ? rowToFederationOutboxRecord(result.rows[0]) : null;
+  }
+  async retryFederationForward(id, now = new Date(), client) {
+    const ts = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const run = async (c) => {
+      const current = await c.query('SELECT state, envelope FROM federation_outbox WHERE id = $1 FOR UPDATE', [id]);
+      const row = current.rows[0];
+      if (!row) return { retried: false };
+      if (row.state !== 'forward_rejected' && row.state !== 'dead_letter') return { retried: false };
+      const expiresAt = row.envelope ? row.envelope.expires_at : null;
+      if (expiresAt != null && Date.parse(expiresAt) <= Date.parse(ts)) {
+        return { retried: false, reason: 'MESSAGE_EXPIRED' };
+      }
+      const updated = await c.query(
+        `UPDATE federation_outbox SET
+           state = 'pending',
+           attempt_count = 0,
+           claim_token = NULL,
+           claimed_at = NULL,
+           next_attempt_at = $2,
+           last_reason_code = NULL
+         WHERE id = $1 AND state IN ('forward_rejected', 'dead_letter')`,
+        [id, ts]
+      );
+      return { retried: updated.rowCount > 0 };
+    };
+    return client ? run(client) : this.withTransaction(run);
   }
   async close() { await this.pool.end(); }
 }
