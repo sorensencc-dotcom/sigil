@@ -71,7 +71,8 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       return endpoint?.status === 'active' ? endpoint : null;
     },
     async persistAcceptedEnvelope(row) {
-      envelopes.set(row.message_id, row);
+      const federationHop = row.federation_hop === true;
+      envelopes.set(row.message_id, { ...row, federation_hop: federationHop });
       idempotency.set(`${row.envelope.sender.endpoint_id}:${row.envelope.idempotency_key}`, { message_id: row.message_id, canonical_hash: row.canonical_hash });
       if (row.envelope.recipient?.endpoint_id) {
         const deliveryId = `del_${row.message_id}`;
@@ -81,7 +82,8 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
           recipient_endpoint_id: row.envelope.recipient.endpoint_id,
           state: 'delivered',
           queued_at: new Date().toISOString(),
-          attempts: 0
+          attempts: 0,
+          federation_hop: federationHop
         });
       }
       return { message_id: row.message_id, duplicate: false };
@@ -337,6 +339,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     // real audit_events table to query.
     _debugGetAuditEvents() {
       return auditEvents;
-    }
+    },
+    _debugGetEnvelope(messageId) { return envelopes.get(messageId) ?? null; }
   };
 }
