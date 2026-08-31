@@ -1,6 +1,7 @@
 import { validateEnvelope, reject, signedBytes, checkRecipientLocality } from './validate-envelope.mjs';
 import { resolveRateLimits, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
 import { writeRejectionAudit } from './rejection-audit.mjs';
+import { decideRoute, buildForwardRequest, signForwardRequest, postForward } from './federation-router.mjs';
 
 // Rejection codes that represent a real, attributable security-relevant
 // rejection worth auditing (design §9, round 3 blocker 5). A malformed-JSON
@@ -25,7 +26,12 @@ const statusByCode = Object.freeze({
   DIRECTORY_LINK_REQUIRED: 403,
   MALFORMED_FEDERATED_ID: 400,
   RECIPIENT_NOT_LOCAL: 400,
-  RECIPIENT_NOT_FOUND: 400
+  RECIPIENT_NOT_FOUND: 400,
+  PEER_NOT_PINNED: 400,
+  FEDERATION_HOP_EXCEEDED: 400,
+  FORWARD_MISCONFIGURED: 500,
+  FORWARD_REJECTED: 502,
+  FORWARD_UNAVAILABLE: 504
 });
 
 function toResponse(options, error) {
@@ -71,8 +77,21 @@ async function acceptWithRepository(envelope, options) {
     // more specific RECIPIENT_NOT_LOCAL/MALFORMED_FEDERATED_ID diagnostic
     // that validateEnvelope would otherwise produce on the legacy path.
     // Pure string check -- needs only envelope + options.relayDomain, no
-    // client/transaction/registry lookup.
-    checkRecipientLocality(envelope, options.relayDomain);
+    // client/transaction/registry lookup. With federationMode set,
+    // decideRoute additionally forwards a pinned foreign-domain recipient
+    // to its peer relay instead of rejecting it (design: inter-relay
+    // routing); with federationMode unset it delegates straight back to
+    // checkRecipientLocality so every non-federated path stays identical.
+    const route = await decideRoute(envelope, {
+      relayDomain: options.relayDomain,
+      federationMode: options.federationMode,
+      getPeerByDomain: repository.getPeerByDomain ? (d) => repository.getPeerByDomain(d) : async () => null,
+    });
+    if (route.action === 'reject') throw reject(route.code, `${route.code}`, route.details ?? {});
+    if (route.action === 'forward') {
+      return forwardEnvelope(envelope, route, options, client);
+    }
+    // route.action === 'local' -> fall through unchanged
     // Every direct recipient must exist in the relay's endpoint directory
     // before any delivery row can be written. Keep this lookup on the
     // acceptance transaction's client so a concurrent endpoint change cannot
@@ -178,6 +197,53 @@ async function acceptWithRepository(envelope, options) {
     }
     return response;
   });
+}
+
+// Origin-side forward of a foreign-domain envelope to its pinned peer relay
+// (design: inter-relay routing). `sync` mode only in this task: the forward
+// happens inside the accept transaction but writes nothing to local
+// envelopes/deliveries -- it returns before persistAcceptedEnvelope is
+// reached, so the transaction commits with no rows. Queue mode is Task 14.
+async function forwardEnvelope(envelope, route, options, client) {
+  const { repository } = options;
+  const registered = options.registered ?? new Map();
+  const senderEntry = registered.get(envelope.sender.endpoint_id) ?? (repository.lookupRecipientEndpoint ? await repository.lookupRecipientEndpoint(envelope.sender.endpoint_id, client) : null);
+  const senderOwnerId = senderEntry?.owner_id;
+  const senderPub = senderEntry?.public_key;
+  if (!senderOwnerId || !senderPub) throw reject('FORWARD_MISCONFIGURED', 'Authenticated local sender has no registered owner or key');
+  const senderKey = {
+    kid: envelope.signature.key_id,
+    alg: 'Ed25519',
+    publicKey: (senderPub.export ? senderPub.export({ type: 'spki', format: 'der' }) : senderPub).toString('base64url'),
+  };
+  const { canonicalBytes } = buildForwardRequest(envelope, { originDomain: options.relayDomain, senderKey, senderOwnerId, now: options.now ?? new Date() });
+  const signed = signForwardRequest(canonicalBytes, options.federationIdentity);
+
+  if (options.federationMode === 'queue') {
+    return enqueueForward(envelope, route, options, client, { senderKey, senderOwnerId }); // Task 14
+  }
+
+  // sync
+  let outcome;
+  try { outcome = await (options.postForwardImpl ?? postForward)(route.peer, canonicalBytes, signed, { fetchImpl: options.fetchImpl }); }
+  catch (error) {
+    if (error.code === 'FORWARD_TRANSPORT_FAILED') {
+      await recordFederationAudit(repository, 'federation.forward_unavailable', envelope, { recipient_domain: route.recipientDomain }, options.now);
+      return { status: 504, body: { request_id: options.request_id ?? null, code: 'FORWARD_UNAVAILABLE', message: 'Peer relay unreachable', details: { recipientDomain: route.recipientDomain } } };
+    }
+    throw error;
+  }
+  if (outcome.ok) {
+    await recordFederationAudit(repository, 'federation.forwarded', envelope, { recipient_domain: route.recipientDomain }, options.now);
+    return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', forwarded: true, forwarded_to: route.recipientDomain } };
+  }
+  await recordFederationAudit(repository, 'federation.forward_rejected', envelope, { recipient_domain: route.recipientDomain, peer_code: outcome.peerCode ?? null }, options.now);
+  return { status: 502, body: { request_id: options.request_id ?? null, code: 'FORWARD_REJECTED', message: 'Peer relay rejected the forward', details: { peerStatus: outcome.status, peerCode: outcome.peerCode ?? null } } };
+}
+
+function recordFederationAudit(repository, eventType, envelope, payload, now) {
+  if (!repository.recordAuditEvent) return Promise.resolve();
+  return repository.recordAuditEvent({ eventType, subjectId: envelope.message_id, endpointId: envelope.sender?.endpoint_id, outcome: eventType.endsWith('forwarded') ? 'forwarded' : 'rejected', reason: null, payload, now }).catch(() => {});
 }
 
 export async function acceptEnvelopeAsync(envelope, options = {}) {
