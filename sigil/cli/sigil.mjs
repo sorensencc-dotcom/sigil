@@ -41,7 +41,7 @@ Commands:
   init <name> [--owner <owner_id> | --federation-owner <federated_id>] [--registry path] [--domain domain]      Create a local identity and register it (domain defaults to "local"; --federation-owner allows an owner id whose domain differs from --domain)
   sign-contract --contract path --identity path [--output path]          Sign a TorqueQuery agent dispatch contract
   verify-contract --contract path --registry path                        Verify a signed TorqueQuery agent dispatch contract
-  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] Run a local relay (blocks; Ctrl+C to stop)
+  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] Run a local relay (blocks; Ctrl+C to stop)
   oidc-issuer add <issuer> --client-id id [--label text] [--assurance level] [--database-url url]
                                                             Provision a real OIDC issuer for /v1/auth/login (requires --database-url or SIGIL_DATABASE_URL; restart the relay, or wait for the next poll, to pick it up)
   oidc-issuer list [--database-url url]                    List all OIDC issuer allow-list entries, including disabled ones
@@ -144,7 +144,7 @@ export function startOidcIssuerAllowlistPolling({ repository, allowlistSet, inte
 }
 
 async function cmdRelayUp(argv) {
-  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' }, 'oidc-issuer-refresh-interval-ms': { type: 'string' }, domain: { type: 'string' } } });
+  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' }, 'oidc-issuer-refresh-interval-ms': { type: 'string' }, domain: { type: 'string' }, 'federation-mode': { type: 'string' }, 'federation-identity': { type: 'string' } } });
   const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
   const port = Number(opt(args, ['port']) ?? 0);
   const streamPort = Number(opt(args, ['stream-port']) ?? (port ? port + 1 : 0));
@@ -161,6 +161,16 @@ async function cmdRelayUp(argv) {
     const federatedId = await import('../relay/v1/federated-id.mjs');
     federatedId.parseDomain(relayDomain); // throws INVALID_DOMAIN_SYNTAX / INVALID_PORT before anything else runs
     isLocalDomain = federatedId.isLocalDomain;
+  }
+  const federationMode = opt(args, ['federation-mode']);
+  let federationIdentity;
+  if (federationMode !== undefined) {
+    if (!['sync', 'queue'].includes(federationMode)) throw new Error('sigil relay up: --federation-mode must be "sync" or "queue"');
+    if (relayDomain === undefined) throw new Error('sigil relay up: --federation-mode requires --domain');
+    const identityPath = opt(args, ['federation-identity']);
+    if (!identityPath) throw new Error('sigil relay up: --federation-mode requires --federation-identity <path>');
+    federationIdentity = loadIdentity(identityPath); // throws on missing / non-JSON
+    if (federationMode === 'queue' && !databaseUrl) throw new Error('sigil relay up: --federation-mode queue requires --database-url (or SIGIL_DATABASE_URL)');
   }
   const data = loadRegistryFile(registryPath);
   if (!data.endpoints.length) throw new Error(`No endpoints in ${registryPath}. Run "sigil init <name> --owner <owner_id>" first.`);
@@ -221,7 +231,7 @@ async function cmdRelayUp(argv) {
     const addr = server?.address();
     return addr ? `http://127.0.0.1:${addr.port}` : `http://127.0.0.1:${port}`;
   };
-  server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain });
+  server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();
   if (enableMockOidc) console.log('WARNING: mock-OIDC login is enabled (--enable-mock-oidc). This is for local development and CI only -- never expose this relay to untrusted networks.');
