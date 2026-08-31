@@ -79,6 +79,9 @@ test('queue mode with live database', { skip: !connectionString }, async (t) => 
   try {
     // Test: first accept -> 202 queued:true, exactly one federation_outbox row
     await t.test('first accept enqueues -> 202 queued:true, one row', async () => {
+      // Clean federation_outbox for hermetic subtest
+      await pool.query('DELETE FROM federation_outbox');
+
       const envelope = makeEnvelope();
       const result = await acceptEnvelopeAsync(envelope, {
         ...baseOptions(),
@@ -102,8 +105,11 @@ test('queue mode with live database', { skip: !connectionString }, async (t) => 
       assert.equal(row.sender_owner_id, 'usr_codex_owner');
     });
 
-    // Test: second identical accept -> 202 queued:true, duplicate:true, still exactly one row
+    // Test: duplicate accept -> 202 queued:true, duplicate:true, still exactly one row (idempotent)
     await t.test('duplicate accept -> 202 queued:true, duplicate:true, still one row', async () => {
+      // Clean federation_outbox for hermetic subtest
+      await pool.query('DELETE FROM federation_outbox');
+
       const envelope = makeEnvelope({
         senderEndpointId: 'ep_codex@a.example',
         recipientEndpointId: 'ep_claude@b.example'
@@ -118,7 +124,11 @@ test('queue mode with live database', { skip: !connectionString }, async (t) => 
       assert.equal(result1.body.queued, true);
       assert.equal(result1.body.duplicate, false);
 
-      // Second accept with same message
+      // Verify one row after first accept
+      let listResult = await repository.listFederationOutbox({ states: ['pending'] });
+      assert.equal(listResult.counts.pending, 1, 'should have exactly one pending row after first accept');
+
+      // Second accept with same message (duplicate)
       const result2 = await acceptEnvelopeAsync(envelope, {
         ...baseOptions(),
         repository,
@@ -129,8 +139,8 @@ test('queue mode with live database', { skip: !connectionString }, async (t) => 
       assert.equal(result2.body.duplicate, true);
       assert.equal(result2.body.request_id, 'req_fwd_1');
 
-      // Verify still exactly one row (idempotent via unique constraint)
-      const listResult = await repository.listFederationOutbox({ states: ['pending'] });
+      // Verify still exactly one row (idempotent via unique constraint, no second insert)
+      listResult = await repository.listFederationOutbox({ states: ['pending'] });
       assert.equal(listResult.counts.pending, 1, 'should have exactly one pending row after duplicate');
     });
   } finally {
