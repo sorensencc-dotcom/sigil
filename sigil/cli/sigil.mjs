@@ -38,7 +38,7 @@ function usage() {
   console.log(`sigil <command> [options]
 
 Commands:
-  init <name> --owner <owner_id> [--registry path] [--domain domain]      Create a local identity and register it (domain defaults to "local")
+  init <name> [--owner <owner_id> | --federation-owner <federated_id>] [--registry path] [--domain domain]      Create a local identity and register it (domain defaults to "local"; --federation-owner allows an owner id whose domain differs from --domain)
   sign-contract --contract path --identity path [--output path]          Sign a TorqueQuery agent dispatch contract
   verify-contract --contract path --registry path                        Verify a signed TorqueQuery agent dispatch contract
   relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] Run a local relay (blocks; Ctrl+C to stop)
@@ -85,7 +85,7 @@ function flushPrint(line) {
 const NAME_CHARSET = /^[a-z0-9_-]+$/;
 
 async function cmdInit(argv) {
-  const args = parseArgs({ args: argv, options: { owner: { type: 'string' }, registry: { type: 'string' }, kind: { type: 'string' }, domain: { type: 'string' } }, allowPositionals: true });
+  const args = parseArgs({ args: argv, options: { owner: { type: 'string' }, 'federation-owner': { type: 'string' }, registry: { type: 'string' }, kind: { type: 'string' }, domain: { type: 'string' } }, allowPositionals: true });
   const name = args.positionals[0];
   if (!name) throw new Error('usage: sigil init <name> --owner <owner_id> [--domain domain]');
   if (!NAME_CHARSET.test(name)) throw new Error(`sigil init: <name> "${name}" must match ${NAME_CHARSET} (it becomes the federated id's local part)`);
@@ -93,10 +93,25 @@ async function cmdInit(argv) {
   const { parseDomain, parseFederatedId, isLocalDomain, resolveDomainOrThrow } = await import('../relay/v1/federated-id.mjs');
   const { host: domainHost } = parseDomain(domain);
   if (domainHost !== 'local') await resolveDomainOrThrow(domain);
-  const owner = opt(args, ['owner']) ?? `usr_${name}@${domain}`;
-  if (opt(args, ['owner']) !== undefined) {
-    parseFederatedId(owner);
-    if (!isLocalDomain(owner, domain)) throw Object.assign(new Error(`sigil init: --owner domain must match --domain`), { code: 'OWNER_DOMAIN_MISMATCH' });
+  const explicitOwner = opt(args, ['owner']);
+  const federationOwner = opt(args, ['federation-owner']);
+  if (explicitOwner !== undefined && federationOwner !== undefined) {
+    throw new Error('sigil init: both --owner and --federation-owner given; pass at most one');
+  }
+  let owner;
+  if (federationOwner !== undefined) {
+    // #3 sub-project amendment: a deliberately cross-domain owner id, so one
+    // owner can be shared verbatim across federated relays and the receiver's
+    // same-owner exemption can fire. OWNER_DOMAIN_MISMATCH is suppressed for
+    // this flag only; the id must still be a well-formed federated id.
+    parseFederatedId(federationOwner);
+    owner = federationOwner;
+  } else if (explicitOwner !== undefined) {
+    parseFederatedId(explicitOwner);
+    if (!isLocalDomain(explicitOwner, domain)) throw Object.assign(new Error(`sigil init: --owner domain must match --domain`), { code: 'OWNER_DOMAIN_MISMATCH' });
+    owner = explicitOwner;
+  } else {
+    owner = `usr_${name}@${domain}`;
   }
   const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
   const identityPath = path.join('.sigil', `${name}.identity.json`);
