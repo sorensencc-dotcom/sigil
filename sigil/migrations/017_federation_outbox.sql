@@ -8,6 +8,12 @@
 ALTER TABLE envelopes  ADD COLUMN IF NOT EXISTS federation_hop BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS federation_hop BOOLEAN NOT NULL DEFAULT FALSE;
 
+-- origin_domain: set by acceptFederatedEnvelope's shadow-registration of a
+-- foreign federated sender (design R10) so the accepted envelope's FK chain
+-- resolves. NULL for every locally-registered endpoint, so shadow rows stay
+-- identifiable and sweepable.
+ALTER TABLE endpoints ADD COLUMN IF NOT EXISTS origin_domain TEXT;
+
 -- federation_outbox: queue-mode forward jobs. One row per foreign-domain
 -- envelope accepted by a --federation-mode=queue relay. Drained by the
 -- federation reaper (sigil/relay/v1/federation-reaper.mjs).

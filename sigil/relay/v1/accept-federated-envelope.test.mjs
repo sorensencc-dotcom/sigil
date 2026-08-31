@@ -4,7 +4,6 @@ import crypto from 'node:crypto';
 import { acceptFederatedEnvelope } from './accept-federated-envelope.mjs';
 import { signedBytes } from './validate-envelope.mjs';
 import { buildForwardRequest, signForwardRequest } from './federation-router.mjs';
-import { canonicalJsonBytes } from './jcs.mjs';
 import { createMemoryRepository } from '../../cli/memory-repository.mjs';
 
 const ORIGIN = 'a.example';
@@ -85,11 +84,79 @@ test('check 5: envelope signature not matching sender_key → 401 INVALID_SIGNAT
   const r = await acceptFederatedEnvelope(body, headers, baseOpts(world.repo));
   assert.equal(r.status, 401); assert.equal(r.body.code, 'INVALID_SIGNATURE');
 });
-test('checks 1-5 pass → reaches the stub (replaced in Task 9)', async () => {
-  const world = makeWorld();
+// The Task 8 "checks 1-5 pass -> reaches the stub" test is folded into the
+// same-owner-exemption test below: with a registered recipient the checks
+// 6-10 path now returns 202 { code: 'ACCEPTED' }, a positive success outcome.
+
+function worldWithRecipient(recipientOwnerId = 'usr_chris@primary.example') {
+  const registry = new Map([[`ep_claude@${RELAY}`, { endpoint_id: `ep_claude@${RELAY}`, owner_id: recipientOwnerId, key_id: `key_ep_claude@${RELAY}`, kind: 'agent', status: 'active', public_key: crypto.generateKeyPairSync('ed25519').publicKey }]]);
+  const relayKeys = crypto.generateKeyPairSync('ed25519');
+  const senderKeys = crypto.generateKeyPairSync('ed25519');
+  const relayIdentity = { key_id: 'relay-a-2026-08', private_key_pem: relayKeys.privateKey.export({ type: 'pkcs8', format: 'pem' }) };
+  const relayPub = relayKeys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url');
+  const senderPub = senderKeys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url');
+  const repo = createMemoryRepository({ registry });
+  repo.upsertPeer({ domain: ORIGIN, relayUrl: 'https://a.example/relay', keys: [{ kid: relayIdentity.key_id, alg: 'Ed25519', publicKey: relayPub }], trustMode: 'tofu' });
+  return { relayKeys, senderKeys, relayIdentity, relayPub, senderPub, repo, registered: registry };
+}
+const opts9 = (world) => ({ repository: world.repo, registered: world.registered, relayDomain: RELAY, request_id: 'req_1', now: new Date('2026-08-30T12:00:30.000Z') });
+
+test('same-owner exemption: relay-attested owner == recipient registry owner → 202 delivered, federation_hop stored', async () => {
+  const world = worldWithRecipient('usr_chris@primary.example');
   const { body, headers } = forwardPayload(world);
-  const r = await acceptFederatedEnvelope(body, headers, baseOpts(world.repo));
-  assert.notEqual(r.status, 400);
-  assert.notEqual(r.status, 401);
-  assert.notEqual(r.status, 403);
+  const r = await acceptFederatedEnvelope(body, headers, opts9(world));
+  assert.equal(r.status, 202); assert.equal(r.body.code, 'ACCEPTED'); assert.equal(r.body.duplicate, false);
+  const inbox = await world.repo.listInbox(`ep_claude@${RELAY}`, '');
+  assert.equal(inbox.length, 1);
+  assert.equal(world.repo._debugGetEnvelope(inbox[0].message_id).federation_hop, true);
+  assert.ok(world.repo._debugGetAuditEvents().some((e) => e.event_type === 'federation.inbound_accepted'));
+});
+test('cross-owner → 403 DIRECTORY_LINK_REQUIRED', async () => {
+  const world = worldWithRecipient('usr_someone_else@b.example');
+  const { body, headers } = forwardPayload(world);
+  const r = await acceptFederatedEnvelope(body, headers, opts9(world));
+  assert.equal(r.status, 403); assert.equal(r.body.code, 'DIRECTORY_LINK_REQUIRED');
+});
+test('envelope.sender.owner_id disagreeing with relay assertion → 403 SENDER_OWNER_ASSERTION_MISMATCH', async () => {
+  const world = worldWithRecipient();
+  const envelope = senderEnvelope(world.senderKeys.privateKey, { sender: { owner_id: 'usr_mismatch@primary.example', endpoint_id: `ep_codex@${ORIGIN}`, kind: 'agent' } });
+  const { body, headers } = forwardPayload(world, {}, { envelope, senderOwnerId: 'usr_chris@primary.example' });
+  const r = await acceptFederatedEnvelope(body, headers, opts9(world));
+  assert.equal(r.status, 403); assert.equal(r.body.code, 'SENDER_OWNER_ASSERTION_MISMATCH');
+});
+test('unknown recipient → 400 RECIPIENT_NOT_FOUND', async () => {
+  const world = worldWithRecipient();
+  const envelope = senderEnvelope(world.senderKeys.privateKey, { recipient: { owner_id: 'usr_chris@primary.example', endpoint_id: `ep_ghost@${RELAY}`, kind: 'agent' } });
+  const { body, headers } = forwardPayload(world, {}, { envelope });
+  const r = await acceptFederatedEnvelope(body, headers, opts9(world));
+  assert.equal(r.status, 400); assert.equal(r.body.code, 'RECIPIENT_NOT_FOUND');
+});
+// Brief fixture used created_at a full day before `now`, which trips
+// validateEnvelope's created_at clock-skew guard (INVALID_ENVELOPE) before the
+// lifetime guard. MESSAGE_EXPIRED in this codebase is the over-long-lifetime
+// branch (validate-envelope.mjs:108) -- fixture aligned with Task 3's own
+// MESSAGE_EXPIRED test (task-3-brief.md:59): current created_at, >24h lifetime.
+test('expired envelope → 422 MESSAGE_EXPIRED', async () => {
+  const world = worldWithRecipient();
+  const envelope = senderEnvelope(world.senderKeys.privateKey, { created_at: '2026-08-30T12:00:00.000Z', expires_at: '2026-08-31T13:00:00.000Z' });
+  const { body, headers } = forwardPayload(world, {}, { envelope });
+  const r = await acceptFederatedEnvelope(body, headers, { ...opts9(world), now: new Date('2026-08-30T12:00:30.000Z') });
+  assert.equal(r.body.code, 'MESSAGE_EXPIRED');
+});
+test('re-POST of an accepted (sender.endpoint_id, idempotency_key) → 202 duplicate:true, no second delivery', async () => {
+  const world = worldWithRecipient();
+  const { body, headers } = forwardPayload(world);
+  await acceptFederatedEnvelope(body, headers, opts9(world));
+  const r2 = await acceptFederatedEnvelope(body, headers, opts9(world));
+  assert.equal(r2.status, 202); assert.equal(r2.body.duplicate, true);
+  assert.equal((await world.repo.listInbox(`ep_claude@${RELAY}`, '')).length, 1);
+});
+test('replay: same message_id under a new idempotency_key → 409 REPLAY_DETECTED', async () => {
+  const world = worldWithRecipient();
+  const { body, headers } = forwardPayload(world);
+  await acceptFederatedEnvelope(body, headers, opts9(world));
+  const envelope2 = senderEnvelope(world.senderKeys.privateKey, { idempotency_key: 'idem_2' });
+  const p2 = forwardPayload(world, {}, { envelope: envelope2 });
+  const r = await acceptFederatedEnvelope(p2.body, p2.headers, opts9(world));
+  assert.equal(r.status, 409); assert.equal(r.body.code, 'REPLAY_DETECTED');
 });

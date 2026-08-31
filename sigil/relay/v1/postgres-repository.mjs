@@ -497,6 +497,35 @@ export class PostgresRepository {
     const count = result.rows[0].count;
     return { count, allowed: count <= limit };
   }
+  // Federated-inbound shadow registration (design R10). The foreign sender of
+  // an accepted federated envelope is not in this relay's humans / endpoints /
+  // endpoint_keys, so #insertAcceptedEnvelope's first INSERT
+  // (conversations.created_by = sender owner) would raise 23503. Upsert a
+  // minimal active shadow identity so the accept transaction completes.
+  // endpoints.origin_domain is set only on these rows (NULL for every
+  // locally-registered endpoint) so shadow rows stay identifiable and
+  // sweepable. The endpoints row's (endpoint_id, owner_id) matches what the
+  // envelope INSERT uses for (sender_endpoint_id, sender_owner_id).
+  async registerFederatedSender({ endpoint_id, owner_id, key_id, public_key, origin_domain }, client = this.pool) {
+    const now = new Date().toISOString();
+    await client.query(
+      `INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', $2)
+       ON CONFLICT (human_id) DO NOTHING`,
+      [owner_id, now]
+    );
+    await client.query(
+      `INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, origin_domain, created_at)
+       VALUES ($1, $2, 'federated', $3, $1, 'active', $3, $4)
+       ON CONFLICT (endpoint_id) DO NOTHING`,
+      [endpoint_id, owner_id, origin_domain, now]
+    );
+    await client.query(
+      `INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
+       VALUES ($1, $2, 'Ed25519', $3, 'active', $4)
+       ON CONFLICT (key_id) DO NOTHING`,
+      [key_id, endpoint_id, public_key, now]
+    );
+  }
   async persistAcceptedEnvelope(row, client) {
     if (client) return this.#insertAcceptedEnvelope(row, client);
     try {
