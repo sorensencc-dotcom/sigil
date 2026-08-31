@@ -141,7 +141,7 @@ test('expired envelope → 422 MESSAGE_EXPIRED', async () => {
   const envelope = senderEnvelope(world.senderKeys.privateKey, { created_at: '2026-08-30T12:00:00.000Z', expires_at: '2026-08-31T13:00:00.000Z' });
   const { body, headers } = forwardPayload(world, {}, { envelope });
   const r = await acceptFederatedEnvelope(body, headers, { ...opts9(world), now: new Date('2026-08-30T12:00:30.000Z') });
-  assert.equal(r.body.code, 'MESSAGE_EXPIRED');
+  assert.equal(r.status, 422); assert.equal(r.body.code, 'MESSAGE_EXPIRED');
 });
 test('re-POST of an accepted (sender.endpoint_id, idempotency_key) → 202 duplicate:true, no second delivery', async () => {
   const world = worldWithRecipient();

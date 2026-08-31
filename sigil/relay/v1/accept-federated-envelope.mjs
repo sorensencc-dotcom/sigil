@@ -154,7 +154,14 @@ export async function acceptFederatedEnvelope(body, headers, options) {
     if (options.onPersisted) await options.onPersisted({ envelope, persisted });
     return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: persisted?.message_id ?? result.message_id, duplicate: persisted?.duplicate ?? false } };
   }).catch(async (error) => {
-    const status = { REPLAY_DETECTED: 409, MESSAGE_EXPIRED: 422, RECIPIENT_NOT_FOUND: 400, DIRECTORY_LINK_REQUIRED: 403, SENDER_OWNER_ASSERTION_MISMATCH: 403, RATE_LIMITED: 429, QUOTA_EXCEEDED: 429, INVALID_ENVELOPE: 400, INVALID_SIGNATURE: 401, VERSION_UNSUPPORTED: 400, CAPABILITY_DENIED: 403 }[error.code] ?? 400;
-    return auditReject(status, error.code ?? 'INVALID_FEDERATION_REQUEST', error.message, error.details ?? {});
+    // Only codes we recognise pass through as the response `code`. A raw
+    // driver error (23503 / 23514 / 23502, etc.) is not a protocol enum
+    // value and must never be echoed to the peer -- collapse anything
+    // unrecognised to INVALID_FEDERATION_REQUEST / 400.
+    const statusByCode = { REPLAY_DETECTED: 409, MESSAGE_EXPIRED: 422, RECIPIENT_NOT_FOUND: 400, DIRECTORY_LINK_REQUIRED: 403, SENDER_OWNER_ASSERTION_MISMATCH: 403, RATE_LIMITED: 429, QUOTA_EXCEEDED: 429, INVALID_ENVELOPE: 400, INVALID_SIGNATURE: 401, VERSION_UNSUPPORTED: 400, CAPABILITY_DENIED: 403 };
+    const known = Object.prototype.hasOwnProperty.call(statusByCode, error.code);
+    const code = known ? error.code : 'INVALID_FEDERATION_REQUEST';
+    const status = known ? statusByCode[error.code] : 400;
+    return auditReject(status, code, known ? error.message : 'Federated envelope could not be accepted', error.details ?? {});
   });
 }

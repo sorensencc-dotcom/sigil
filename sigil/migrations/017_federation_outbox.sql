@@ -14,6 +14,19 @@ ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS federation_hop BOOLEAN NOT NULL 
 -- identifiable and sweepable.
 ALTER TABLE endpoints ADD COLUMN IF NOT EXISTS origin_domain TEXT;
 
+-- Widen the rolling-window rate-limit scope set once more (design §8) for the
+-- federation_origin scope acceptFederatedEnvelope reserves against on check 9.
+-- Same drop/re-add-by-name pattern as 012_directory_trust.sql:83-87 (Postgres
+-- has no ADD CONSTRAINT IF NOT EXISTS for CHECK); DROP ... IF EXISTS keeps a
+-- re-run idempotent. Base list is 012's (the newest prior toucher) plus
+-- 'federation_origin'.
+ALTER TABLE quota_usage DROP CONSTRAINT IF EXISTS quota_usage_scope_kind_check;
+ALTER TABLE quota_usage ADD CONSTRAINT quota_usage_scope_kind_check
+  CHECK (scope_kind IN ('endpoint', 'owner', 'conversation',
+                         'directory_invite_create', 'directory_invite_redeem',
+                         'directory_match_create', 'directory_match_attempt',
+                         'federation_origin'));
+
 -- federation_outbox: queue-mode forward jobs. One row per foreign-domain
 -- envelope accepted by a --federation-mode=queue relay. Drained by the
 -- federation reaper (sigil/relay/v1/federation-reaper.mjs).
