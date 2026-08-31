@@ -241,6 +241,19 @@ async function forwardEnvelope(envelope, route, options, client) {
   return { status: 502, body: { request_id: options.request_id ?? null, code: 'FORWARD_REJECTED', message: 'Peer relay rejected the forward', details: { peerStatus: outcome.status, peerCode: outcome.peerCode ?? null } } };
 }
 
+// Queue-mode federation forward: enqueue to federation_outbox for asynchronous
+// delivery by a reaper process instead of forwarding synchronously (Task 14).
+async function enqueueForward(envelope, route, options, client, { senderKey, senderOwnerId }) {
+  const { repository } = options;
+  const { row, inserted } = await repository.enqueueFederationForward({
+    messageId: envelope.message_id, idempotencyKey: envelope.idempotency_key,
+    recipientDomain: route.recipientDomain, originDomain: options.relayDomain,
+    envelope, senderKey, senderOwnerId, now: options.now ?? new Date(),
+  }, client);
+  await recordFederationAudit(repository, 'federation.queued', envelope, { recipient_domain: route.recipientDomain }, options.now);
+  return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', queued: true, duplicate: !inserted } };
+}
+
 function recordFederationAudit(repository, eventType, envelope, payload, now) {
   if (!repository.recordAuditEvent) return Promise.resolve();
   return repository.recordAuditEvent({ eventType, subjectId: envelope.message_id, endpointId: envelope.sender?.endpoint_id, outcome: eventType.endsWith('forwarded') ? 'forwarded' : 'rejected', reason: null, payload, now }).catch(() => {});
