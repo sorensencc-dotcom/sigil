@@ -119,3 +119,39 @@ test('fetch rejection (timeout/transport) → throws FORWARD_TRANSPORT_FAILED', 
   const fetchImpl = async () => { throw Object.assign(new Error('aborted'), { name: 'TimeoutError' }); };
   await assert.rejects(() => postForward(peer, bytes, sig, { fetchImpl }), (e) => e.code === 'FORWARD_TRANSPORT_FAILED');
 });
+
+import { verifyRelaySignature } from './federation-router.mjs';
+
+function keyEntry(kid, publicKeyObj) {
+  return { kid, alg: 'Ed25519', publicKey: publicKeyObj.export({ type: 'spki', format: 'der' }).toString('base64url') };
+}
+
+test('verifyRelaySignature: valid signature over canonical bytes verifies after re-canonicalization', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const body = { b: 2, a: 1 }; // deliberately non-canonical key order
+  const signature = crypto.sign(null, canonicalJsonBytes(body), privateKey).toString('base64url');
+  const peer = { keys: [keyEntry('k1', publicKey)] };
+  assert.equal(verifyRelaySignature(body, { signature, keyId: 'k1', peer }), true);
+});
+test('tampered body → false', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const signature = crypto.sign(null, canonicalJsonBytes({ a: 1 }), privateKey).toString('base64url');
+  assert.equal(verifyRelaySignature({ a: 2 }, { signature, keyId: 'k1', peer: { keys: [keyEntry('k1', publicKey)] } }), false);
+});
+test('unknown keyId → false', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const signature = crypto.sign(null, canonicalJsonBytes({ a: 1 }), privateKey).toString('base64url');
+  assert.equal(verifyRelaySignature({ a: 1 }, { signature, keyId: 'nope', peer: { keys: [keyEntry('k1', publicKey)] } }), false);
+});
+test('kid reused with a swapped publicKey → false', () => {
+  const a = crypto.generateKeyPairSync('ed25519');
+  const b = crypto.generateKeyPairSync('ed25519');
+  const signature = crypto.sign(null, canonicalJsonBytes({ a: 1 }), a.privateKey).toString('base64url');
+  assert.equal(verifyRelaySignature({ a: 1 }, { signature, keyId: 'k1', peer: { keys: [keyEntry('k1', b.publicKey)] } }), false);
+});
+test('signature made over non-canonical bytes → false', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const badBytes = Buffer.from(JSON.stringify({ b: 2, a: 1 }), 'utf8'); // not JCS-ordered
+  const signature = crypto.sign(null, badBytes, privateKey).toString('base64url');
+  assert.equal(verifyRelaySignature({ b: 2, a: 1 }, { signature, keyId: 'k1', peer: { keys: [keyEntry('k1', publicKey)] } }), false);
+});

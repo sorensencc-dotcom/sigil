@@ -96,3 +96,14 @@ export async function postForward(peer, canonicalBytes, { signature, keyId }, { 
   } catch { /* non-JSON / oversize / read error: peerCode stays undefined */ }
   return peerCode ? { ok: false, status: res.status, peerCode } : { ok: false, status: res.status };
 }
+
+export function verifyRelaySignature(parsedBody, { signature, keyId, peer } = {}) {
+  try {
+    const entry = (peer?.keys ?? []).find((k) => k.kid === keyId);
+    if (!entry) return false;
+    const publicKey = crypto.createPublicKey({ key: Buffer.from(entry.publicKey, 'base64url'), format: 'der', type: 'spki' });
+    return crypto.verify(null, canonicalJsonBytes(parsedBody), publicKey, Buffer.from(signature, 'base64url'));
+  } catch {
+    return false;
+  }
+}
