@@ -170,7 +170,7 @@ async function cmdRelayUp(argv) {
     const identityPath = opt(args, ['federation-identity']);
     if (!identityPath) throw new Error('sigil relay up: --federation-mode requires --federation-identity <path>');
     federationIdentity = loadIdentity(identityPath); // throws on missing / non-JSON
-    if (federationMode === 'queue' && !databaseUrl) throw new Error('sigil relay up: --federation-mode queue requires --database-url (or SIGIL_DATABASE_URL)');
+    if (federationMode === 'queue' && !databaseUrl) throw new Error('sigil relay up: --federation-mode queue requires --database-url (or SIGIL_DATABASE_URL); in-memory relays have no durable outbox');
   }
   const data = loadRegistryFile(registryPath);
   if (!data.endpoints.length) throw new Error(`No endpoints in ${registryPath}. Run "sigil init <name> --owner <owner_id>" first.`);
@@ -234,6 +234,12 @@ async function cmdRelayUp(argv) {
   server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();
+  let federationReaperTimer;
+  if (federationMode === 'queue') {
+    const { startFederationReaper } = await import('../relay/v1/federation-reaper.mjs');
+    federationReaperTimer = startFederationReaper({ repository, identity: federationIdentity, originDomain: relayDomain });
+    console.log('Federation outbox reaper running (60s interval).');
+  }
   if (enableMockOidc) console.log('WARNING: mock-OIDC login is enabled (--enable-mock-oidc). This is for local development and CI only -- never expose this relay to untrusted networks.');
   console.log(`Sigil relay listening on http://127.0.0.1:${address.port}`);
   console.log(`Sigil stream (push notify) on ws://127.0.0.1:${streamAddress.port}/v1/stream`);

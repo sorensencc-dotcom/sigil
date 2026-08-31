@@ -77,3 +77,16 @@ test('--federation-identity pointing at a missing file aborts', () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   }
 });
+
+test('--federation-mode queue without --database-url names in-memory in error message', () => {
+  const cwd = tmp();
+  try {
+    execFileSync(process.execPath, [sigilCli, 'init', 'a', '--domain', 'local'], { cwd, encoding: 'utf8' });
+    assert.throws(
+      () => runRelayUp(['--registry', 'registry.json', '--domain', 'local', '--federation-mode', 'queue', '--federation-identity', '.sigil/a.identity.json'], cwd),
+      (e) => /in-memory relays have no durable outbox/.test(e.stderr ?? e.message),
+    );
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
