@@ -58,3 +58,41 @@ export function signForwardRequest(canonicalBytes, identity) {
   const signature = crypto.sign(null, canonicalBytes, privateKey).toString('base64url');
   return { signature, keyId: identity.key_id };
 }
+
+const PEER_CODE_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
+const PEER_BODY_READ_CAP = 4 * 1024;
+
+export async function postForward(peer, canonicalBytes, { signature, keyId }, { fetchImpl = fetch } = {}) {
+  const url = peer.relayUrl.replace(/\/+$/, '') + '/v1/federation/envelopes';
+  let res;
+  try {
+    res = await fetchImpl(url, {
+      method: 'POST',
+      body: canonicalBytes,
+      redirect: 'error',
+      signal: AbortSignal.timeout(5000),
+      headers: {
+        'content-type': 'application/json',
+        'Sigil-Relay-Signature': signature,
+        'Sigil-Relay-Key-Id': keyId,
+      },
+    });
+  } catch (error) {
+    throw Object.assign(new Error(`forward transport failed: ${error.message}`), { code: 'FORWARD_TRANSPORT_FAILED', cause: error });
+  }
+
+  if (res.status >= 200 && res.status < 300) return { ok: true, status: res.status };
+  if (res.status >= 500) {
+    throw Object.assign(new Error(`peer relay returned ${res.status}`), { code: 'FORWARD_TRANSPORT_FAILED', status: res.status });
+  }
+  // 4xx: attempt a bounded, shape-checked read of the peer's error code.
+  let peerCode;
+  try {
+    const text = await res.text();
+    if (typeof text === 'string' && text.length <= PEER_BODY_READ_CAP) {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed.code === 'string' && PEER_CODE_RE.test(parsed.code)) peerCode = parsed.code;
+    }
+  } catch { /* non-JSON / oversize / read error: peerCode stays undefined */ }
+  return peerCode ? { ok: false, status: res.status, peerCode } : { ok: false, status: res.status };
+}

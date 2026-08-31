@@ -72,3 +72,50 @@ test('signForwardRequest: verifies against identity public key over canonicalByt
   assert.equal(keyId, 'key_ep_codex@a.example');
   assert.equal(crypto.verify(null, canonicalBytes, publicKey, Buffer.from(signature, 'base64url')), true);
 });
+
+import { postForward } from './federation-router.mjs';
+
+const peer = { relayUrl: 'https://b.example/relay' };
+const bytes = Buffer.from('{"x":1}', 'utf8');
+const sig = { signature: 'SIG', keyId: 'k1' };
+const res = ({ status, body = '', json }) => ({
+  status, ok: status >= 200 && status < 300,
+  text: async () => body,
+  json: async () => (json ?? JSON.parse(body)),
+});
+
+test('2xx → ok:true and target URL is peer.relayUrl', async () => {
+  let seenUrl, seenOpts;
+  const fetchImpl = async (url, opts) => { seenUrl = url; seenOpts = opts; return res({ status: 202 }); };
+  const out = await postForward(peer, bytes, sig, { fetchImpl });
+  assert.deepEqual(out, { ok: true, status: 202 });
+  assert.equal(String(seenUrl), 'https://b.example/relay/v1/federation/envelopes');
+  assert.equal(seenOpts.redirect, 'error');
+  assert.equal(seenOpts.headers['Sigil-Relay-Signature'], 'SIG');
+  assert.equal(seenOpts.headers['Sigil-Relay-Key-Id'], 'k1');
+});
+test('4xx with well-formed { code } → ok:false + peerCode', async () => {
+  const fetchImpl = async () => res({ status: 403, body: JSON.stringify({ code: 'DIRECTORY_LINK_REQUIRED', message: 'nope' }) });
+  assert.deepEqual(await postForward(peer, bytes, sig, { fetchImpl }), { ok: false, status: 403, peerCode: 'DIRECTORY_LINK_REQUIRED' });
+});
+test('4xx with non-JSON body → ok:false, peerCode omitted', async () => {
+  const fetchImpl = async () => res({ status: 400, body: '<html>bad</html>' });
+  assert.deepEqual(await postForward(peer, bytes, sig, { fetchImpl }), { ok: false, status: 400 });
+});
+test('4xx with a code that fails the shape regex → peerCode omitted', async () => {
+  const fetchImpl = async () => res({ status: 400, body: JSON.stringify({ code: 'not-a-code' }) });
+  assert.deepEqual(await postForward(peer, bytes, sig, { fetchImpl }), { ok: false, status: 400 });
+});
+test('4xx body over 4 KiB → peerCode omitted', async () => {
+  const big = JSON.stringify({ code: 'REAL_CODE', pad: 'x'.repeat(5000) });
+  const fetchImpl = async () => res({ status: 400, body: big });
+  assert.deepEqual(await postForward(peer, bytes, sig, { fetchImpl }), { ok: false, status: 400 });
+});
+test('5xx → throws FORWARD_TRANSPORT_FAILED', async () => {
+  const fetchImpl = async () => res({ status: 503, body: 'nope' });
+  await assert.rejects(() => postForward(peer, bytes, sig, { fetchImpl }), (e) => e.code === 'FORWARD_TRANSPORT_FAILED');
+});
+test('fetch rejection (timeout/transport) → throws FORWARD_TRANSPORT_FAILED', async () => {
+  const fetchImpl = async () => { throw Object.assign(new Error('aborted'), { name: 'TimeoutError' }); };
+  await assert.rejects(() => postForward(peer, bytes, sig, { fetchImpl }), (e) => e.code === 'FORWARD_TRANSPORT_FAILED');
+});
