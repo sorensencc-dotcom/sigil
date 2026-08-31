@@ -1,6 +1,7 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { acceptEnvelopeAsync } from './accept-envelope.mjs';
+import { acceptFederatedEnvelope } from './accept-federated-envelope.mjs';
 import { transitionDelivery } from './delivery-state.mjs';
 import { createBearerAuthenticator } from './transport-auth.mjs';
 import { createApprovalChallenge, coseKeyToPublicKey, parseAttestationObject, verifyPackedAttestation, verifyWebAuthnApproval, verifyWebAuthnAssertion } from './approval-ceremony.mjs';
@@ -29,7 +30,7 @@ async function readBody(request, maxBytes = 1024 * 1024) {
   return raw;
 }
 
-export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain } = {}) {
+export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain, federationMode, federationIdentity, fetchImpl } = {}) {
   const jwksCache = createJwksCache({ fetchImpl: oidcFetchImpl });
   const discoveryCache = createDiscoveryCache({ fetchImpl: oidcFetchImpl });
   const authenticateRequest = authenticate ?? (tokenHashes ? createBearerAuthenticator(tokenHashes, registry) : null);
@@ -146,6 +147,29 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     if (request.method === 'GET' && parsedUrl.pathname === '/v1/health') {
       response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(JSON.stringify({ status: 'ok' }));
+    }
+
+    // Unauthenticated at the transport layer: trust is the peer relay's
+    // signature, verified inside acceptFederatedEnvelope. Must sit before the
+    // authenticateRequest gate below.
+    if (request.method === 'POST' && parsedUrl.pathname === '/v1/federation/envelopes') {
+      let raw;
+      try { raw = await readBody(request); }
+      catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      let body;
+      try { body = JSON.parse(raw); }
+      catch { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_FEDERATION_REQUEST', message: 'Invalid JSON', details: {} })); }
+      const headers = {};
+      for (const [k, v] of Object.entries(request.headers)) headers[k.toLowerCase()] = Array.isArray(v) ? v[0] : v;
+      const result = await acceptFederatedEnvelope(body, headers, {
+        repository, registered: registry, relayDomain, request_id: requestId, now,
+        onPersisted: async ({ envelope: accepted, persisted }) => {
+          if (!stream || persisted?.duplicate) return;
+          if (accepted.recipient?.endpoint_id) stream.notify(accepted.recipient.endpoint_id, persisted.message_id);
+        },
+      });
+      response.writeHead(result.status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+      return response.end(result.body ? JSON.stringify(result.body) : '');
     }
 
     const principal = authenticateRequest ? await authenticateRequest(request) : null;
