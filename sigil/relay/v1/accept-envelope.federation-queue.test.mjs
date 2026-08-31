@@ -1,9 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import pg from 'pg';
 import { signedBytes } from './validate-envelope.mjs';
 import { acceptEnvelopeAsync } from './accept-envelope.mjs';
 import { PostgresRepository } from './postgres-repository.mjs';
+import { assertDisposableTestDatabase } from '../../scripts/assert-disposable-test-db.mjs';
 
 // Task 14: origin relay in `queue` federation mode enqueues a foreign-domain
 // envelope to federation_outbox instead of forwarding synchronously.
@@ -16,8 +21,6 @@ const federationIdentity = {
   private_key_pem: relayIdentityKeys.privateKey.export({ type: 'pkcs8', format: 'pem' }),
   key_id: 'relay-a-key-1',
 };
-
-const PEER_B = { domain: 'b.example', relayUrl: 'https://relay.b.example', wsUrl: null, keys: [], trustMode: 'pinned' };
 
 function makeEnvelope({ senderEndpointId = 'ep_codex@a.example', recipientEndpointId = 'ep_claude@b.example' } = {}) {
   const envelope = {
@@ -50,7 +53,28 @@ const baseOptions = () => ({
 });
 
 test('queue mode with live database', { skip: !connectionString }, async (t) => {
-  const repository = new PostgresRepository({ connectionString });
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+
+  // Schema reset and migration (hermetic test setup)
+  assertDisposableTestDatabase(connectionString);
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
+  for (const file of sqlFiles) {
+    await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
+  }
+
+  const repository = new PostgresRepository({ pool });
+
+  // Register the peer (b.example) so decideRoute doesn't reject with PEER_NOT_PINNED
+  const peerPubKey = relayIdentityKeys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url');
+  await repository.upsertPeer({
+    domain: 'b.example',
+    relayUrl: 'https://relay.b.example',
+    keys: [{ kid: federationIdentity.key_id, alg: 'Ed25519', publicKey: peerPubKey }],
+    trustMode: 'pinned'
+  });
 
   try {
     // Test: first accept -> 202 queued:true, exactly one federation_outbox row
@@ -78,14 +102,12 @@ test('queue mode with live database', { skip: !connectionString }, async (t) => 
       assert.equal(row.sender_owner_id, 'usr_codex_owner');
     });
 
-    // Test: second identical accept -> 202 queued:true, duplicate:true, still one row
+    // Test: second identical accept -> 202 queued:true, duplicate:true, still exactly one row
     await t.test('duplicate accept -> 202 queued:true, duplicate:true, still one row', async () => {
       const envelope = makeEnvelope({
         senderEndpointId: 'ep_codex@a.example',
         recipientEndpointId: 'ep_claude@b.example'
       });
-      const idempotencyKey = envelope.idempotency_key;
-      const messageId = envelope.message_id;
 
       // First accept
       const result1 = await acceptEnvelopeAsync(envelope, {
@@ -95,10 +117,6 @@ test('queue mode with live database', { skip: !connectionString }, async (t) => 
       assert.equal(result1.status, 202);
       assert.equal(result1.body.queued, true);
       assert.equal(result1.body.duplicate, false);
-
-      // Verify one row
-      let listResult = await repository.listFederationOutbox({ states: ['pending'] });
-      const countBefore = listResult.counts.pending;
 
       // Second accept with same message
       const result2 = await acceptEnvelopeAsync(envelope, {
@@ -111,9 +129,9 @@ test('queue mode with live database', { skip: !connectionString }, async (t) => 
       assert.equal(result2.body.duplicate, true);
       assert.equal(result2.body.request_id, 'req_fwd_1');
 
-      // Verify still exactly one row (or same count as before)
-      listResult = await repository.listFederationOutbox({ states: ['pending'] });
-      assert.equal(listResult.counts.pending, countBefore, 'should still have same number of rows after duplicate');
+      // Verify still exactly one row (idempotent via unique constraint)
+      const listResult = await repository.listFederationOutbox({ states: ['pending'] });
+      assert.equal(listResult.counts.pending, 1, 'should have exactly one pending row after duplicate');
     });
   } finally {
     await repository.close();
