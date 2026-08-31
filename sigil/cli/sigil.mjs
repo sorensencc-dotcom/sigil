@@ -56,6 +56,9 @@ Commands:
   peer get <domain> [--database-url url]                   Show one pinned peer relay
   peer remove <domain> [--database-url url]                Unpin a peer relay
   peer rotate <domain> --confirm [--database-url url]      Force-overwrite a pinned peer's key set, bypassing the TOFU mismatch check
+  federation outbox list [--database-url url]              List queue-mode federation forward jobs: state counts, then one row per job (no envelope bodies)
+  federation outbox show <id> [--database-url url]         Show one federation_outbox row's metadata (no envelope body)
+  federation outbox retry <id> [--database-url url]        Re-queue a forward_rejected / dead_letter row for another forward attempt
   send [--identity path] [--relay-url url] [--stream-url url] [--wait-for-receipt] --to endpoint_id --to-owner owner_id --message "text" [--conversation id]
   inbox [--identity path] [--relay-url url] [--watch|--wait] [--loop] [--stream-url url] [--interval ms] [--timeout ms] [--local] [--ledger path]
   doctor [--identity path] [--relay-url url]               Conformance check: JCS/dependency audits, plus a keypair check (if --identity)
@@ -681,6 +684,65 @@ async function cmdAgentRun(argv) {
   await new Promise(() => {});
 }
 
+// `sigil federation outbox list|show|retry` -- inspect and re-queue the
+// queue-mode federation forward jobs in federation_outbox (Task 13 repo
+// methods). Never prints an envelope body: `list` rows are already
+// body-stripped by listFederationOutbox; `show` omits envelope/senderKey
+// before printing.
+async function cmdFederation(argv) {
+  const [group, action, ...rest] = argv;
+  const actions = ['list', 'show', 'retry'];
+  if (group !== 'outbox' || !actions.includes(action)) {
+    throw new Error('usage: sigil federation outbox <list|show|retry> [<id>] [--database-url url]');
+  }
+  const args = parseArgs({ args: rest, options: { 'database-url': { type: 'string' } }, allowPositionals: true });
+  const requireMsg = 'sigil federation outbox requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable outbox';
+
+  if (action === 'list') {
+    await withRepository(args, requireMsg, async (repository) => {
+      const { counts, rows } = await repository.listFederationOutbox();
+      console.log(`pending=${counts.pending}  processing=${counts.processing}  forwarded=${counts.forwarded}  forward_rejected=${counts.forward_rejected}  dead_letter=${counts.dead_letter}`);
+      console.log('id\tstate\trecipient_domain\tattempt_count\tnext_attempt_at\tlast_reason_code');
+      for (const row of rows) {
+        console.log(`${row.id}\t${row.state}\t${row.recipientDomain}\t${row.attemptCount}\t${row.nextAttemptAt ?? ''}\t${row.lastReasonCode ?? ''}`);
+      }
+    }, { migrate: true });
+    return;
+  }
+
+  const id = args.positionals[0];
+  if (!id) throw new Error(`usage: sigil federation outbox ${action} <id> [--database-url url]`);
+
+  if (action === 'show') {
+    await withRepository(args, requireMsg, async (repository) => {
+      const record = await repository.getFederationOutboxRow(id);
+      if (!record) {
+        console.error(`No federation_outbox row for "${id}".`);
+        process.exitCode = 1;
+        return;
+      }
+      const { envelope, senderKey, ...meta } = record;
+      console.log(JSON.stringify(meta, null, 2));
+      console.log('Transition history: (unavailable)');
+    }, { migrate: true });
+    return;
+  }
+
+  await withRepository(args, requireMsg, async (repository) => {
+    const result = await repository.retryFederationForward(id, new Date());
+    if (result.retried) {
+      console.log(`Re-queued ${id}`);
+      return;
+    }
+    if (result.reason === 'MESSAGE_EXPIRED') {
+      console.error(`Cannot retry ${id}: the stored envelope has expired — have the sender resend.`);
+    } else {
+      console.error(`Cannot retry ${id}: not in a retryable state (only forward_rejected / dead_letter rows can be re-queued).`);
+    }
+    process.exitCode = 1;
+  }, { migrate: true });
+}
+
 export async function main() {
   const [command, sub, ...rest] = process.argv.slice(2);
   try {
@@ -702,6 +764,7 @@ export async function main() {
     else if (command === 'doctor') await cmdDoctor(process.argv.slice(3));
     else if (command === 'send') await cmdSend(process.argv.slice(3));
     else if (command === 'inbox') await cmdInbox(process.argv.slice(3));
+    else if (command === 'federation') await cmdFederation(process.argv.slice(3));
     else usage();
   } catch (error) {
     console.error(`sigil: ${error.message}`);
