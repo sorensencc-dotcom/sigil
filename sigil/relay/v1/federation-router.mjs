@@ -1,5 +1,7 @@
+import crypto from 'node:crypto';
 import { parseFederatedId } from './federated-id.mjs';
 import { checkRecipientLocality, reject } from './validate-envelope.mjs';
+import { canonicalJsonBytes } from './jcs.mjs';
 
 // Origin-side routing decision (design §"New module"). Async only because the
 // pinned-peer lookup is a repository call; every other branch is pure string
@@ -38,4 +40,21 @@ export async function decideRoute(envelope, { relayDomain, federationMode, getPe
     return { action: 'reject', code: 'PEER_NOT_PINNED', details: { recipientDomain: recipientId.domain } };
   }
   return { action: 'forward', peer, recipientDomain: recipientId.domain };
+}
+
+export function buildForwardRequest(envelope, { originDomain, senderKey, senderOwnerId, now } = {}) {
+  const body = {
+    origin_domain: originDomain,
+    envelope,
+    sender_key: { kid: senderKey.kid, alg: senderKey.alg ?? 'Ed25519', publicKey: senderKey.publicKey },
+    sender_owner_id: senderOwnerId,
+    forwarded_at: (now instanceof Date ? now : new Date(now)).toISOString(),
+  };
+  return { body, canonicalBytes: canonicalJsonBytes(body) };
+}
+
+export function signForwardRequest(canonicalBytes, identity) {
+  const privateKey = crypto.createPrivateKey(identity.private_key_pem);
+  const signature = crypto.sign(null, canonicalBytes, privateKey).toString('base64url');
+  return { signature, keyId: identity.key_id };
 }
