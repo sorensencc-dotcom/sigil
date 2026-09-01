@@ -70,8 +70,19 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       const endpoint = registry.get(endpointId);
       return endpoint?.status === 'active' ? endpoint : null;
     },
+    // Federated-inbound shadow registration (design R10). A foreign sender
+    // (endpoint homed on another relay) is not in this relay's registry, so
+    // an accepted federated envelope would have nothing to hang its FK chain
+    // on in the Postgres path. Insert a minimal active registry entry keyed
+    // by endpoint_id, mirroring the shape other entries use; origin_domain
+    // marks it as a shadow row. No-op if the endpoint is already present.
+    async registerFederatedSender({ endpoint_id, owner_id, key_id, public_key, origin_domain }) {
+      if (registry.has(endpoint_id)) return;
+      registry.set(endpoint_id, { endpoint_id, owner_id, key_id, status: 'active', public_key, origin_domain });
+    },
     async persistAcceptedEnvelope(row) {
-      envelopes.set(row.message_id, row);
+      const federationHop = row.federation_hop === true;
+      envelopes.set(row.message_id, { ...row, federation_hop: federationHop });
       idempotency.set(`${row.envelope.sender.endpoint_id}:${row.envelope.idempotency_key}`, { message_id: row.message_id, canonical_hash: row.canonical_hash });
       if (row.envelope.recipient?.endpoint_id) {
         const deliveryId = `del_${row.message_id}`;
@@ -81,7 +92,8 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
           recipient_endpoint_id: row.envelope.recipient.endpoint_id,
           state: 'delivered',
           queued_at: new Date().toISOString(),
-          attempts: 0
+          attempts: 0,
+          federation_hop: federationHop
         });
       }
       return { message_id: row.message_id, duplicate: false };
@@ -337,6 +349,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     // real audit_events table to query.
     _debugGetAuditEvents() {
       return auditEvents;
-    }
+    },
+    _debugGetEnvelope(messageId) { return envelopes.get(messageId) ?? null; }
   };
 }

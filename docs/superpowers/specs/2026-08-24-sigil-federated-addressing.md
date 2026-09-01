@@ -234,3 +234,9 @@ accept time, replacing today's silent accept-and-never-deliver. It does
 The `--owner` flag supplies a complete owner ID, not a local-part. When supplied during `sigil init`, it must be a well-formed federated ID whose domain matches `--domain` case-insensitively, with ports remaining significant. Bare owners fail with the parser error; well-formed owners from another domain fail with stable code `OWNER_DOMAIN_MISMATCH`. Both are rejected before identity-file or registry writes. When omitted, the owner defaults to `usr_<name>@<domain>`.
 
 Required tests: matching-domain owner is preserved; bare owner is rejected; foreign-domain owner is rejected; all failures leave no partial identity file.
+
+## Revision: `--federation-owner` amendment (2026-08-30)
+
+Sub-project #3 (inter-relay routing) prerequisite. `sigil init` gains `--federation-owner <federated-id>`, mutually exclusive with `--owner`. It accepts an owner ID whose domain differs from `--domain`, suppressing `OWNER_DOMAIN_MISMATCH` for that invocation only; the value must still be a well-formed federated ID. The omitted-owner default (`usr_<name>@<domain>`) and plain `--owner` domain-match enforcement are unchanged. Purpose: let one owner ID be registered verbatim on two federated relays so sub-project #3's same-owner delivery exemption can fire. Adds no owner-ID resolution, directory, or proof of same-principal — that is sub-project #4.
+
+Required tests: cross-domain `--federation-owner` is written verbatim to identity and registry; malformed `--federation-owner` is rejected with no partial identity file; `--owner` and `--federation-owner` together are rejected; plain `--owner` foreign-domain still fails `OWNER_DOMAIN_MISMATCH`; omitted owner still defaults to `usr_<name>@<domain>`.

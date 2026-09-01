@@ -29,6 +29,7 @@ import { loadConfigFile, resolveConfig } from './config-resolver.mjs';
 import { formatInboxItem, INBOX_WAIT_EXIT_CODES, waitForOneInboxMessage, isRetryableInboxWaitExitCode } from './inbox-wait.mjs';
 import { appendInboxLedger, readInboxLedger } from './ledger.mjs';
 import { signContract, verifyContract } from './contract-signing.mjs';
+import { checkRelayConnectivity } from './doctor.mjs';
 
 const DEFAULT_CLI_CONFIG = path.join('.sigil', 'config.json');
 
@@ -38,10 +39,10 @@ function usage() {
   console.log(`sigil <command> [options]
 
 Commands:
-  init <name> --owner <owner_id> [--registry path] [--domain domain]      Create a local identity and register it (domain defaults to "local")
+  init <name> [--owner <owner_id> | --federation-owner <federated_id>] [--registry path] [--domain domain]      Create a local identity and register it (domain defaults to "local"; --federation-owner allows an owner id whose domain differs from --domain)
   sign-contract --contract path --identity path [--output path]          Sign a TorqueQuery agent dispatch contract
   verify-contract --contract path --registry path                        Verify a signed TorqueQuery agent dispatch contract
-  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] Run a local relay (blocks; Ctrl+C to stop)
+  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] Run a local relay (blocks; Ctrl+C to stop)
   relay well-known generate --identity path --domain domain --endpoint url [--ws-endpoint url] [--output path]
                                                             Emit this relay's .well-known/sigil discovery document from a designated endpoint identity
   oidc-issuer add <issuer> --client-id id [--label text] [--assurance level] [--database-url url]
@@ -58,6 +59,11 @@ Commands:
   peer get <domain> [--database-url url]                   Show one pinned peer relay
   peer remove <domain> [--database-url url]                Unpin a peer relay
   peer rotate <domain> --confirm [--database-url url]      Force-overwrite a pinned peer's key set, bypassing the TOFU mismatch check
+  federation outbox list [--database-url url]              List queue-mode federation forward jobs: state counts, then one row per job (no envelope bodies)
+  federation outbox show <id> [--database-url url]         Show one federation_outbox row's metadata (no envelope body)
+  federation outbox retry <id> [--database-url url]        Re-queue a forward_rejected / dead_letter row for another forward attempt
+  route test <recipient_federated_id> --identity path [--database-url url] [--registry path]
+                                                            Read-only federation routing check: parse recipient, peer-directory pin lookup, /v1/health reachability, advisory same-owner line -- sends no envelope
   send [--identity path] [--relay-url url] [--stream-url url] [--wait-for-receipt] --to endpoint_id --to-owner owner_id --message "text" [--conversation id]
   inbox [--identity path] [--relay-url url] [--watch|--wait] [--loop] [--stream-url url] [--interval ms] [--timeout ms] [--local] [--ledger path]
   doctor [--identity path] [--relay-url url]               Conformance check: JCS/dependency audits, plus a keypair check (if --identity)
@@ -87,18 +93,33 @@ function flushPrint(line) {
 const NAME_CHARSET = /^[a-z0-9_-]+$/;
 
 async function cmdInit(argv) {
-  const args = parseArgs({ args: argv, options: { owner: { type: 'string' }, registry: { type: 'string' }, kind: { type: 'string' }, domain: { type: 'string' } }, allowPositionals: true });
+  const args = parseArgs({ args: argv, options: { owner: { type: 'string' }, 'federation-owner': { type: 'string' }, registry: { type: 'string' }, kind: { type: 'string' }, domain: { type: 'string' } }, allowPositionals: true });
   const name = args.positionals[0];
-  if (!name) throw new Error('usage: sigil init <name> --owner <owner_id> [--domain domain]');
+  if (!name) throw new Error('usage: sigil init <name> [--owner <owner_id> | --federation-owner <federated_id>] [--domain domain]');
   if (!NAME_CHARSET.test(name)) throw new Error(`sigil init: <name> "${name}" must match ${NAME_CHARSET} (it becomes the federated id's local part)`);
   const domain = opt(args, ['domain']) ?? 'local';
   const { parseDomain, parseFederatedId, isLocalDomain, resolveDomainOrThrow } = await import('../relay/v1/federated-id.mjs');
   const { host: domainHost } = parseDomain(domain);
   if (domainHost !== 'local') await resolveDomainOrThrow(domain);
-  const owner = opt(args, ['owner']) ?? `usr_${name}@${domain}`;
-  if (opt(args, ['owner']) !== undefined) {
-    parseFederatedId(owner);
-    if (!isLocalDomain(owner, domain)) throw Object.assign(new Error(`sigil init: --owner domain must match --domain`), { code: 'OWNER_DOMAIN_MISMATCH' });
+  const explicitOwner = opt(args, ['owner']);
+  const federationOwner = opt(args, ['federation-owner']);
+  if (explicitOwner !== undefined && federationOwner !== undefined) {
+    throw new Error('sigil init: both --owner and --federation-owner given; pass at most one');
+  }
+  let owner;
+  if (federationOwner !== undefined) {
+    // #3 sub-project amendment: a deliberately cross-domain owner id, so one
+    // owner can be shared verbatim across federated relays and the receiver's
+    // same-owner exemption can fire. OWNER_DOMAIN_MISMATCH is suppressed for
+    // this flag only; the id must still be a well-formed federated id.
+    parseFederatedId(federationOwner);
+    owner = federationOwner;
+  } else if (explicitOwner !== undefined) {
+    parseFederatedId(explicitOwner);
+    if (!isLocalDomain(explicitOwner, domain)) throw Object.assign(new Error(`sigil init: --owner domain must match --domain`), { code: 'OWNER_DOMAIN_MISMATCH' });
+    owner = explicitOwner;
+  } else {
+    owner = `usr_${name}@${domain}`;
   }
   const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
   const identityPath = path.join('.sigil', `${name}.identity.json`);
@@ -131,7 +152,7 @@ export function startOidcIssuerAllowlistPolling({ repository, allowlistSet, inte
 }
 
 async function cmdRelayUp(argv) {
-  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' }, 'oidc-issuer-refresh-interval-ms': { type: 'string' }, domain: { type: 'string' } } });
+  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' }, 'oidc-issuer-refresh-interval-ms': { type: 'string' }, domain: { type: 'string' }, 'federation-mode': { type: 'string' }, 'federation-identity': { type: 'string' } } });
   const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
   const port = Number(opt(args, ['port']) ?? 0);
   const streamPort = Number(opt(args, ['stream-port']) ?? (port ? port + 1 : 0));
@@ -149,10 +170,20 @@ async function cmdRelayUp(argv) {
     federatedId.parseDomain(relayDomain); // throws INVALID_DOMAIN_SYNTAX / INVALID_PORT before anything else runs
     isLocalDomain = federatedId.isLocalDomain;
   }
+  const federationMode = opt(args, ['federation-mode']);
+  let federationIdentity;
+  if (federationMode !== undefined) {
+    if (!['sync', 'queue'].includes(federationMode)) throw new Error('sigil relay up: --federation-mode must be "sync" or "queue"');
+    if (relayDomain === undefined) throw new Error('sigil relay up: --federation-mode requires --domain');
+    const identityPath = opt(args, ['federation-identity']);
+    if (!identityPath) throw new Error('sigil relay up: --federation-mode requires --federation-identity <path>');
+    federationIdentity = loadIdentity(identityPath); // throws on missing / non-JSON
+    if (federationMode === 'queue' && !databaseUrl) throw new Error('sigil relay up: --federation-mode queue requires --database-url (or SIGIL_DATABASE_URL); in-memory relays have no durable outbox');
+  }
   const data = loadRegistryFile(registryPath);
-  if (!data.endpoints.length) throw new Error(`No endpoints in ${registryPath}. Run "sigil init <name> --owner <owner_id>" first.`);
+  if (!data.endpoints.length) throw new Error(`No endpoints in ${registryPath}. Run "sigil init <name> --owner <owner_id>" (or --federation-owner <federated_id>) first.`);
   if (relayDomain !== undefined && !data.endpoints.some((ep) => isLocalDomain(ep.endpoint_id, relayDomain))) {
-    console.log(`WARNING: no endpoint in ${registryPath} belongs to domain "${relayDomain}" -- every envelope will be rejected with RECIPIENT_NOT_LOCAL. Register an endpoint with "sigil init <name> --owner <owner_id> --domain ${relayDomain}", or drop --domain.`);
+    console.log(`WARNING: no endpoint in ${registryPath} belongs to domain "${relayDomain}" -- every envelope will be rejected with RECIPIENT_NOT_LOCAL. Register an endpoint with "sigil init <name> --owner <owner_id> --domain ${relayDomain}" (or --federation-owner <federated_id> for an owner whose domain differs from --domain), or drop --domain.`);
   }
   const registry = toRegistryMap(data);
   const tokenHashes = toTokenHashes(data);
@@ -208,9 +239,15 @@ async function cmdRelayUp(argv) {
     const addr = server?.address();
     return addr ? `http://127.0.0.1:${addr.port}` : `http://127.0.0.1:${port}`;
   };
-  server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain });
+  server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();
+  let federationReaperTimer;
+  if (federationMode === 'queue') {
+    const { startFederationReaper } = await import('../relay/v1/federation-reaper.mjs');
+    federationReaperTimer = startFederationReaper({ repository, identity: federationIdentity, originDomain: relayDomain });
+    console.log('Federation outbox reaper running (60s interval).');
+  }
   if (enableMockOidc) console.log('WARNING: mock-OIDC login is enabled (--enable-mock-oidc). This is for local development and CI only -- never expose this relay to untrusted networks.');
   console.log(`Sigil relay listening on http://127.0.0.1:${address.port}`);
   console.log(`Sigil stream (push notify) on ws://127.0.0.1:${streamAddress.port}/v1/stream`);
@@ -723,6 +760,138 @@ async function cmdAgentRun(argv) {
   await new Promise(() => {});
 }
 
+// `sigil federation outbox list|show|retry` -- inspect and re-queue the
+// queue-mode federation forward jobs in federation_outbox (Task 13 repo
+// methods). Never prints an envelope body: `list` rows are already
+// body-stripped by listFederationOutbox; `show` omits envelope/senderKey
+// before printing.
+async function cmdFederation(argv) {
+  const [group, action, ...rest] = argv;
+  const actions = ['list', 'show', 'retry'];
+  if (group !== 'outbox' || !actions.includes(action)) {
+    throw new Error('usage: sigil federation outbox <list|show|retry> [<id>] [--database-url url]');
+  }
+  const args = parseArgs({ args: rest, options: { 'database-url': { type: 'string' } }, allowPositionals: true });
+  const requireMsg = 'sigil federation outbox requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable outbox';
+
+  if (action === 'list') {
+    await withRepository(args, requireMsg, async (repository) => {
+      const { counts, rows } = await repository.listFederationOutbox();
+      console.log(`pending=${counts.pending}  processing=${counts.processing}  forwarded=${counts.forwarded}  forward_rejected=${counts.forward_rejected}  dead_letter=${counts.dead_letter}`);
+      console.log('id\tstate\trecipient_domain\tattempt_count\tnext_attempt_at\tlast_reason_code');
+      for (const row of rows) {
+        console.log(`${row.id}\t${row.state}\t${row.recipientDomain}\t${row.attemptCount}\t${row.nextAttemptAt ?? ''}\t${row.lastReasonCode ?? ''}`);
+      }
+    }, { migrate: true });
+    return;
+  }
+
+  const id = args.positionals[0];
+  if (!id) throw new Error(`usage: sigil federation outbox ${action} <id> [--database-url url]`);
+
+  if (action === 'show') {
+    await withRepository(args, requireMsg, async (repository) => {
+      const record = await repository.getFederationOutboxRow(id);
+      if (!record) {
+        console.error(`No federation_outbox row for "${id}".`);
+        process.exitCode = 1;
+        return;
+      }
+      // Strip the envelope body, the propagated sender key, and the internal
+      // lease fields (claim token / claimed-at) -- none belong in operator output.
+      const { envelope, senderKey, claimToken, claimedAt, ...meta } = record;
+      console.log(JSON.stringify(meta, null, 2));
+    }, { migrate: true });
+    return;
+  }
+
+  await withRepository(args, requireMsg, async (repository) => {
+    const result = await repository.retryFederationForward(id, new Date());
+    if (result.retried) {
+      console.log(`Re-queued ${id}`);
+      return;
+    }
+    if (result.reason === 'MESSAGE_EXPIRED') {
+      console.error(`Cannot retry ${id}: the stored envelope has expired — have the sender resend.`);
+    } else {
+      console.error(`Cannot retry ${id}: not in a retryable state (only forward_rejected / dead_letter rows can be re-queued).`);
+    }
+    process.exitCode = 1;
+  }, { migrate: true });
+}
+
+// Read-only federation routing diagnostic. Sends NO envelope, ever: it only
+// parses the recipient id, reads the local peer directory, GETs the peer
+// relay's /v1/health, and prints an advisory same-owner-exemption line based
+// on the local registry. The receiving relay always re-checks everything.
+async function cmdRoute(argv) {
+  const [action, ...rest] = argv;
+  const usageLine = 'usage: sigil route test <recipient_federated_id> --identity <path> [--database-url url] [--registry path]';
+  if (action !== 'test') throw new Error(usageLine);
+  const args = parseArgs({ args: rest, options: { identity: { type: 'string' }, 'database-url': { type: 'string' }, registry: { type: 'string' } }, allowPositionals: true });
+  const recipient = args.positionals[0];
+  const identityPath = opt(args, ['identity']);
+  if (!recipient || !identityPath) throw new Error(usageLine);
+  const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
+
+  // Step 1: parse the recipient federated id.
+  const { parseFederatedId } = await import('../relay/v1/federated-id.mjs');
+  let parsed;
+  try {
+    parsed = parseFederatedId(recipient);
+  } catch (error) {
+    console.error(`sigil route test: malformed recipient federated id "${recipient}" (${error.code ?? 'MALFORMED_FEDERATED_ID'}): ${error.message}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`Recipient: ${parsed.localPart}@${parsed.domain}`);
+
+  // Step 2: resolve the recipient domain against the local peer directory.
+  // With no database there is no durable peer directory, so every domain is
+  // treated as unpinned.
+  const databaseUrl = opt(args, ['database-url']) ?? process.env.SIGIL_DATABASE_URL;
+  let peer = null;
+  if (databaseUrl) {
+    // databaseUrl is non-empty in this branch, so withRepository's own
+    // missing-url guard is never reached -- the message is intentionally empty.
+    await withRepository(args, '', async (repository) => {
+      peer = await repository.getPeerByDomain(parsed.domain);
+    });
+  }
+  if (!peer) {
+    console.log('Pinned: no');
+    process.exitCode = 1;
+    return;
+  }
+  console.log('Pinned: yes');
+  console.log(`Peer relay URL: ${peer.relayUrl}`);
+
+  // Step 3: probe the pinned peer relay's health endpoint (read-only GET).
+  const reach = await checkRelayConnectivity(peer.relayUrl);
+  if (reach.ok) {
+    console.log(`Reachable: yes (${reach.latencyMs}ms)`);
+  } else {
+    console.log(`Reachable: no (${reach.error})`);
+    process.exitCode = 1;
+  }
+
+  // Step 4: advisory same-owner-exemption line. Only informative when the
+  // recipient endpoint is present in the local registry -- the receiving
+  // relay re-checks against its own registry regardless.
+  const localRegistry = toRegistryMap(loadRegistryFile(registryPath));
+  // Look up by the normalized federated id (localPart@domain), not the raw CLI
+  // arg -- the registry is keyed on the canonical form printed above.
+  const recipientEntry = localRegistry.get(`${parsed.localPart}@${parsed.domain}`);
+  if (!recipientEntry) {
+    console.log('Same-owner exemption: not determinable locally');
+  } else if (recipientEntry.owner_id === loadIdentity(identityPath).owner_id) {
+    console.log('Same-owner exemption: would apply (advisory)');
+  } else {
+    console.log('Same-owner exemption: would NOT apply (advisory) — owner ids differ');
+  }
+  console.log('(advisory only — the receiving relay re-checks against its own registry)');
+}
+
 export async function main() {
   const [command, sub, ...rest] = process.argv.slice(2);
   try {
@@ -745,6 +914,8 @@ export async function main() {
     else if (command === 'doctor') await cmdDoctor(process.argv.slice(3));
     else if (command === 'send') await cmdSend(process.argv.slice(3));
     else if (command === 'inbox') await cmdInbox(process.argv.slice(3));
+    else if (command === 'federation') await cmdFederation(process.argv.slice(3));
+    else if (command === 'route') await cmdRoute(process.argv.slice(3));
     else usage();
   } catch (error) {
     console.error(`sigil: ${error.message}`);
