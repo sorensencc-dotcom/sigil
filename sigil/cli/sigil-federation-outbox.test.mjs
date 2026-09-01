@@ -57,6 +57,9 @@ test('sigil federation outbox list|show|retry against a seeded federation_outbox
   assert.match(list.stdout, /forward_rejected=1/);
   assert.match(list.stdout, /dead_letter=1/);
   assert.match(list.stdout, new RegExp(rejectedId));
+  // the metadata columns actually render their seeded values, not just the id
+  assert.match(list.stdout, /b\.example/); // recipient_domain
+  assert.match(list.stdout, /PEER_4XX/); // last_reason_code
   assert.doesNotMatch(list.stdout, /SECRET-BODY/);
   assert.doesNotMatch(list.stdout, /"text"/);
 

@@ -65,13 +65,37 @@ export async function runFederationReaperPass({
       continue;
     }
 
-    const { canonicalBytes } = buildForwardRequest(row.envelope, {
-      originDomain,
-      senderKey: row.senderKey,
-      senderOwnerId: row.senderOwnerId,
-      now,
-    });
-    const signed = signForwardRequest(canonicalBytes, identity);
+    // A malformed stored envelope or a bad identity key makes buildForwardRequest
+    // / signForwardRequest throw. That throw precedes every finalize below, so an
+    // unguarded one aborts the whole pass and wedges every row behind this one.
+    // Route the poison row to dead_letter (ownership-guarded) and move on.
+    let canonicalBytes;
+    let signed;
+    try {
+      ({ canonicalBytes } = buildForwardRequest(row.envelope, {
+        originDomain,
+        senderKey: row.senderKey,
+        senderOwnerId: row.senderOwnerId,
+        now,
+      }));
+      signed = signForwardRequest(canonicalBytes, identity);
+    } catch {
+      const { updated } = await finalize(repository, row, 'dead_letter', {
+        attemptCount: row.attemptCount,
+        reasonCode: 'FORWARD_BUILD_FAILED',
+      });
+      if (updated) {
+        counts.deadLettered += 1;
+        await repository.recordAuditEvent({
+          ...auditBase,
+          eventType: 'federation.dead_letter',
+          outcome: 'rejected',
+          reason: 'FORWARD_BUILD_FAILED',
+          payload: { reason_code: 'FORWARD_BUILD_FAILED' },
+        });
+      }
+      continue;
+    }
 
     let outcome;
     let transportFailed = false;
@@ -180,7 +204,7 @@ export function startFederationReaper({ repository, identity, originDomain, inte
     try {
       await runFederationReaperPass({ repository, identity, originDomain, fetchImpl });
     } catch (error) {
-      console.error(`sigil: federation reaper pass failed: ${error.message}`);
+      console.error(`sigil: federation reaper pass failed: ${error?.message ?? error}`);
     }
   }, intervalMs).unref();
 }

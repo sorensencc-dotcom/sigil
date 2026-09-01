@@ -93,7 +93,7 @@ const NAME_CHARSET = /^[a-z0-9_-]+$/;
 async function cmdInit(argv) {
   const args = parseArgs({ args: argv, options: { owner: { type: 'string' }, 'federation-owner': { type: 'string' }, registry: { type: 'string' }, kind: { type: 'string' }, domain: { type: 'string' } }, allowPositionals: true });
   const name = args.positionals[0];
-  if (!name) throw new Error('usage: sigil init <name> --owner <owner_id> [--domain domain]');
+  if (!name) throw new Error('usage: sigil init <name> [--owner <owner_id> | --federation-owner <federated_id>] [--domain domain]');
   if (!NAME_CHARSET.test(name)) throw new Error(`sigil init: <name> "${name}" must match ${NAME_CHARSET} (it becomes the federated id's local part)`);
   const domain = opt(args, ['domain']) ?? 'local';
   const { parseDomain, parseFederatedId, isLocalDomain, resolveDomainOrThrow } = await import('../relay/v1/federated-id.mjs');
@@ -726,7 +726,6 @@ async function cmdFederation(argv) {
       }
       const { envelope, senderKey, ...meta } = record;
       console.log(JSON.stringify(meta, null, 2));
-      console.log('Transition history: (unavailable)');
     }, { migrate: true });
     return;
   }
@@ -779,7 +778,9 @@ async function cmdRoute(argv) {
   const databaseUrl = opt(args, ['database-url']) ?? process.env.SIGIL_DATABASE_URL;
   let peer = null;
   if (databaseUrl) {
-    await withRepository(args, 'sigil route test: --database-url unexpectedly missing', async (repository) => {
+    // databaseUrl is non-empty in this branch, so withRepository's own
+    // missing-url guard is never reached -- the message is intentionally empty.
+    await withRepository(args, '', async (repository) => {
       peer = await repository.getPeerByDomain(parsed.domain);
     });
   }

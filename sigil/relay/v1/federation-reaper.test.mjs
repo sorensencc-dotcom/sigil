@@ -267,6 +267,42 @@ test('stale claim token (finalize updated:false) -> pass does not throw, no audi
   assert.equal(repo.finalizeCalls.length, 1);
 });
 
+test('poison row (buildForwardRequest throws) -> dead_letter FORWARD_BUILD_FAILED; pass does not throw and a healthy row behind it still forwards', async () => {
+  const poison = makeRow({
+    envelope: {
+      message_id: 'm-poison',
+      expires_at: '2999-01-01T00:00:00Z',
+      sender: { endpoint_id: 'ep_poison@local.example.com' },
+      bad: 10n, // a BigInt cannot be canonicalized -> buildForwardRequest throws
+    },
+  });
+  const healthy = makeRow();
+  const repo = makeRepo({ rows: [poison, healthy], peers: PEERS });
+  let posted = 0;
+
+  const counts = await runFederationReaperPass({
+    repository: repo,
+    identity: makeIdentity(),
+    originDomain: ORIGIN_DOMAIN,
+    now: new Date('2026-08-31T00:00:00Z'),
+    postForwardImpl: async () => { posted += 1; return { ok: true, status: 202 }; },
+  });
+
+  // (a) poison row: terminal dead_letter, no forward attempted, pass survived.
+  assert.equal(repo.store.get(poison.id).state, 'dead_letter');
+  assert.equal(repo.store.get(poison.id).lastReasonCode, 'FORWARD_BUILD_FAILED');
+  const dl = repo.audits.find((a) => a.eventType === 'federation.dead_letter' && a.subjectId === poison.messageId);
+  assert.ok(dl, 'expected a federation.dead_letter audit for the poison row');
+  assert.equal(dl.reason, 'FORWARD_BUILD_FAILED');
+  assert.equal(dl.payload.reason_code, 'FORWARD_BUILD_FAILED');
+
+  // (b) healthy row queued behind the poison row still forwarded in the same pass.
+  assert.equal(posted, 1, 'the healthy row must still be forwarded');
+  assert.equal(repo.store.get(healthy.id).state, 'forwarded');
+
+  assert.deepEqual(counts, { claimed: 2, forwarded: 1, rejected: 0, failed: 0, deadLettered: 1 });
+});
+
 test('startFederationReaper returns an unref()-d handle and logs a thrown pass without stopping', async () => {
   const originalError = console.error;
   const logged = [];

@@ -61,5 +61,6 @@ test('--federation-owner and --owner together is rejected', () => {
       () => runInit(['codex', '--domain', 'local', '--owner', 'usr_x@local', '--federation-owner', 'usr_chris@primary.example'], cwd),
       (err) => /both --owner and --federation-owner/.test(err.stderr ?? err.message),
     );
+    assert.equal(fs.existsSync(path.join(cwd, '.sigil', 'codex.identity.json')), false);
   } finally { fs.rmSync(cwd, { recursive: true, force: true }); }
 });
