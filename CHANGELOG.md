@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Added
+- **Federation sub-project #3 — inter-relay routing.** Opt-in `sigil relay up --federation-mode sync|queue --federation-identity <path>` forwards foreign-domain envelopes to TOFU-pinned peer relays over `POST /v1/federation/envelopes`, signed with the origin relay's `.well-known/sigil` key. `queue` mode persists to a new `federation_outbox` table drained by a 60s reaper (300s lease, `FOR UPDATE SKIP LOCKED` + `claim_token` guard). Receiver enforces mutual pinning, canonicalize-after-parse relay-signature verification, end-to-end sender-key verification, and a relay-signed `sender_owner_id` same-owner exemption; every accepted federated envelope is stored `federation_hop = true` (one hop, structural). New: `sigil init --federation-owner`, `sigil route test`, `sigil federation outbox list|show|retry`. Migration `017_federation_outbox.sql`.
 - Added `POST /v1/auth/login`: production OIDC login backed by live IdP
   discovery and JWKS fetch (RS256/ES256, aud/azp validation, JWKS caching
   with rotation refetch). Closes the "real IdP integration" roadmap item.

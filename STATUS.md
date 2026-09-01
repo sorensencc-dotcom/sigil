@@ -1,20 +1,23 @@
 # Status
 
 ## Current goal
-Implement Local Revocation Interval Cache & Key Registry in Sigil connectors for decentralized offline verification (`docs/superpowers/plans/2026-08-28-sigil-local-revocation-cache.md`).
+Federation #3 (inter-relay routing) — shipped on `feat/federation-inter-relay-routing`.
 
 ## Completed work
-- Brainstormed and finalized design specification `docs/superpowers/specs/2026-08-28-sigil-local-revocation-cache-design.md`.
-- Executed `/plan-eng-review` with Codex outside-voice analysis, incorporating authenticated key registry cache, strict ISO 8601 UTC regex, anchored fallback logging, and signed relay revocation sync manifests.
-- Authored comprehensive implementation plan `docs/superpowers/plans/2026-08-28-sigil-local-revocation-cache.md` covering Tasks 1–4 with full 12-case test matrix (`TEST-REV-01` through `TEST-REV-12`).
-- Implemented Task 1: SQLite schema extension with `endpoint_keys_cache`, `endpoint_revocation_intervals`, and `audit_events` tables; prepared statements and transaction-isolated batch/lookup methods on `ConnectorDatabase`.
-- Implemented Task 2: Signed relay revocation sync manifest processor (`revocation-sync.mjs`) with Ed25519 signature verification, sequence monotonicity checks, and atomic batch interval storage.
-- Implemented Task 3: Fail-closed offline envelope validator (`connector-validator.mjs`) with two-tier rejection audit logging, clock skew enforcement, strict ISO 8601 UTC regex checks, JCS canonicalization, and active registry/revocation checks.
-- Implemented Task 4: Complete connector test suite execution (90 tests passing) and JCS / dependency audit verification.
+- Executed all 19 tasks of `docs/superpowers/plans/2026-08-30-sigil-inter-relay-routing.md` (subagent-driven-development, six batches) against spec `docs/superpowers/specs/2026-08-30-sigil-inter-relay-routing-design.md`.
+- Prerequisite amendment: `sigil init --federation-owner` for cross-domain owner ids (Task 1).
+- `federation_hop` column + `decideRoute` hard-stop on a truthy stored hop (Task 2); migration `017_federation_outbox.sql`.
+- `federation-router.mjs`: `decideRoute` / `buildForwardRequest` / `signForwardRequest` / `postForward` / `verifyRelaySignature` (Tasks 4–7).
+- Receiving side: `acceptFederatedEnvelope` checks 1–10 and the `POST /v1/federation/envelopes` route, mutual pinning, canonicalize-after-parse relay-signature verification, same-owner exemption, `federation_hop = true` persistence (Tasks 8–10).
+- Origin `sync` mode: 202 forwarded / 502 `FORWARD_REJECTED` / 504 `FORWARD_UNAVAILABLE` / 500 `FORWARD_MISCONFIGURED`, nothing written locally (Task 11); CLI `--federation-mode` / `--federation-identity` validation (Task 12).
+- Queue mode: `federation_outbox` repo methods, idempotent enqueue, 60s reaper (claim→commit→forward→ownership-guarded finalize, 1m/5m/30m backoff, dead-letter after 3 / on expiry, `federation.*` audit events), wired into `sigil relay up` for `queue` (Tasks 13–16).
+- CLI: `sigil federation outbox list|show|retry` (no bodies, expired-retry refusal) and `sigil route test` (read-only, advisory same-owner line, sends nothing) (Tasks 17–18).
+- Task 19: regression sweep (`sigil/relay/v1/federation-regression.test.mjs`), CHANGELOG + STATUS, plan close-out; plus a bounded close-out cleanup pass (reaper poison-row dead-letter guard + 6 CLI/test tidy items).
 
 ## Tests
-- `node --test sigil/connectors/v1/*.test.mjs` (90/90 passing across all suites including all 12 `TEST-REV-01` through `TEST-REV-12` cases).
-- `npm run audit:deps` and `npm run audit:jcs` clean with zero dependency or canonicalization drift.
+- `node --test sigil/relay/v1/federation-regression.test.mjs` — 4/4 pass.
+- `npm test` green (dep audit + JCS audit + full `node --test`); the pre-existing `sigil/scripts/live-ollama-worker-test.mjs` env failure is known-flaky and unrelated.
+- Postgres live-DB matrix (migration + outbox methods + concurrency + `federation_hop` read-back) runs in CI.
 - `pwsh -NoProfile -File C:\dev\scripts\verify-repo-context.ps1 -Path C:\dev\sigil-repo` preflight pass.
 
 ## Decisions
@@ -27,7 +30,7 @@ Implement Local Revocation Interval Cache & Key Registry in Sigil connectors for
 - None.
 
 ## Next action
-- Prepare release notes and coordinate downstream connector integration.
+- Open PR; then sub-project #4 (cross-federation directory/presence).
 
 
 ## Production packaging and host adapters (2026-08-27)
