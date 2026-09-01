@@ -64,6 +64,24 @@ test('check 2: unpinned origin → 403 PEER_NOT_TRUSTED', async () => {
   const r = await acceptFederatedEnvelope(body, headers, baseOpts(world.repo));
   assert.equal(r.status, 403); assert.equal(r.body.code, 'PEER_NOT_TRUSTED');
 });
+test('self-federation: origin_domain == this relay\'s own domain → 400 INVALID_FEDERATION_REQUEST (before the peer lookup)', async () => {
+  const world = makeWorld();
+  // origin_domain asserts RELAY itself. RELAY is not pinned, so if this guard
+  // were absent the request would fall through to check 2 (PEER_NOT_TRUSTED);
+  // getting INVALID_FEDERATION_REQUEST proves the self-federation check fires first.
+  const { body, headers } = forwardPayload(world, {}, { originDomain: RELAY });
+  const r = await acceptFederatedEnvelope(body, headers, baseOpts(world.repo));
+  assert.equal(r.status, 400);
+  assert.equal(r.body.code, 'INVALID_FEDERATION_REQUEST');
+  assert.match(r.body.message, /self-federation/);
+});
+test('self-federation: case-insensitive domain compare still rejects', async () => {
+  const world = makeWorld();
+  const { body, headers } = forwardPayload(world, {}, { originDomain: RELAY.toUpperCase() });
+  const r = await acceptFederatedEnvelope(body, headers, baseOpts(world.repo));
+  assert.equal(r.status, 400);
+  assert.equal(r.body.code, 'INVALID_FEDERATION_REQUEST');
+});
 test('check 3: bad relay signature → 401 RELAY_SIGNATURE_INVALID', async () => {
   const world = makeWorld();
   const { body, headers } = forwardPayload(world);

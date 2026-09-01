@@ -107,3 +107,89 @@ test('federated envelope with an unregistered foreign sender is accepted and sha
   assert.equal(shadowKey.rowCount, 1);
   assert.equal(shadowKey.rows[0].status, 'active');
 });
+
+// I3 live-DB pin: a peer-chosen signature.key_id that collides with a key
+// already bound to a DIFFERENT (local) endpoint must fail closed with 400 and
+// write no envelope row -- otherwise the accepted envelope's signature_key_id
+// FK would resolve to the wrong endpoint's key.
+test('federated envelope whose signature.key_id collides with a local endpoint key → 400, no envelope row', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const ids = {
+    owner: `usr_chris_${suffix}@primary.example`,
+    localEndpoint: `ep_victim_${suffix}@${RELAY}`,
+    sender: `ep_codex_${suffix}@${ORIGIN}`,
+    recipient: `ep_claude_${suffix}@${RELAY}`,
+    recipientKey: `key_ep_claude_${suffix}@${RELAY}`,
+    collidingKey: `key_collide_${suffix}`,
+    conversation: `conv_${suffix}`,
+    message: `msg_fed_${suffix}`,
+    idempotency: `idem_fed_${suffix}`,
+  };
+
+  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  assertDisposableTestDatabase(connectionString);
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
+  for (const file of sqlFiles) {
+    await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
+  }
+
+  const senderKeys = crypto.generateKeyPairSync('ed25519');
+  const relayKeys = crypto.generateKeyPairSync('ed25519');
+  const relayIdentity = { key_id: `relay-a-${suffix}`, private_key_pem: relayKeys.privateKey.export({ type: 'pkcs8', format: 'pem' }) };
+  const relayPub = relayKeys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url');
+  const senderPub = senderKeys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url');
+
+  // Recipient identity plus a SECOND local endpoint that already owns
+  // `ids.collidingKey`. The incoming federated envelope will claim that same
+  // key_id but with a foreign sender endpoint id.
+  await pool.query(`
+    INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.owner}', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
+      VALUES ('${ids.recipient}', '${ids.owner}', 'claude', 'install_claude_${suffix}', 'Claude', 'active', NOW()),
+             ('${ids.localEndpoint}', '${ids.owner}', 'claude', 'install_victim_${suffix}', 'Victim', 'active', NOW());
+    INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
+      VALUES ('${ids.recipientKey}', '${ids.recipient}', 'Ed25519', decode('00', 'hex'), 'active', NOW()),
+             ('${ids.collidingKey}', '${ids.localEndpoint}', 'Ed25519', decode('00', 'hex'), 'active', NOW());
+  `);
+
+  const repository = new PostgresRepository({ pool });
+  await repository.upsertPeer({ domain: ORIGIN, relayUrl: 'https://a.example/relay', keys: [{ kid: relayIdentity.key_id, alg: 'Ed25519', publicKey: relayPub }], trustMode: 'tofu' });
+
+  const base = {
+    protocol: 'sigil/1', message_id: ids.message, conversation_id: ids.conversation, message_type: 'chat.message',
+    sender: { owner_id: ids.owner, endpoint_id: ids.sender, kind: 'agent' },
+    recipient: { owner_id: ids.owner, endpoint_id: ids.recipient, kind: 'agent' },
+    body: { text: 'hi' }, context_refs: [], capabilities: [], idempotency_key: ids.idempotency,
+    created_at: '2029-12-31T12:00:00.000Z', expires_at: '2029-12-31T12:10:00.000Z',
+  };
+  const value = crypto.sign(null, signedBytes({ ...base, signature: undefined }), senderKeys.privateKey).toString('base64url');
+  // signature.key_id deliberately set to the local endpoint's key id.
+  const envelope = { ...base, signature: { algorithm: 'Ed25519', key_id: ids.collidingKey, value } };
+
+  const { body, canonicalBytes } = buildForwardRequest(envelope, {
+    originDomain: ORIGIN,
+    senderKey: { kid: ids.collidingKey, alg: 'Ed25519', publicKey: senderPub },
+    senderOwnerId: ids.owner,
+    now: new Date('2029-12-31T12:00:05.000Z'),
+  });
+  const { signature, keyId } = signForwardRequest(canonicalBytes, relayIdentity);
+  const headers = { 'sigil-relay-signature': signature, 'sigil-relay-key-id': keyId };
+
+  const r = await acceptFederatedEnvelope(body, headers, {
+    repository, registered: new Map(), relayDomain: RELAY, request_id: 'req_pg_collide', now: new Date('2029-12-31T12:00:30.000Z'),
+  });
+  assert.equal(r.status, 400);
+  assert.equal(r.body.code, 'INVALID_FEDERATION_REQUEST');
+
+  const persisted = await pool.query('SELECT 1 FROM envelopes WHERE message_id = $1', [ids.message]);
+  assert.equal(persisted.rowCount, 0, 'no envelope row must be written on a key_id collision');
+  // The colliding key still belongs to the original local endpoint, untouched.
+  const key = await pool.query('SELECT endpoint_id FROM endpoint_keys WHERE key_id = $1', [ids.collidingKey]);
+  assert.equal(key.rows[0].endpoint_id, ids.localEndpoint);
+  // The foreign sender was never shadow-registered.
+  const shadow = await pool.query('SELECT 1 FROM endpoints WHERE endpoint_id = $1', [ids.sender]);
+  assert.equal(shadow.rowCount, 0);
+});

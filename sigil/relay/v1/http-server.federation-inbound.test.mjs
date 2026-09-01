@@ -49,8 +49,10 @@ function forwardPayload(world, envelopeOverrides = {}, opts = {}) {
   return { body, headers: { 'sigil-relay-signature': signature, 'sigil-relay-key-id': keyId } };
 }
 
-async function startServer(world, { stream } = {}) {
-  const server = createRelayServer({ repository: world.repo, registry: world.registered, relayDomain: RELAY, stream, now: () => SERVER_NOW });
+async function startServer(world, opts = {}) {
+  const { stream } = opts;
+  const federationMode = 'federationMode' in opts ? opts.federationMode : 'sync';
+  const server = createRelayServer({ repository: world.repo, registry: world.registered, relayDomain: RELAY, stream, now: () => SERVER_NOW, federationMode });
   await new Promise((resolve) => server.listen(0, resolve));
   return { server, port: server.address().port };
 }
@@ -85,6 +87,35 @@ test('POST /v1/federation/envelopes delivers a signed forward and is idempotent'
     assert.equal(second.body.duplicate, true);
     assert.equal((await world.repo.listInbox(`ep_claude@${RELAY}`, '')).length, 1);
     assert.equal(notifications.length, 1);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('no federationMode → POST /v1/federation/envelopes falls through to 404 even for a valid signed forward', async () => {
+  const world = worldWithRecipient();
+  const { server, port } = await startServer(world, { federationMode: undefined });
+  try {
+    const payload = forwardPayload(world);
+    const result = await postForward(port, payload);
+    assert.equal(result.status, 404);
+    assert.equal(result.body.code, 'CONTEXT_NOT_FOUND');
+    // The would-be recipient inbox stays empty — the handler never ran.
+    assert.equal((await world.repo.listInbox(`ep_claude@${RELAY}`, '')).length, 0);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('federationMode:"queue" still routes a valid signed forward into acceptFederatedEnvelope', async () => {
+  const world = worldWithRecipient();
+  const { server, port } = await startServer(world, { federationMode: 'queue' });
+  try {
+    const payload = forwardPayload(world);
+    const result = await postForward(port, payload);
+    assert.equal(result.status, 202);
+    assert.equal(result.body.code, 'ACCEPTED');
+    assert.equal((await world.repo.listInbox(`ep_claude@${RELAY}`, '')).length, 1);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

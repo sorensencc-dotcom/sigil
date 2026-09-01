@@ -151,8 +151,11 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
 
     // Unauthenticated at the transport layer: trust is the peer relay's
     // signature, verified inside acceptFederatedEnvelope. Must sit before the
-    // authenticateRequest gate below.
-    if (request.method === 'POST' && parsedUrl.pathname === '/v1/federation/envelopes') {
+    // authenticateRequest gate below. Registered ONLY when federated inbound is
+    // enabled (federationMode 'sync' | 'queue'); otherwise the path is left
+    // unhandled and falls through to the generic 404 -- a relay that never
+    // opted into federation must not expose an unauthenticated accept surface.
+    if (federationMode && request.method === 'POST' && parsedUrl.pathname === '/v1/federation/envelopes') {
       let raw;
       try { raw = await readBody(request); }
       catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }

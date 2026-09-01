@@ -103,6 +103,18 @@ test('queue mode with live database', { skip: !connectionString }, async (t) => 
       assert.equal(row.recipient_domain, 'b.example');
       assert.equal(row.origin_domain, 'a.example');
       assert.equal(row.sender_owner_id, 'usr_codex_owner');
+
+      // I5: a successful enqueue is a success, not a rejection. The old
+      // `eventType.endsWith('forwarded')` heuristic in recordFederationAudit
+      // stamped `federation.queued` as outcome 'rejected'; it must now be an
+      // explicit success outcome.
+      const audit = await pool.query(
+        `SELECT outcome FROM audit_events WHERE event_type = 'federation.queued' AND subject_id = $1`,
+        [envelope.message_id]
+      );
+      assert.equal(audit.rowCount, 1, 'a federation.queued audit event is recorded');
+      assert.notEqual(audit.rows[0].outcome, 'rejected', 'a successful enqueue must not be audited as rejected');
+      assert.equal(audit.rows[0].outcome, 'accepted');
     });
 
     // Test: duplicate accept -> 202 queued:true, duplicate:true, still exactly one row (idempotent)

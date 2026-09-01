@@ -37,6 +37,15 @@ export async function acceptFederatedEnvelope(body, headers, options) {
   if (!body || typeof body !== 'object') return respond(400, 'INVALID_FEDERATION_REQUEST', 'Request body must be an object', options);
   const { origin_domain: originDomain, envelope, sender_key: senderKey, sender_owner_id: senderOwnerId } = body;
   try { parseDomain(originDomain); } catch { return respond(400, 'INVALID_FEDERATION_REQUEST', 'origin_domain is not a well-formed domain', options); }
+  // Self-federation guard: a peer must never assert this relay's own domain as
+  // the origin. One hop is structural (design: the receiver never re-forwards),
+  // and a matching origin_domain would otherwise let a pinned peer inject
+  // envelopes attributed to local senders. Domain compare is case-insensitive
+  // (federated-id rule); port is significant, so parseDomain-normalized strings
+  // are compared verbatim after lowercasing.
+  if (isNonEmptyString(options.relayDomain) && originDomain.toLowerCase() === options.relayDomain.toLowerCase()) {
+    return respond(400, 'INVALID_FEDERATION_REQUEST', 'origin_domain equals this relay\'s own domain (self-federation is not allowed)', options, { origin_domain: originDomain });
+  }
   if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) return respond(400, 'INVALID_FEDERATION_REQUEST', 'envelope must be an object', options);
   if (!senderKey || !isNonEmptyString(senderKey.kid) || senderKey.alg !== 'Ed25519' || !isNonEmptyString(senderKey.publicKey)) {
     return respond(400, 'INVALID_FEDERATION_REQUEST', 'sender_key must be { kid, alg: "Ed25519", publicKey }', options);

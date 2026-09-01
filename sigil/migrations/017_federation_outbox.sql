@@ -1,6 +1,10 @@
 -- sigil/migrations/017_federation_outbox.sql
 -- Sub-project #3 (inter-relay routing).
 --
+-- Requires PostgreSQL 13+: federation_outbox.id defaults to gen_random_uuid(),
+-- a core builtin only since PG13. No migration in sigil/migrations/ runs
+-- CREATE EXTENSION pgcrypto, so on PG12 and earlier this migration fails.
+--
 -- federation_hop: a stored envelope / delivery that arrived over the
 -- federated-inbound path (POST /v1/federation/envelopes). Set true by
 -- acceptFederatedEnvelope; treated as a hard "never forward onward" stop by

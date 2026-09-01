@@ -165,7 +165,7 @@ test('4xx with no valid peer code -> forward_rejected, reason code null', async 
   assert.equal(audit.payload.peer_code, null);
 });
 
-test('three transport failures across three passes -> +60s, +300s, then dead_letter', async () => {
+test('four transport failures walk +60s, +300s, +1800s, then dead_letter (all three backoffs used)', async () => {
   const row = makeRow();
   const repo = makeRepo({ rows: [row], peers: PEERS });
   const identity = makeIdentity();
@@ -173,7 +173,7 @@ test('three transport failures across three passes -> +60s, +300s, then dead_let
     throw Object.assign(new Error('forward transport failed: boom'), { code: 'FORWARD_TRANSPORT_FAILED' });
   };
 
-  // Pass 1
+  // Pass 1 — first backoff: 1 minute.
   const now1 = new Date('2026-08-31T00:00:00Z');
   const c1 = await runFederationReaperPass({ repository: repo, identity, originDomain: ORIGIN_DOMAIN, now: now1, postForwardImpl: throwTransport });
   assert.deepEqual(c1, { claimed: 1, forwarded: 0, rejected: 0, failed: 1, deadLettered: 0 });
@@ -184,7 +184,7 @@ test('three transport failures across three passes -> +60s, +300s, then dead_let
   assert.equal(repo.audits.filter((a) => a.eventType === 'federation.forward_unavailable').length, 1);
   assert.equal(repo.audits.at(-1).payload.attempt_count, 1);
 
-  // Pass 2 — must be after the +60s backoff window.
+  // Pass 2 — second backoff: 5 minutes.
   const now2 = new Date(now1.getTime() + 61_000);
   const c2 = await runFederationReaperPass({ repository: repo, identity, originDomain: ORIGIN_DOMAIN, now: now2, postForwardImpl: throwTransport });
   assert.deepEqual(c2, { claimed: 1, forwarded: 0, rejected: 0, failed: 1, deadLettered: 0 });
@@ -194,20 +194,30 @@ test('three transport failures across three passes -> +60s, +300s, then dead_let
   assert.equal(stored.nextAttemptAt, new Date(now2.getTime() + 300_000).toISOString());
   assert.equal(repo.audits.at(-1).payload.attempt_count, 2);
 
-  // Pass 3 — dead letter.
+  // Pass 3 — third backoff: 30 minutes (BACKOFF_MS[2], previously unreachable).
   const now3 = new Date(now2.getTime() + 301_000);
   const c3 = await runFederationReaperPass({ repository: repo, identity, originDomain: ORIGIN_DOMAIN, now: now3, postForwardImpl: throwTransport });
-  assert.deepEqual(c3, { claimed: 1, forwarded: 0, rejected: 0, failed: 0, deadLettered: 1 });
+  assert.deepEqual(c3, { claimed: 1, forwarded: 0, rejected: 0, failed: 1, deadLettered: 0 });
+  stored = repo.store.get(row.id);
+  assert.equal(stored.state, 'pending');
+  assert.equal(stored.attemptCount, 3);
+  assert.equal(stored.nextAttemptAt, new Date(now3.getTime() + 1_800_000).toISOString());
+  assert.equal(repo.audits.at(-1).payload.attempt_count, 3);
+
+  // Pass 4 — fourth transport failure dead-letters.
+  const now4 = new Date(now3.getTime() + 1_800_001);
+  const c4 = await runFederationReaperPass({ repository: repo, identity, originDomain: ORIGIN_DOMAIN, now: now4, postForwardImpl: throwTransport });
+  assert.deepEqual(c4, { claimed: 1, forwarded: 0, rejected: 0, failed: 0, deadLettered: 1 });
   stored = repo.store.get(row.id);
   assert.equal(stored.state, 'dead_letter');
-  assert.equal(stored.attemptCount, 3);
+  assert.equal(stored.attemptCount, 4);
   const dl = repo.audits.find((a) => a.eventType === 'federation.dead_letter');
   assert.ok(dl, 'expected a federation.dead_letter audit event');
-  assert.equal(dl.payload.attempt_count, 3);
+  assert.equal(dl.payload.attempt_count, 4);
 
-  // Pass 4 — nothing left to claim.
-  const c4 = await runFederationReaperPass({ repository: repo, identity, originDomain: ORIGIN_DOMAIN, now: new Date(now3.getTime() + 10_000), postForwardImpl: throwTransport });
-  assert.equal(c4.claimed, 0);
+  // Pass 5 — nothing left to claim.
+  const c5 = await runFederationReaperPass({ repository: repo, identity, originDomain: ORIGIN_DOMAIN, now: new Date(now4.getTime() + 10_000), postForwardImpl: throwTransport });
+  assert.equal(c5.claimed, 0);
 });
 
 test('null peer (unpinned since enqueue) takes the transport-failure backoff path', async () => {

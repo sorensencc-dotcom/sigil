@@ -78,11 +78,24 @@ import { postForward } from './federation-router.mjs';
 const peer = { relayUrl: 'https://b.example/relay' };
 const bytes = Buffer.from('{"x":1}', 'utf8');
 const sig = { signature: 'SIG', keyId: 'k1' };
-const res = ({ status, body = '', json }) => ({
-  status, ok: status >= 200 && status < 300,
-  text: async () => body,
-  json: async () => (json ?? JSON.parse(body)),
-});
+// Fake Response. `body` is exposed as an async-iterable stream (as real
+// fetch's Response.body is) plus a cancel() that records the call, so a test
+// can prove postForward stops reading and cancels once the cap is exceeded.
+const res = ({ status, body = '', json, chunks }) => {
+  const cancelState = { cancelled: false };
+  const parts = (chunks ?? [body]).map((c) => (Buffer.isBuffer(c) ? c : Buffer.from(String(c), 'utf8')));
+  const full = () => Buffer.concat(parts).toString('utf8');
+  return {
+    status, ok: status >= 200 && status < 300,
+    cancelState,
+    body: {
+      async *[Symbol.asyncIterator]() { for (const p of parts) yield p; },
+      async cancel() { cancelState.cancelled = true; },
+    },
+    text: async () => full(),
+    json: async () => (json ?? JSON.parse(full())),
+  };
+};
 
 test('2xx → ok:true and target URL is peer.relayUrl', async () => {
   let seenUrl, seenOpts;
@@ -110,6 +123,24 @@ test('4xx body over 4 KiB → peerCode omitted', async () => {
   const big = JSON.stringify({ code: 'REAL_CODE', pad: 'x'.repeat(5000) });
   const fetchImpl = async () => res({ status: 400, body: big });
   assert.deepEqual(await postForward(peer, bytes, sig, { fetchImpl }), { ok: false, status: 400 });
+});
+test('4xx body streamed in chunks past the cap → peerCode omitted AND reader cancelled', async () => {
+  // 64 chunks × 1 KiB = 64 KiB, well past the 4 KiB read cap. postForward must
+  // stop iterating and call body.cancel() rather than buffer the whole thing.
+  const chunks = Array.from({ length: 64 }, () => 'x'.repeat(1024));
+  let captured;
+  const fetchImpl = async () => (captured = res({ status: 400, chunks }));
+  const out = await postForward(peer, bytes, sig, { fetchImpl });
+  assert.deepEqual(out, { ok: false, status: 400 });
+  assert.equal(captured.cancelState.cancelled, true, 'expected postForward to cancel the body reader after the cap');
+});
+test('4xx body streamed in small chunks under the cap → peerCode parsed, no cancel', async () => {
+  const chunks = ['{"code":', '"DIRECTORY_', 'LINK_REQUIRED"}'];
+  let captured;
+  const fetchImpl = async () => (captured = res({ status: 403, chunks }));
+  const out = await postForward(peer, bytes, sig, { fetchImpl });
+  assert.deepEqual(out, { ok: false, status: 403, peerCode: 'DIRECTORY_LINK_REQUIRED' });
+  assert.equal(captured.cancelState.cancelled, false);
 });
 test('5xx → throws FORWARD_TRANSPORT_FAILED', async () => {
   const fetchImpl = async () => res({ status: 503, body: 'nope' });

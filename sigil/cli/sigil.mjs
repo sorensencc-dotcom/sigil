@@ -60,7 +60,7 @@ Commands:
   federation outbox list [--database-url url]              List queue-mode federation forward jobs: state counts, then one row per job (no envelope bodies)
   federation outbox show <id> [--database-url url]         Show one federation_outbox row's metadata (no envelope body)
   federation outbox retry <id> [--database-url url]        Re-queue a forward_rejected / dead_letter row for another forward attempt
-  route test <recipient_federated_id> --identity path --relay-url url [--database-url url] [--registry path]
+  route test <recipient_federated_id> --identity path [--database-url url] [--registry path]
                                                             Read-only federation routing check: parse recipient, peer-directory pin lookup, /v1/health reachability, advisory same-owner line -- sends no envelope
   send [--identity path] [--relay-url url] [--stream-url url] [--wait-for-receipt] --to endpoint_id --to-owner owner_id --message "text" [--conversation id]
   inbox [--identity path] [--relay-url url] [--watch|--wait] [--loop] [--stream-url url] [--interval ms] [--timeout ms] [--local] [--ledger path]
@@ -179,9 +179,9 @@ async function cmdRelayUp(argv) {
     if (federationMode === 'queue' && !databaseUrl) throw new Error('sigil relay up: --federation-mode queue requires --database-url (or SIGIL_DATABASE_URL); in-memory relays have no durable outbox');
   }
   const data = loadRegistryFile(registryPath);
-  if (!data.endpoints.length) throw new Error(`No endpoints in ${registryPath}. Run "sigil init <name> --owner <owner_id>" first.`);
+  if (!data.endpoints.length) throw new Error(`No endpoints in ${registryPath}. Run "sigil init <name> --owner <owner_id>" (or --federation-owner <federated_id>) first.`);
   if (relayDomain !== undefined && !data.endpoints.some((ep) => isLocalDomain(ep.endpoint_id, relayDomain))) {
-    console.log(`WARNING: no endpoint in ${registryPath} belongs to domain "${relayDomain}" -- every envelope will be rejected with RECIPIENT_NOT_LOCAL. Register an endpoint with "sigil init <name> --owner <owner_id> --domain ${relayDomain}", or drop --domain.`);
+    console.log(`WARNING: no endpoint in ${registryPath} belongs to domain "${relayDomain}" -- every envelope will be rejected with RECIPIENT_NOT_LOCAL. Register an endpoint with "sigil init <name> --owner <owner_id> --domain ${relayDomain}" (or --federation-owner <federated_id> for an owner whose domain differs from --domain), or drop --domain.`);
   }
   const registry = toRegistryMap(data);
   const tokenHashes = toTokenHashes(data);
@@ -724,7 +724,9 @@ async function cmdFederation(argv) {
         process.exitCode = 1;
         return;
       }
-      const { envelope, senderKey, ...meta } = record;
+      // Strip the envelope body, the propagated sender key, and the internal
+      // lease fields (claim token / claimed-at) -- none belong in operator output.
+      const { envelope, senderKey, claimToken, claimedAt, ...meta } = record;
       console.log(JSON.stringify(meta, null, 2));
     }, { migrate: true });
     return;
@@ -751,13 +753,12 @@ async function cmdFederation(argv) {
 // on the local registry. The receiving relay always re-checks everything.
 async function cmdRoute(argv) {
   const [action, ...rest] = argv;
-  const usageLine = 'usage: sigil route test <recipient_federated_id> --identity <path> --relay-url <url> [--database-url url] [--registry path]';
+  const usageLine = 'usage: sigil route test <recipient_federated_id> --identity <path> [--database-url url] [--registry path]';
   if (action !== 'test') throw new Error(usageLine);
-  const args = parseArgs({ args: rest, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'database-url': { type: 'string' }, registry: { type: 'string' } }, allowPositionals: true });
+  const args = parseArgs({ args: rest, options: { identity: { type: 'string' }, 'database-url': { type: 'string' }, registry: { type: 'string' } }, allowPositionals: true });
   const recipient = args.positionals[0];
   const identityPath = opt(args, ['identity']);
-  const relayUrl = opt(args, ['relay-url']);
-  if (!recipient || !identityPath || !relayUrl) throw new Error(usageLine);
+  if (!recipient || !identityPath) throw new Error(usageLine);
   const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
 
   // Step 1: parse the recipient federated id.
@@ -798,13 +799,16 @@ async function cmdRoute(argv) {
     console.log(`Reachable: yes (${reach.latencyMs}ms)`);
   } else {
     console.log(`Reachable: no (${reach.error})`);
+    process.exitCode = 1;
   }
 
   // Step 4: advisory same-owner-exemption line. Only informative when the
   // recipient endpoint is present in the local registry -- the receiving
   // relay re-checks against its own registry regardless.
   const localRegistry = toRegistryMap(loadRegistryFile(registryPath));
-  const recipientEntry = localRegistry.get(recipient);
+  // Look up by the normalized federated id (localPart@domain), not the raw CLI
+  // arg -- the registry is keyed on the canonical form printed above.
+  const recipientEntry = localRegistry.get(`${parsed.localPart}@${parsed.domain}`);
   if (!recipientEntry) {
     console.log('Same-owner exemption: not determinable locally');
   } else if (recipientEntry.owner_id === loadIdentity(identityPath).owner_id) {

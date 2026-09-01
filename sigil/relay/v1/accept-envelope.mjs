@@ -228,16 +228,16 @@ async function forwardEnvelope(envelope, route, options, client) {
   try { outcome = await (options.postForwardImpl ?? postForward)(route.peer, canonicalBytes, signed, { fetchImpl: options.fetchImpl }); }
   catch (error) {
     if (error.code === 'FORWARD_TRANSPORT_FAILED') {
-      await recordFederationAudit(repository, 'federation.forward_unavailable', envelope, { recipient_domain: route.recipientDomain }, options.now);
+      await recordFederationAudit(repository, 'federation.forward_unavailable', 'rejected', envelope, { recipient_domain: route.recipientDomain }, options.now);
       return { status: 504, body: { request_id: options.request_id ?? null, code: 'FORWARD_UNAVAILABLE', message: 'Peer relay unreachable', details: { recipientDomain: route.recipientDomain } } };
     }
     throw error;
   }
   if (outcome.ok) {
-    await recordFederationAudit(repository, 'federation.forwarded', envelope, { recipient_domain: route.recipientDomain }, options.now);
+    await recordFederationAudit(repository, 'federation.forwarded', 'forwarded', envelope, { recipient_domain: route.recipientDomain }, options.now);
     return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', forwarded: true, forwarded_to: route.recipientDomain } };
   }
-  await recordFederationAudit(repository, 'federation.forward_rejected', envelope, { recipient_domain: route.recipientDomain, peer_code: outcome.peerCode ?? null }, options.now);
+  await recordFederationAudit(repository, 'federation.forward_rejected', 'rejected', envelope, { recipient_domain: route.recipientDomain, peer_code: outcome.peerCode ?? null }, options.now);
   return { status: 502, body: { request_id: options.request_id ?? null, code: 'FORWARD_REJECTED', message: 'Peer relay rejected the forward', details: { peerStatus: outcome.status, peerCode: outcome.peerCode ?? null } } };
 }
 
@@ -250,13 +250,18 @@ async function enqueueForward(envelope, route, options, client, { senderKey, sen
     recipientDomain: route.recipientDomain, originDomain: options.relayDomain,
     envelope, senderKey, senderOwnerId, now: options.now ?? new Date(),
   }, client);
-  await recordFederationAudit(repository, 'federation.queued', envelope, { recipient_domain: route.recipientDomain }, options.now);
+  await recordFederationAudit(repository, 'federation.queued', 'accepted', envelope, { recipient_domain: route.recipientDomain }, options.now);
   return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', queued: true, duplicate: !inserted } };
 }
 
-function recordFederationAudit(repository, eventType, envelope, payload, now) {
+// `outcome` is passed explicitly by each call site (mirroring federation-reaper.mjs):
+// the queue-enqueue path is a success ('accepted'); the forward path is
+// 'forwarded' on 2xx and 'rejected' on a peer reject / transport failure. The
+// old `eventType.endsWith('forwarded')` heuristic mislabelled `federation.queued`
+// (a success) as 'rejected'.
+function recordFederationAudit(repository, eventType, outcome, envelope, payload, now) {
   if (!repository.recordAuditEvent) return Promise.resolve();
-  return repository.recordAuditEvent({ eventType, subjectId: envelope.message_id, endpointId: envelope.sender?.endpoint_id, outcome: eventType.endsWith('forwarded') ? 'forwarded' : 'rejected', reason: null, payload, now }).catch(() => {});
+  return repository.recordAuditEvent({ eventType, subjectId: envelope.message_id, endpointId: envelope.sender?.endpoint_id, outcome, reason: null, payload, now }).catch(() => {});
 }
 
 export async function acceptEnvelopeAsync(envelope, options = {}) {

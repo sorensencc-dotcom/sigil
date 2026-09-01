@@ -85,15 +85,44 @@ export async function postForward(peer, canonicalBytes, { signature, keyId }, { 
   if (res.status >= 500) {
     throw Object.assign(new Error(`peer relay returned ${res.status}`), { code: 'FORWARD_TRANSPORT_FAILED', status: res.status });
   }
-  // 4xx: attempt a bounded, shape-checked read of the peer's error code.
+  // 4xx: bounded, shape-checked *streaming* read of the peer's error code.
+  // Never buffer the whole response -- a hostile pinned peer could otherwise
+  // force multi-GB buffering. Read res.body chunk by chunk; the instant the
+  // accumulated byte count exceeds PEER_BODY_READ_CAP, cancel the reader and
+  // give up on peerCode (design §172: 4 KiB read cap).
   let peerCode;
-  try {
-    const text = await res.text();
-    if (typeof text === 'string' && text.length <= PEER_BODY_READ_CAP) {
-      const parsed = JSON.parse(text);
-      if (parsed && typeof parsed.code === 'string' && PEER_CODE_RE.test(parsed.code)) peerCode = parsed.code;
+  const bodyStream = res.body;
+  if (bodyStream && typeof bodyStream[Symbol.asyncIterator] === 'function') {
+    const parts = [];
+    let total = 0;
+    let overCap = false;
+    try {
+      for await (const chunk of bodyStream) {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        total += buf.length;
+        if (total > PEER_BODY_READ_CAP) { overCap = true; break; }
+        parts.push(buf);
+      }
+    } catch { overCap = true; }
+    if (overCap) {
+      try { await bodyStream.cancel?.(); } catch { /* reader already closed */ }
+    } else {
+      try {
+        const parsed = JSON.parse(Buffer.concat(parts).toString('utf8'));
+        if (parsed && typeof parsed.code === 'string' && PEER_CODE_RE.test(parsed.code)) peerCode = parsed.code;
+      } catch { /* non-JSON / empty: peerCode stays undefined */ }
     }
-  } catch { /* non-JSON / oversize / read error: peerCode stays undefined */ }
+  } else if (typeof res.text === 'function') {
+    // No streamable body (e.g. a mock or a HEAD-style response): fall back to
+    // a single bounded text read, still capped by bytes.
+    try {
+      const text = await res.text();
+      if (typeof text === 'string' && Buffer.byteLength(text) <= PEER_BODY_READ_CAP) {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed.code === 'string' && PEER_CODE_RE.test(parsed.code)) peerCode = parsed.code;
+      }
+    } catch { /* non-JSON / oversize / read error: peerCode stays undefined */ }
+  }
   return peerCode ? { ok: false, status: res.status, peerCode } : { ok: false, status: res.status };
 }
 

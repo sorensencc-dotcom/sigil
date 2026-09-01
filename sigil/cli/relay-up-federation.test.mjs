@@ -90,3 +90,10 @@ test('--federation-mode queue without --database-url names in-memory in error me
     fs.rmSync(cwd, { recursive: true, force: true });
   }
 });
+
+// TODO: positive "reaper starts" coverage requires live Postgres + process
+// management (relay up blocks forever) — see CI Postgres startup integration
+// test. The queue-mode path above only asserts the pre-bind guards; that
+// `--federation-mode queue` with a real --database-url calls
+// startFederationReaper and logs "Federation outbox reaper running" is not
+// exercised here.

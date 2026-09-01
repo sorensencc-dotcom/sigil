@@ -13,8 +13,12 @@
 import { buildForwardRequest, signForwardRequest, postForward } from './federation-router.mjs';
 
 // Backoff before the Nth retry (index = attemptCount - 1): 1 min, 5 min, 30 min.
+// MAX_ATTEMPTS is 4 so all three backoffs are walked: transport failures 1-3
+// re-queue with BACKOFF_MS[0..2] (1m / 5m / 30m) and the FOURTH failure
+// dead-letters. The dead-letter guard below (nextAttemptCount >= MAX_ATTEMPTS)
+// only fires at nextAttemptCount === 4, so BACKOFF_MS is never indexed past 2.
 const BACKOFF_MS = [60_000, 300_000, 1_800_000];
-const MAX_ATTEMPTS = 3;
+const MAX_ATTEMPTS = 4;
 
 function finalize(repository, row, state, patch) {
   return repository.withTransaction((client) =>
@@ -60,7 +64,7 @@ export async function runFederationReaperPass({
           outcome: 'rejected',
           reason: 'MESSAGE_EXPIRED',
           payload: { reason_code: 'MESSAGE_EXPIRED' },
-        });
+        }).catch(() => {});
       }
       continue;
     }
@@ -92,7 +96,7 @@ export async function runFederationReaperPass({
           outcome: 'rejected',
           reason: 'FORWARD_BUILD_FAILED',
           payload: { reason_code: 'FORWARD_BUILD_FAILED' },
-        });
+        }).catch(() => {});
       }
       continue;
     }
@@ -134,7 +138,7 @@ export async function runFederationReaperPass({
             outcome: 'rejected',
             reason: transportReason,
             payload: { reason_code: transportReason, attempt_count: nextAttemptCount },
-          });
+          }).catch(() => {});
         }
       } else {
         const nextAttemptAt = new Date(nowMs + BACKOFF_MS[nextAttemptCount - 1]);
@@ -151,7 +155,7 @@ export async function runFederationReaperPass({
             outcome: 'rejected',
             reason: transportReason,
             payload: { reason_code: transportReason, attempt_count: nextAttemptCount },
-          });
+          }).catch(() => {});
         }
       }
       continue;
@@ -170,7 +174,7 @@ export async function runFederationReaperPass({
           outcome: 'forwarded',
           reason: null,
           payload: { peer_status: outcome.status ?? null },
-        });
+        }).catch(() => {});
       }
       continue;
     }
@@ -189,7 +193,7 @@ export async function runFederationReaperPass({
         outcome: 'rejected',
         reason: peerCode,
         payload: { peer_code: peerCode, peer_status: outcome.status ?? null },
-      });
+      }).catch(() => {});
     }
   }
 

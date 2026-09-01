@@ -541,6 +541,24 @@ export class PostgresRepository {
        ON CONFLICT (endpoint_id) DO NOTHING`,
       [endpoint_id, owner_id, origin_domain, now]
     );
+    // Fail closed on a cross-endpoint key_id collision. The key_id here is
+    // peer-chosen (envelope.signature.key_id). `ON CONFLICT (key_id) DO NOTHING`
+    // would silently keep an existing row that belongs to a DIFFERENT
+    // endpoint, after which the accepted envelope's signature_key_id FK
+    // resolves to the wrong endpoint's key. If a row already exists for this
+    // key_id and it is not this shadow sender's own endpoint, reject the
+    // whole federated request (outer acceptFederatedEnvelope catch maps an
+    // unrecognised code to INVALID_FEDERATION_REQUEST / 400).
+    const existingKey = await client.query(
+      `SELECT endpoint_id FROM endpoint_keys WHERE key_id = $1`,
+      [key_id]
+    );
+    if (existingKey.rows.length > 0 && existingKey.rows[0].endpoint_id !== endpoint_id) {
+      throw Object.assign(
+        new Error(`federated sender key_id "${key_id}" already bound to a different endpoint on this relay`),
+        { code: 'FEDERATED_KEY_ID_COLLISION' }
+      );
+    }
     await client.query(
       `INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
        VALUES ($1, $2, 'Ed25519', $3, 'active', $4)

@@ -29,6 +29,22 @@ Federation #3 (inter-relay routing) — shipped on `feat/federation-inter-relay-
 ## Blockers
 - None.
 
+## Known limitations
+- **Sync-mode federation forward holds a DB transaction across the outbound
+  HTTP call (I1, parked).** In `accept-envelope.mjs`, the `forward` branch runs
+  `forwardEnvelope` → `postForward` (5s timeout) from inside
+  `repository.withTransaction(...)`. Nothing is written locally on that branch,
+  so the transaction is not needed for correctness, but a slow or hung peer
+  ties up a Postgres connection/transaction for up to the timeout. Lifting the
+  branch out safely means restructuring the shared `decideRoute` /
+  replay-check ordering that the `local` path also depends on, which exceeded
+  the bounded final-review fix budget and carries regression risk with no
+  second review pass. **Sync mode is therefore not production-ready under slow
+  peers; use queue mode (`--federation-mode queue`), which enqueues to
+  `federation_outbox` and forwards from the reaper entirely outside any
+  transaction and is unaffected.** Follow-up: lift the sync `forward` branch
+  out of `withTransaction`.
+
 ## Next action
 - Open PR; then sub-project #4 (cross-federation directory/presence).
 
