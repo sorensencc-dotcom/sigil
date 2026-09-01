@@ -29,6 +29,7 @@ import { loadConfigFile, resolveConfig } from './config-resolver.mjs';
 import { formatInboxItem, INBOX_WAIT_EXIT_CODES, waitForOneInboxMessage, isRetryableInboxWaitExitCode } from './inbox-wait.mjs';
 import { appendInboxLedger, readInboxLedger } from './ledger.mjs';
 import { signContract, verifyContract } from './contract-signing.mjs';
+import { checkRelayConnectivity } from './doctor.mjs';
 
 const DEFAULT_CLI_CONFIG = path.join('.sigil', 'config.json');
 
@@ -59,6 +60,8 @@ Commands:
   federation outbox list [--database-url url]              List queue-mode federation forward jobs: state counts, then one row per job (no envelope bodies)
   federation outbox show <id> [--database-url url]         Show one federation_outbox row's metadata (no envelope body)
   federation outbox retry <id> [--database-url url]        Re-queue a forward_rejected / dead_letter row for another forward attempt
+  route test <recipient_federated_id> --identity path --relay-url url [--database-url url] [--registry path]
+                                                            Read-only federation routing check: parse recipient, peer-directory pin lookup, /v1/health reachability, advisory same-owner line -- sends no envelope
   send [--identity path] [--relay-url url] [--stream-url url] [--wait-for-receipt] --to endpoint_id --to-owner owner_id --message "text" [--conversation id]
   inbox [--identity path] [--relay-url url] [--watch|--wait] [--loop] [--stream-url url] [--interval ms] [--timeout ms] [--local] [--ledger path]
   doctor [--identity path] [--relay-url url]               Conformance check: JCS/dependency audits, plus a keypair check (if --identity)
@@ -743,6 +746,74 @@ async function cmdFederation(argv) {
   }, { migrate: true });
 }
 
+// Read-only federation routing diagnostic. Sends NO envelope, ever: it only
+// parses the recipient id, reads the local peer directory, GETs the peer
+// relay's /v1/health, and prints an advisory same-owner-exemption line based
+// on the local registry. The receiving relay always re-checks everything.
+async function cmdRoute(argv) {
+  const [action, ...rest] = argv;
+  const usageLine = 'usage: sigil route test <recipient_federated_id> --identity <path> --relay-url <url> [--database-url url] [--registry path]';
+  if (action !== 'test') throw new Error(usageLine);
+  const args = parseArgs({ args: rest, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'database-url': { type: 'string' }, registry: { type: 'string' } }, allowPositionals: true });
+  const recipient = args.positionals[0];
+  const identityPath = opt(args, ['identity']);
+  const relayUrl = opt(args, ['relay-url']);
+  if (!recipient || !identityPath || !relayUrl) throw new Error(usageLine);
+  const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
+
+  // Step 1: parse the recipient federated id.
+  const { parseFederatedId } = await import('../relay/v1/federated-id.mjs');
+  let parsed;
+  try {
+    parsed = parseFederatedId(recipient);
+  } catch (error) {
+    console.error(`sigil route test: malformed recipient federated id "${recipient}" (${error.code ?? 'MALFORMED_FEDERATED_ID'}): ${error.message}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`Recipient: ${parsed.localPart}@${parsed.domain}`);
+
+  // Step 2: resolve the recipient domain against the local peer directory.
+  // With no database there is no durable peer directory, so every domain is
+  // treated as unpinned.
+  const databaseUrl = opt(args, ['database-url']) ?? process.env.SIGIL_DATABASE_URL;
+  let peer = null;
+  if (databaseUrl) {
+    await withRepository(args, 'sigil route test: --database-url unexpectedly missing', async (repository) => {
+      peer = await repository.getPeerByDomain(parsed.domain);
+    });
+  }
+  if (!peer) {
+    console.log('Pinned: no');
+    process.exitCode = 1;
+    return;
+  }
+  console.log('Pinned: yes');
+  console.log(`Peer relay URL: ${peer.relayUrl}`);
+
+  // Step 3: probe the pinned peer relay's health endpoint (read-only GET).
+  const reach = await checkRelayConnectivity(peer.relayUrl);
+  if (reach.ok) {
+    console.log(`Reachable: yes (${reach.latencyMs}ms)`);
+  } else {
+    console.log(`Reachable: no (${reach.error})`);
+  }
+
+  // Step 4: advisory same-owner-exemption line. Only informative when the
+  // recipient endpoint is present in the local registry -- the receiving
+  // relay re-checks against its own registry regardless.
+  const localRegistry = toRegistryMap(loadRegistryFile(registryPath));
+  const recipientEntry = localRegistry.get(recipient);
+  if (!recipientEntry) {
+    console.log('Same-owner exemption: not determinable locally');
+  } else if (recipientEntry.owner_id === loadIdentity(identityPath).owner_id) {
+    console.log('Same-owner exemption: would apply (advisory)');
+  } else {
+    console.log('Same-owner exemption: would NOT apply (advisory) — owner ids differ');
+  }
+  console.log('(advisory only — the receiving relay re-checks against its own registry)');
+}
+
 export async function main() {
   const [command, sub, ...rest] = process.argv.slice(2);
   try {
@@ -765,6 +836,7 @@ export async function main() {
     else if (command === 'send') await cmdSend(process.argv.slice(3));
     else if (command === 'inbox') await cmdInbox(process.argv.slice(3));
     else if (command === 'federation') await cmdFederation(process.argv.slice(3));
+    else if (command === 'route') await cmdRoute(process.argv.slice(3));
     else usage();
   } catch (error) {
     console.error(`sigil: ${error.message}`);
