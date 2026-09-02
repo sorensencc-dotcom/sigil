@@ -2,9 +2,11 @@
 
 ## Current goal
 Federation #3 (inter-relay routing) — merged to `main` (`5c389e9`) and pushed to
-`origin/main` on 2026-09-01. Feature branch deleted both sides. CI is **red** on
-the first live-DB run: two of the new federation live-DB suites have broken test
-setup (see Blockers). Production federation code and migrations are unaffected.
+`origin/main` on 2026-09-01. Feature branch deleted both sides. The two broken
+live-DB suites are fixed (`0829eb5`, pushed 2026-09-02); **CI run 33610373355 is
+green on all five jobs** (Secret-scan, Linux + Windows × Node 22/24), including
+the live-PostgreSQL gate. Remaining follow-up: the parked I1 sync-forward
+transaction-boundary fix (see Known limitations).
 
 ## Completed work
 - Executed all 19 tasks of `docs/superpowers/plans/2026-08-30-sigil-inter-relay-routing.md` (subagent-driven-development, six batches) against spec `docs/superpowers/specs/2026-08-30-sigil-inter-relay-routing-design.md`.
@@ -34,30 +36,24 @@ setup (see Blockers). Production federation code and migrations are unaffected.
 - Two-tier fail-closed rejection audit logging with append-only fallback to `path.join(dataDir, 'logs', 'security-failures.log')`.
 
 ## Blockers
-- **CI live-DB gate red (2 broken new test suites; product code + migrations OK).**
-  1. `sigil/cli/sigil-federation-outbox.test.mjs:56` — `sigil: column "client_id"
-     of relation "oidc_issuer_allowlist" already exists`, so the CLI exits 1 and
-     `assert.equal(list.exitCode, 0)` fails (`1 !== 0`). Cause: the test raw-applies
-     every `sigil/migrations/*.sql` by concatenated `pool.query()` **without
-     recording them in the `schema_migrations` ledger**, then shells
-     `sigil federation outbox list`, whose `cmdFederation` path is the first CLI
-     surface to pass `withRepository(..., { migrate: true })`. The CLI migrator
-     sees an empty ledger and replays `014_oidc_issuer_client_id.sql`
-     (`ALTER TABLE ... ADD COLUMN client_id TEXT`, no `IF NOT EXISTS`) against a
-     DB that already has the column. Fix in the test: seed the ledger after the
-     raw apply, or run `SIGIL_DATABASE_URL` unset against a clean schema and let
-     the CLI do the only migrate, or call the shared migrate helper instead of
-     raw concatenation. (Belt-and-braces: make `014` — and any other bare
-     `ADD COLUMN` — idempotent with `IF NOT EXISTS`.)
-  2. `sigil/relay/v1/accept-envelope.federation-queue.test.mjs:74` —
-     `new row for relation "peer_relays" violates check constraint
-     "peer_relays_trust_mode_check"` (pg `23514`) from
-     `repository.upsertPeer({ ..., trustMode: 'pinned' })`. `016_peer_relays.sql`
-     defines `CHECK (trust_mode IN ('tofu', 'static'))` and no later migration
-     widens it; `'pinned'` is not a valid `trust_mode`. No production code writes
-     `'pinned'` (`cmdRoute` only reads `getPeerByDomain`; "Pinned: yes/no" there
-     just means a row exists). Fix in the test: use `trustMode: 'static'` (an
-     explicit pin) — matches every other peer-registration call site.
+- None. The CI live-DB gate is green as of `0829eb5`.
+
+## Resolved
+- **CI live-DB gate red (2 broken new test suites)** — fixed in `0829eb5`
+  (2026-09-02), test-only, no product-code change. CI run 33610373355 green.
+  1. `sigil/cli/sigil-federation-outbox.test.mjs` raw-applied migrations without
+     seeding `_sigil_schema_migrations`, so the CLI's
+     `withRepository(..., { migrate: true })` replayed `014`'s bare
+     `ADD COLUMN client_id` and exited 1. Fixed by replacing the raw apply with
+     `applyMigrations(connectionString, { reset: true })` (the same helper the
+     CLI runs), which seeds the ledger.
+  2. `sigil/relay/v1/accept-envelope.federation-queue.test.mjs`: (a) `upsertPeer`
+     used `trustMode: 'pinned'`, violating `peer_relays_trust_mode_check`
+     (`016` allows only `tofu`/`static`) → now `'static'`; (b) the row
+     assertions read snake_case keys but `listFederationOutbox` returns
+     camelCase records → switched to `row.messageId` etc.; (c) teardown called
+     `pool.end()` twice (`t.after` + a `finally repository.close()`) → single
+     `t.after(() => repository.close())`, `try/finally` removed.
 
 ## Known limitations
 - **Sync-mode federation forward holds a DB transaction across the outbound
@@ -76,10 +72,23 @@ setup (see Blockers). Production federation code and migrations are unaffected.
   out of `withTransaction`.
 
 ## Next action
-- Fix the two broken live-DB suites above, push, confirm CI green.
-- Then the parked I1 follow-up (lift sync `forward` out of `withTransaction`).
-- Doc debt: tick the plan checkboxes; add I1-PARKED + I4 `MAX_ATTEMPTS=4` notes
-  to `docs/superpowers/specs/2026-08-30-sigil-inter-relay-routing-design.md`.
+- Parked I1 follow-up: lift the sync `forward` branch out of `withTransaction`
+  in `sigil/relay/v1/accept-envelope.mjs`. Approach sketched: run the replay
+  gate (`lookupAcceptedMessageId`) + `decideRoute` in a pre-check *outside*
+  `withTransaction`; when it resolves to a sync forward (`federationMode` set
+  and not `'queue'`, `route.action === 'forward'`), call `forwardEnvelope`
+  entirely outside any transaction and return, mapping a thrown
+  `FORWARD_MISCONFIGURED` through `toResponse` exactly as the existing
+  `.catch` does (extract that into a shared `auditReject` helper). `local` and
+  `queue` paths fall through to the unchanged transactional body (queue's
+  `enqueueForward` must stay on the txn `client`). Covering tests:
+  `sigil/relay/v1/accept-envelope.federation-sync.test.mjs` already asserts the
+  four sync outcomes against a fake repo whose `withTransaction` is a passthrough
+  — add one that fails if `withTransaction` is entered on the sync-forward path.
+- Doc debt (in the `C:\dev` repo, not sigil-repo): tick the plan checkboxes in
+  `docs/superpowers/plans/2026-08-30-sigil-inter-relay-routing.md`; add
+  I1-PARKED + I4 `MAX_ATTEMPTS=4` notes to
+  `docs/superpowers/specs/2026-08-30-sigil-inter-relay-routing-design.md`.
 - Then sub-project #4 (cross-federation directory/presence).
 
 
