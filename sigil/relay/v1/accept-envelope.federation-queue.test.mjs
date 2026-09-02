@@ -153,4 +153,47 @@ test('queue mode with live database', { skip: !connectionString }, async (t) => 
       listResult = await repository.listFederationOutbox({ states: ['pending'] });
       assert.equal(listResult.counts.pending, 1, 'should have exactly one pending row after duplicate');
     });
+
+    // Test: rollback-on-failure — outbox INSERT must be atomic with the txn
+    // Guard for Blocker 1 (I1 review): confirms enqueueForward receives a real
+    // txn client (not null), and that a post-enqueue failure rolls the INSERT back.
+    await t.test('rollback-on-failure: outbox INSERT is atomic, rolled back on post-enqueue error', async () => {
+      await pool.query('DELETE FROM federation_outbox');
+
+      // Wrap repository to spy on enqueueFederationForward and capture its client arg,
+      // then throw after the INSERT to force the transaction to roll back.
+      const realEnqueue = repository.enqueueFederationForward.bind(repository);
+      let capturedClient = undefined;
+      let enqueueCallCount = 0;
+      repository.enqueueFederationForward = async (args, client) => {
+        capturedClient = client;
+        enqueueCallCount++;
+        await realEnqueue(args, client);
+        // Throw after the INSERT but before commit to force rollback.
+        throw Object.assign(new Error('injected post-enqueue failure'), { code: 'INJECTED_FAILURE' });
+      };
+
+      const envelope = makeEnvelope();
+      const result = await acceptEnvelopeAsync(envelope, {
+        ...baseOptions(),
+        repository,
+      });
+
+      // The error propagates out as a server fault (no specific HTTP mapping for INJECTED_FAILURE)
+      assert.equal(result.status, 400, 'unexpected error returns a non-2xx status');
+      assert.equal(enqueueCallCount, 1, 'enqueue was attempted exactly once');
+
+      // capturedClient must be a real pg client (has a query method), not null or the pool.
+      // The pool object and a client both have .query, but a txn client is !== pool.
+      assert.ok(capturedClient !== null, 'enqueueFederationForward must receive a non-null client');
+      assert.ok(capturedClient !== pool, 'enqueueFederationForward must receive a txn client, not the pool directly');
+      assert.ok(typeof capturedClient.query === 'function', 'client must have a .query method');
+
+      // The INSERT was rolled back: federation_outbox must still be empty.
+      const { rows } = await pool.query('SELECT COUNT(*)::int AS cnt FROM federation_outbox');
+      assert.equal(rows[0].cnt, 0, 'outbox INSERT must be rolled back on post-enqueue failure');
+
+      // Restore
+      repository.enqueueFederationForward = realEnqueue;
+    });
 });

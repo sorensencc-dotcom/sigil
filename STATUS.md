@@ -5,8 +5,8 @@ Federation #3 (inter-relay routing) — merged to `main` (`5c389e9`) and pushed 
 `origin/main` on 2026-09-01. Feature branch deleted both sides. The two broken
 live-DB suites are fixed (`0829eb5`, pushed 2026-09-02); **CI run 33610373355 is
 green on all five jobs** (Secret-scan, Linux + Windows × Node 22/24), including
-the live-PostgreSQL gate. Remaining follow-up: the parked I1 sync-forward
-transaction-boundary fix (see Known limitations).
+the live-PostgreSQL gate. I1 sync-forward transaction-boundary fix shipped (see
+Completed work).
 
 ## Completed work
 - Executed all 19 tasks of `docs/superpowers/plans/2026-08-30-sigil-inter-relay-routing.md` (subagent-driven-development, six batches) against spec `docs/superpowers/specs/2026-08-30-sigil-inter-relay-routing-design.md`.
@@ -18,6 +18,7 @@ transaction-boundary fix (see Known limitations).
 - Queue mode: `federation_outbox` repo methods, idempotent enqueue, 60s reaper (claim→commit→forward→ownership-guarded finalize, 1m/5m/30m backoff, dead-letter after 3 / on expiry, `federation.*` audit events), wired into `sigil relay up` for `queue` (Tasks 13–16).
 - CLI: `sigil federation outbox list|show|retry` (no bodies, expired-retry refusal) and `sigil route test` (read-only, advisory same-owner line, sends nothing) (Tasks 17–18).
 - Task 19: regression sweep (`sigil/relay/v1/federation-regression.test.mjs`), CHANGELOG + STATUS, plan close-out; plus a bounded close-out cleanup pass (reaper poison-row dead-letter guard + 6 CLI/test tidy items).
+- **I1 fix**: sync forward lifted off the accept transaction (`accept-envelope.mjs`). `decideRoute` + the sync forward path now run before `withTransaction`; queue forward and local accept still open a transaction. Replay check preserved on the sync path via non-transactional pool lookup. Phase 1 has its own `try/catch → toResponse`. Sync-test `fakeRepo` updated with `withTransactionCallCount` spy; all four forward-outcome tests assert count = 0; new REPLAY_DETECTED test added. Queue-test: rollback-atomicity sub-test added (spies on `enqueueFederationForward`, asserts real txn client, verifies INSERT is rolled back on post-enqueue error).
 
 ## Tests
 - `node --test sigil/relay/v1/federation-regression.test.mjs` — 4/4 pass.
@@ -56,40 +57,15 @@ transaction-boundary fix (see Known limitations).
      `t.after(() => repository.close())`, `try/finally` removed.
 
 ## Known limitations
-- **Sync-mode federation forward holds a DB transaction across the outbound
-  HTTP call (I1, parked).** In `accept-envelope.mjs`, the `forward` branch runs
-  `forwardEnvelope` → `postForward` (5s timeout) from inside
-  `repository.withTransaction(...)`. Nothing is written locally on that branch,
-  so the transaction is not needed for correctness, but a slow or hung peer
-  ties up a Postgres connection/transaction for up to the timeout. Lifting the
-  branch out safely means restructuring the shared `decideRoute` /
-  replay-check ordering that the `local` path also depends on, which exceeded
-  the bounded final-review fix budget and carries regression risk with no
-  second review pass. **Sync mode is therefore not production-ready under slow
-  peers; use queue mode (`--federation-mode queue`), which enqueues to
-  `federation_outbox` and forwards from the reaper entirely outside any
-  transaction and is unaffected.** Follow-up: lift the sync `forward` branch
-  out of `withTransaction`.
+- None.
 
 ## Next action
-- Parked I1 follow-up: lift the sync `forward` branch out of `withTransaction`
-  in `sigil/relay/v1/accept-envelope.mjs`. Approach sketched: run the replay
-  gate (`lookupAcceptedMessageId`) + `decideRoute` in a pre-check *outside*
-  `withTransaction`; when it resolves to a sync forward (`federationMode` set
-  and not `'queue'`, `route.action === 'forward'`), call `forwardEnvelope`
-  entirely outside any transaction and return, mapping a thrown
-  `FORWARD_MISCONFIGURED` through `toResponse` exactly as the existing
-  `.catch` does (extract that into a shared `auditReject` helper). `local` and
-  `queue` paths fall through to the unchanged transactional body (queue's
-  `enqueueForward` must stay on the txn `client`). Covering tests:
-  `sigil/relay/v1/accept-envelope.federation-sync.test.mjs` already asserts the
-  four sync outcomes against a fake repo whose `withTransaction` is a passthrough
-  — add one that fails if `withTransaction` is entered on the sync-forward path.
 - Doc debt (in the `C:\dev` repo, not sigil-repo): tick the plan checkboxes in
   `docs/superpowers/plans/2026-08-30-sigil-inter-relay-routing.md`; add
-  I1-PARKED + I4 `MAX_ATTEMPTS=4` notes to
+  I4 `MAX_ATTEMPTS=4` notes to
   `docs/superpowers/specs/2026-08-30-sigil-inter-relay-routing-design.md`.
-- Then sub-project #4 (cross-federation directory/presence).
+- Sub-project #4 (cross-federation directory/presence).
+
 
 
 ## Production packaging and host adapters (2026-08-27)

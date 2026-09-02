@@ -37,15 +37,16 @@ function makeEnvelope({ senderEndpointId = 'ep_codex@a.example', recipientEndpoi
   return envelope;
 }
 
-function fakeRepo({ withSenderKey = true } = {}) {
+function fakeRepo({ withSenderKey = true, priorMessage = null } = {}) {
   const envelopes = new Map();
   const audits = [];
   return {
     envelopes,
     audits,
     persistCalled: false,
-    async withTransaction(fn) { return fn({ id: 'client-1' }); },
-    async lookupAcceptedMessageId() { return null; },
+    withTransactionCallCount: 0,
+    async withTransaction(fn) { this.withTransactionCallCount++; return fn({ id: 'client-1' }); },
+    async lookupAcceptedMessageId() { return priorMessage; },
     async getPeerByDomain(domain) { return domain === 'b.example' ? PEER_B : null; },
     async lookupRecipientEndpoint() { return null; },
     async recordAuditEvent(event) { audits.push(event); },
@@ -63,6 +64,7 @@ const baseOptions = () => ({
   registered: new Map([['ep_codex@a.example', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_codex', public_key: senderKeys.publicKey }]]),
 });
 
+
 test('sync mode: peer accepts the forward -> 202 forwarded, nothing persisted locally', async () => {
   const repository = fakeRepo();
   const envelope = makeEnvelope();
@@ -79,6 +81,7 @@ test('sync mode: peer accepts the forward -> 202 forwarded, nothing persisted lo
   assert.equal(repository.persistCalled, false);
   assert.equal(repository._debugGetEnvelope(envelope.message_id), null);
   assert.equal(repository.audits.at(-1).eventType, 'federation.forwarded');
+  assert.equal(repository.withTransactionCallCount, 0, 'sync forward must not open a Postgres transaction');
 });
 
 test('sync mode: peer rejects the forward -> 502 FORWARD_REJECTED with peer status/code', async () => {
@@ -94,6 +97,7 @@ test('sync mode: peer rejects the forward -> 502 FORWARD_REJECTED with peer stat
   assert.equal(result.body.details.peerCode, 'DIRECTORY_LINK_REQUIRED');
   assert.equal(repository.persistCalled, false);
   assert.equal(repository.audits.at(-1).eventType, 'federation.forward_rejected');
+  assert.equal(repository.withTransactionCallCount, 0, 'sync forward must not open a Postgres transaction');
 });
 
 test('sync mode: transport failure -> 504 FORWARD_UNAVAILABLE', async () => {
@@ -108,6 +112,7 @@ test('sync mode: transport failure -> 504 FORWARD_UNAVAILABLE', async () => {
   assert.equal(result.body.details.recipientDomain, 'b.example');
   assert.equal(repository.persistCalled, false);
   assert.equal(repository.audits.at(-1).eventType, 'federation.forward_unavailable');
+  assert.equal(repository.withTransactionCallCount, 0, 'sync forward must not open a Postgres transaction');
 });
 
 test('sync mode: authenticated local sender with no registered key -> 500 FORWARD_MISCONFIGURED', async () => {
@@ -123,4 +128,41 @@ test('sync mode: authenticated local sender with no registered key -> 500 FORWAR
   assert.equal(result.body.code, 'FORWARD_MISCONFIGURED');
   assert.equal(posted, false);
   assert.equal(repository.persistCalled, false);
+  assert.equal(repository.withTransactionCallCount, 0, 'sync forward must not open a Postgres transaction');
+});
+
+test('sync mode: REPLAY_DETECTED for a reused message_id on a foreign recipient, no transaction opened', async () => {
+  // Seed lookupAcceptedMessageId to return a prior accepted record under a
+  // *different* idempotency_key -- simulates a local sender that previously
+  // sent this message_id to a local recipient and now retries to a foreign one.
+  const envelope = makeEnvelope();
+  const priorMessage = { message_id: envelope.message_id, idempotency_key: 'idem_prior_different' };
+  const repository = fakeRepo({ priorMessage });
+  const result = await acceptEnvelopeAsync(envelope, {
+    ...baseOptions(),
+    repository,
+    postForwardImpl: async () => { throw new Error('should not be called'); },
+  });
+  assert.equal(result.status, 409);
+  assert.equal(result.body.code, 'REPLAY_DETECTED');
+  assert.equal(repository.withTransactionCallCount, 0, 'replay rejection on sync forward path must not open a transaction');
+});
+
+test('sync mode: reject route (PEER_NOT_PINNED) takes priority over replay check when decideRoute returns reject', async () => {
+  // Behavior locked by I1 refactor: decideRoute now runs before lookupAcceptedMessageId
+  // in the reject-route short-circuit. An envelope bound for an unpinned peer that also
+  // has a reused message_id returns PEER_NOT_PINNED (400), not REPLAY_DETECTED (409).
+  // Pre-refactor this returned REPLAY_DETECTED because lookupAcceptedMessageId ran first.
+  // The new ordering is more correct (route validity gates replay detection), but it is
+  // a visible status change from the prior behavior.
+  const envelope = makeEnvelope({ recipientEndpointId: 'ep_claude@c.example' }); // c.example not in peers
+  const priorMessage = { message_id: envelope.message_id, idempotency_key: 'idem_prior_different' };
+  const repository = fakeRepo({ priorMessage });
+  const result = await acceptEnvelopeAsync(envelope, {
+    ...baseOptions(),
+    repository,
+  });
+  assert.equal(result.status, 400);
+  assert.equal(result.body.code, 'PEER_NOT_PINNED');
+  assert.equal(repository.withTransactionCallCount, 0, 'reject route must not open a transaction');
 });

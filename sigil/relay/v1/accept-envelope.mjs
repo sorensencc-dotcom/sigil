@@ -58,40 +58,80 @@ export function acceptEnvelope(envelope, options = {}) {
 // already-resolved snapshots, never the client.
 async function acceptWithRepository(envelope, options) {
   const { repository, now = new Date() } = options;
+
+  // ── Phase 1: route decision + sync-only forward ──────────────────────────
+  // decideRoute is a read-only peers-table lookup; no transaction is needed.
+  // The route is computed here so the sync forward path never opens a Postgres
+  // connection -- a slow or hung peer would otherwise hold a connection for up
+  // to the 5 s postForward timeout (I1).
+  const route = await decideRoute(envelope, {
+    relayDomain: options.relayDomain,
+    federationMode: options.federationMode,
+    getPeerByDomain: repository.getPeerByDomain ? (d) => repository.getPeerByDomain(d) : async () => null,
+  });
+
+  // Only the sync forward path exits before opening a transaction.
+  // Queue forward falls through to Phase 2 so enqueueForward's INSERT + audit
+  // remain atomic inside the transaction. The explicit 'sync' guard is
+  // intentional: a future third mode must opt in here, not fall through
+  // silently with a null client.
+  if (route.action === 'reject' || (route.action === 'forward' && options.federationMode === 'sync')) {
+    try {
+      if (route.action === 'reject') throw reject(route.code, `${route.code}`, route.details ?? {});
+
+      // Replay check on the sync forward path: preserves pre-refactor behavior
+      // where a forwarded envelope from a local sender that reused a message_id
+      // (previously accepted to a local recipient under a different
+      // idempotency_key) is rejected with REPLAY_DETECTED.
+      // lookupAcceptedMessageId(…, undefined) triggers the `client = this.pool`
+      // default -- a regular pool checkout, not a transaction. Safe here:
+      // nothing is written locally on the sync forward path, so there is no
+      // atomicity requirement.
+      const priorMessage = await repository.lookupAcceptedMessageId(
+        envelope.sender.endpoint_id, envelope.message_id, undefined
+      );
+      if (priorMessage && priorMessage.idempotency_key !== envelope.idempotency_key) {
+        throw reject('REPLAY_DETECTED', 'message_id was already accepted under a different idempotency_key');
+      }
+
+      // client = null: forwardEnvelope passes it only to lookupRecipientEndpoint
+      // (L210) for the sender-key lookup, handled by the existing `?? null`
+      // guard. buildForwardRequest / signForwardRequest / postForward never
+      // touch client. Queue mode is not reached here (gated above), so
+      // enqueueForward's client-dependent INSERT is never called with null.
+      return await forwardEnvelope(envelope, route, options, null);
+    } catch (error) {
+      // Covers: reject codes from decideRoute (PEER_NOT_PINNED,
+      // RECIPIENT_NOT_LOCAL, etc.), REPLAY_DETECTED, and FORWARD_MISCONFIGURED
+      // from forwardEnvelope. FORWARD_TRANSPORT_FAILED is caught inside
+      // forwardEnvelope and returned as {status:504} before reaching here.
+      // None of these codes are in AUDITED_REJECTION_CODES, so no audit write
+      // is needed in this catch.
+      return toResponse(options, error);
+    }
+  }
+
+  // ── Phase 2: queue-forward OR local accept ───────────────────────────────
+  // Both paths need a transaction: queue-forward for atomicity of the outbox
+  // INSERT + audit; local for replay/idempotency/persist serialisation.
+  // route is already decided above -- withTransaction never calls decideRoute.
   return repository.withTransaction(async (client) => {
-    // Replay check (design §6, §18 #13): the scoped (sender_endpoint_id,
-    // message_id) lookup happens first, before validateEnvelope's own
-    // expiry check can run. A prior accepted record under a *different*
-    // idempotency_key is a replay -- classified and rejected immediately,
-    // skipping expiry entirely. Same idempotency_key falls through to the
-    // ordinary duplicate path below (handled by validateEnvelope + the
-    // lookupIdempotency check that follows).
+    // Replay check (design §6, §18 #13): must be serialised with
+    // persistAcceptedEnvelope / enqueueFederationForward. A prior accepted
+    // record under a *different* idempotency_key is a replay -- classified and
+    // rejected immediately, skipping expiry entirely. Same idempotency_key
+    // falls through to the ordinary duplicate path (lookupIdempotency below).
     const priorMessage = await repository.lookupAcceptedMessageId(envelope.sender.endpoint_id, envelope.message_id, client);
     if (priorMessage && priorMessage.idempotency_key !== envelope.idempotency_key) {
       throw reject('REPLAY_DETECTED', 'message_id was already accepted under a different idempotency_key');
     }
-    // Recipient-locality check (design: federated addressing) runs here,
-    // before the directory-link gate below -- a foreign-domain recipient
-    // normally has no pre-existing directory_links row, so without this
-    // early check DIRECTORY_LINK_REQUIRED would fire first and mask the
-    // more specific RECIPIENT_NOT_LOCAL/MALFORMED_FEDERATED_ID diagnostic
-    // that validateEnvelope would otherwise produce on the legacy path.
-    // Pure string check -- needs only envelope + options.relayDomain, no
-    // client/transaction/registry lookup. With federationMode set,
-    // decideRoute additionally forwards a pinned foreign-domain recipient
-    // to its peer relay instead of rejecting it (design: inter-relay
-    // routing); with federationMode unset it delegates straight back to
-    // checkRecipientLocality so every non-federated path stays identical.
-    const route = await decideRoute(envelope, {
-      relayDomain: options.relayDomain,
-      federationMode: options.federationMode,
-      getPeerByDomain: repository.getPeerByDomain ? (d) => repository.getPeerByDomain(d) : async () => null,
-    });
-    if (route.action === 'reject') throw reject(route.code, `${route.code}`, route.details ?? {});
+
+    // Queue-forward: enqueueForward's INSERT + audit are atomic inside this txn.
     if (route.action === 'forward') {
       return forwardEnvelope(envelope, route, options, client);
     }
-    // route.action === 'local' -> fall through unchanged
+
+    // route.action === 'local' -> fall through to recipient/capability/persist checks.
     // Every direct recipient must exist in the relay's endpoint directory
     // before any delivery row can be written. Keep this lookup on the
     // acceptance transaction's client so a concurrent endpoint change cannot
