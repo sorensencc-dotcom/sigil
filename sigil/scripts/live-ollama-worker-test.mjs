@@ -118,7 +118,12 @@ async function runLiveOllamaWorkflow() {
     autoReply: true,
   });
 
-  daemon.start();
+  // Do NOT call daemon.start() here. start() opens a WebSocket stream listener
+  // that fires poll() on every relay "delivered" notification. That races with
+  // the explicit daemon.poll() call below: both pick up the same unacknowledged
+  // task.request and each tries to send a reply with the same idempotency_key
+  // but a different body hash → relay returns 409 DUPLICATE_MESSAGE.
+  // The test drives polling manually, so the stream listener is unnecessary.
 
   console.log('[5/6] Sending signed task.request envelope from Codex to Ollama...');
   const codexOutbox = new LocalOutbox({
