@@ -61,22 +61,32 @@ async function acceptWithRepository(envelope, options) {
 
   // ── Phase 1: route decision + sync-only forward ──────────────────────────
   // decideRoute is a read-only peers-table lookup; no transaction is needed.
-  // The route is computed here so the sync forward path never opens a Postgres
+  // It is computed here so the sync forward path never opens a Postgres
   // connection -- a slow or hung peer would otherwise hold a connection for up
   // to the 5 s postForward timeout (I1).
-  const route = await decideRoute(envelope, {
-    relayDomain: options.relayDomain,
-    federationMode: options.federationMode,
-    getPeerByDomain: repository.getPeerByDomain ? (d) => repository.getPeerByDomain(d) : async () => null,
-  });
+  //
+  // The route decision runs inside one try/catch. decideRoute itself throws
+  // for a foreign recipient with no usable route (RECIPIENT_NOT_LOCAL,
+  // MALFORMED_FEDERATED_ID from checkRecipientLocality), and the reject /
+  // sync-forward branches throw their own reject() codes. Pre-refactor every
+  // one of these ran inside withTransaction, whose .catch converted the throw
+  // to a response; that conversion is reproduced here now that the decision
+  // is lifted out. A 'local' or queue-'forward' route falls through with no
+  // throw and is handled by Phase 2.
+  let route;
+  try {
+    route = await decideRoute(envelope, {
+      relayDomain: options.relayDomain,
+      federationMode: options.federationMode,
+      getPeerByDomain: repository.getPeerByDomain ? (d) => repository.getPeerByDomain(d) : async () => null,
+    });
 
-  // Only the sync forward path exits before opening a transaction.
-  // Queue forward falls through to Phase 2 so enqueueForward's INSERT + audit
-  // remain atomic inside the transaction. The explicit 'sync' guard is
-  // intentional: a future third mode must opt in here, not fall through
-  // silently with a null client.
-  if (route.action === 'reject' || (route.action === 'forward' && options.federationMode === 'sync')) {
-    try {
+    // Only the sync forward path exits before opening a transaction.
+    // Queue forward falls through to Phase 2 so enqueueForward's INSERT + audit
+    // remain atomic inside the transaction. The explicit 'sync' guard is
+    // intentional: a future third mode must opt in here, not fall through
+    // silently with a null client.
+    if (route.action === 'reject' || (route.action === 'forward' && options.federationMode === 'sync')) {
       if (route.action === 'reject') throw reject(route.code, `${route.code}`, route.details ?? {});
 
       // Replay check on the sync forward path: preserves pre-refactor behavior
@@ -100,28 +110,30 @@ async function acceptWithRepository(envelope, options) {
       // touch client. Queue mode is not reached here (gated above), so
       // enqueueForward's client-dependent INSERT is never called with null.
       return await forwardEnvelope(envelope, route, options, null);
-    } catch (error) {
-      // Covers: reject codes from decideRoute (PEER_NOT_PINNED,
-      // RECIPIENT_NOT_LOCAL, etc.), REPLAY_DETECTED from the replay check above,
-      // and FORWARD_MISCONFIGURED from forwardEnvelope. FORWARD_TRANSPORT_FAILED
-      // is caught inside forwardEnvelope and returned as {status:504} before
-      // reaching here.
-      //
-      // REPLAY_DETECTED is in AUDITED_REJECTION_CODES, so this catch mirrors the
-      // Phase 2 withTransaction .catch: an attributable replay rejection on the
-      // sync forward path must still emit its envelope.rejected.replay_detected
-      // audit event, exactly as the local and queue paths do.
-      const response = toResponse(options, error);
-      if (AUDITED_REJECTION_CODES.has(error.code) && repository.recordAuditEvent) {
-        await writeRejectionAudit({
-          repository,
-          event: { eventType: `envelope.rejected.${error.code.toLowerCase()}`, subjectId: envelope.message_id, endpointId: envelope.sender?.endpoint_id, outcome: 'rejected', reason: error.message, now },
-          fallbackLog: options.rejectionAuditFallbackLog,
-          degradedCounter: options.rejectionAuditDegradedCounter,
-        });
-      }
-      return response;
     }
+    // route.action === 'local', or 'forward' in queue mode: fall through to Phase 2.
+  } catch (error) {
+    // Covers: throws from decideRoute (RECIPIENT_NOT_LOCAL,
+    // MALFORMED_FEDERATED_ID), reject codes from the decideRoute result
+    // (PEER_NOT_PINNED, FEDERATION_HOP_EXCEEDED, etc.), REPLAY_DETECTED from
+    // the replay check above, and FORWARD_MISCONFIGURED from forwardEnvelope.
+    // FORWARD_TRANSPORT_FAILED is caught inside forwardEnvelope and returned
+    // as {status:504} before reaching here.
+    //
+    // This catch mirrors the Phase 2 withTransaction .catch: an attributable
+    // rejection whose code is in AUDITED_REJECTION_CODES (e.g. REPLAY_DETECTED)
+    // must still emit its envelope.rejected.<code> audit event on this path,
+    // exactly as the local and queue paths do.
+    const response = toResponse(options, error);
+    if (AUDITED_REJECTION_CODES.has(error.code) && repository.recordAuditEvent) {
+      await writeRejectionAudit({
+        repository,
+        event: { eventType: `envelope.rejected.${error.code.toLowerCase()}`, subjectId: envelope.message_id, endpointId: envelope.sender?.endpoint_id, outcome: 'rejected', reason: error.message, now },
+        fallbackLog: options.rejectionAuditFallbackLog,
+        degradedCounter: options.rejectionAuditDegradedCounter,
+      });
+    }
+    return response;
   }
 
   // ── Phase 2: queue-forward OR local accept ───────────────────────────────
