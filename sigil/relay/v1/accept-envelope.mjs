@@ -260,7 +260,18 @@ async function acceptWithRepository(envelope, options) {
 async function forwardEnvelope(envelope, route, options, client) {
   const { repository } = options;
   const registered = options.registered ?? new Map();
-  const senderEntry = registered.get(envelope.sender.endpoint_id) ?? (repository.lookupRecipientEndpoint ? await repository.lookupRecipientEndpoint(envelope.sender.endpoint_id, client) : null);
+  // The repository fallback is gated on a real transaction client. On the
+  // Phase 1 sync-forward path `client` is null, and
+  // postgres-repository.lookupRecipientEndpoint hard-throws a bare Error
+  // ("Recipient lookup requires a transaction client") when called without
+  // one -- it deliberately has no `client = this.pool` default because it
+  // takes a row lock. With the fallback skipped, an unresolvable sender
+  // falls to the FORWARD_MISCONFIGURED reject below instead, matching the
+  // queue/local paths' behaviour for the same condition.
+  const senderEntry = registered.get(envelope.sender.endpoint_id)
+    ?? (client && repository.lookupRecipientEndpoint
+          ? await repository.lookupRecipientEndpoint(envelope.sender.endpoint_id, client)
+          : null);
   const senderOwnerId = senderEntry?.owner_id;
   const senderPub = senderEntry?.public_key;
   if (!senderOwnerId || !senderPub) throw reject('FORWARD_MISCONFIGURED', 'Authenticated local sender has no registered owner or key');

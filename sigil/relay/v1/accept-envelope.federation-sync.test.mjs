@@ -131,6 +131,31 @@ test('sync mode: authenticated local sender with no registered key -> 500 FORWAR
   assert.equal(repository.withTransactionCallCount, 0, 'sync forward must not open a Postgres transaction');
 });
 
+test('sync mode: sender absent from registered does not call lookupRecipientEndpoint with a null client (S1)', async () => {
+  // postgres-repository.lookupRecipientEndpoint hard-throws a bare Error when
+  // called without a transaction client. On the Phase 1 sync-forward path the
+  // client is null, so forwardEnvelope must not fall back to it; an
+  // unresolvable sender should surface as 500 FORWARD_MISCONFIGURED, not a
+  // codeless Error mapped to 400 INVALID_ENVELOPE.
+  const repository = fakeRepo();
+  let lookupClientArg = 'not-called';
+  repository.lookupRecipientEndpoint = async (_id, client) => {
+    lookupClientArg = client;
+    if (!client) throw new Error('Recipient lookup requires a transaction client');
+    return null;
+  };
+  const result = await acceptEnvelopeAsync(makeEnvelope(), {
+    ...baseOptions(),
+    repository,
+    registered: new Map(), // sender not resolvable from the trusted directory
+    postForwardImpl: async () => ({ ok: true, status: 202 }),
+  });
+  assert.equal(result.status, 500);
+  assert.equal(result.body.code, 'FORWARD_MISCONFIGURED');
+  assert.equal(lookupClientArg, 'not-called', 'lookupRecipientEndpoint must not be invoked on the null-client sync path');
+  assert.equal(repository.withTransactionCallCount, 0, 'sync forward must not open a Postgres transaction');
+});
+
 test('sync mode: REPLAY_DETECTED for a reused message_id on a foreign recipient, no transaction opened', async () => {
   // Seed lookupAcceptedMessageId to return a prior accepted record under a
   // *different* idempotency_key -- simulates a local sender that previously
