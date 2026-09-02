@@ -102,12 +102,25 @@ async function acceptWithRepository(envelope, options) {
       return await forwardEnvelope(envelope, route, options, null);
     } catch (error) {
       // Covers: reject codes from decideRoute (PEER_NOT_PINNED,
-      // RECIPIENT_NOT_LOCAL, etc.), REPLAY_DETECTED, and FORWARD_MISCONFIGURED
-      // from forwardEnvelope. FORWARD_TRANSPORT_FAILED is caught inside
-      // forwardEnvelope and returned as {status:504} before reaching here.
-      // None of these codes are in AUDITED_REJECTION_CODES, so no audit write
-      // is needed in this catch.
-      return toResponse(options, error);
+      // RECIPIENT_NOT_LOCAL, etc.), REPLAY_DETECTED from the replay check above,
+      // and FORWARD_MISCONFIGURED from forwardEnvelope. FORWARD_TRANSPORT_FAILED
+      // is caught inside forwardEnvelope and returned as {status:504} before
+      // reaching here.
+      //
+      // REPLAY_DETECTED is in AUDITED_REJECTION_CODES, so this catch mirrors the
+      // Phase 2 withTransaction .catch: an attributable replay rejection on the
+      // sync forward path must still emit its envelope.rejected.replay_detected
+      // audit event, exactly as the local and queue paths do.
+      const response = toResponse(options, error);
+      if (AUDITED_REJECTION_CODES.has(error.code) && repository.recordAuditEvent) {
+        await writeRejectionAudit({
+          repository,
+          event: { eventType: `envelope.rejected.${error.code.toLowerCase()}`, subjectId: envelope.message_id, endpointId: envelope.sender?.endpoint_id, outcome: 'rejected', reason: error.message, now },
+          fallbackLog: options.rejectionAuditFallbackLog,
+          degradedCounter: options.rejectionAuditDegradedCounter,
+        });
+      }
+      return response;
     }
   }
 

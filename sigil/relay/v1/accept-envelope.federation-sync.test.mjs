@@ -146,6 +146,12 @@ test('sync mode: REPLAY_DETECTED for a reused message_id on a foreign recipient,
   assert.equal(result.status, 409);
   assert.equal(result.body.code, 'REPLAY_DETECTED');
   assert.equal(repository.withTransactionCallCount, 0, 'replay rejection on sync forward path must not open a transaction');
+  // REPLAY_DETECTED is an AUDITED_REJECTION_CODE: the sync forward path must
+  // still emit the rejection audit, matching the local and queue paths.
+  const auditEvent = repository.audits.at(-1);
+  assert.equal(auditEvent?.eventType, 'envelope.rejected.replay_detected');
+  assert.equal(auditEvent?.outcome, 'rejected');
+  assert.equal(auditEvent?.subjectId, envelope.message_id);
 });
 
 test('sync mode: reject route (PEER_NOT_PINNED) takes priority over replay check when decideRoute returns reject', async () => {
