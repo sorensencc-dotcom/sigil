@@ -54,7 +54,8 @@ const baseOptions = () => ({
 
 test('queue mode with live database', { skip: !connectionString }, async (t) => {
   const pool = new pg.Pool({ connectionString });
-  t.after(() => pool.end());
+  const repository = new PostgresRepository({ pool });
+  t.after(() => repository.close());
 
   // Schema reset and migration (hermetic test setup)
   assertDisposableTestDatabase(connectionString);
@@ -65,20 +66,17 @@ test('queue mode with live database', { skip: !connectionString }, async (t) => 
     await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
   }
 
-  const repository = new PostgresRepository({ pool });
-
   // Register the peer (b.example) so decideRoute doesn't reject with PEER_NOT_PINNED
   const peerPubKey = relayIdentityKeys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url');
   await repository.upsertPeer({
     domain: 'b.example',
     relayUrl: 'https://relay.b.example',
     keys: [{ kid: federationIdentity.key_id, alg: 'Ed25519', publicKey: peerPubKey }],
-    trustMode: 'pinned'
+    trustMode: 'static'
   });
 
-  try {
-    // Test: first accept -> 202 queued:true, exactly one federation_outbox row
-    await t.test('first accept enqueues -> 202 queued:true, one row', async () => {
+  // Test: first accept -> 202 queued:true, exactly one federation_outbox row
+  await t.test('first accept enqueues -> 202 queued:true, one row', async () => {
       // Clean federation_outbox for hermetic subtest
       await pool.query('DELETE FROM federation_outbox');
 
@@ -98,11 +96,11 @@ test('queue mode with live database', { skip: !connectionString }, async (t) => 
       const listResult = await repository.listFederationOutbox({ states: ['pending'] });
       assert.equal(listResult.counts.pending, 1, 'should have exactly one pending row');
       const row = listResult.rows[0];
-      assert.equal(row.message_id, envelope.message_id);
-      assert.equal(row.idempotency_key, envelope.idempotency_key);
-      assert.equal(row.recipient_domain, 'b.example');
-      assert.equal(row.origin_domain, 'a.example');
-      assert.equal(row.sender_owner_id, 'usr_codex_owner');
+      assert.equal(row.messageId, envelope.message_id);
+      assert.equal(row.idempotencyKey, envelope.idempotency_key);
+      assert.equal(row.recipientDomain, 'b.example');
+      assert.equal(row.originDomain, 'a.example');
+      assert.equal(row.senderOwnerId, 'usr_codex_owner');
 
       // I5: a successful enqueue is a success, not a rejection. The old
       // `eventType.endsWith('forwarded')` heuristic in recordFederationAudit
@@ -155,7 +153,4 @@ test('queue mode with live database', { skip: !connectionString }, async (t) => 
       listResult = await repository.listFederationOutbox({ states: ['pending'] });
       assert.equal(listResult.counts.pending, 1, 'should have exactly one pending row after duplicate');
     });
-  } finally {
-    await repository.close();
-  }
 });

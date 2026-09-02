@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +7,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import pg from 'pg';
 import { assertDisposableTestDatabase } from '../scripts/assert-disposable-test-db.mjs';
+import { applyMigrations } from '../scripts/apply-migrations.mjs';
 
 const execFileAsync = promisify(execFile);
 const sigilPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'sigil.mjs');
@@ -31,12 +31,13 @@ test('sigil federation outbox list|show|retry against a seeded federation_outbox
   const pool = new pg.Pool({ connectionString });
   t.after(() => pool.end());
   assertDisposableTestDatabase(connectionString);
-  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
-  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../migrations');
-  const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
-  for (const file of sqlFiles) {
-    await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
-  }
+  // Reset + apply through the shared migrator so the `_sigil_schema_migrations`
+  // ledger is populated. The CLI paths under test call
+  // `withRepository(..., { migrate: true })`, which re-runs `applyMigrations`;
+  // an unseeded ledger makes it replay non-idempotent migrations (e.g. `014`'s
+  // bare `ADD COLUMN client_id`) against an already-migrated schema and the CLI
+  // exits non-zero.
+  await applyMigrations(connectionString, { reset: true });
 
   const suffix = crypto.randomUUID().replaceAll('-', '_');
   const rejectedId = crypto.randomUUID();
