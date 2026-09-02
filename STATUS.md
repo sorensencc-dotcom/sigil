@@ -18,7 +18,11 @@ Completed work).
 - Queue mode: `federation_outbox` repo methods, idempotent enqueue, 60s reaper (claim→commit→forward→ownership-guarded finalize, 1m/5m/30m backoff, dead-letter after 3 / on expiry, `federation.*` audit events), wired into `sigil relay up` for `queue` (Tasks 13–16).
 - CLI: `sigil federation outbox list|show|retry` (no bodies, expired-retry refusal) and `sigil route test` (read-only, advisory same-owner line, sends nothing) (Tasks 17–18).
 - Task 19: regression sweep (`sigil/relay/v1/federation-regression.test.mjs`), CHANGELOG + STATUS, plan close-out; plus a bounded close-out cleanup pass (reaper poison-row dead-letter guard + 6 CLI/test tidy items).
-- **I1 fix**: sync forward lifted off the accept transaction (`accept-envelope.mjs`). `decideRoute` + the sync forward path now run before `withTransaction`; queue forward and local accept still open a transaction. Replay check preserved on the sync path via non-transactional pool lookup. Phase 1 has its own `try/catch → toResponse`. Sync-test `fakeRepo` updated with `withTransactionCallCount` spy; all four forward-outcome tests assert count = 0; new REPLAY_DETECTED test added. Queue-test: rollback-atomicity sub-test added (spies on `enqueueFederationForward`, asserts real txn client, verifies INSERT is rolled back on post-enqueue error).
+- **I1 fix** (`8fdd1fb`, pushed `origin/main`): sync forward lifted off the accept transaction (`accept-envelope.mjs`). `decideRoute` + the sync forward path now run before `withTransaction`; queue forward and local accept still open a transaction. Replay check preserved on the sync path via non-transactional pool lookup. Phase 1 has its own `try/catch → toResponse`. Sync-test `fakeRepo` updated with `withTransactionCallCount` spy; all four forward-outcome tests assert count = 0; new REPLAY_DETECTED test added. Queue-test: rollback-atomicity sub-test added (spies on `enqueueFederationForward`, asserts real txn client, verifies INSERT is rolled back on post-enqueue error).
+- **I1 review follow-ups** (all pushed `origin/main`):
+  - `7d14e4a` — Phase 1 catch mirrors the Phase 2 `withTransaction` `.catch`: an `AUDITED_REJECTION_CODES` rejection (`REPLAY_DETECTED`) on the sync-forward path now emits its `envelope.rejected.replay_detected` audit event, matching the local and queue paths. Sync test asserts the audit event.
+  - `e8bf8b7` (S1) — sync-forward path no longer calls `repository.lookupRecipientEndpoint(id, null)` when the sender is absent from `options.registered`; the real Postgres repo hard-throws a codeless `Error` without a txn client, which mapped to `400 INVALID_ENVELOPE` instead of `500 FORWARD_MISCONFIGURED`. Test locks the 500 + asserts `lookupRecipientEndpoint` is not invoked.
+  - `fabb4fe` — a direct `decideRoute` throw (not a returned `{action:'reject'}`) now routes through the Phase 1 `try/catch → toResponse` instead of escaping unhandled.
 
 ## Tests
 - `node --test sigil/relay/v1/federation-regression.test.mjs` — 4/4 pass.
@@ -29,6 +33,11 @@ Completed work).
   Node 22.x and 24.x fail at the "Run Live PostgreSQL Gate" step only. Unit &
   Contract Tests pass 757/0. `npm run test:live` fails 2 of 21 schema-resetting
   suites — both new in this branch, both broken test harness, not product code.
+  Those two suites were fixed in `0829eb5`; CI run 33610373355 green on all five jobs.
+- CI run 33683013747 (push of `fabb4fe`, I1 + follow-ups): all four test-matrix
+  jobs green (Linux + Windows × Node 22/24). Only red = the **Secret-scan /
+  gitleaks "missing license"** step — repo-wide infra issue (needs a
+  `GITLEAKS_LICENSE` GitHub secret), unrelated to this work.
 
 ## Decisions
 - Compound primary key scoping `(profile_id, endpoint_id, key_id)` to isolate connector profiles.
