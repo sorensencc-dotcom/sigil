@@ -323,6 +323,12 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     async getPeerByDomain(domain) {
       return peerRelays.get(domain) ?? null;
     },
+    async getPeerByKid(kid) {
+      for (const peer of peerRelays.values()) {
+        if ((peer.keys ?? []).some((k) => k.kid === kid)) return peer;
+      }
+      return null;
+    },
     async listPeers() {
       return [...peerRelays.values()].sort((a, b) => a.domain.localeCompare(b.domain));
     },

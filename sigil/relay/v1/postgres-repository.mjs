@@ -1036,6 +1036,15 @@ export class PostgresRepository {
     );
     return result.rows[0] ? rowToPeerRecord(result.rows[0]) : null;
   }
+  async getPeerByKid(kid, client = this.pool) {
+    const result = await client.query(
+      `SELECT * FROM peer_relays
+        WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(keys) AS k WHERE k->>'kid' = $1)
+        LIMIT 1`,
+      [kid]
+    );
+    return result.rows[0] ? rowToPeerRecord(result.rows[0]) : null;
+  }
   async listPeers() {
     const result = await this.pool.query(
       'SELECT domain, relay_url, ws_url, keys, trust_mode, discovered_at, updated_at, last_resolved_at FROM peer_relays ORDER BY domain'

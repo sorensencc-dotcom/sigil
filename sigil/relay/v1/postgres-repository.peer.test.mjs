@@ -75,3 +75,19 @@ test('removePeer deletes a pinned peer and returns true, false if nothing was th
   assert.equal(await repository.getPeerByDomain(domain), null);
   assert.equal(await repository.removePeer(domain), false);
 });
+
+test('getPeerByKid resolves the pinned peer that published a kid', { skip: !connectionString }, async (t) => {
+  const { repository } = await bootstrap(t);
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const domain = `relay-${suffix}.example.com`;
+  const testKid = `kid-${suffix}`;
+  await repository.upsertPeer({
+    domain,
+    relayUrl: 'https://relay.example.com',
+    keys: [{ kid: testKid, alg: 'Ed25519', publicKey: 'AAAA' }],
+    trustMode: 'tofu',
+  });
+  const fetched = await repository.getPeerByKid(testKid);
+  assert.equal(fetched?.domain, domain);
+  assert.equal(await repository.getPeerByKid('kid-unknown'), null);
+});
