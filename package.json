@@ -32,7 +32,8 @@
   "scripts": {
     "prepare": "node sigil/scripts/install-git-hooks.mjs",
     "secret-scan": "node sigil/scripts/secret-scan.mjs",
-    "test": "node sigil-dep-audit.mjs && node sigil-jcs-audit.mjs && node --test",
+    "test": "node sigil-dep-audit.mjs && node sigil-jcs-audit.mjs && node --test --test-timeout=10000",
+    "test:bounded": "node -e \"const { spawnSync } = require('child_process'); const r = spawnSync('npm', ['test'], { stdio: 'inherit', timeout: 60000 }); process.exit(r.status ?? 1);\"",
     "audit:deps": "node sigil-dep-audit.mjs",
     "audit:jcs": "node sigil-jcs-audit.mjs",
     "test:live": "node sigil/scripts/live-db-tests.mjs",
