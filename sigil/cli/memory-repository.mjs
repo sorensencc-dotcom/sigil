@@ -390,7 +390,23 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       if (row.status === 'pending' && Date.parse(row.expires_at) <= Date.now()) {
         row.status = 'expired';
       }
-      return row;
+      // Return a shallow copy shaped like the Postgres rowToFederationDirectoryInvite
+      // mapper (no `created_at`) -- callers such as Task 8's acceptDirectoryRedemption
+      // are one shared code path; handing back the live Map row would let a mutation
+      // there corrupt the store silently while Postgres is unaffected.
+      return {
+        invite_id: row.invite_id,
+        link_ref: row.link_ref,
+        issuer_endpoint_id: row.issuer_endpoint_id,
+        issuer_owner_id: row.issuer_owner_id,
+        peer_domain: row.peer_domain,
+        code_hash: row.code_hash,
+        status: row.status,
+        redeemed_by_owner_id: row.redeemed_by_owner_id,
+        redeemed_by_endpoint_id: row.redeemed_by_endpoint_id,
+        redeemed_at: row.redeemed_at,
+        expires_at: row.expires_at,
+      };
     },
     async markFederationDirectoryInviteRedeemed(inviteId, redeemer, now = new Date()) {
       const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();

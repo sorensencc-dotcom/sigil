@@ -76,14 +76,19 @@ test('memory relay federation_directory_invites: create -> getByRef -> lazy expi
   assert.equal(row.status, 'pending');
   assert.equal(row.peer_domain, 'b.example');
   assert.equal(row.code_hash, 'HASH');
+  // getByRef returns a shallow copy, not the live Map row (no `created_at`).
+  assert.equal(row.created_at, undefined);
 
-  // force expiry, then getByRef must lazily transition
-  const stored = await repository.getFederationDirectoryInviteByRef(linkRef, null, {});
-  stored.expires_at = new Date(Date.now() - 3600_000).toISOString();
-  const expired = await repository.getFederationDirectoryInviteByRef(linkRef, null, {});
+  // an invite created with a past expiry lazily transitions on getByRef
+  const pastLinkRef = crypto.randomUUID();
+  await repository.createFederationDirectoryInvite({
+    linkRef: pastLinkRef, issuerEndpointId: 'ep_codex@a.example', issuerOwnerId: 'usr_chris@a.example',
+    peerDomain: 'b.example', codeHash: 'HASH', expiresAt: new Date(Date.now() - 3600_000), now: new Date(),
+  }, null);
+  const expired = await repository.getFederationDirectoryInviteByRef(pastLinkRef, null, {});
   assert.equal(expired.status, 'expired');
 
-  const revoke = await repository.revokeFederationDirectoryInvite(linkRef, new Date(), null);
+  const revoke = await repository.revokeFederationDirectoryInvite(pastLinkRef, new Date(), null);
   assert.equal(revoke.updated, 0); // already terminal (expired)
 });
 
