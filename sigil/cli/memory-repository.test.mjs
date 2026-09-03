@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import crypto from 'node:crypto';
 import { createMemoryRepository } from './memory-repository.mjs';
 
 test('memory relay does not redeliver acknowledged messages and replays acknowledgements', async () => {
@@ -58,4 +59,59 @@ test('memory relay lookupCapabilityRegistration returns registered capabilities 
 test('memory relay lookupCapabilityRegistration returns null for unregistered capabilities', async () => {
   const repository = createMemoryRepository();
   assert.equal(await repository.lookupCapabilityRegistration('unknown.capability/fake'), null);
+});
+
+test('memory relay federation_directory_invites: create -> getByRef -> lazy expire -> revoke', async () => {
+  const repository = createMemoryRepository();
+  const linkRef = crypto.randomUUID();
+
+  const created = await repository.withTransaction((c) => repository.createFederationDirectoryInvite({
+    linkRef, issuerEndpointId: 'ep_codex@a.example', issuerOwnerId: 'usr_chris@a.example',
+    peerDomain: 'b.example', codeHash: 'HASH', expiresAt: new Date(Date.now() + 3600_000), now: new Date(),
+  }, c));
+  assert.equal(created.link_ref, linkRef);
+  assert.ok(created.invite_id);
+
+  const row = await repository.getFederationDirectoryInviteByRef(linkRef, null, {});
+  assert.equal(row.status, 'pending');
+  assert.equal(row.peer_domain, 'b.example');
+  assert.equal(row.code_hash, 'HASH');
+
+  // force expiry, then getByRef must lazily transition
+  const stored = await repository.getFederationDirectoryInviteByRef(linkRef, null, {});
+  stored.expires_at = new Date(Date.now() - 3600_000).toISOString();
+  const expired = await repository.getFederationDirectoryInviteByRef(linkRef, null, {});
+  assert.equal(expired.status, 'expired');
+
+  const revoke = await repository.revokeFederationDirectoryInvite(linkRef, new Date(), null);
+  assert.equal(revoke.updated, 0); // already terminal (expired)
+});
+
+test('memory relay federation_directory_invites: redeem + list omits code_hash', async () => {
+  const repository = createMemoryRepository();
+  const linkRef = crypto.randomUUID();
+
+  const { invite_id } = await repository.createFederationDirectoryInvite({
+    linkRef, issuerEndpointId: 'ep_codex@a.example', issuerOwnerId: 'usr_lister@a.example',
+    peerDomain: 'b.example', codeHash: 'SECRET', expiresAt: new Date(Date.now() + 3600_000), now: new Date(),
+  }, null);
+
+  const marked = await repository.markFederationDirectoryInviteRedeemed(
+    invite_id, { owner_id: 'usr_peer@b.example', endpoint_id: 'ep_peer@b.example' }, new Date(), null,
+  );
+  assert.equal(marked.updated, 1);
+
+  const redeemed = await repository.getFederationDirectoryInviteByRef(linkRef, null, {});
+  assert.equal(redeemed.status, 'redeemed');
+  assert.equal(redeemed.redeemed_by_owner_id, 'usr_peer@b.example');
+  assert.equal(redeemed.redeemed_by_endpoint_id, 'ep_peer@b.example');
+  assert.ok(redeemed.redeemed_at);
+
+  const listed = await repository.listFederationDirectoryInvites({ issuerOwnerId: 'usr_lister@a.example' });
+  assert.equal(listed.length, 1);
+  assert.deepEqual(Object.keys(listed[0]).sort(), ['expires_at', 'link_ref', 'peer_domain', 'status']);
+  assert.equal(listed[0].link_ref, linkRef);
+
+  const revoke = await repository.revokeFederationDirectoryInvite(linkRef, new Date(), null);
+  assert.equal(revoke.updated, 0); // already redeemed -> terminal
 });

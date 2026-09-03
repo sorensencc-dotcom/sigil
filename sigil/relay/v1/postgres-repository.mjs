@@ -18,6 +18,27 @@ function rowToPeerRecord(row) {
   };
 }
 
+// Snake_case passthrough -- the redemption handler and CLI read
+// row.code_hash / row.status / row.peer_domain / row.issuer_owner_id /
+// row.issuer_endpoint_id / row.redeemed_by_* / row.invite_id / row.link_ref
+// directly, so the mapper only normalizes timestamp columns to ISO strings.
+function rowToFederationDirectoryInvite(row) {
+  const iso = (v) => (v instanceof Date ? v.toISOString() : v);
+  return {
+    invite_id: row.invite_id,
+    link_ref: row.link_ref,
+    issuer_endpoint_id: row.issuer_endpoint_id,
+    issuer_owner_id: row.issuer_owner_id,
+    peer_domain: row.peer_domain,
+    code_hash: row.code_hash,
+    status: row.status,
+    redeemed_by_owner_id: row.redeemed_by_owner_id,
+    redeemed_by_endpoint_id: row.redeemed_by_endpoint_id,
+    redeemed_at: iso(row.redeemed_at),
+    expires_at: iso(row.expires_at),
+  };
+}
+
 function rowToFederationOutboxRecord(row) {
   const iso = (v) => (v instanceof Date ? v.toISOString() : v);
   return {
@@ -1185,6 +1206,81 @@ export class PostgresRepository {
       return { retried: updated.rowCount > 0 };
     };
     return client ? run(client) : this.withTransaction(run);
+  }
+  // --- federation_directory_invites (cross-federation directory, migration 018) ---
+  // Consumed by acceptDirectoryRedemption (redemption handler) and the
+  // `sigil federation invite` CLI. Methods that take an optional `client`
+  // run on it when passed (joining the caller's transaction), else on
+  // `this.pool`.
+  async createFederationDirectoryInvite(row, client = this.pool) {
+    const ts = (v) => (v == null
+      ? new Date().toISOString()
+      : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+    const inserted = await client.query(
+      `INSERT INTO federation_directory_invites
+         (link_ref, issuer_endpoint_id, issuer_owner_id, peer_domain, code_hash, expires_at, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING invite_id, link_ref`,
+      [row.linkRef, row.issuerEndpointId, row.issuerOwnerId, row.peerDomain, row.codeHash,
+        ts(row.expiresAt), ts(row.now)]
+    );
+    return { invite_id: inserted.rows[0].invite_id, link_ref: inserted.rows[0].link_ref };
+  }
+  async getFederationDirectoryInviteByRef(linkRef, client = this.pool, { forUpdate = false } = {}) {
+    const lock = forUpdate ? ' FOR UPDATE' : '';
+    const r = await client.query(`SELECT * FROM federation_directory_invites WHERE link_ref = $1${lock}`, [linkRef]);
+    if (!r.rows[0]) return null;
+    let row = r.rows[0];
+    if (row.status === 'pending' && new Date(row.expires_at).getTime() <= Date.now()) {
+      const upd = await client.query(
+        `UPDATE federation_directory_invites SET status = 'expired' WHERE link_ref = $1 AND status = 'pending' RETURNING *`,
+        [linkRef]
+      );
+      if (upd.rows[0]) row = upd.rows[0];
+    }
+    return rowToFederationDirectoryInvite(row);
+  }
+  async markFederationDirectoryInviteRedeemed(inviteId, redeemer, now = new Date(), client = this.pool) {
+    const ts = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const result = await client.query(
+      `UPDATE federation_directory_invites SET
+         status = 'redeemed',
+         redeemed_by_owner_id = $2,
+         redeemed_by_endpoint_id = $3,
+         redeemed_at = $4
+       WHERE invite_id = $1`,
+      [inviteId, redeemer.owner_id, redeemer.endpoint_id, ts]
+    );
+    return { updated: result.rowCount };
+  }
+  async revokeFederationDirectoryInvite(linkRef, _now = new Date(), client = this.pool) {
+    // `_now` is part of the signature for memory-repo parity; the invites
+    // table has no updated_at column, so only `status` changes here.
+    const result = await client.query(
+      `UPDATE federation_directory_invites SET status = 'revoked'
+       WHERE link_ref = $1 AND status = 'pending'`,
+      [linkRef]
+    );
+    return { updated: result.rowCount };
+  }
+  async listFederationDirectoryInvites(filter = {}) {
+    const params = [];
+    const clauses = [];
+    if (filter.issuerOwnerId != null) { params.push(filter.issuerOwnerId); clauses.push(`issuer_owner_id = $${params.length}`); }
+    if (filter.status != null) { params.push(filter.status); clauses.push(`status = $${params.length}`); }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+    const result = await this.pool.query(
+      `SELECT link_ref, peer_domain, status, expires_at
+       FROM federation_directory_invites ${where}
+       ORDER BY created_at, invite_id`,
+      params
+    );
+    return result.rows.map((r) => ({
+      link_ref: r.link_ref,
+      peer_domain: r.peer_domain,
+      status: r.status,
+      expires_at: r.expires_at instanceof Date ? r.expires_at.toISOString() : r.expires_at,
+    }));
   }
   async close() { await this.pool.end(); }
 }

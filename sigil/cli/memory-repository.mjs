@@ -27,6 +27,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
   const directoryInvites = new Map(); // code -> invite row (memory repo has no separate hash step -- single process, nothing to hide from itself)
   const directoryLinks = new Map();
   const directoryMatchRequests = new Map();
+  const federationDirectoryInvites = new Map(); // link_ref -> invite row (migration 018, cross-federation directory)
   const humanSessions = new Map();
   const consumedLoginJtis = new Map();
   const oidcIssuerAllowlist = new Map();
@@ -355,6 +356,67 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     // real audit_events table to query.
     _debugGetAuditEvents() {
       return auditEvents;
+    },
+    // --- federation_directory_invites (migration 018) parity ---------------
+    // Local half of the cross-federation directory: a `sync`-only relay can
+    // create / look up / revoke / list invites here even though the
+    // outbox-drained posts stay on the Postgres repo. `client` is ignored
+    // (withTransaction is fn(null)).
+    async createFederationDirectoryInvite(row) {
+      const inviteId = `fdinv_${crypto.randomUUID()}`;
+      const iso = (v) => (v == null ? new Date() : (v instanceof Date ? v : new Date(v))).toISOString();
+      federationDirectoryInvites.set(row.linkRef, {
+        invite_id: inviteId,
+        link_ref: row.linkRef,
+        issuer_endpoint_id: row.issuerEndpointId,
+        issuer_owner_id: row.issuerOwnerId,
+        peer_domain: row.peerDomain,
+        code_hash: row.codeHash,
+        status: 'pending',
+        redeemed_by_owner_id: null,
+        redeemed_by_endpoint_id: null,
+        redeemed_at: null,
+        expires_at: iso(row.expiresAt),
+        created_at: iso(row.now),
+      });
+      return { invite_id: inviteId, link_ref: row.linkRef };
+    },
+    // Lazy `pending` -> `expired` transition happens in-place with no `await`
+    // between the read and the flip -- single writer, mirrors the
+    // claimDirectoryMatch concurrency note above.
+    async getFederationDirectoryInviteByRef(linkRef) {
+      const row = federationDirectoryInvites.get(linkRef);
+      if (!row) return null;
+      if (row.status === 'pending' && Date.parse(row.expires_at) <= Date.now()) {
+        row.status = 'expired';
+      }
+      return row;
+    },
+    async markFederationDirectoryInviteRedeemed(inviteId, redeemer, now = new Date()) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      for (const row of federationDirectoryInvites.values()) {
+        if (row.invite_id === inviteId) {
+          row.status = 'redeemed';
+          row.redeemed_by_owner_id = redeemer.owner_id;
+          row.redeemed_by_endpoint_id = redeemer.endpoint_id;
+          row.redeemed_at = timestamp;
+          return { updated: 1 };
+        }
+      }
+      return { updated: 0 };
+    },
+    async revokeFederationDirectoryInvite(linkRef) {
+      const row = federationDirectoryInvites.get(linkRef);
+      if (!row || row.status !== 'pending') return { updated: 0 };
+      row.status = 'revoked';
+      return { updated: 1 };
+    },
+    async listFederationDirectoryInvites(filter = {}) {
+      return [...federationDirectoryInvites.values()]
+        .filter((r) => (filter.issuerOwnerId == null || r.issuer_owner_id === filter.issuerOwnerId)
+          && (filter.status == null || r.status === filter.status))
+        .sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0))
+        .map((r) => ({ link_ref: r.link_ref, peer_domain: r.peer_domain, status: r.status, expires_at: r.expires_at }));
     },
     _debugGetEnvelope(messageId) { return envelopes.get(messageId) ?? null; }
   };

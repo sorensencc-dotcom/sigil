@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import pg from 'pg';
 import { applyMigrations } from '../../scripts/apply-migrations.mjs';
+import { PostgresRepository } from './postgres-repository.mjs';
 
 const connectionString = process.env.SIGIL_TEST_DATABASE_URL;
 
@@ -36,4 +38,61 @@ test('018 applies clean and creates the directory tables + outbox kind column', 
     /unique|duplicate key/i,
   );
   await pool.query(`DELETE FROM federation_directory_links WHERE local_owner_id = 'usr_a@a.example'`);
+});
+
+test('invite create -> getByRef -> lazy expire -> revoke', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  await applyMigrations(connectionString);
+  const repo = new PostgresRepository({ pool });
+  const linkRef = crypto.randomUUID();
+
+  await repo.withTransaction((c) => repo.createFederationDirectoryInvite({
+    linkRef, issuerEndpointId: 'ep_codex@a.example', issuerOwnerId: 'usr_chris@a.example',
+    peerDomain: 'b.example', codeHash: 'HASH', expiresAt: new Date(Date.now() + 3600_000), now: new Date(),
+  }, c));
+
+  const row = await repo.getFederationDirectoryInviteByRef(linkRef, pool, {});
+  assert.equal(row.status, 'pending');
+  assert.equal(row.peer_domain, 'b.example');
+
+  // force expiry, then getByRef must lazily transition
+  await pool.query(`UPDATE federation_directory_invites SET expires_at = now() - interval '1 hour' WHERE link_ref = $1`, [linkRef]);
+  const expired = await repo.getFederationDirectoryInviteByRef(linkRef, pool, {});
+  assert.equal(expired.status, 'expired');
+
+  const revoke = await repo.revokeFederationDirectoryInvite(linkRef, new Date(), pool);
+  assert.equal(revoke.updated, 0); // already terminal (expired)
+  await pool.query(`DELETE FROM federation_directory_invites WHERE link_ref = $1`, [linkRef]);
+});
+
+test('invite redeem + list omits code_hash', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  await applyMigrations(connectionString);
+  const repo = new PostgresRepository({ pool });
+  const linkRef = crypto.randomUUID();
+
+  const { invite_id } = await repo.createFederationDirectoryInvite({
+    linkRef, issuerEndpointId: 'ep_codex@a.example', issuerOwnerId: 'usr_lister@a.example',
+    peerDomain: 'b.example', codeHash: 'SECRET', expiresAt: new Date(Date.now() + 3600_000), now: new Date(),
+  }, pool);
+
+  await repo.markFederationDirectoryInviteRedeemed(
+    invite_id, { owner_id: 'usr_peer@b.example', endpoint_id: 'ep_peer@b.example' }, new Date(), pool,
+  );
+  const redeemed = await repo.getFederationDirectoryInviteByRef(linkRef, pool, {});
+  assert.equal(redeemed.status, 'redeemed');
+  assert.equal(redeemed.redeemed_by_owner_id, 'usr_peer@b.example');
+  assert.equal(redeemed.redeemed_by_endpoint_id, 'ep_peer@b.example');
+  assert.ok(redeemed.redeemed_at);
+
+  const listed = await repo.listFederationDirectoryInvites({ issuerOwnerId: 'usr_lister@a.example' });
+  assert.equal(listed.length, 1);
+  assert.deepEqual(Object.keys(listed[0]).sort(), ['expires_at', 'link_ref', 'peer_domain', 'status']);
+  assert.equal(listed[0].link_ref, linkRef);
+
+  const revoke = await repo.revokeFederationDirectoryInvite(linkRef, new Date(), pool);
+  assert.equal(revoke.updated, 0); // already redeemed -> terminal
+  await pool.query(`DELETE FROM federation_directory_invites WHERE link_ref = $1`, [linkRef]);
 });
