@@ -165,7 +165,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       const headers = {};
       for (const [k, v] of Object.entries(request.headers)) headers[k.toLowerCase()] = Array.isArray(v) ? v[0] : v;
       const result = await acceptFederatedEnvelope(body, headers, {
-        repository, registered: registry, relayDomain, request_id: requestId, now,
+        repository, registered: registry, relayDomain, request_id: requestId, now, rawBody: Buffer.from(raw),
         onPersisted: async ({ envelope: accepted, persisted }) => {
           if (!stream || persisted?.duplicate) return;
           if (accepted.recipient?.endpoint_id) stream.notify(accepted.recipient.endpoint_id, persisted.message_id);

@@ -14,6 +14,7 @@ import crypto from 'node:crypto';
 import { acceptEnvelopeAsync } from './accept-envelope.mjs';
 import { acceptFederatedEnvelope } from './accept-federated-envelope.mjs';
 import { buildForwardRequest, signForwardRequest } from './federation-router.mjs';
+import { canonicalJsonBytes } from './jcs.mjs';
 import { signedBytes } from './validate-envelope.mjs';
 import { createMemoryRepository } from '../../cli/memory-repository.mjs';
 
@@ -169,4 +170,40 @@ test('two federated recipients differing only in local-part case stay distinct t
   const rb = await acceptFederatedEnvelope(b.body, b.headers, opts9(world));
   assert.equal(rb.status, 403);
   assert.equal(rb.body.code, 'DIRECTORY_LINK_REQUIRED');
+});
+
+test('federated envelope: body origin_domain disagreeing with the signing kid -> 403 PEER_NOT_TRUSTED', async () => {
+  const world = worldWithRecipient('usr_chris@primary.example');
+  // Pin a second peer c.example with its own distinct relay key so the body's
+  // mutated origin_domain still resolves under the (pre-refactor) domain-pinned
+  // check. The signing kid, however, stays a.example's relay key.
+  const cKeys = crypto.generateKeyPairSync('ed25519');
+  await world.repo.upsertPeer({
+    domain: 'c.example', relayUrl: 'https://c.example/relay',
+    keys: [{ kid: 'relay-c-2026-08', alg: 'Ed25519', publicKey: cKeys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url') }],
+    trustMode: 'tofu',
+  });
+
+  // Well-formed forward body from a.example, then origin_domain is mutated to
+  // "c.example" and the request is re-signed by a.example's relay key. The kid
+  // resolves to a.example while the body claims c.example.
+  const envelope = senderEnvelope(world.senderKeys.privateKey);
+  const { body } = buildForwardRequest(envelope, {
+    originDomain: ORIGIN,
+    senderKey: { kid: `key_ep_codex@${ORIGIN}`, alg: 'Ed25519', publicKey: world.senderPub },
+    senderOwnerId: 'usr_chris@primary.example',
+    now: new Date('2026-08-30T12:00:05.000Z'),
+  });
+  body.origin_domain = 'c.example';
+  const raw = Buffer.from(canonicalJsonBytes(body));
+  const { signature, keyId } = signForwardRequest(raw, world.relayIdentity);
+
+  const res = await acceptFederatedEnvelope(
+    body,
+    { 'sigil-relay-signature': signature, 'sigil-relay-key-id': keyId },
+    { ...opts9(world), rawBody: raw },
+  );
+
+  assert.equal(res.status, 403);
+  assert.equal(res.body.code, 'PEER_NOT_TRUSTED');
 });

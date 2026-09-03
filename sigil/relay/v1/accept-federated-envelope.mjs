@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
-import { parseDomain, parseFederatedId } from './federated-id.mjs';
-import { verifyRelaySignature } from './federation-router.mjs';
+import { parseFederatedId } from './federated-id.mjs';
+import { verifyInboundRelayRequest } from './federation-relay-auth.mjs';
 import { validateEnvelope, signedBytes, reject } from './validate-envelope.mjs';
 import { resolveRateLimits, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
 
@@ -33,36 +33,48 @@ export async function acceptFederatedEnvelope(body, headers, options) {
     }
   };
 
-  // --- Check 1: structural ---
-  if (!body || typeof body !== 'object') return respond(400, 'INVALID_FEDERATION_REQUEST', 'Request body must be an object', options);
-  const { origin_domain: originDomain, envelope, sender_key: senderKey, sender_owner_id: senderOwnerId } = body;
-  try { parseDomain(originDomain); } catch { return respond(400, 'INVALID_FEDERATION_REQUEST', 'origin_domain is not a well-formed domain', options); }
-  // Self-federation guard: a peer must never assert this relay's own domain as
-  // the origin. One hop is structural (design: the receiver never re-forwards),
-  // and a matching origin_domain would otherwise let a pinned peer inject
-  // envelopes attributed to local senders. Domain compare is case-insensitive
-  // (federated-id rule); port is significant, so parseDomain-normalized strings
-  // are compared verbatim after lowercasing.
-  if (isNonEmptyString(options.relayDomain) && originDomain.toLowerCase() === options.relayDomain.toLowerCase()) {
-    return respond(400, 'INVALID_FEDERATION_REQUEST', 'origin_domain equals this relay\'s own domain (self-federation is not allowed)', options, { origin_domain: originDomain });
+  // --- Checks 1-3: structural parse + peer resolution by signing kid + relay
+  // signature. Delegated to the shared inbound relay-auth verifier: the acting
+  // peer is resolved from WHICH pinned key signed the request (never a body
+  // field), and the signature is checked over bytes re-canonicalized from the
+  // same raw source the sender signed.
+  let originDomain, peer, parsedBody, envelope, senderKey, senderOwnerId;
+  try {
+    ({ originDomain, peerRecord: peer, parsedBody } = await verifyInboundRelayRequest(
+      options.rawBody ?? Buffer.from(JSON.stringify(body)),
+      headers,
+      { getPeerByKid: (kid) => repository.getPeerByKid(kid) },
+    ));
+    ({ envelope, sender_key: senderKey, sender_owner_id: senderOwnerId } = parsedBody);
+  } catch (error) {
+    const code = error.code ?? 'INVALID_FEDERATION_REQUEST';
+    // Parity with #3: PEER_NOT_TRUSTED / RELAY_SIGNATURE_INVALID audit here;
+    // a pre-signature parse failure (INVALID_FEDERATION_REQUEST) does not.
+    if (code !== 'INVALID_FEDERATION_REQUEST') await auditInboundReject(code);
+    return respond(error.httpStatus ?? 400, code, error.message, options);
   }
+
+  // Self-federation guard (unchanged from #3, re-sequenced after the verifier):
+  // a peer must never assert this relay's own domain as the body origin_domain.
+  // Compare is case-insensitive (federated-id rule); port is significant.
+  if (isNonEmptyString(options.relayDomain) && String(parsedBody.origin_domain).toLowerCase() === options.relayDomain.toLowerCase()) {
+    return respond(400, 'INVALID_FEDERATION_REQUEST', 'origin_domain equals this relay\'s own domain (self-federation is not allowed)', options, { origin_domain: parsedBody.origin_domain });
+  }
+
+  // Body/origin consistency (new in #4): the body's declared origin_domain must
+  // equal the domain the signing relay key is pinned under. A disagreement
+  // means the caller is not the peer the body claims -> PEER_NOT_TRUSTED.
+  if (!parsedBody.origin_domain || String(parsedBody.origin_domain).toLowerCase() !== originDomain.toLowerCase()) {
+    await auditInboundReject('PEER_NOT_TRUSTED');
+    return respond(403, 'PEER_NOT_TRUSTED', 'Body origin_domain does not match the pinned domain of the signing relay key', options, { origin_domain: parsedBody.origin_domain ?? null, signing_domain: originDomain });
+  }
+
+  // --- Structural checks on the parsed body (unchanged from #3, re-sequenced) ---
   if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) return respond(400, 'INVALID_FEDERATION_REQUEST', 'envelope must be an object', options);
   if (!senderKey || !isNonEmptyString(senderKey.kid) || senderKey.alg !== 'Ed25519' || !isNonEmptyString(senderKey.publicKey)) {
     return respond(400, 'INVALID_FEDERATION_REQUEST', 'sender_key must be { kid, alg: "Ed25519", publicKey }', options);
   }
   try { parseFederatedId(senderOwnerId); } catch { return respond(400, 'INVALID_FEDERATION_REQUEST', 'sender_owner_id is not a well-formed federated id', options); }
-
-  // --- Check 2: origin pinned (receiver's own peer directory) ---
-  const peer = await repository.getPeerByDomain(originDomain);
-  if (!peer) { await auditInboundReject('PEER_NOT_TRUSTED'); return respond(403, 'PEER_NOT_TRUSTED', 'Origin domain is not pinned in this relay\'s peer directory', options, { origin_domain: originDomain }); }
-
-  // --- Check 3: relay signature over the JCS body bytes ---
-  const relaySignature = headers['sigil-relay-signature'];
-  const relayKeyId = headers['sigil-relay-key-id'];
-  if (!isNonEmptyString(relaySignature) || !isNonEmptyString(relayKeyId) || !verifyRelaySignature(body, { signature: relaySignature, keyId: relayKeyId, peer })) {
-    await auditInboundReject('RELAY_SIGNATURE_INVALID');
-    return respond(401, 'RELAY_SIGNATURE_INVALID', 'Sigil-Relay-Signature failed verification against the pinned peer key', options);
-  }
 
   // --- Check 4: sender domain === origin_domain ---
   let senderDomain;

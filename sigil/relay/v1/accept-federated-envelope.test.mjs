@@ -49,7 +49,9 @@ const baseOpts = (repo) => ({ repository: repo, registered: new Map(), relayDoma
 
 test('check 1: structural garbage → 400 INVALID_FEDERATION_REQUEST', async () => {
   const world = makeWorld();
-  const r = await acceptFederatedEnvelope({ origin_domain: 'not a domain', envelope: null }, {}, baseOpts(world.repo));
+  // The shared verifier re-parses the raw bytes; a non-JSON body fails the
+  // parse step -> 400 INVALID_FEDERATION_REQUEST before any signature work.
+  const r = await acceptFederatedEnvelope({}, {}, { ...baseOpts(world.repo), rawBody: Buffer.from('not json{{') });
   assert.equal(r.status, 400); assert.equal(r.body.code, 'INVALID_FEDERATION_REQUEST');
 });
 test('check 1: malformed sender_owner_id → 400 INVALID_FEDERATION_REQUEST', async () => {
