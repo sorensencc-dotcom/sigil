@@ -1275,7 +1275,7 @@ export class PostgresRepository {
          redeemed_by_owner_id = $2,
          redeemed_by_endpoint_id = $3,
          redeemed_at = $4
-       WHERE invite_id = $1`,
+       WHERE invite_id = $1 AND status = 'pending'`,
       [inviteId, redeemer.owner_id, redeemer.endpoint_id, ts]
     );
     return { updated: result.rowCount };
@@ -1418,6 +1418,21 @@ export class PostgresRepository {
     const r = await client.query(
       `SELECT * FROM federation_directory_links
         WHERE status = 'active' AND local_owner_id = $1 AND remote_owner_id = $2 AND remote_domain = $3
+        LIMIT 1`,
+      [localOwnerId, remoteOwnerId, remoteDomain],
+    );
+    return r.rows[0] ? rowToFederationDirectoryLink(r.rows[0]) : null;
+  }
+  // Owner-pair collision probe for acceptDirectoryRedemption (Task 8): any
+  // `status IN ('pending','active')` row for this triple, or null. Matches the
+  // partial unique index `federation_directory_links_live_pair_uidx`; the
+  // handler runs it BEFORE markFederationDirectoryInviteRedeemed so a colliding
+  // invite is left `pending`.
+  async findLiveFederationDirectoryLinkForPair(localOwnerId, remoteOwnerId, remoteDomain, client = this.pool) {
+    const r = await client.query(
+      `SELECT * FROM federation_directory_links
+        WHERE local_owner_id = $1 AND remote_owner_id = $2 AND remote_domain = $3
+          AND status IN ('pending','active')
         LIMIT 1`,
       [localOwnerId, remoteOwnerId, remoteDomain],
     );

@@ -439,6 +439,9 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
       for (const row of federationDirectoryInvites.values()) {
         if (row.invite_id === inviteId) {
+          // Defence-in-depth: only a still-`pending` invite can be redeemed
+          // (mirrors the Postgres `AND status = 'pending'` WHERE guard).
+          if (row.status !== 'pending') return { updated: 0 };
           row.status = 'redeemed';
           row.redeemed_by_owner_id = redeemer.owner_id;
           row.redeemed_by_endpoint_id = redeemer.endpoint_id;
@@ -562,6 +565,22 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     async getActiveFederationDirectoryLink(localOwnerId, remoteOwnerId, remoteDomain) {
       for (const row of federationDirectoryLinks.values()) {
         if (row.status === 'active'
+          && row.local_owner_id === localOwnerId
+          && row.remote_owner_id === remoteOwnerId
+          && row.remote_domain === remoteDomain) {
+          return fdlRowView(row);
+        }
+      }
+      return null;
+    },
+    // Owner-pair collision probe for acceptDirectoryRedemption (Task 8): any
+    // `status IN ('pending','active')` row for this triple, or null. Mirrors
+    // the partial unique index `federation_directory_links_live_pair_uidx`;
+    // used to reject a redemption *before* the invite is marked redeemed so a
+    // colliding invite stays `pending`.
+    async findLiveFederationDirectoryLinkForPair(localOwnerId, remoteOwnerId, remoteDomain) {
+      for (const row of federationDirectoryLinks.values()) {
+        if ((row.status === 'pending' || row.status === 'active')
           && row.local_owner_id === localOwnerId
           && row.remote_owner_id === remoteOwnerId
           && row.remote_domain === remoteDomain) {

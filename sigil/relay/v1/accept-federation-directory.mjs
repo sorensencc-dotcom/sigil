@@ -1,0 +1,156 @@
+import crypto from 'node:crypto';
+import { parseDomain, parseFederatedId } from './federated-id.mjs';
+
+// Failure envelope shared with the /v1/federation/directory/redemptions route
+// (Task 10). Success / idempotent-replay returns a FLAT body instead
+// (`acceptedBody` below) so the route can serialize it verbatim.
+export function respond(status, code, message, ctx, details = {}) {
+  return { status, body: { request_id: ctx?.request_id ?? null, code, message, details } };
+}
+
+function acceptedBody(status, ctx, body) {
+  return { status, body: { request_id: ctx?.request_id ?? null, ...body } };
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const sha256Hex = (s) => crypto.createHash('sha256').update(s).digest('hex');
+
+function constantTimeEqualHex(a, b) {
+  const ba = Buffer.from(String(a), 'utf8');
+  const bb = Buffer.from(String(b), 'utf8');
+  if (ba.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ba, bb);
+}
+
+// POST /v1/federation/directory/redemptions handler. Runs on the caller's
+// client / transaction, mirrors acceptFederatedEnvelope's fail-fast shape:
+// the first failing check returns immediately. Unknown / expired / revoked /
+// redeemed-by-another / secret-hash-mismatch / peer-domain-mismatch all
+// collapse to one generic INVALID_FEDERATION_INVITE so a caller cannot use
+// the response as an oracle. 409 is reserved for a genuine owner-pair
+// collision, and the invite is left `pending` in that branch.
+export async function acceptDirectoryRedemption(parsedBody, ctx) {
+  const { repository, client, originDomain, now, relayDomain } = ctx;
+  const audit = (eventType, reason, extra = {}) => {
+    const p = repository.recordAuditEvent?.({
+      eventType,
+      outcome: reason ? 'rejected' : 'accepted',
+      reason: reason ?? null,
+      payload: { peer_domain: originDomain, link_ref: parsedBody?.link_ref ?? null, ...extra },
+      now,
+    });
+    if (p && typeof p.catch === 'function') p.catch(() => {});
+  };
+
+  // 1. Structural parse of the redemption code and redeemer ids.
+  const code = parsedBody?.code;
+  if (typeof code !== 'string') return respond(400, 'INVALID_FEDERATION_REQUEST', 'code is required', ctx);
+  const parts = code.split(':');
+  if (parts.length !== 4 || parts[0] !== 'sigil-fed-invite') {
+    return respond(400, 'INVALID_FEDERATION_REQUEST', 'code is not sigil-fed-invite:<domain>:<link-ref>:<segment>', ctx);
+  }
+  const [, issuerDomain, embeddedRef, segment] = parts;
+  try { parseDomain(issuerDomain); } catch { return respond(400, 'INVALID_FEDERATION_REQUEST', 'issuer domain in code is malformed', ctx); }
+  if (!relayDomain || issuerDomain.toLowerCase() !== String(relayDomain).toLowerCase()) {
+    return respond(400, 'INVALID_FEDERATION_REQUEST', 'code issuer domain does not name this relay', ctx);
+  }
+  if (!UUID_RE.test(embeddedRef) || embeddedRef !== parsedBody.link_ref) {
+    return respond(400, 'INVALID_FEDERATION_REQUEST', 'link_ref mismatch between code and body', ctx);
+  }
+  const redeemer = parsedBody.redeemer;
+  if (!redeemer || typeof redeemer !== 'object') {
+    return respond(400, 'INVALID_FEDERATION_REQUEST', 'redeemer is required', ctx);
+  }
+  try {
+    parseFederatedId(redeemer.owner_id);
+    if (parseFederatedId(redeemer.endpoint_id).domain.toLowerCase() !== String(originDomain).toLowerCase()) {
+      throw new Error('endpoint domain');
+    }
+  } catch {
+    return respond(400, 'INVALID_FEDERATION_REQUEST', 'redeemer ids are malformed or not on the posting domain', ctx);
+  }
+  try { parseDomain(parsedBody.redeemer_domain); } catch { return respond(400, 'INVALID_FEDERATION_REQUEST', 'redeemer_domain is malformed', ctx); }
+  if (String(parsedBody.redeemer_domain).toLowerCase() !== String(originDomain).toLowerCase()) {
+    return respond(400, 'INVALID_FEDERATION_REQUEST', 'redeemer_domain does not equal the verified posting relay', ctx);
+  }
+
+  // (rate) Load-bearing anti-guessing scope, keyed per posting peer domain.
+  if (typeof repository.reserveRateLimit === 'function') {
+    const ms = now instanceof Date ? now.getTime() : Date.parse(now);
+    const windowStart = new Date(Math.floor(ms / 60_000) * 60_000).toISOString();
+    const limit = ctx.rateLimits?.federation_directory_redemption_inbound ?? 60;
+    const r = await repository.reserveRateLimit('federation_directory_redemption_inbound', originDomain, windowStart, limit, client);
+    if (r && r.allowed === false) {
+      return respond(429, 'RATE_LIMITED', 'redemption rate limit for this peer domain exceeded', ctx, { scope_kind: 'federation_directory_redemption_inbound' });
+    }
+  }
+
+  // 2. Invite lookup + constant-time secret-hash compare. Lazy pending -> expired
+  //    transition happens inside getFederationDirectoryInviteByRef.
+  const invite = await repository.getFederationDirectoryInviteByRef(parsedBody.link_ref, client, { forUpdate: true });
+  const genericInvalid = () => {
+    audit('federation_directory.redemption_rejected', 'INVALID_FEDERATION_INVITE');
+    return respond(403, 'INVALID_FEDERATION_INVITE', 'Redemption code is not valid', ctx);
+  };
+  if (!invite) return genericInvalid();
+  if (!constantTimeEqualHex(sha256Hex(segment), invite.code_hash)) return genericInvalid();
+
+  // 3. Peer-domain match (invite was minted for exactly one peer domain).
+  if (String(invite.peer_domain).toLowerCase() !== String(originDomain).toLowerCase()) return genericInvalid();
+
+  // 4. Idempotent replay for an already-'redeemed' invite by the same redeemer.
+  if (invite.status === 'redeemed') {
+    if (invite.redeemed_by_owner_id === redeemer.owner_id && invite.redeemed_by_endpoint_id === redeemer.endpoint_id) {
+      return acceptedBody(202, ctx, {
+        link_ref: parsedBody.link_ref,
+        issuer: { owner_id: invite.issuer_owner_id, endpoint_id: invite.issuer_endpoint_id },
+      });
+    }
+    return genericInvalid();
+  }
+  if (invite.status !== 'pending') return genericInvalid(); // expired / revoked
+
+  // 5. Owner-pair collision under a DIFFERENT link_ref. Detected BEFORE
+  //    markRedeemed so the invite stays `pending` on a collision (spec step 5).
+  const livePair = await repository.findLiveFederationDirectoryLinkForPair?.(
+    invite.issuer_owner_id, redeemer.owner_id, originDomain, client,
+  );
+  if (livePair && livePair.link_ref !== parsedBody.link_ref) {
+    audit('federation_directory.redemption_rejected', 'FEDERATION_LINK_EXISTS');
+    return respond(409, 'FEDERATION_LINK_EXISTS', 'A federation directory link already exists for this owner pair', ctx, { existing_link_ref: livePair.link_ref });
+  }
+
+  // 6. Write: mark invite redeemed + create the issuer-side link, one transaction.
+  await repository.markFederationDirectoryInviteRedeemed(invite.invite_id, redeemer, now, client);
+  let link;
+  try {
+    link = await repository.createFederationDirectoryLink({
+      linkRef: parsedBody.link_ref,
+      localOwnerId: invite.issuer_owner_id,
+      localEndpointId: invite.issuer_endpoint_id,
+      remoteOwnerId: redeemer.owner_id,
+      remoteEndpointId: redeemer.endpoint_id,
+      remoteDomain: originDomain,
+      role: 'issuer',
+      status: 'pending',
+      localConfirmedAt: null,
+      remoteConfirmedAt: now,
+      sourceInviteId: invite.invite_id,
+      peerDomain: originDomain,
+    }, client);
+  } catch (error) {
+    // Defence-in-depth for a concurrent insert that races past step 5's probe.
+    if (error && error.code === 'FEDERATION_LINK_EXISTS') {
+      audit('federation_directory.redemption_rejected', 'FEDERATION_LINK_EXISTS');
+      return respond(409, 'FEDERATION_LINK_EXISTS', 'A federation directory link already exists for this owner pair', ctx, { existing_link_ref: error.existingLinkRef ?? null });
+    }
+    throw error;
+  }
+
+  audit('federation_directory.redemption_accepted', null);
+  audit('federation_directory.link_created', null, { role: 'issuer' });
+  return acceptedBody(202, ctx, {
+    link_ref: link?.link_ref ?? parsedBody.link_ref,
+    issuer: { owner_id: invite.issuer_owner_id, endpoint_id: invite.issuer_endpoint_id },
+  });
+}
