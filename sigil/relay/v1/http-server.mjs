@@ -2,6 +2,8 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { acceptEnvelopeAsync } from './accept-envelope.mjs';
 import { acceptFederatedEnvelope } from './accept-federated-envelope.mjs';
+import { verifyInboundRelayRequest } from './federation-relay-auth.mjs';
+import { acceptDirectoryRedemption, acceptDirectoryConfirmation, acceptDirectoryRevocation } from './accept-federation-directory.mjs';
 import { transitionDelivery } from './delivery-state.mjs';
 import { createBearerAuthenticator } from './transport-auth.mjs';
 import { createApprovalChallenge, coseKeyToPublicKey, parseAttestationObject, verifyPackedAttestation, verifyWebAuthnApproval, verifyWebAuthnAssertion } from './approval-ceremony.mjs';
@@ -171,6 +173,45 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
           if (accepted.recipient?.endpoint_id) stream.notify(accepted.recipient.endpoint_id, persisted.message_id);
         },
       });
+      response.writeHead(result.status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+      return response.end(result.body ? JSON.stringify(result.body) : '');
+    }
+
+    // Cross-federation directory routes (#4). Like /v1/federation/envelopes these
+    // are unauthenticated at the transport layer -- trust is the peer relay's
+    // pinned signature, verified inside verifyInboundRelayRequest -- and must sit
+    // before the authenticateRequest gate. Postgres-only: the 501 pre-gate is the
+    // cheapest possible reject, before any body read or signature work. The probe
+    // is repository.enqueueFederationForward (a durable outbox) -- the memory repo
+    // never gets it, which is exactly the spec's Postgres requirement.
+    const DIRECTORY_ROUTES = {
+      '/v1/federation/directory/redemptions': acceptDirectoryRedemption,
+      '/v1/federation/directory/confirmations': acceptDirectoryConfirmation,
+      '/v1/federation/directory/revocations': acceptDirectoryRevocation,
+    };
+    if (request.method === 'POST' && DIRECTORY_ROUTES[parsedUrl.pathname]) {
+      if (!federationMode || typeof repository?.enqueueFederationForward !== 'function') {
+        response.writeHead(501, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'FEDERATION_DIRECTORY_UNAVAILABLE', message: 'This relay is not Postgres-backed; cross-federation directory is unavailable', details: {} }));
+      }
+      let raw;
+      try { raw = await readBody(request); }
+      catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      const headers = {};
+      for (const [k, v] of Object.entries(request.headers)) headers[k.toLowerCase()] = Array.isArray(v) ? v[0] : v;
+
+      let verified;
+      try {
+        verified = await verifyInboundRelayRequest(Buffer.from(raw), headers, { getPeerByKid: (kid) => repository.getPeerByKid(kid) });
+      } catch (error) {
+        response.writeHead(error.httpStatus ?? 400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'INVALID_FEDERATION_REQUEST', message: error.message, details: {} }));
+      }
+
+      const handler = DIRECTORY_ROUTES[parsedUrl.pathname];
+      const result = await repository.withTransaction((client) => handler(verified.parsedBody, {
+        repository, client, originDomain: verified.originDomain, now, request_id: requestId, relayDomain,
+      }));
       response.writeHead(result.status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(result.body ? JSON.stringify(result.body) : '');
     }
