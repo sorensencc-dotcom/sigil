@@ -62,6 +62,12 @@ Commands:
   federation outbox list [--database-url url]              List queue-mode federation forward jobs: state counts, then one row per job (no envelope bodies)
   federation outbox show <id> [--database-url url]         Show one federation_outbox row's metadata (no envelope body)
   federation outbox retry <id> [--database-url url]        Re-queue a forward_rejected / dead_letter row for another forward attempt
+  federation invite create --peer <domain> --endpoint <fid> --identity <path> [--ttl 24h] [--database-url url]
+                                                            Mint a redemption code for a peer domain; prints the code once, then the bare link_ref
+  federation invite list [--database-url url]              List directory invites: link_ref, peer_domain, status, expires_at (never the code)
+  federation invite revoke <link_ref> [--database-url url] Revoke a pending directory invite
+  federation invite redeem <code> --identity <path> [--database-url url]
+                                                            Redeem a peer's invite code, synchronously if reachable (else queued for retry)
   route test <recipient_federated_id> --identity path [--database-url url] [--registry path]
                                                             Read-only federation routing check: parse recipient, peer-directory pin lookup, /v1/health reachability, advisory same-owner line -- sends no envelope
   send [--identity path] [--relay-url url] [--stream-url url] [--wait-for-receipt] --to endpoint_id --to-owner owner_id --message "text" [--conversation id]
@@ -760,15 +766,27 @@ async function cmdAgentRun(argv) {
   await new Promise(() => {});
 }
 
+// `sigil federation <outbox|invite|link>` -- dispatch on group. `outbox`
+// inspects/re-queues queue-mode federation forward jobs; `invite` is the
+// operator on-ramp for minting/redeeming cross-federation directory invite
+// codes (Task 13); `link` (Task 14) manages the resulting
+// federation_directory_links rows -- not implemented yet, so it falls
+// through to the usage error below until Task 14 lands.
+async function cmdFederation(argv) {
+  const [group, action, ...rest] = argv;
+  if (group === 'outbox') return cmdFederationOutbox(action, rest);
+  if (group === 'invite') return cmdFederationInvite(action, rest);
+  throw new Error('usage: sigil federation <outbox|invite|link> ...');
+}
+
 // `sigil federation outbox list|show|retry` -- inspect and re-queue the
 // queue-mode federation forward jobs in federation_outbox (Task 13 repo
 // methods). Never prints an envelope body: `list` rows are already
 // body-stripped by listFederationOutbox; `show` omits envelope/senderKey
 // before printing.
-async function cmdFederation(argv) {
-  const [group, action, ...rest] = argv;
+async function cmdFederationOutbox(action, rest) {
   const actions = ['list', 'show', 'retry'];
-  if (group !== 'outbox' || !actions.includes(action)) {
+  if (!actions.includes(action)) {
     throw new Error('usage: sigil federation outbox <list|show|retry> [<id>] [--database-url url]');
   }
   const args = parseArgs({ args: rest, options: { 'database-url': { type: 'string' } }, allowPositionals: true });
@@ -816,6 +834,277 @@ async function cmdFederation(argv) {
     } else {
       console.error(`Cannot retry ${id}: not in a retryable state (only forward_rejected / dead_letter rows can be re-queued).`);
     }
+    process.exitCode = 1;
+  }, { migrate: true });
+}
+
+// `sigil federation invite create|list|revoke|redeem` -- the operator
+// on-ramp for the cross-federation directory (design §"New CLI: sigil
+// federation invite"). `create`/`redeem` bind the acting operator to a
+// specific local endpoint via `--identity <path>`, the CLI's equivalent of
+// "an authenticated human session whose owner equals X" (same role
+// `--identity` plays in `sigil route test`).
+async function cmdFederationInvite(action, rest) {
+  const actions = ['create', 'list', 'revoke', 'redeem'];
+  if (!actions.includes(action)) {
+    throw new Error('usage: sigil federation invite <create|list|revoke|redeem> ...');
+  }
+  if (action === 'create') return cmdFederationInviteCreate(rest);
+  if (action === 'list') return cmdFederationInviteList(rest);
+  if (action === 'revoke') return cmdFederationInviteRevoke(rest);
+  return cmdFederationInviteRedeem(rest);
+}
+
+const ONE_HOUR_MS = 3_600_000;
+const SEVEN_DAYS_MS = 7 * 24 * ONE_HOUR_MS;
+
+// Parses `30m` / `24h` / `7d` style durations and clamps to [1h, 7d]
+// (design default: 24h). No unit -> error rather than silently guessing.
+function parseInviteTtlMs(raw) {
+  if (raw == null) return 24 * ONE_HOUR_MS;
+  const match = /^([0-9]+)(s|m|h|d)$/.exec(String(raw).trim());
+  if (!match) throw new Error(`sigil federation invite create: invalid --ttl "${raw}" (expected e.g. "30m", "24h", "7d")`);
+  const unitMs = { s: 1000, m: 60_000, h: ONE_HOUR_MS, d: 24 * ONE_HOUR_MS }[match[2]];
+  const ms = Number(match[1]) * unitMs;
+  return Math.min(Math.max(ms, ONE_HOUR_MS), SEVEN_DAYS_MS);
+}
+
+const INVITE_CREATE_USAGE = 'usage: sigil federation invite create --peer <domain> --endpoint <federated-id> --identity <path> [--ttl <duration>] [--domain <domain>] [--registry <path>] [--database-url url]';
+
+async function cmdFederationInviteCreate(rest) {
+  const args = parseArgs({
+    args: rest,
+    options: {
+      peer: { type: 'string' },
+      endpoint: { type: 'string' },
+      identity: { type: 'string' },
+      domain: { type: 'string' },
+      ttl: { type: 'string' },
+      registry: { type: 'string' },
+      'database-url': { type: 'string' },
+    },
+  });
+  const peerDomain = opt(args, ['peer']);
+  const endpoint = opt(args, ['endpoint']);
+  const identityPath = opt(args, ['identity']);
+  if (!peerDomain || !endpoint || !identityPath) throw new Error(INVITE_CREATE_USAGE);
+
+  const { parseDomain, parseFederatedId } = await import('../relay/v1/federated-id.mjs');
+  parseDomain(peerDomain);
+  const parsedEndpoint = parseFederatedId(endpoint);
+
+  // This relay's own domain: an explicit --domain wins; otherwise it is read
+  // off the endpoint being introduced (the endpoint IS hosted on this relay,
+  // by construction of the check right below). Either way the endpoint's
+  // domain must equal it -- an operator cannot mint an invite that names an
+  // endpoint on someone else's relay.
+  const relayDomain = opt(args, ['domain']) ?? parsedEndpoint.domain;
+  if (relayDomain !== parsedEndpoint.domain) {
+    throw new Error(`sigil federation invite create: --domain "${relayDomain}" does not match --endpoint domain "${parsedEndpoint.domain}"`);
+  }
+
+  // Actor binding: --identity must be the human session that owns --endpoint,
+  // per the local registry (same source of truth "sigil route test" reads for
+  // its advisory same-owner-exemption line).
+  const identity = loadIdentity(identityPath);
+  const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
+  const registryEntry = toRegistryMap(loadRegistryFile(registryPath)).get(endpoint);
+  if (!registryEntry || registryEntry.owner_id !== identity.owner_id) {
+    throw new Error(`sigil federation invite create: --identity must own the endpoint "${endpoint}"`);
+  }
+
+  const ttlMs = parseInviteTtlMs(opt(args, ['ttl']));
+  const requireMsg = 'sigil federation invite create requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable directory invites';
+  await withRepository(args, requireMsg, async (repository) => {
+    const now = new Date();
+    const linkRef = crypto.randomUUID();
+    const segment = crypto.randomBytes(24).toString('base64url');
+    const codeHash = crypto.createHash('sha256').update(segment).digest('hex');
+    const expiresAt = new Date(now.getTime() + ttlMs);
+    await repository.createFederationDirectoryInvite({
+      linkRef,
+      issuerEndpointId: endpoint,
+      issuerOwnerId: identity.owner_id,
+      peerDomain,
+      codeHash,
+      expiresAt,
+      now,
+    });
+    await repository.recordAuditEvent({
+      eventType: 'federation_directory.invite_created',
+      subjectId: linkRef,
+      actorId: identity.owner_id,
+      endpointId: endpoint,
+      objectType: 'federation_directory_invite',
+      objectId: linkRef,
+      outcome: 'accepted',
+      payload: { peer_domain: peerDomain },
+      now,
+    });
+    // The full redemption code is printed exactly once -- only the sha256 of
+    // its segment is ever persisted (createFederationDirectoryInvite above).
+    // The second, bare link_ref line lets an operator grab just the id (e.g.
+    // for `sigil federation invite revoke`) without re-parsing the code line.
+    console.log(`sigil-fed-invite:${relayDomain}:${linkRef}:${segment}`);
+    console.log(linkRef);
+  }, { migrate: true });
+}
+
+async function cmdFederationInviteList(rest) {
+  const args = parseArgs({ args: rest, options: { 'database-url': { type: 'string' } } });
+  const requireMsg = 'sigil federation invite list requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable directory invites';
+  await withRepository(args, requireMsg, async (repository) => {
+    const rows = await repository.listFederationDirectoryInvites({});
+    for (const row of rows) {
+      console.log(`${row.link_ref}\t${row.peer_domain}\t${row.status}\t${row.expires_at}`);
+    }
+  }, { migrate: true });
+}
+
+async function cmdFederationInviteRevoke(rest) {
+  const args = parseArgs({ args: rest, options: { 'database-url': { type: 'string' } }, allowPositionals: true });
+  const linkRef = args.positionals[0];
+  if (!linkRef) throw new Error('usage: sigil federation invite revoke <link_ref> [--database-url url]');
+  const requireMsg = 'sigil federation invite revoke requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable directory invites';
+  await withRepository(args, requireMsg, async (repository) => {
+    const now = new Date();
+    const result = await repository.revokeFederationDirectoryInvite(linkRef, now);
+    if (result.updated) {
+      await repository.recordAuditEvent({
+        eventType: 'federation_directory.invite_revoked',
+        subjectId: linkRef,
+        objectType: 'federation_directory_invite',
+        objectId: linkRef,
+        outcome: 'accepted',
+        payload: {},
+        now,
+      });
+      console.log(`Revoked invite ${linkRef}.`);
+      return;
+    }
+    const invite = await repository.getFederationDirectoryInviteByRef(linkRef);
+    if (!invite) {
+      console.error(`No invite for link_ref "${linkRef}".`);
+    } else if (invite.status === 'redeemed') {
+      console.error('already redeemed — use `sigil federation link revoke <link_ref>`');
+    } else {
+      console.error(`already ${invite.status}`);
+    }
+    process.exitCode = 1;
+  }, { migrate: true });
+}
+
+const INVITE_REDEEM_USAGE = 'usage: sigil federation invite redeem <code> --identity <path> [--database-url url]';
+
+// Synchronous redemption (locked design decision (b)): POST to the issuer
+// relay and wait. A 202 lets us write the redeemer's federation_directory_links
+// row fully populated right away (we now know the issuer's identity from the
+// response body). A terminal 4xx writes nothing. A transport failure / 5xx
+// writes nothing either but falls back to the durable outbox so the redemption
+// is retried once the issuer relay comes back -- the reaper's directory_redemption
+// success branch (federation-reaper.mjs) writes the same link row from that
+// later 202, idempotently.
+async function cmdFederationInviteRedeem(rest) {
+  const args = parseArgs({
+    args: rest,
+    options: { identity: { type: 'string' }, endpoint: { type: 'string' }, 'database-url': { type: 'string' } },
+    allowPositionals: true,
+  });
+  const code = args.positionals[0];
+  const identityPath = opt(args, ['identity']);
+  if (!code || !identityPath) throw new Error(INVITE_REDEEM_USAGE);
+
+  const parts = code.split(':');
+  if (parts.length !== 4 || parts[0] !== 'sigil-fed-invite') {
+    throw new Error('sigil federation invite redeem: code is not sigil-fed-invite:<domain>:<link_ref>:<segment>');
+  }
+  const [, issuerDomain, linkRef] = parts;
+  const { parseDomain } = await import('../relay/v1/federated-id.mjs');
+  parseDomain(issuerDomain);
+
+  const identity = loadIdentity(identityPath);
+  const endpointOverride = opt(args, ['endpoint']);
+  if (endpointOverride !== undefined && endpointOverride !== identity.endpoint_id) {
+    throw new Error("sigil federation invite redeem: --endpoint must match --identity's own endpoint_id");
+  }
+  const redeemer = { owner_id: identity.owner_id, endpoint_id: identity.endpoint_id };
+  const { parseFederatedId } = await import('../relay/v1/federated-id.mjs');
+  const redeemerDomain = parseFederatedId(identity.endpoint_id).domain;
+
+  const requireMsg = 'sigil federation invite redeem requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable directory links';
+  await withRepository(args, requireMsg, async (repository) => {
+    const peer = await repository.getPeerByDomain(issuerDomain);
+    if (!peer) {
+      console.error(`pin the peer relay first: sigil peer resolve --domain ${issuerDomain}`);
+      process.exitCode = 1;
+      return;
+    }
+
+    const { buildRedemptionRequest, signRelayRequest, postDirectory } = await import('../relay/v1/federation-directory-client.mjs');
+    const now = new Date();
+    const { body, canonicalBytes } = buildRedemptionRequest({ linkRef, code, redeemer, redeemerDomain, now });
+    const signed = signRelayRequest(canonicalBytes, identity);
+
+    let outcome;
+    try {
+      outcome = await postDirectory(peer, '/v1/federation/directory/redemptions', canonicalBytes, signed);
+    } catch (error) {
+      if (error && error.code === 'FORWARD_TRANSPORT_FAILED') {
+        await repository.enqueueFederationForward({
+          kind: 'directory_redemption',
+          messageId: linkRef,
+          idempotencyKey: linkRef,
+          recipientDomain: issuerDomain,
+          originDomain: redeemerDomain,
+          directoryPayload: body,
+          now,
+        });
+        console.log(`issuer relay unreachable; redemption queued for retry — run \`sigil federation link show ${linkRef}\` after it drains`);
+        return;
+      }
+      throw error;
+    }
+
+    if (outcome.ok) {
+      const issuer = outcome.body?.issuer;
+      if (issuer && issuer.owner_id && issuer.endpoint_id) {
+        try {
+          await repository.createFederationDirectoryLink({
+            linkRef,
+            localOwnerId: redeemer.owner_id,
+            localEndpointId: redeemer.endpoint_id,
+            remoteOwnerId: issuer.owner_id,
+            remoteEndpointId: issuer.endpoint_id,
+            remoteDomain: issuerDomain,
+            role: 'redeemer',
+            status: 'pending',
+            localConfirmedAt: now,
+            remoteConfirmedAt: null,
+            sourceInviteId: null,
+            peerDomain: issuerDomain,
+          });
+        } catch (error) {
+          // Idempotent: a prior reaper pass (or a retried redeem) already wrote it.
+          if (!error || error.code !== 'FEDERATION_LINK_EXISTS') throw error;
+        }
+      }
+      await repository.recordAuditEvent({
+        eventType: 'federation_directory.invite_redeemed',
+        subjectId: linkRef,
+        actorId: redeemer.owner_id,
+        endpointId: redeemer.endpoint_id,
+        objectType: 'federation_directory_invite',
+        objectId: linkRef,
+        outcome: 'accepted',
+        payload: { peer_domain: issuerDomain },
+        now,
+      });
+      console.log(linkRef);
+      console.log('waiting for issuer confirmation.');
+      return;
+    }
+
+    console.error(`sigil federation invite redeem: redemption rejected by issuer relay (${outcome.peerCode ?? outcome.status})`);
     process.exitCode = 1;
   }, { migrate: true });
 }
