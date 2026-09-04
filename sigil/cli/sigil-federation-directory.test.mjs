@@ -142,3 +142,141 @@ test('sigil federation invite create/list/revoke/redeem', { skip: !connectionStr
   assert.equal(noDbRedeem.exitCode, 1);
   assert.match(noDbRedeem.stderr, /sigil federation invite redeem requires --database-url/);
 });
+
+// Seeds a federation_directory_links row directly (Task 14's CLI never
+// creates one itself -- that is invite redeem/reaper's job, Tasks 13/11) so
+// `link list|show|confirm|revoke` can be exercised without a second live
+// relay to redeem against.
+async function insertDirectoryLink(pool, overrides = {}) {
+  const row = {
+    linkRef: crypto.randomUUID(),
+    localOwnerId: 'usr_alice@local',
+    localEndpointId: 'ep_alice@local',
+    remoteOwnerId: 'usr_bob@b.example',
+    remoteEndpointId: 'ep_bob@b.example',
+    remoteDomain: 'b.example',
+    role: 'issuer',
+    status: 'pending',
+    localConfirmedAt: null,
+    remoteConfirmedAt: null,
+    sourceInviteId: null,
+    peerDomain: 'b.example',
+    ...overrides,
+  };
+  await pool.query(
+    `INSERT INTO federation_directory_links
+       (link_ref, local_owner_id, local_endpoint_id, remote_owner_id, remote_endpoint_id,
+        remote_domain, role, status, local_confirmed_at, remote_confirmed_at, source_invite_id,
+        peer_domain, created_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now(), now())`,
+    [row.linkRef, row.localOwnerId, row.localEndpointId, row.remoteOwnerId, row.remoteEndpointId,
+      row.remoteDomain, row.role, row.status, row.localConfirmedAt, row.remoteConfirmedAt,
+      row.sourceInviteId, row.peerDomain],
+  );
+  return row.linkRef;
+}
+
+test('sigil federation link list/show/confirm/revoke', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  assertDisposableTestDatabase(connectionString);
+  await applyMigrations(connectionString, { reset: true });
+
+  const dir = await makeWorkdir(t);
+  const aliceIdentity = '.sigil/alice.identity.json';
+  const bobIdentity = '.sigil/bob.identity.json';
+
+  // --- confirm: --identity does not own the link -------------------------
+  const issuerLinkRef = await insertDirectoryLink(pool, { remoteConfirmedAt: new Date() });
+  const wrongOwner = await run(
+    ['federation', 'link', 'confirm', issuerLinkRef, '--identity', bobIdentity, '--database-url', connectionString],
+    dir,
+  );
+  assert.equal(wrongOwner.exitCode, 1);
+  assert.match(wrongOwner.stderr, /not the link owner/);
+
+  // --- confirm: redeemer side auto-confirmed ------------------------------
+  const redeemerLinkRef = await insertDirectoryLink(pool, {
+    role: 'redeemer',
+    remoteOwnerId: 'usr_carol@c.example',
+    remoteEndpointId: 'ep_carol@c.example',
+    remoteDomain: 'c.example',
+    peerDomain: 'c.example',
+  });
+  const redeemerConfirm = await run(
+    ['federation', 'link', 'confirm', redeemerLinkRef, '--identity', aliceIdentity, '--database-url', connectionString],
+    dir,
+  );
+  assert.equal(redeemerConfirm.exitCode, 1);
+  assert.match(redeemerConfirm.stderr, /redeemer side auto-confirmed/);
+
+  // --- confirm: pending issuer row with remote already set -> active -----
+  const confirm = await run(
+    ['federation', 'link', 'confirm', issuerLinkRef, '--identity', aliceIdentity, '--database-url', connectionString],
+    dir,
+  );
+  assert.equal(confirm.exitCode, 0, confirm.stderr);
+  assert.match(confirm.stdout, /Confirmed; peer notification enqueued\./);
+  const afterConfirm = await pool.query('SELECT status FROM federation_directory_links WHERE link_ref = $1', [issuerLinkRef]);
+  assert.equal(afterConfirm.rows[0].status, 'active');
+  const confirmOutbox = await pool.query(
+    "SELECT kind, idempotency_key FROM federation_outbox WHERE message_id = $1 AND kind = 'directory_confirmation'",
+    [issuerLinkRef],
+  );
+  assert.equal(confirmOutbox.rows.length, 1);
+  assert.match(confirmOutbox.rows[0].idempotency_key, /:confirm$/);
+
+  // --- revoke: either role -------------------------------------------------
+  const revoke = await run(
+    ['federation', 'link', 'revoke', issuerLinkRef, '--identity', aliceIdentity, '--database-url', connectionString],
+    dir,
+  );
+  assert.equal(revoke.exitCode, 0, revoke.stderr);
+  assert.match(revoke.stdout, /Revoked; peer notification enqueued\./);
+  const afterRevoke = await pool.query('SELECT status FROM federation_directory_links WHERE link_ref = $1', [issuerLinkRef]);
+  assert.equal(afterRevoke.rows[0].status, 'revoked');
+  const revokeOutbox = await pool.query(
+    "SELECT kind, idempotency_key FROM federation_outbox WHERE message_id = $1 AND kind = 'directory_revocation'",
+    [issuerLinkRef],
+  );
+  assert.equal(revokeOutbox.rows.length, 1);
+  assert.match(revokeOutbox.rows[0].idempotency_key, /:revoke$/);
+
+  const revokeAgain = await run(
+    ['federation', 'link', 'revoke', issuerLinkRef, '--identity', aliceIdentity, '--database-url', connectionString],
+    dir,
+  );
+  assert.equal(revokeAgain.exitCode, 1);
+  assert.match(revokeAgain.stderr, /already revoked/);
+
+  // --- list / show: no hash or code-segment substrings --------------------
+  const list = await run(['federation', 'link', 'list', '--database-url', connectionString], dir);
+  assert.equal(list.exitCode, 0, list.stderr);
+  assert.match(list.stdout, new RegExp(issuerLinkRef));
+  assert.match(list.stdout, /usr_alice@local/);
+  assert.match(list.stdout, /usr_bob@b\.example@b\.example/);
+  assert.doesNotMatch(list.stdout, /code_hash|sha256|segment/i);
+
+  const show = await run(['federation', 'link', 'show', issuerLinkRef, '--database-url', connectionString], dir);
+  assert.equal(show.exitCode, 0, show.stderr);
+  assert.match(show.stdout, new RegExp(issuerLinkRef));
+  assert.match(show.stdout, /revoked/);
+  assert.doesNotMatch(show.stdout, /code_hash|sha256|segment/i);
+
+  // --- no --database-url: every subcommand throws the documented limitation
+  const noDbList = await run(['federation', 'link', 'list'], dir);
+  assert.equal(noDbList.exitCode, 1);
+  assert.match(noDbList.stderr, /sigil federation link list requires --database-url/);
+
+  const noDbShow = await run(['federation', 'link', 'show', issuerLinkRef], dir);
+  assert.equal(noDbShow.exitCode, 1);
+  assert.match(noDbShow.stderr, /sigil federation link show requires --database-url/);
+
+  const noDbConfirm = await run(['federation', 'link', 'confirm', issuerLinkRef, '--identity', aliceIdentity], dir);
+  assert.equal(noDbConfirm.exitCode, 1);
+  assert.match(noDbConfirm.stderr, /sigil federation link confirm requires --database-url/);
+
+  const noDbRevoke = await run(['federation', 'link', 'revoke', issuerLinkRef, '--identity', aliceIdentity], dir);
+  assert.equal(noDbRevoke.exitCode, 1);
+  assert.match(noDbRevoke.stderr, /sigil federation link revoke requires --database-url/);
+});

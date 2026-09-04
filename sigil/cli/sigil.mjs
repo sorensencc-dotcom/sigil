@@ -68,6 +68,12 @@ Commands:
   federation invite revoke <link_ref> [--database-url url] Revoke a pending directory invite
   federation invite redeem <code> --identity <path> [--database-url url]
                                                             Redeem a peer's invite code, synchronously if reachable (else queued for retry)
+  federation link list [--status s] [--database-url url]   List federation_directory_links rows: link_ref, role, owners, status, confirmation timestamps
+  federation link show <link_ref> [--database-url url]     Show one federation_directory_links row (no hash, no code)
+  federation link confirm <link_ref> --identity <path> [--database-url url]
+                                                            Issuer-side explicit confirmation of a pending link (the redeemer side auto-confirms at redemption)
+  federation link revoke <link_ref> --identity <path> [--database-url url]
+                                                            Revoke a pending or active link from either side
   route test <recipient_federated_id> --identity path [--database-url url] [--registry path]
                                                             Read-only federation routing check: parse recipient, peer-directory pin lookup, /v1/health reachability, advisory same-owner line -- sends no envelope
   send [--identity path] [--relay-url url] [--stream-url url] [--wait-for-receipt] --to endpoint_id --to-owner owner_id --message "text" [--conversation id]
@@ -770,12 +776,14 @@ async function cmdAgentRun(argv) {
 // inspects/re-queues queue-mode federation forward jobs; `invite` is the
 // operator on-ramp for minting/redeeming cross-federation directory invite
 // codes (Task 13); `link` (Task 14) manages the resulting
-// federation_directory_links rows -- not implemented yet, so it falls
-// through to the usage error below until Task 14 lands.
+// federation_directory_links rows: list/show them and drive the issuer-side
+// confirm/revoke transitions (redemption itself, and the redeemer's implicit
+// confirmation, both happen in `invite redeem`/Task 13).
 async function cmdFederation(argv) {
   const [group, action, ...rest] = argv;
   if (group === 'outbox') return cmdFederationOutbox(action, rest);
   if (group === 'invite') return cmdFederationInvite(action, rest);
+  if (group === 'link') return cmdFederationLink(action, rest);
   throw new Error('usage: sigil federation <outbox|invite|link> ...');
 }
 
@@ -1106,6 +1114,231 @@ async function cmdFederationInviteRedeem(rest) {
 
     console.error(`sigil federation invite redeem: redemption rejected by issuer relay (${outcome.peerCode ?? outcome.status})`);
     process.exitCode = 1;
+  }, { migrate: true });
+}
+
+// `sigil federation link list|show|confirm|revoke` -- operates on
+// federation_directory_links rows created by `invite redeem`/the reaper
+// (Tasks 11/13). `list`/`show` never print a hash or code segment -- there
+// is none on this table (those live only on federation_directory_invites).
+// `confirm`/`revoke` synthesise the outbox row's message_id/idempotency_key
+// from the parsed link_ref, matching the (linkRef, linkRef) /
+// (linkRef, linkRef + ':confirm') / (linkRef, linkRef + ':revoke')
+// convention Task 13's redemption path already uses.
+async function cmdFederationLink(action, rest) {
+  const actions = ['list', 'show', 'confirm', 'revoke'];
+  if (!actions.includes(action)) {
+    throw new Error('usage: sigil federation link <list|show|confirm|revoke> ...');
+  }
+  if (action === 'list') return cmdFederationLinkList(rest);
+  if (action === 'show') return cmdFederationLinkShow(rest);
+  if (action === 'confirm') return cmdFederationLinkConfirm(rest);
+  return cmdFederationLinkRevoke(rest);
+}
+
+async function cmdFederationLinkList(rest) {
+  const args = parseArgs({ args: rest, options: { status: { type: 'string' }, 'database-url': { type: 'string' } } });
+  const requireMsg = 'sigil federation link list requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable directory links';
+  await withRepository(args, requireMsg, async (repository) => {
+    const status = opt(args, ['status']);
+    const rows = await repository.listFederationDirectoryLinks(status ? { status } : {});
+    for (const row of rows) {
+      console.log(`${row.link_ref}\t${row.role}\t${row.local_owner_id}\t${row.remote_owner_id}@${row.remote_domain}\t${row.status}\t${row.local_confirmed_at ?? ''}\t${row.remote_confirmed_at ?? ''}`);
+    }
+  }, { migrate: true });
+}
+
+async function cmdFederationLinkShow(rest) {
+  const args = parseArgs({ args: rest, options: { 'database-url': { type: 'string' } }, allowPositionals: true });
+  const linkRef = args.positionals[0];
+  if (!linkRef) throw new Error('usage: sigil federation link show <link_ref> [--database-url url]');
+  const requireMsg = 'sigil federation link show requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable directory links';
+  await withRepository(args, requireMsg, async (repository) => {
+    const row = await repository.getFederationDirectoryLinkByRef(linkRef);
+    if (!row) {
+      console.error(`No federation directory link for "${linkRef}".`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`link_ref\t${row.link_ref}`);
+    console.log(`role\t${row.role}`);
+    console.log(`local_owner_id\t${row.local_owner_id}`);
+    console.log(`local_endpoint_id\t${row.local_endpoint_id}`);
+    console.log(`remote_owner_id\t${row.remote_owner_id}`);
+    console.log(`remote_endpoint_id\t${row.remote_endpoint_id}`);
+    console.log(`remote_domain\t${row.remote_domain}`);
+    console.log(`status\t${row.status}`);
+    console.log(`local_confirmed_at\t${row.local_confirmed_at ?? ''}`);
+    console.log(`remote_confirmed_at\t${row.remote_confirmed_at ?? ''}`);
+    console.log(`revoked_at\t${row.revoked_at ?? ''}`);
+    console.log(`revoked_by\t${row.revoked_by ?? ''}`);
+    console.log(`last_reason_code\t${row.last_reason_code ?? ''}`);
+    // Transition history would come from an audit-event query keyed on
+    // subject_id; the repository does not yet expose one (only
+    // listAuditEventsForConversation, keyed on conversation_id, exists), so
+    // print the row only rather than guess at a shape.
+    if (typeof repository.listAuditEvents === 'function') {
+      const events = await repository.listAuditEvents({ subjectId: linkRef });
+      console.log('\nhistory:');
+      for (const event of events) {
+        console.log(`${event.created_at}\t${event.event_type}\t${event.outcome ?? ''}`);
+      }
+    } else {
+      console.log('\n(transition history needs an audit-event query by subject id, not yet exposed by the repository)');
+    }
+  }, { migrate: true });
+}
+
+const LINK_CONFIRM_USAGE = 'usage: sigil federation link confirm <link_ref> --identity <path> [--database-url url]';
+
+async function cmdFederationLinkConfirm(rest) {
+  const args = parseArgs({
+    args: rest,
+    options: { identity: { type: 'string' }, 'database-url': { type: 'string' } },
+    allowPositionals: true,
+  });
+  const linkRef = args.positionals[0];
+  const identityPath = opt(args, ['identity']);
+  if (!linkRef || !identityPath) throw new Error(LINK_CONFIRM_USAGE);
+  const identity = loadIdentity(identityPath);
+
+  const requireMsg = 'sigil federation link confirm requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable directory links';
+  await withRepository(args, requireMsg, async (repository) => {
+    const row = await repository.getFederationDirectoryLinkByRef(linkRef);
+    if (!row) {
+      console.error(`No federation directory link for "${linkRef}".`);
+      process.exitCode = 1;
+      return;
+    }
+    if (row.role === 'redeemer') {
+      console.error('sigil federation link confirm: redeemer side auto-confirmed at redemption');
+      process.exitCode = 1;
+      return;
+    }
+    if (row.status !== 'pending') {
+      console.error('sigil federation link confirm: link is already revoked/terminal; nothing enqueued');
+      process.exitCode = 1;
+      return;
+    }
+    if (identity.owner_id !== row.local_owner_id) {
+      console.error('sigil federation link confirm: --identity is not the link owner');
+      process.exitCode = 1;
+      return;
+    }
+
+    const now = new Date();
+    const result = await repository.setFederationDirectoryLinkConfirmation(linkRef, 'local', now);
+    if (!result.updated) {
+      console.error('sigil federation link confirm: link is already revoked/terminal; nothing enqueued');
+      process.exitCode = 1;
+      return;
+    }
+
+    if (typeof repository.enqueueFederationForward === 'function') {
+      const { buildConfirmationRequest } = await import('../relay/v1/federation-directory-client.mjs');
+      const { parseFederatedId } = await import('../relay/v1/federated-id.mjs');
+      const { body } = buildConfirmationRequest({ linkRef, now });
+      await repository.enqueueFederationForward({
+        kind: 'directory_confirmation',
+        messageId: linkRef,
+        idempotencyKey: `${linkRef}:confirm`,
+        recipientDomain: row.remote_domain,
+        originDomain: parseFederatedId(identity.endpoint_id).domain,
+        directoryPayload: body,
+        now,
+      });
+    }
+
+    await repository.recordAuditEvent({
+      eventType: 'federation_directory.link_confirmed',
+      subjectId: linkRef,
+      actorId: identity.owner_id,
+      endpointId: identity.endpoint_id,
+      objectType: 'federation_directory_link',
+      objectId: linkRef,
+      outcome: 'accepted',
+      payload: {},
+      now,
+    });
+    if (result.activated) {
+      await repository.recordAuditEvent({
+        eventType: 'federation_directory.link_activated',
+        subjectId: linkRef,
+        actorId: identity.owner_id,
+        endpointId: identity.endpoint_id,
+        objectType: 'federation_directory_link',
+        objectId: linkRef,
+        outcome: 'accepted',
+        payload: {},
+        now,
+      });
+    }
+    console.log('Confirmed; peer notification enqueued.');
+  }, { migrate: true });
+}
+
+const LINK_REVOKE_USAGE = 'usage: sigil federation link revoke <link_ref> --identity <path> [--database-url url]';
+
+async function cmdFederationLinkRevoke(rest) {
+  const args = parseArgs({
+    args: rest,
+    options: { identity: { type: 'string' }, 'database-url': { type: 'string' } },
+    allowPositionals: true,
+  });
+  const linkRef = args.positionals[0];
+  const identityPath = opt(args, ['identity']);
+  if (!linkRef || !identityPath) throw new Error(LINK_REVOKE_USAGE);
+  const identity = loadIdentity(identityPath);
+
+  const requireMsg = 'sigil federation link revoke requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable directory links';
+  await withRepository(args, requireMsg, async (repository) => {
+    const row = await repository.getFederationDirectoryLinkByRef(linkRef);
+    if (!row) {
+      console.error(`No federation directory link for "${linkRef}".`);
+      process.exitCode = 1;
+      return;
+    }
+    if (identity.owner_id !== row.local_owner_id) {
+      console.error('sigil federation link revoke: --identity is not the link owner');
+      process.exitCode = 1;
+      return;
+    }
+
+    const now = new Date();
+    const result = await repository.revokeFederationDirectoryLink(linkRef, 'local', now);
+    if (!result.updated) {
+      console.error('sigil federation link revoke: already revoked');
+      process.exitCode = 1;
+      return;
+    }
+
+    if (typeof repository.enqueueFederationForward === 'function') {
+      const { buildRevocationRequest } = await import('../relay/v1/federation-directory-client.mjs');
+      const { parseFederatedId } = await import('../relay/v1/federated-id.mjs');
+      const { body } = buildRevocationRequest({ linkRef, now });
+      await repository.enqueueFederationForward({
+        kind: 'directory_revocation',
+        messageId: linkRef,
+        idempotencyKey: `${linkRef}:revoke`,
+        recipientDomain: row.remote_domain,
+        originDomain: parseFederatedId(identity.endpoint_id).domain,
+        directoryPayload: body,
+        now,
+      });
+    }
+
+    await repository.recordAuditEvent({
+      eventType: 'federation_directory.link_revoked',
+      subjectId: linkRef,
+      actorId: identity.owner_id,
+      endpointId: identity.endpoint_id,
+      objectType: 'federation_directory_link',
+      objectId: linkRef,
+      outcome: 'accepted',
+      payload: { by: 'local' },
+      now,
+    });
+    console.log('Revoked; peer notification enqueued.');
   }, { migrate: true });
 }
 
