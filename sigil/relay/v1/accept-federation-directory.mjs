@@ -154,3 +154,78 @@ export async function acceptDirectoryRedemption(parsedBody, ctx) {
     issuer: { owner_id: invite.issuer_owner_id, endpoint_id: invite.issuer_endpoint_id },
   });
 }
+
+function isoString(v) { return typeof v === 'string' && !Number.isNaN(Date.parse(v)); }
+
+function fdlAudit(repository, originDomain, linkRef, now) {
+  return (eventType, extra = {}) => {
+    const p = repository.recordAuditEvent?.({
+      eventType,
+      outcome: 'accepted',
+      reason: null,
+      payload: { peer_domain: originDomain, link_ref: linkRef ?? null, ...extra },
+      now,
+    });
+    if (p && typeof p.catch === 'function') p.catch(() => {});
+  };
+}
+
+// POST /v1/federation/directory/confirmations handler. The peer relay tells us
+// it has recorded its own side of the link; we set `remote_confirmed_at` and,
+// if our side is already set, flip the row to `active`. Revocation always wins:
+// a revoked / expired row is a 202 no-op that never reactivates. 202 bodies are
+// FLAT (`acceptedBody`); only the 400 / 403 / 404 error returns use `respond`.
+export async function acceptDirectoryConfirmation(parsedBody, ctx) {
+  const { repository, client, originDomain, now } = ctx;
+  const audit = fdlAudit(repository, originDomain, parsedBody?.link_ref, now);
+
+  // 1. Structural.
+  if (!UUID_RE.test(parsedBody?.link_ref ?? '') || !isoString(parsedBody?.confirmed_at)) {
+    return respond(400, 'INVALID_FEDERATION_REQUEST', 'link_ref must be a uuid and confirmed_at an ISO timestamp', ctx);
+  }
+  // 2. Link lookup (FOR UPDATE) + peer_domain pin.
+  const link = await repository.getFederationDirectoryLinkByRef(parsedBody.link_ref, client, { forUpdate: true });
+  if (!link) return respond(404, 'FEDERATION_LINK_NOT_FOUND', 'No local link row for this link_ref', ctx);
+  if (String(link.peer_domain).toLowerCase() !== String(originDomain).toLowerCase()) {
+    return respond(403, 'PEER_NOT_TRUSTED', 'Posting relay is not the peer named by this link', ctx);
+  }
+  // 3. Terminal / idempotent (revocation wins).
+  if (link.status === 'revoked' || link.status === 'expired') {
+    return acceptedBody(202, ctx, { link_ref: parsedBody.link_ref, outcome: 'noop' });
+  }
+  if (link.remote_confirmed_at && (link.status === 'pending' || link.status === 'active')) {
+    return acceptedBody(202, ctx, { link_ref: parsedBody.link_ref, outcome: 'noop' });
+  }
+  // 4. Write (compare-and-set). A zero update means a concurrent revocation
+  //    flipped status; treat it as a step-3 no-op (no audit event).
+  const { updated, activated } = await repository.setFederationDirectoryLinkConfirmation(parsedBody.link_ref, 'remote', now, client);
+  if (updated) {
+    audit('federation_directory.confirmation_accepted', { side: 'remote' });
+    if (activated) audit('federation_directory.link_activated');
+  }
+  return acceptedBody(202, ctx, { link_ref: parsedBody.link_ref, outcome: updated ? 'confirmed' : 'noop' });
+}
+
+// POST /v1/federation/directory/revocations handler. An unknown link_ref is a
+// 202 no-op (no existence leak); a `peer_domain` mismatch is 403; a repeat on an
+// already-revoked row is an idempotent 202. Audit fires only on a real update.
+export async function acceptDirectoryRevocation(parsedBody, ctx) {
+  const { repository, client, originDomain, now } = ctx;
+
+  if (!UUID_RE.test(parsedBody?.link_ref ?? '') || !isoString(parsedBody?.revoked_at)) {
+    return respond(400, 'INVALID_FEDERATION_REQUEST', 'link_ref must be a uuid and revoked_at an ISO timestamp', ctx);
+  }
+  const link = await repository.getFederationDirectoryLinkByRef(parsedBody.link_ref, client, { forUpdate: true });
+  if (!link) return acceptedBody(202, ctx, { link_ref: parsedBody.link_ref, outcome: 'noop' }); // no existence leak
+  if (String(link.peer_domain).toLowerCase() !== String(originDomain).toLowerCase()) {
+    return respond(403, 'PEER_NOT_TRUSTED', 'Posting relay is not the peer named by this link', ctx);
+  }
+  if (link.status === 'revoked') {
+    return acceptedBody(202, ctx, { link_ref: parsedBody.link_ref, outcome: 'noop' });
+  }
+  const { updated } = await repository.revokeFederationDirectoryLink(parsedBody.link_ref, 'remote', now, client);
+  if (updated) {
+    fdlAudit(repository, originDomain, parsedBody.link_ref, now)('federation_directory.revocation_accepted', { revoked_by: 'remote' });
+  }
+  return acceptedBody(202, ctx, { link_ref: parsedBody.link_ref, outcome: updated ? 'revoked' : 'noop' });
+}
