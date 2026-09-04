@@ -40,14 +40,41 @@ function makeRow(overrides = {}) {
 }
 
 // In-memory fake repository. `withTransaction(fn)` just runs `fn(null)`.
-function makeRepo({ rows = [], peers = {}, finalizeOverride } = {}) {
+function makeRepo({ rows = [], peers = {}, finalizeOverride, directoryLinks = [], markFederationDirectoryLinkExpired } = {}) {
   const store = new Map(rows.map((r) => [r.id, { ...r }]));
   const audits = [];
   const finalizeCalls = [];
+  const linkStore = new Map(directoryLinks.map((l) => [l.linkRef, { ...l }]));
+  const createLinkCalls = [];
+  const expireCalls = [];
   return {
     store,
     audits,
     finalizeCalls,
+    linkStore,
+    createLinkCalls,
+    expireCalls,
+    async getFederationDirectoryLinkByRef(linkRef, _client) {
+      return linkStore.get(linkRef) ?? null;
+    },
+    async createFederationDirectoryLink(row, _client) {
+      createLinkCalls.push(row);
+      if (linkStore.has(row.linkRef)) {
+        throw Object.assign(new Error('link exists'), { code: 'FEDERATION_LINK_EXISTS' });
+      }
+      const rec = { ...row };
+      linkStore.set(row.linkRef, rec);
+      return rec;
+    },
+    async markFederationDirectoryLinkExpired(linkRef, reasonCode, now, _client) {
+      expireCalls.push({ linkRef, reason: reasonCode });
+      if (typeof markFederationDirectoryLinkExpired === 'function') {
+        return markFederationDirectoryLinkExpired(linkRef, reasonCode, now);
+      }
+      const l = linkStore.get(linkRef);
+      if (l && l.status === 'pending') { l.status = 'expired'; l.lastReasonCode = reasonCode; return { updated: 1 }; }
+      return { updated: 0 };
+    },
     async withTransaction(fn) {
       return fn(null);
     },
@@ -311,6 +338,142 @@ test('poison row (buildForwardRequest throws) -> dead_letter FORWARD_BUILD_FAILE
   assert.equal(repo.store.get(healthy.id).state, 'forwarded');
 
   assert.deepEqual(counts, { claimed: 2, forwarded: 1, rejected: 0, failed: 0, deadLettered: 1 });
+});
+
+// --- Task 11: outbox `kind` dispatch (directory_* rows) --------------------
+
+const DIR_PEERS = { 'b.example': { domain: 'b.example', relayUrl: 'https://b.example/relay' } };
+
+function makeRedemptionRow(overrides = {}) {
+  const suffix = crypto.randomUUID();
+  return {
+    id: `row-${suffix}`,
+    kind: 'directory_redemption',
+    recipientDomain: 'b.example',
+    state: 'pending',
+    attemptCount: 0,
+    nextAttemptAt: null,
+    claimToken: null,
+    lastReasonCode: null,
+    directoryPayload: {
+      link_ref: 'L1',
+      code: 'sigil-fed-invite:a.example:L1:SEG',
+      redeemer: { owner_id: 'usr_bob@b.example', endpoint_id: 'ep_c@b.example' },
+      redeemer_domain: 'b.example',
+      requested_at: '2026-09-02T12:00:00.000Z',
+    },
+    ...overrides,
+  };
+}
+
+test('a directory_redemption row posts via postDirectory to /redemptions with directory_payload as the body', async () => {
+  const posts = [];
+  const postDirectoryImpl = async (peer, path, bytes) => {
+    posts.push({ relayUrl: peer.relayUrl, path, body: JSON.parse(Buffer.from(bytes).toString()) });
+    return { ok: true, status: 202 };
+  };
+  const row = makeRedemptionRow({ id: 'r1' });
+  const repo = makeRepo({ rows: [row], peers: DIR_PEERS });
+  const counts = await runFederationReaperPass({
+    repository: repo, identity: makeIdentity(), originDomain: 'a.example', now: new Date(), postDirectoryImpl,
+  });
+  assert.equal(counts.forwarded, 1);
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].relayUrl, 'https://b.example/relay');
+  assert.equal(posts[0].path, '/v1/federation/directory/redemptions');
+  assert.equal(posts[0].body.link_ref, 'L1');
+  assert.deepEqual(posts[0].body, row.directoryPayload);
+  assert.equal(repo.store.get('r1').state, 'forwarded');
+});
+
+test('a directory_redemption that the peer 4xx-rejects -> forward_rejected AND the redeemer link row is expired', async () => {
+  const expired = [];
+  const repo = makeRepo({
+    rows: [makeRedemptionRow({ id: 'r2', directoryPayload: { ...makeRedemptionRow().directoryPayload, link_ref: 'L2' } })],
+    peers: DIR_PEERS,
+    markFederationDirectoryLinkExpired: async (linkRef, reason) => { expired.push({ linkRef, reason }); return { updated: 1 }; },
+  });
+  const postDirectoryImpl = async () => ({ ok: false, status: 403, peerCode: 'INVALID_FEDERATION_INVITE' });
+  const counts = await runFederationReaperPass({
+    repository: repo, identity: makeIdentity(), originDomain: 'a.example', now: new Date(), postDirectoryImpl,
+  });
+  assert.equal(counts.rejected, 1);
+  assert.equal(repo.store.get('r2').state, 'forward_rejected');
+  assert.deepEqual(expired, [{ linkRef: 'L2', reason: 'INVALID_FEDERATION_INVITE' }]);
+});
+
+test('a directory_redemption transport failure walks the same 1m backoff as an envelope row', async () => {
+  const repo = makeRepo({ rows: [makeRedemptionRow({ id: 'r3' })], peers: DIR_PEERS });
+  const now = new Date('2026-08-31T00:00:00Z');
+  const throwTransport = async () => {
+    throw Object.assign(new Error('boom'), { code: 'FORWARD_TRANSPORT_FAILED' });
+  };
+  const counts = await runFederationReaperPass({
+    repository: repo, identity: makeIdentity(), originDomain: 'a.example', now, postDirectoryImpl: throwTransport,
+  });
+  assert.deepEqual(counts, { claimed: 1, forwarded: 0, rejected: 0, failed: 1, deadLettered: 0 });
+  const stored = repo.store.get('r3');
+  assert.equal(stored.state, 'pending');
+  assert.equal(stored.attemptCount, 1);
+  assert.equal(stored.nextAttemptAt, new Date(now.getTime() + 60_000).toISOString());
+  assert.equal(repo.audits.at(-1).eventType, 'federation.forward_unavailable');
+  assert.equal(repo.audits.at(-1).payload.kind, 'directory_redemption');
+});
+
+test('kind = envelope rows are unaffected: dispatch uses buildForwardRequest/postForward, not postDirectory', async () => {
+  const row = makeRow();
+  const repo = makeRepo({ rows: [row], peers: PEERS });
+  let dirCalled = false;
+  const counts = await runFederationReaperPass({
+    repository: repo,
+    identity: makeIdentity(),
+    originDomain: ORIGIN_DOMAIN,
+    now: new Date('2026-08-31T00:00:00Z'),
+    postForwardImpl: async () => ({ ok: true, status: 202 }),
+    postDirectoryImpl: async () => { dirCalled = true; return { ok: true, status: 202 }; },
+  });
+  assert.equal(dirCalled, false, 'an envelope row must never reach postDirectory');
+  assert.equal(counts.forwarded, 1);
+  assert.equal(repo.store.get(row.id).state, 'forwarded');
+  const audit = repo.audits.find((a) => a.eventType === 'federation.forwarded');
+  assert.ok(audit);
+  assert.ok(!('kind' in (audit.payload ?? {})), 'envelope audit payload must not carry a kind field');
+});
+
+test('directory_redemption 2xx with an issuer body writes the redeemer link once; a redelivery does not double-write', async () => {
+  const row = makeRedemptionRow({ id: 'r4', directoryPayload: { ...makeRedemptionRow().directoryPayload, link_ref: 'L3' } });
+  const repo = makeRepo({ rows: [row], peers: DIR_PEERS });
+  const now = new Date('2026-09-02T12:00:00.000Z');
+  const postDirectoryImpl = async () => ({
+    ok: true, status: 202,
+    body: { link_ref: 'L3', issuer: { owner_id: 'usr_a@a.example', endpoint_id: 'ep_a@a.example' } },
+  });
+
+  const c1 = await runFederationReaperPass({
+    repository: repo, identity: makeIdentity(), originDomain: 'a.example', now, postDirectoryImpl,
+  });
+  assert.equal(c1.forwarded, 1);
+  assert.equal(repo.createLinkCalls.length, 1);
+  const call = repo.createLinkCalls[0];
+  assert.equal(call.linkRef, 'L3');
+  assert.equal(call.role, 'redeemer');
+  assert.equal(call.status, 'pending');
+  assert.equal(call.localOwnerId, 'usr_bob@b.example');
+  assert.equal(call.localEndpointId, 'ep_c@b.example');
+  assert.equal(call.remoteOwnerId, 'usr_a@a.example');
+  assert.equal(call.remoteEndpointId, 'ep_a@a.example');
+  assert.equal(call.remoteDomain, 'b.example');
+  assert.ok(call.localConfirmedAt, 'localConfirmedAt must be set');
+  assert.equal(call.remoteConfirmedAt, null);
+
+  // Redelivery: the outbox row comes back as pending, the link row now exists.
+  repo.store.get('r4').state = 'pending';
+  repo.store.get('r4').nextAttemptAt = null;
+  const c2 = await runFederationReaperPass({
+    repository: repo, identity: makeIdentity(), originDomain: 'a.example', now, postDirectoryImpl,
+  });
+  assert.equal(c2.forwarded, 1);
+  assert.equal(repo.createLinkCalls.length, 1, 'no second createFederationDirectoryLink call for the same link_ref');
 });
 
 test('startFederationReaper returns an unref()-d handle and logs a thrown pass without stopping', async () => {

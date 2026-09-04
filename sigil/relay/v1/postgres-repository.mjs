@@ -74,9 +74,11 @@ function rowToFederationOutboxRecord(row) {
     idempotencyKey: row.idempotency_key,
     recipientDomain: row.recipient_domain,
     originDomain: row.origin_domain,
+    kind: row.kind ?? 'envelope',
     envelope: row.envelope,
     senderKey: row.sender_key,
     senderOwnerId: row.sender_owner_id,
+    directoryPayload: row.directory_payload ?? null,
     state: row.state,
     attemptCount: row.attempt_count,
     nextAttemptAt: iso(row.next_attempt_at),
@@ -1126,14 +1128,20 @@ export class PostgresRepository {
     const ts = row.now == null
       ? new Date().toISOString()
       : (row.now instanceof Date ? row.now.toISOString() : new Date(row.now).toISOString());
+    const kind = row.kind ?? 'envelope';
     const inserted = await client.query(
       `INSERT INTO federation_outbox
-         (message_id, idempotency_key, recipient_domain, origin_domain, envelope, sender_key, sender_owner_id, next_attempt_at, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $8)
+         (message_id, idempotency_key, recipient_domain, origin_domain, kind,
+          envelope, sender_key, sender_owner_id, directory_payload, next_attempt_at, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $10)
        ON CONFLICT (message_id, idempotency_key) DO NOTHING
        RETURNING *`,
-      [row.messageId, row.idempotencyKey, row.recipientDomain, row.originDomain,
-        JSON.stringify(row.envelope), JSON.stringify(row.senderKey), row.senderOwnerId, ts]
+      [row.messageId, row.idempotencyKey, row.recipientDomain, row.originDomain, kind,
+        row.envelope == null ? null : JSON.stringify(row.envelope),
+        row.senderKey == null ? null : JSON.stringify(row.senderKey),
+        row.senderOwnerId ?? null,
+        row.directoryPayload == null ? null : JSON.stringify(row.directoryPayload),
+        ts]
     );
     if (inserted.rows[0]) return { row: rowToFederationOutboxRecord(inserted.rows[0]), inserted: true };
     const existing = await client.query(
@@ -1193,13 +1201,13 @@ export class PostgresRepository {
       where = 'WHERE state = ANY($1::text[])';
     }
     const rowResult = await this.pool.query(
-      `SELECT id, message_id, idempotency_key, recipient_domain, origin_domain, sender_owner_id,
+      `SELECT id, message_id, idempotency_key, recipient_domain, origin_domain, kind, sender_owner_id,
               state, attempt_count, next_attempt_at, claimed_at, claim_token, last_reason_code, created_at, updated_at
        FROM federation_outbox ${where} ORDER BY created_at, id`,
       params
     );
     const rows = rowResult.rows.map((r) => {
-      const { envelope, senderKey, ...rest } = rowToFederationOutboxRecord(r);
+      const { envelope, senderKey, directoryPayload, ...rest } = rowToFederationOutboxRecord(r);
       return rest;
     });
     return { counts, rows };

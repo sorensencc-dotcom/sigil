@@ -42,6 +42,45 @@ export function signRelayRequest(canonicalBytes, identity) {
 const PEER_CODE_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const PEER_BODY_READ_CAP = 4 * 1024;
 
+// Bounded read of a peer's 2xx JSON body, mirroring readPeerCode's 4 KiB cap and
+// chunk-by-chunk streaming (never buffer an unbounded response). Returns the
+// parsed object, or `undefined` when the body is absent, over-cap, non-JSON, or
+// not a JSON object. Callers that do not need the body (postForward) ignore it.
+async function readCappedJsonBody(res) {
+  const bodyStream = res.body;
+  if (bodyStream && typeof bodyStream[Symbol.asyncIterator] === 'function') {
+    const parts = [];
+    let total = 0;
+    let overCap = false;
+    try {
+      for await (const chunk of bodyStream) {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        total += buf.length;
+        if (total > PEER_BODY_READ_CAP) { overCap = true; break; }
+        parts.push(buf);
+      }
+    } catch { overCap = true; }
+    if (overCap) {
+      try { await bodyStream.cancel?.(); } catch { /* reader already closed */ }
+      return undefined;
+    }
+    try {
+      const parsed = JSON.parse(Buffer.concat(parts).toString('utf8'));
+      return parsed && typeof parsed === 'object' ? parsed : undefined;
+    } catch { return undefined; }
+  }
+  if (typeof res.text === 'function') {
+    try {
+      const text = await res.text();
+      if (typeof text === 'string' && Buffer.byteLength(text) <= PEER_BODY_READ_CAP) {
+        const parsed = JSON.parse(text);
+        return parsed && typeof parsed === 'object' ? parsed : undefined;
+      }
+    } catch { /* non-JSON / oversize / read error: body stays undefined */ }
+  }
+  return undefined;
+}
+
 // Shared 4xx peer-error-code reader. Lifted verbatim from federation-router.mjs
 // (the `let peerCode; ... ` block previously inline in postForward). Both
 // postForward and postDirectory call this so there is one implementation of the
@@ -124,7 +163,10 @@ export async function postDirectory(peer, path, canonicalBytes, { signature, key
     throw Object.assign(new Error(`directory post transport failed: ${error.message}`), { code: 'FORWARD_TRANSPORT_FAILED', cause: error });
   }
 
-  if (res.status >= 200 && res.status < 300) return { ok: true, status: res.status };
+  if (res.status >= 200 && res.status < 300) {
+    const body = await readCappedJsonBody(res);
+    return body === undefined ? { ok: true, status: res.status } : { ok: true, status: res.status, body };
+  }
   if (res.status >= 500) {
     throw Object.assign(new Error(`peer relay returned ${res.status}`), { code: 'FORWARD_TRANSPORT_FAILED', status: res.status });
   }
