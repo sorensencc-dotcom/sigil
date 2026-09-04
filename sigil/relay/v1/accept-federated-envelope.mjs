@@ -136,9 +136,21 @@ export async function acceptFederatedEnvelope(body, headers, options) {
     if (!recipient || (recipient.status !== undefined && recipient.status !== 'active')) {
       throw reject('RECIPIENT_NOT_FOUND', 'The recipient endpoint does not exist in this relay\'s registry.', { recipient_id: recipientId });
     }
-    // 8: directory gate — same-owner exemption only.
-    if (senderOwnerId !== recipient.owner_id) {
-      throw reject('DIRECTORY_LINK_REQUIRED', 'No cross-owner directory link; federated first contact is out of scope', { sender_owner_id: senderOwnerId, recipient_endpoint_id: recipientId });
+    // 8: directory gate.
+    if (senderOwnerId === recipient.owner_id) {
+      // same-owner exemption (design #3) — checked first, unchanged.
+    } else {
+      const link = typeof repository.getActiveFederationDirectoryLink === 'function'
+        ? await repository.getActiveFederationDirectoryLink(recipient.owner_id, senderOwnerId, originDomain, client)
+        : null;
+      if (!link) {
+        throw reject('DIRECTORY_LINK_REQUIRED', 'No active cross-federation directory link authorises this cross-owner delivery', {
+          sender_owner_id: senderOwnerId,
+          recipient_endpoint_id: recipientId,
+          reason: 'no_active_federation_directory_link',
+        });
+      }
+      // link.status === 'active' — deliver.
     }
     // 9: rate reservations (verified federated sender id) + federation_origin + inbox depth.
     const limits = resolveRateLimits(options.rateLimits);

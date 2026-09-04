@@ -180,3 +180,111 @@ test('replay: same message_id under a new idempotency_key → 409 REPLAY_DETECTE
   const r = await acceptFederatedEnvelope(p2.body, p2.headers, opts9(world));
   assert.equal(r.status, 409); assert.equal(r.body.code, 'REPLAY_DETECTED');
 });
+
+// --- Task 12: step 8 active-link second pass --------------------------------
+// The #3 tests run with the receiver relay on `b.example` and the sending peer
+// on `a.example`. These cases invert that orientation (receiver `a.example`,
+// sender `b.example`) so a link triple reads naturally as
+// `(local=recipient owner, remote=sender owner, remote_domain=b.example)`.
+// `seedFederatedInboundFixture` returns the repo (to seed a link row) and a
+// `deliverForwardBody` that POSTs one signed inbound forward -> { status, body }.
+const RECV_DOMAIN = 'a.example';
+const SEND_DOMAIN = 'b.example';
+
+async function seedFederatedInboundFixture({ recipient }) {
+  const relayKeys = crypto.generateKeyPairSync('ed25519');
+  const relayIdentity = { key_id: 'relay-b-2026-08', private_key_pem: relayKeys.privateKey.export({ type: 'pkcs8', format: 'pem' }) };
+  const relayPub = relayKeys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url');
+  const registry = new Map([[recipient.endpoint_id, {
+    endpoint_id: recipient.endpoint_id, owner_id: recipient.owner_id,
+    key_id: `key_${recipient.endpoint_id}`, kind: 'agent', status: 'active',
+    public_key: crypto.generateKeyPairSync('ed25519').publicKey,
+  }]]);
+  const repository = createMemoryRepository({ registry });
+  repository.upsertPeer({ domain: SEND_DOMAIN, relayUrl: 'https://b.example/relay', keys: [{ kid: relayIdentity.key_id, alg: 'Ed25519', publicKey: relayPub }], trustMode: 'tofu' });
+
+  async function deliverForwardBody({ senderOwnerId, senderEndpoint }) {
+    const senderKeys = crypto.generateKeyPairSync('ed25519');
+    const senderPub = senderKeys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url');
+    const base = {
+      protocol: 'sigil/1', message_id: 'msg_fed_1', conversation_id: 'conv_1', message_type: 'chat.message',
+      sender: { owner_id: senderOwnerId, endpoint_id: senderEndpoint, kind: 'agent' },
+      recipient: { owner_id: recipient.owner_id, endpoint_id: recipient.endpoint_id, kind: 'agent' },
+      body: { text: 'hi' }, context_refs: [], capabilities: [], idempotency_key: 'idem_1',
+      created_at: '2026-08-30T12:00:00.000Z', expires_at: '2026-08-30T12:10:00.000Z',
+    };
+    const value = crypto.sign(null, signedBytes({ ...base, signature: undefined }), senderKeys.privateKey).toString('base64url');
+    const envelope = { ...base, signature: { algorithm: 'Ed25519', key_id: `key_${senderEndpoint}`, value } };
+    const { body, canonicalBytes } = buildForwardRequest(envelope, {
+      originDomain: SEND_DOMAIN,
+      senderKey: { kid: `key_${senderEndpoint}`, alg: 'Ed25519', publicKey: senderPub },
+      senderOwnerId,
+      now: new Date('2026-08-30T12:00:05.000Z'),
+    });
+    const { signature, keyId } = signForwardRequest(canonicalBytes, relayIdentity);
+    const res = await acceptFederatedEnvelope(body, { 'sigil-relay-signature': signature, 'sigil-relay-key-id': keyId }, {
+      repository, registered: registry, relayDomain: RECV_DOMAIN, request_id: 'req_1', now: new Date('2026-08-30T12:00:30.000Z'),
+    });
+    return { status: res.status, body: res.body };
+  }
+
+  return { repository, deliverForwardBody };
+}
+
+test('step 8: cross-owner + an active federation directory link -> delivered and inbox-visible', async () => {
+  const { repository, deliverForwardBody } = await seedFederatedInboundFixture({
+    recipient: { endpoint_id: 'ep_claude@a.example', owner_id: 'usr_chris@a.example' },
+  });
+  await repository.createFederationDirectoryLink({
+    linkRef: crypto.randomUUID(),
+    localOwnerId: 'usr_chris@a.example', localEndpointId: 'ep_claude@a.example',
+    remoteOwnerId: 'usr_bob@b.example', remoteEndpointId: 'ep_codex@b.example', remoteDomain: 'b.example',
+    role: 'redeemer', status: 'active', localConfirmedAt: new Date(), remoteConfirmedAt: new Date(),
+    sourceInviteId: null, peerDomain: 'b.example',
+  }, null);
+  const res = await deliverForwardBody({ senderOwnerId: 'usr_bob@b.example', senderEndpoint: 'ep_codex@b.example' });
+  assert.equal(res.status, 202);
+  assert.equal(res.body.code, 'ACCEPTED');
+});
+
+test('step 8: cross-owner + a pending / revoked / expired link, or no row -> 403 DIRECTORY_LINK_REQUIRED with reason', async () => {
+  for (const linkStatus of ['pending', 'revoked', 'expired', null]) {
+    const { repository, deliverForwardBody } = await seedFederatedInboundFixture({
+      recipient: { endpoint_id: 'ep_claude@a.example', owner_id: 'usr_chris@a.example' },
+    });
+    if (linkStatus) {
+      await repository.createFederationDirectoryLink({
+        linkRef: crypto.randomUUID(), localOwnerId: 'usr_chris@a.example', localEndpointId: 'ep_claude@a.example',
+        remoteOwnerId: 'usr_bob@b.example', remoteEndpointId: 'ep_codex@b.example', remoteDomain: 'b.example',
+        role: 'redeemer', status: linkStatus, localConfirmedAt: null, remoteConfirmedAt: null,
+        sourceInviteId: null, peerDomain: 'b.example',
+      }, null);
+    }
+    const res = await deliverForwardBody({ senderOwnerId: 'usr_bob@b.example', senderEndpoint: 'ep_codex@b.example' });
+    assert.equal(res.status, 403);
+    assert.equal(res.body.code, 'DIRECTORY_LINK_REQUIRED');
+    assert.equal(res.body.details.reason, 'no_active_federation_directory_link');
+  }
+});
+
+test('step 8: an active link for one remote owner does not authorise a different remote owner on the same domain', async () => {
+  const { repository, deliverForwardBody } = await seedFederatedInboundFixture({
+    recipient: { endpoint_id: 'ep_claude@a.example', owner_id: 'usr_chris@a.example' },
+  });
+  await repository.createFederationDirectoryLink({
+    linkRef: crypto.randomUUID(), localOwnerId: 'usr_chris@a.example', localEndpointId: 'ep_claude@a.example',
+    remoteOwnerId: 'usr_bob@b.example', remoteEndpointId: 'ep_codex@b.example', remoteDomain: 'b.example',
+    role: 'redeemer', status: 'active', localConfirmedAt: new Date(), remoteConfirmedAt: new Date(),
+    sourceInviteId: null, peerDomain: 'b.example',
+  }, null);
+  const res = await deliverForwardBody({ senderOwnerId: 'usr_dave@b.example', senderEndpoint: 'ep_dave@b.example' });
+  assert.equal(res.status, 403);
+});
+
+test('step 8: same-owner still delivers with no link row (unchanged)', async () => {
+  const { deliverForwardBody } = await seedFederatedInboundFixture({
+    recipient: { endpoint_id: 'ep_claude@a.example', owner_id: 'usr_shared@a.example' },
+  });
+  const res = await deliverForwardBody({ senderOwnerId: 'usr_shared@a.example', senderEndpoint: 'ep_codex@b.example' });
+  assert.equal(res.status, 202);
+});
