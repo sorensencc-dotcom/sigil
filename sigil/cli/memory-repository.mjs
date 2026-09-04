@@ -17,6 +17,32 @@ const SEEDED_CAPABILITIES = new Map([
   ['sigil.approval/request', { namespace: 'sigil.approval', risk_tier: 'high' }],
 ]);
 
+// Shallow copy of a stored federation_directory_links row shaped exactly like
+// the Postgres `rowToFederationDirectoryLink` mapper (same snake_case key set,
+// no internal `id` / `created_at` / `updated_at`). The accept-federation-directory
+// handlers (Task 8) are one shared code path across both repos; handing back the
+// live Map row would let a handler mutation silently corrupt this store while
+// Postgres stays intact.
+function fdlRowView(row) {
+  return {
+    link_ref: row.link_ref,
+    local_owner_id: row.local_owner_id,
+    local_endpoint_id: row.local_endpoint_id,
+    remote_owner_id: row.remote_owner_id,
+    remote_endpoint_id: row.remote_endpoint_id,
+    remote_domain: row.remote_domain,
+    role: row.role,
+    status: row.status,
+    local_confirmed_at: row.local_confirmed_at,
+    remote_confirmed_at: row.remote_confirmed_at,
+    source_invite_id: row.source_invite_id,
+    peer_domain: row.peer_domain,
+    revoked_at: row.revoked_at,
+    revoked_by: row.revoked_by,
+    last_reason_code: row.last_reason_code,
+  };
+}
+
 export function createMemoryRepository({ registry = new Map() } = {}) {
   const envelopes = new Map();
   const deliveries = new Map();
@@ -28,6 +54,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
   const directoryLinks = new Map();
   const directoryMatchRequests = new Map();
   const federationDirectoryInvites = new Map(); // link_ref -> invite row (migration 018, cross-federation directory)
+  const federationDirectoryLinks = new Map(); // link_ref -> link row (migration 018, cross-federation directory)
   const humanSessions = new Map();
   const consumedLoginJtis = new Map();
   const oidcIssuerAllowlist = new Map();
@@ -433,6 +460,115 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
           && (filter.status == null || r.status === filter.status))
         .sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0))
         .map((r) => ({ link_ref: r.link_ref, peer_domain: r.peer_domain, status: r.status, expires_at: r.expires_at }));
+    },
+    // --- federation_directory_links (migration 018) parity ----------------
+    // Identical signatures to the Postgres repo. The live-pair uniqueness
+    // check is a synchronous scan mirroring the partial unique index
+    // `federation_directory_links_live_pair_uidx`. The confirmation CAS
+    // replicates the `status='pending' AND <side>_confirmed_at IS NULL`
+    // guard as an `if`, so a revoked / expired / active row is never moved
+    // back. All in-place status flips run with no interleaved `await`;
+    // getters return `fdlRowView` copies, never the live Map row. `client`
+    // is ignored (withTransaction is fn(null)).
+    async createFederationDirectoryLink(row) {
+      for (const existing of federationDirectoryLinks.values()) {
+        if (existing.local_owner_id === row.localOwnerId
+          && existing.remote_owner_id === row.remoteOwnerId
+          && existing.remote_domain === row.remoteDomain
+          && (existing.status === 'pending' || existing.status === 'active')) {
+          throw Object.assign(new Error('A pending or active federation directory link already exists for this owner pair'), {
+            code: 'FEDERATION_LINK_EXISTS',
+            existingLinkRef: existing.link_ref,
+          });
+        }
+      }
+      const iso = (v) => (v == null ? null : (v instanceof Date ? v : new Date(v)).toISOString());
+      const nowIso = new Date().toISOString();
+      const stored = {
+        link_ref: row.linkRef,
+        local_owner_id: row.localOwnerId,
+        local_endpoint_id: row.localEndpointId,
+        remote_owner_id: row.remoteOwnerId,
+        remote_endpoint_id: row.remoteEndpointId,
+        remote_domain: row.remoteDomain,
+        role: row.role,
+        status: row.status,
+        local_confirmed_at: iso(row.localConfirmedAt),
+        remote_confirmed_at: iso(row.remoteConfirmedAt),
+        source_invite_id: row.sourceInviteId ?? null,
+        peer_domain: row.peerDomain,
+        revoked_at: null,
+        revoked_by: null,
+        last_reason_code: null,
+        created_at: nowIso,
+        updated_at: nowIso,
+      };
+      federationDirectoryLinks.set(row.linkRef, stored);
+      return fdlRowView(stored);
+    },
+    async getFederationDirectoryLinkByRef(linkRef) {
+      const row = federationDirectoryLinks.get(linkRef);
+      return row ? fdlRowView(row) : null;
+    },
+    async setFederationDirectoryLinkConfirmation(linkRef, side, now) {
+      const col = side === 'local' ? 'local_confirmed_at' : 'remote_confirmed_at';
+      const otherCol = side === 'local' ? 'remote_confirmed_at' : 'local_confirmed_at';
+      const row = federationDirectoryLinks.get(linkRef);
+      if (!row || row.status !== 'pending' || row[col] != null) {
+        return { updated: 0, activated: false };
+      }
+      const ts = (now instanceof Date ? now : new Date(now)).toISOString();
+      row[col] = ts;
+      row.status = row[otherCol] != null ? 'active' : 'pending';
+      row.updated_at = ts;
+      return { updated: 1, activated: row.status === 'active' };
+    },
+    async revokeFederationDirectoryLink(linkRef, by, now) {
+      const row = federationDirectoryLinks.get(linkRef);
+      if (!row || (row.status !== 'pending' && row.status !== 'active')) return { updated: 0 };
+      const ts = (now instanceof Date ? now : new Date(now)).toISOString();
+      row.status = 'revoked';
+      row.revoked_at = ts;
+      row.revoked_by = by;
+      row.updated_at = ts;
+      return { updated: 1 };
+    },
+    async markFederationDirectoryLinkExpired(linkRef, reasonCode, now) {
+      const row = federationDirectoryLinks.get(linkRef);
+      if (!row || row.status !== 'pending') return { updated: 0 };
+      const ts = (now instanceof Date ? now : new Date(now)).toISOString();
+      row.status = 'expired';
+      row.last_reason_code = reasonCode;
+      row.updated_at = ts;
+      return { updated: 1 };
+    },
+    async listFederationDirectoryLinks(filter = {}) {
+      return [...federationDirectoryLinks.values()]
+        .filter((r) => (filter.status == null || r.status === filter.status)
+          && (filter.role == null || r.role === filter.role)
+          && (filter.ownerId == null || r.local_owner_id === filter.ownerId))
+        .sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0))
+        .map((r) => ({
+          link_ref: r.link_ref,
+          role: r.role,
+          local_owner_id: r.local_owner_id,
+          remote_owner_id: r.remote_owner_id,
+          remote_domain: r.remote_domain,
+          status: r.status,
+          local_confirmed_at: r.local_confirmed_at,
+          remote_confirmed_at: r.remote_confirmed_at,
+        }));
+    },
+    async getActiveFederationDirectoryLink(localOwnerId, remoteOwnerId, remoteDomain) {
+      for (const row of federationDirectoryLinks.values()) {
+        if (row.status === 'active'
+          && row.local_owner_id === localOwnerId
+          && row.remote_owner_id === remoteOwnerId
+          && row.remote_domain === remoteDomain) {
+          return fdlRowView(row);
+        }
+      }
+      return null;
     },
     _debugGetEnvelope(messageId) { return envelopes.get(messageId) ?? null; }
   };

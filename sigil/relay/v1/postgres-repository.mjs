@@ -39,6 +39,33 @@ function rowToFederationDirectoryInvite(row) {
   };
 }
 
+// Snake_case passthrough for federation_directory_links (migration 018).
+// The accept-federation-directory handlers (Tasks 8-9), the reaper (Task 11),
+// acceptFederatedEnvelope step 8 (Task 12), and the `sigil federation link`
+// CLI (Task 14) read row.status / row.link_ref / row.*_confirmed_at /
+// row.revoked_* directly, so this only normalizes timestamp columns to ISO
+// strings and drops the internal `id` primary key.
+function rowToFederationDirectoryLink(row) {
+  const iso = (v) => (v instanceof Date ? v.toISOString() : v);
+  return {
+    link_ref: row.link_ref,
+    local_owner_id: row.local_owner_id,
+    local_endpoint_id: row.local_endpoint_id,
+    remote_owner_id: row.remote_owner_id,
+    remote_endpoint_id: row.remote_endpoint_id,
+    remote_domain: row.remote_domain,
+    role: row.role,
+    status: row.status,
+    local_confirmed_at: iso(row.local_confirmed_at),
+    remote_confirmed_at: iso(row.remote_confirmed_at),
+    source_invite_id: row.source_invite_id,
+    peer_domain: row.peer_domain,
+    revoked_at: iso(row.revoked_at),
+    revoked_by: row.revoked_by,
+    last_reason_code: row.last_reason_code,
+  };
+}
+
 function rowToFederationOutboxRecord(row) {
   const iso = (v) => (v instanceof Date ? v.toISOString() : v);
   return {
@@ -1281,6 +1308,120 @@ export class PostgresRepository {
       status: r.status,
       expires_at: r.expires_at instanceof Date ? r.expires_at.toISOString() : r.expires_at,
     }));
+  }
+  // --- federation_directory_links (cross-federation directory, migration 018) ---
+  // Consumed by the accept-federation-directory handlers (Tasks 8-9),
+  // acceptFederatedEnvelope step 8 (Task 12), the reaper (Task 11), and the
+  // `sigil federation link` CLI (Task 14). An optional `client` joins the
+  // caller's transaction, else the method runs on `this.pool`.
+  async createFederationDirectoryLink(row, client = this.pool) {
+    try {
+      const r = await client.query(
+        `INSERT INTO federation_directory_links
+           (link_ref, local_owner_id, local_endpoint_id, remote_owner_id, remote_endpoint_id,
+            remote_domain, role, status, local_confirmed_at, remote_confirmed_at, source_invite_id,
+            peer_domain, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now(), now())
+         RETURNING *`,
+        [row.linkRef, row.localOwnerId, row.localEndpointId, row.remoteOwnerId, row.remoteEndpointId,
+          row.remoteDomain, row.role, row.status, row.localConfirmedAt, row.remoteConfirmedAt,
+          row.sourceInviteId, row.peerDomain],
+      );
+      return rowToFederationDirectoryLink(r.rows[0]);
+    } catch (error) {
+      if (error?.code === '23505') {
+        // A 23505 inside a transaction aborts it, so the lookup that populates
+        // `existingLinkRef` must run on a fresh pool connection. The conflicting
+        // live row is always committed and visible by the time the partial
+        // unique index raises (a concurrent inserter that later rolls back
+        // would instead let this INSERT through).
+        const existing = await this.pool.query(
+          `SELECT link_ref FROM federation_directory_links
+            WHERE local_owner_id = $1 AND remote_owner_id = $2 AND remote_domain = $3
+              AND status IN ('pending','active') LIMIT 1`,
+          [row.localOwnerId, row.remoteOwnerId, row.remoteDomain],
+        );
+        throw Object.assign(new Error('A pending or active federation directory link already exists for this owner pair'), {
+          code: 'FEDERATION_LINK_EXISTS',
+          existingLinkRef: existing.rows[0]?.link_ref ?? null,
+        });
+      }
+      throw error;
+    }
+  }
+  async getFederationDirectoryLinkByRef(linkRef, client = this.pool, { forUpdate = false } = {}) {
+    const lock = forUpdate ? ' FOR UPDATE' : '';
+    const r = await client.query(
+      `SELECT * FROM federation_directory_links WHERE link_ref = $1${lock}`, [linkRef],
+    );
+    return r.rows[0] ? rowToFederationDirectoryLink(r.rows[0]) : null;
+  }
+  async setFederationDirectoryLinkConfirmation(linkRef, side, now, client = this.pool) {
+    const other = side === 'local' ? 'remote' : 'local';
+    const r = await client.query(
+      `UPDATE federation_directory_links
+          SET ${side}_confirmed_at = $2,
+              status = CASE WHEN ${other}_confirmed_at IS NOT NULL THEN 'active' ELSE 'pending' END,
+              updated_at = $2
+        WHERE link_ref = $1 AND status = 'pending' AND ${side}_confirmed_at IS NULL
+        RETURNING status`,
+      [linkRef, (now instanceof Date ? now : new Date(now)).toISOString()],
+    );
+    return { updated: r.rowCount, activated: r.rows[0]?.status === 'active' };
+  }
+  async revokeFederationDirectoryLink(linkRef, by, now, client = this.pool) {
+    const ts = (now instanceof Date ? now : new Date(now)).toISOString();
+    const r = await client.query(
+      `UPDATE federation_directory_links
+          SET status = 'revoked', revoked_at = $2, revoked_by = $3, updated_at = $2
+        WHERE link_ref = $1 AND status IN ('pending','active')`,
+      [linkRef, ts, by],
+    );
+    return { updated: r.rowCount };
+  }
+  async markFederationDirectoryLinkExpired(linkRef, reasonCode, now, client = this.pool) {
+    const ts = (now instanceof Date ? now : new Date(now)).toISOString();
+    const r = await client.query(
+      `UPDATE federation_directory_links
+          SET status = 'expired', last_reason_code = $2, updated_at = $3
+        WHERE link_ref = $1 AND status = 'pending'`,
+      [linkRef, reasonCode, ts],
+    );
+    return { updated: r.rowCount };
+  }
+  async listFederationDirectoryLinks(filter = {}) {
+    const params = [];
+    const clauses = [];
+    if (filter.status != null) { params.push(filter.status); clauses.push(`status = $${params.length}`); }
+    if (filter.role != null) { params.push(filter.role); clauses.push(`role = $${params.length}`); }
+    if (filter.ownerId != null) { params.push(filter.ownerId); clauses.push(`local_owner_id = $${params.length}`); }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+    const result = await this.pool.query(
+      `SELECT link_ref, role, local_owner_id, remote_owner_id, remote_domain, status,
+              local_confirmed_at, remote_confirmed_at
+       FROM federation_directory_links ${where}
+       ORDER BY created_at, id`,
+      params,
+    );
+    return result.rows.map((r) => ({
+      link_ref: r.link_ref,
+      role: r.role,
+      local_owner_id: r.local_owner_id,
+      remote_owner_id: r.remote_owner_id,
+      remote_domain: r.remote_domain,
+      status: r.status,
+      local_confirmed_at: r.local_confirmed_at instanceof Date ? r.local_confirmed_at.toISOString() : r.local_confirmed_at,
+      remote_confirmed_at: r.remote_confirmed_at instanceof Date ? r.remote_confirmed_at.toISOString() : r.remote_confirmed_at,
+    }));
+  }
+  async getActiveFederationDirectoryLink(localOwnerId, remoteOwnerId, remoteDomain, client = this.pool) {
+    const r = await client.query(
+      `SELECT * FROM federation_directory_links
+        WHERE status = 'active' AND local_owner_id = $1 AND remote_owner_id = $2 AND remote_domain = $3
+        LIMIT 1`,
+      [localOwnerId, remoteOwnerId, remoteDomain],
+    );
+    return r.rows[0] ? rowToFederationDirectoryLink(r.rows[0]) : null;
   }
   async close() { await this.pool.end(); }
 }

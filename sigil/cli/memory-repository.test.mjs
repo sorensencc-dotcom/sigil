@@ -120,3 +120,73 @@ test('memory relay federation_directory_invites: redeem + list omits code_hash',
   const revoke = await repository.revokeFederationDirectoryInvite(linkRef, new Date(), null);
   assert.equal(revoke.updated, 0); // already redeemed -> terminal
 });
+
+test('memory relay federation_directory_links: create -> confirm CAS -> revoke-wins race -> getActive', async () => {
+  const repository = createMemoryRepository();
+  const linkRef = crypto.randomUUID();
+
+  await repository.withTransaction((c) => repository.createFederationDirectoryLink({
+    linkRef, localOwnerId: 'usr_chris@a.example', localEndpointId: 'ep_codex@a.example',
+    remoteOwnerId: 'usr_bob@b.example', remoteEndpointId: 'ep_c@b.example', remoteDomain: 'b.example',
+    role: 'issuer', status: 'pending', localConfirmedAt: null, remoteConfirmedAt: new Date(),
+    sourceInviteId: null, peerDomain: 'b.example',
+  }, c));
+
+  // second live link for the same pair -> typed FEDERATION_LINK_EXISTS
+  await assert.rejects(
+    repository.withTransaction((c) => repository.createFederationDirectoryLink({
+      linkRef: crypto.randomUUID(), localOwnerId: 'usr_chris@a.example', localEndpointId: 'ep_x@a.example',
+      remoteOwnerId: 'usr_bob@b.example', remoteEndpointId: 'ep_y@b.example', remoteDomain: 'b.example',
+      role: 'issuer', status: 'pending', localConfirmedAt: null, remoteConfirmedAt: new Date(),
+      sourceInviteId: null, peerDomain: 'b.example',
+    }, c)),
+    (e) => e.code === 'FEDERATION_LINK_EXISTS' && e.existingLinkRef === linkRef,
+  );
+
+  const set = await repository.setFederationDirectoryLinkConfirmation(linkRef, 'local', new Date(), null);
+  assert.deepEqual(set, { updated: 1, activated: true });
+
+  const active = await repository.getActiveFederationDirectoryLink('usr_chris@a.example', 'usr_bob@b.example', 'b.example', null);
+  assert.equal(active?.link_ref, linkRef);
+  assert.equal(active.status, 'active');
+  // getActive returns a shallow copy -- mutating it must not reach the store
+  active.status = 'MUTATED';
+  const active2 = await repository.getActiveFederationDirectoryLink('usr_chris@a.example', 'usr_bob@b.example', 'b.example', null);
+  assert.equal(active2.status, 'active');
+
+  // revoke wins: after revoke, a late confirmation CAS updates nothing
+  await repository.revokeFederationDirectoryLink(linkRef, 'local', new Date(), null);
+  const late = await repository.setFederationDirectoryLinkConfirmation(linkRef, 'remote', new Date(), null);
+  assert.equal(late.updated, 0);
+  const afterRevoke = await repository.getActiveFederationDirectoryLink('usr_chris@a.example', 'usr_bob@b.example', 'b.example', null);
+  assert.equal(afterRevoke, null);
+
+  // list projection omits endpoint ids, source_invite_id, and reason codes
+  const listed = await repository.listFederationDirectoryLinks({ ownerId: 'usr_chris@a.example' });
+  assert.equal(listed.length, 1);
+  assert.deepEqual(Object.keys(listed[0]).sort(),
+    ['link_ref', 'local_confirmed_at', 'local_owner_id', 'remote_confirmed_at', 'remote_domain', 'remote_owner_id', 'role', 'status']);
+});
+
+test('memory relay federation_directory_links: expired reaper path never resurrects a link', async () => {
+  const repository = createMemoryRepository();
+  const linkRef = crypto.randomUUID();
+  await repository.createFederationDirectoryLink({
+    linkRef, localOwnerId: 'usr_a@a.example', localEndpointId: 'ep_a@a.example',
+    remoteOwnerId: 'usr_b@b.example', remoteEndpointId: 'ep_b@b.example', remoteDomain: 'b.example',
+    role: 'redeemer', status: 'pending', localConfirmedAt: null, remoteConfirmedAt: null,
+    sourceInviteId: null, peerDomain: 'b.example',
+  }, null);
+
+  const exp = await repository.markFederationDirectoryLinkExpired(linkRef, 'redemption_dead_letter', new Date(), null);
+  assert.deepEqual(exp, { updated: 1 });
+
+  // a late confirmation and a late revoke are both inert against a terminal row
+  assert.equal((await repository.setFederationDirectoryLinkConfirmation(linkRef, 'local', new Date(), null)).updated, 0);
+  assert.equal((await repository.revokeFederationDirectoryLink(linkRef, 'remote', new Date(), null)).updated, 0);
+  assert.equal((await repository.markFederationDirectoryLinkExpired(linkRef, 'again', new Date(), null)).updated, 0);
+
+  const row = await repository.getFederationDirectoryLinkByRef(linkRef, null, {});
+  assert.equal(row.status, 'expired');
+  assert.equal(row.last_reason_code, 'redemption_dead_letter');
+});

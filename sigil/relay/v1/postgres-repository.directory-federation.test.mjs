@@ -96,3 +96,43 @@ test('invite redeem + list omits code_hash', { skip: !connectionString }, async 
   assert.equal(revoke.updated, 0); // already redeemed -> terminal
   await pool.query(`DELETE FROM federation_directory_invites WHERE link_ref = $1`, [linkRef]);
 });
+
+test('link create -> confirm CAS -> revoke-wins race -> getActive', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  await applyMigrations(connectionString);
+  const repo = new PostgresRepository({ pool });
+  const linkRef = crypto.randomUUID();
+  await repo.withTransaction((c) => repo.createFederationDirectoryLink({
+    linkRef, localOwnerId: 'usr_chris@a.example', localEndpointId: 'ep_codex@a.example',
+    remoteOwnerId: 'usr_bob@b.example', remoteEndpointId: 'ep_c@b.example', remoteDomain: 'b.example',
+    role: 'issuer', status: 'pending', localConfirmedAt: null, remoteConfirmedAt: new Date(),
+    sourceInviteId: null, peerDomain: 'b.example',
+  }, c));
+
+  // second live link for the same pair -> typed FEDERATION_LINK_EXISTS
+  await assert.rejects(
+    repo.withTransaction((c) => repo.createFederationDirectoryLink({
+      linkRef: crypto.randomUUID(), localOwnerId: 'usr_chris@a.example', localEndpointId: 'ep_x@a.example',
+      remoteOwnerId: 'usr_bob@b.example', remoteEndpointId: 'ep_y@b.example', remoteDomain: 'b.example',
+      role: 'issuer', status: 'pending', localConfirmedAt: null, remoteConfirmedAt: new Date(),
+      sourceInviteId: null, peerDomain: 'b.example',
+    }, c)),
+    (e) => e.code === 'FEDERATION_LINK_EXISTS' && e.existingLinkRef === linkRef,
+  );
+
+  const set = await repo.setFederationDirectoryLinkConfirmation(linkRef, 'local', new Date(), pool);
+  assert.deepEqual(set, { updated: 1, activated: true });
+
+  const active = await repo.getActiveFederationDirectoryLink('usr_chris@a.example', 'usr_bob@b.example', 'b.example', pool);
+  assert.equal(active?.link_ref, linkRef);
+
+  // revoke wins: after revoke, a late confirmation CAS updates nothing
+  await repo.revokeFederationDirectoryLink(linkRef, 'local', new Date(), pool);
+  const late = await repo.setFederationDirectoryLinkConfirmation(linkRef, 'remote', new Date(), pool);
+  assert.equal(late.updated, 0);
+  const afterRevoke = await repo.getActiveFederationDirectoryLink('usr_chris@a.example', 'usr_bob@b.example', 'b.example', pool);
+  assert.equal(afterRevoke, null);
+
+  await pool.query(`DELETE FROM federation_directory_links WHERE link_ref = $1`, [linkRef]);
+});
