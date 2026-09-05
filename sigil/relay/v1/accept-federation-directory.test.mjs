@@ -192,3 +192,42 @@ test('revocation: sets revoked/remote; repeat -> 202; unknown ref -> 202 no-op (
   res = await acceptDirectoryRevocation({ link_ref: other, revoked_at: '2026-09-02T13:00:00Z' }, ctx(repo));
   assert.equal(res.status, 403);
 });
+
+test('confirmation: stays pending when local_confirmed_at is unset', async () => {
+  const repo = createMemoryRepository();
+  const linkRef = crypto.randomUUID();
+  await seedLink(repo, { linkRef, localConfirmedAt: null, remoteConfirmedAt: null });
+  const res = await acceptDirectoryConfirmation({ link_ref: linkRef, confirmed_at: '2026-09-02T12:05:00Z' }, ctx(repo));
+  assert.equal(res.status, 202);
+  const link = await repo.getFederationDirectoryLinkByRef(linkRef, null, {});
+  assert.equal(link.status, 'pending');
+  assert.ok(link.remote_confirmed_at);
+  assert.equal(link.local_confirmed_at, null);
+});
+
+test('confirmation / revocation: malformed body -> 400 INVALID_FEDERATION_REQUEST', async () => {
+  const repo = createMemoryRepository();
+  const linkRef = crypto.randomUUID();
+  await seedLink(repo, { linkRef, localConfirmedAt: new Date() });
+
+  // Confirmation malformed link_ref
+  let res = await acceptDirectoryConfirmation({ link_ref: 'not-a-uuid', confirmed_at: '2026-09-02T12:05:00Z' }, ctx(repo));
+  assert.equal(res.status, 400);
+  assert.equal(res.body.code, 'INVALID_FEDERATION_REQUEST');
+
+  // Confirmation malformed confirmed_at
+  res = await acceptDirectoryConfirmation({ link_ref: linkRef, confirmed_at: 'not-a-date' }, ctx(repo));
+  assert.equal(res.status, 400);
+  assert.equal(res.body.code, 'INVALID_FEDERATION_REQUEST');
+
+  // Revocation malformed link_ref
+  res = await acceptDirectoryRevocation({ link_ref: 'not-a-uuid', revoked_at: '2026-09-02T13:00:00Z' }, ctx(repo));
+  assert.equal(res.status, 400);
+  assert.equal(res.body.code, 'INVALID_FEDERATION_REQUEST');
+
+  // Revocation malformed revoked_at
+  res = await acceptDirectoryRevocation({ link_ref: linkRef, revoked_at: 'not-a-date' }, ctx(repo));
+  assert.equal(res.status, 400);
+  assert.equal(res.body.code, 'INVALID_FEDERATION_REQUEST');
+});
+

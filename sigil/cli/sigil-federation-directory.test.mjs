@@ -367,6 +367,34 @@ test('sigil federation link list/show/confirm/revoke', { skip: !connectionString
   assert.equal(revokeAgain.exitCode, 1);
   assert.match(revokeAgain.stderr, /already revoked/);
 
+  // --- revoke: redeemer role -----------------------------------------------
+  const redeemerRevokeRef = await insertDirectoryLink(pool, {
+    role: 'redeemer',
+    remoteOwnerId: 'usr_dave@d.example',
+    remoteEndpointId: 'ep_dave@d.example',
+    remoteDomain: 'd.example',
+    peerDomain: 'd.example',
+  });
+  const revokeRedeemer = await run(
+    ['federation', 'link', 'revoke', redeemerRevokeRef, '--identity', aliceIdentity, '--database-url', connectionString],
+    dir,
+  );
+  assert.equal(revokeRedeemer.exitCode, 0, revokeRedeemer.stderr);
+  assert.match(revokeRedeemer.stdout, /Revoked; peer notification enqueued\./);
+  const afterRedeemerRevoke = await pool.query('SELECT status FROM federation_directory_links WHERE link_ref = $1', [redeemerRevokeRef]);
+  assert.equal(afterRedeemerRevoke.rows[0].status, 'revoked');
+
+  // --- list: --status filter ----------------------------------------------
+  const listActiveOnly = await run(['federation', 'link', 'list', '--status', 'active', '--database-url', connectionString], dir);
+  assert.equal(listActiveOnly.exitCode, 0, listActiveOnly.stderr);
+  assert.doesNotMatch(listActiveOnly.stdout, new RegExp(issuerLinkRef)); // issuerLinkRef is revoked
+  assert.doesNotMatch(listActiveOnly.stdout, new RegExp(redeemerRevokeRef)); // redeemerRevokeRef is revoked
+
+  const listRevokedOnly = await run(['federation', 'link', 'list', '--status', 'revoked', '--database-url', connectionString], dir);
+  assert.equal(listRevokedOnly.exitCode, 0, listRevokedOnly.stderr);
+  assert.match(listRevokedOnly.stdout, new RegExp(issuerLinkRef));
+  assert.match(listRevokedOnly.stdout, new RegExp(redeemerRevokeRef));
+
   // --- list / show: no hash or code-segment substrings --------------------
   const list = await run(['federation', 'link', 'list', '--database-url', connectionString], dir);
   assert.equal(list.exitCode, 0, list.stderr);

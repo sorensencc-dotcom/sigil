@@ -495,3 +495,67 @@ test('startFederationReaper returns an unref()-d handle and logs a thrown pass w
   assert.ok(logged.length >= 1, 'expected at least one console.error from a failing pass');
   assert.ok(logged.some((l) => l.includes('federation reaper pass failed')), `unexpected log lines: ${logged.join(' | ')}`);
 });
+
+test('directory_redemption writeRedeemerLink catches typed FEDERATION_LINK_EXISTS on create race', async () => {
+  const row = makeRedemptionRow({ id: 'r5', directoryPayload: { ...makeRedemptionRow().directoryPayload, link_ref: 'L_RACE' } });
+  const repo = makeRepo({ rows: [row], peers: DIR_PEERS });
+  repo.createFederationDirectoryLink = async () => {
+    throw Object.assign(new Error('link exists'), { code: 'FEDERATION_LINK_EXISTS' });
+  };
+  const now = new Date('2026-09-02T12:00:00.000Z');
+  const postDirectoryImpl = async () => ({
+    ok: true, status: 202,
+    body: { link_ref: 'L_RACE', issuer: { owner_id: 'usr_a@a.example', endpoint_id: 'ep_a@a.example' } },
+  });
+
+  const counts = await runFederationReaperPass({
+    repository: repo, identity: makeIdentity(), originDomain: 'a.example', now, postDirectoryImpl,
+  });
+  assert.equal(counts.forwarded, 1);
+  assert.equal(repo.store.get('r5').state, 'forwarded');
+});
+
+test('directory_redemption transport failure walks full 1m -> 5m -> 30m -> dead_letter backoff', async () => {
+  const row = makeRedemptionRow({ id: 'r_walk' });
+  const repo = makeRepo({ rows: [row], peers: DIR_PEERS });
+  const identity = makeIdentity();
+  const throwTransport = async () => {
+    throw Object.assign(new Error('boom'), { code: 'FORWARD_TRANSPORT_FAILED' });
+  };
+
+  // Attempt 1: 1m
+  const now1 = new Date('2026-08-31T00:00:00Z');
+  const c1 = await runFederationReaperPass({ repository: repo, identity, originDomain: 'a.example', now: now1, postDirectoryImpl: throwTransport });
+  assert.equal(c1.failed, 1);
+  let stored = repo.store.get('r_walk');
+  assert.equal(stored.state, 'pending');
+  assert.equal(stored.attemptCount, 1);
+  assert.equal(stored.nextAttemptAt, new Date(now1.getTime() + 60_000).toISOString());
+
+  // Attempt 2: 5m
+  const now2 = new Date(now1.getTime() + 61_000);
+  const c2 = await runFederationReaperPass({ repository: repo, identity, originDomain: 'a.example', now: now2, postDirectoryImpl: throwTransport });
+  assert.equal(c2.failed, 1);
+  stored = repo.store.get('r_walk');
+  assert.equal(stored.state, 'pending');
+  assert.equal(stored.attemptCount, 2);
+  assert.equal(stored.nextAttemptAt, new Date(now2.getTime() + 300_000).toISOString());
+
+  // Attempt 3: 30m
+  const now3 = new Date(now2.getTime() + 301_000);
+  const c3 = await runFederationReaperPass({ repository: repo, identity, originDomain: 'a.example', now: now3, postDirectoryImpl: throwTransport });
+  assert.equal(c3.failed, 1);
+  stored = repo.store.get('r_walk');
+  assert.equal(stored.state, 'pending');
+  assert.equal(stored.attemptCount, 3);
+  assert.equal(stored.nextAttemptAt, new Date(now3.getTime() + 1_800_000).toISOString());
+
+  // Attempt 4: dead_letter + expired link
+  const now4 = new Date(now3.getTime() + 1_800_001);
+  const c4 = await runFederationReaperPass({ repository: repo, identity, originDomain: 'a.example', now: now4, postDirectoryImpl: throwTransport });
+  assert.equal(c4.deadLettered, 1);
+  stored = repo.store.get('r_walk');
+  assert.equal(stored.state, 'dead_letter');
+  assert.equal(stored.attemptCount, 4);
+});
+

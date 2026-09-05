@@ -245,6 +245,9 @@ test('step 8: cross-owner + an active federation directory link -> delivered and
   const res = await deliverForwardBody({ senderOwnerId: 'usr_bob@b.example', senderEndpoint: 'ep_codex@b.example' });
   assert.equal(res.status, 202);
   assert.equal(res.body.code, 'ACCEPTED');
+  const inbox = await repository.listInbox('ep_claude@a.example');
+  assert.equal(inbox.length, 1);
+  assert.equal(inbox[0].envelope.message_id, 'msg_fed_1');
 });
 
 test('step 8: cross-owner + a pending / revoked / expired link, or no row -> 403 DIRECTORY_LINK_REQUIRED with reason', async () => {
@@ -279,6 +282,8 @@ test('step 8: an active link for one remote owner does not authorise a different
   }, null);
   const res = await deliverForwardBody({ senderOwnerId: 'usr_dave@b.example', senderEndpoint: 'ep_dave@b.example' });
   assert.equal(res.status, 403);
+  assert.equal(res.body.code, 'DIRECTORY_LINK_REQUIRED');
+  assert.equal(res.body.details.reason, 'no_active_federation_directory_link');
 });
 
 test('step 8: same-owner still delivers with no link row (unchanged)', async () => {

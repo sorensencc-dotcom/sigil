@@ -1,43 +1,29 @@
 # Status
 
 ## Current goal
-Federation #3 (inter-relay routing) — merged to `main` (`5c389e9`) and pushed to
-`origin/main` on 2026-09-01. Feature branch deleted both sides. The two broken
-live-DB suites are fixed (`0829eb5`, pushed 2026-09-02); **CI run 33610373355 is
-green on all five jobs** (Secret-scan, Linux + Windows × Node 22/24), including
-the live-PostgreSQL gate. I1 sync-forward transaction-boundary fix shipped (see
-Completed work).
+Federation #4 (cross-federation directory / presence) — completed Task 17 (final live-DB matrix, full-suite regression sweep, deferred-minor fold-ins, and CI verification). All live-DB and unit/contract test suites passing locally. Ready for human-supervised whole-branch review and final landing.
 
 ## Completed work
-- Executed all 19 tasks of `docs/superpowers/plans/2026-08-30-sigil-inter-relay-routing.md` (subagent-driven-development, six batches) against spec `docs/superpowers/specs/2026-08-30-sigil-inter-relay-routing-design.md`.
-- Prerequisite amendment: `sigil init --federation-owner` for cross-domain owner ids (Task 1).
-- `federation_hop` column + `decideRoute` hard-stop on a truthy stored hop (Task 2); migration `017_federation_outbox.sql`.
-- `federation-router.mjs`: `decideRoute` / `buildForwardRequest` / `signForwardRequest` / `postForward` / `verifyRelaySignature` (Tasks 4–7).
-- Receiving side: `acceptFederatedEnvelope` checks 1–10 and the `POST /v1/federation/envelopes` route, mutual pinning, canonicalize-after-parse relay-signature verification, same-owner exemption, `federation_hop = true` persistence (Tasks 8–10).
-- Origin `sync` mode: 202 forwarded / 502 `FORWARD_REJECTED` / 504 `FORWARD_UNAVAILABLE` / 500 `FORWARD_MISCONFIGURED`, nothing written locally (Task 11); CLI `--federation-mode` / `--federation-identity` validation (Task 12).
-- Queue mode: `federation_outbox` repo methods, idempotent enqueue, 60s reaper (claim→commit→forward→ownership-guarded finalize, 1m/5m/30m backoff, dead-letter after 3 / on expiry, `federation.*` audit events), wired into `sigil relay up` for `queue` (Tasks 13–16).
-- CLI: `sigil federation outbox list|show|retry` (no bodies, expired-retry refusal) and `sigil route test` (read-only, advisory same-owner line, sends nothing) (Tasks 17–18).
-- Task 19: regression sweep (`sigil/relay/v1/federation-regression.test.mjs`), CHANGELOG + STATUS, plan close-out; plus a bounded close-out cleanup pass (reaper poison-row dead-letter guard + 6 CLI/test tidy items).
-- **I1 fix** (`8fdd1fb`, pushed `origin/main`): sync forward lifted off the accept transaction (`accept-envelope.mjs`). `decideRoute` + the sync forward path now run before `withTransaction`; queue forward and local accept still open a transaction. Replay check preserved on the sync path via non-transactional pool lookup. Phase 1 has its own `try/catch → toResponse`. Sync-test `fakeRepo` updated with `withTransactionCallCount` spy; all four forward-outcome tests assert count = 0; new REPLAY_DETECTED test added. Queue-test: rollback-atomicity sub-test added (spies on `enqueueFederationForward`, asserts real txn client, verifies INSERT is rolled back on post-enqueue error).
-- **I1 review follow-ups** (all pushed `origin/main`):
-  - `7d14e4a` — Phase 1 catch mirrors the Phase 2 `withTransaction` `.catch`: an `AUDITED_REJECTION_CODES` rejection (`REPLAY_DETECTED`) on the sync-forward path now emits its `envelope.rejected.replay_detected` audit event, matching the local and queue paths. Sync test asserts the audit event.
-  - `e8bf8b7` (S1) — sync-forward path no longer calls `repository.lookupRecipientEndpoint(id, null)` when the sender is absent from `options.registered`; the real Postgres repo hard-throws a codeless `Error` without a txn client, which mapped to `400 INVALID_ENVELOPE` instead of `500 FORWARD_MISCONFIGURED`. Test locks the 500 + asserts `lookupRecipientEndpoint` is not invoked.
-  - `fabb4fe` — a direct `decideRoute` throw (not a returned `{action:'reject'}`) now routes through the Phase 1 `try/catch → toResponse` instead of escaping unhandled.
+- Executed all 17 tasks of `docs/superpowers/plans/2026-09-03-sigil-cross-federation-directory.md` (subagent-driven-development) against spec `docs/superpowers/specs/2026-09-02-sigil-cross-federation-directory-design.md`.
+- Migration `018_federation_directory.sql`: `federation_directory_invites`, `federation_directory_links`, `federation_outbox.kind` / `directory_payload`, and quota usage scopes (`federation_directory_invite_create`, `federation_directory_redeem`, `federation_directory_redemption_inbound`).
+- Repository methods & state machines for directory invites and links across Postgres and memory repositories.
+- Inbound relay authentication and verification (`verifyInboundRelayRequest`) with timestamp, replay, and domain pinning validation.
+- Directory request signing, transmission, and client routing (`postDirectory`, `signRelayRequest`, `buildDirectoryRedemptionRequest`, etc.).
+- Handlers for directory invite redemption, link confirmation, and revocation with 202/403/404/409 semantics and fail-closed audit logging.
+- HTTP server wiring for directory routes with 501 capability gating on unconfigured / non-Postgres relays.
+- Reaper support for directory outbox processing with backoff (1m/5m/30m) and automatic redeemer link persistence on successful redemption.
+- Step 8 federated envelope delivery checks enforcing active cross-federation directory links between distinct domains.
+- CLI commands: `sigil federation invite create|list|show|revoke|redeem`, `sigil federation link list|show|confirm|revoke`, and route test advisory indicators.
+- Rate limiting and quota reservation for directory invitations and redemption endpoints.
+- Task 17: Live-DB test matrix in `postgres-repository.directory-federation.test.mjs`, comprehensive regression sweep, and deferred-minor fold-in.
 
 ## Tests
-- `node --test sigil/relay/v1/federation-regression.test.mjs` — 4/4 pass.
-- `npm test` green (dep audit + JCS audit + full `node --test`); the pre-existing `sigil/scripts/live-ollama-worker-test.mjs` env failure is known-flaky and unrelated.
-- Postgres live-DB matrix (migration + outbox methods + concurrency + `federation_hop` read-back) runs in CI.
-- `pwsh -NoProfile -File C:\dev\scripts\verify-repo-context.ps1 -Path C:\dev\sigil-repo` preflight pass.
-- CI run 33568029999 (push of `5c389e9`): Windows + Secret-scan green; Linux
-  Node 22.x and 24.x fail at the "Run Live PostgreSQL Gate" step only. Unit &
-  Contract Tests pass 757/0. `npm run test:live` fails 2 of 21 schema-resetting
-  suites — both new in this branch, both broken test harness, not product code.
-  Those two suites were fixed in `0829eb5`; CI run 33610373355 green on all five jobs.
-- CI run 33683013747 (push of `fabb4fe`, I1 + follow-ups): all four test-matrix
-  jobs green (Linux + Windows × Node 22/24). Only red = the **Secret-scan /
-  gitleaks "missing license"** step — repo-wide infra issue (needs a
-  `GITLEAKS_LICENSE` GitHub secret), unrelated to this work.
+- Full test suite: `npm test` — 812 pass, 0 fail, 103 skipped across all suites.
+- Live PostgreSQL gate: `npm run test:live` — 112 pass, 0 fail across 23 schema-resetting suites run sequentially.
+- Targeted Step 3 Live-DB matrix: 36 pass, 0 fail across directory federation, peer repo, CLI directory, CLI route-test, and HTTP server directory suites.
+- Targeted Step 4 Regressions: 79 pass, 0 fail across sync mode 501 gates, trust mode, and inter-relay routing suites.
+- Preflight verified via `pwsh -NoProfile -File C:\dev\scripts\verify-repo-context.ps1 -Path C:\dev\sigil-repo`.
+- CI live-DB runner (`sigil/scripts/live-db-tests.mjs`) automatically discovers any suite referencing `SIGIL_TEST_DATABASE_URL`, fully covering all directory DB suites.
 
 ## Decisions
 - Compound primary key scoping `(profile_id, endpoint_id, key_id)` to isolate connector profiles.
