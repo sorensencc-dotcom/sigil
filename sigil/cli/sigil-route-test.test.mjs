@@ -311,3 +311,46 @@ test(
     assert.match(res.stdout, /Directory link: not determinable locally/);
   },
 );
+
+test(
+  'route test: without --database-url, prints no "Directory link:" line at all',
+  { skip: !connectionString },
+  async (t) => {
+    const { default: pg } = await import('pg');
+    const { assertDisposableTestDatabase } = await import('../scripts/assert-disposable-test-db.mjs');
+    assertDisposableTestDatabase(connectionString);
+    const pool = new pg.Pool({ connectionString });
+    t.after(() => pool.end());
+    await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+
+    const dir = await makeWorkdir(t);
+    const stub = await startStubRelay(t);
+    // Pin the peer and seed a foreign, different-owner recipient using
+    // --database-url on the setup calls only -- the same setup as the
+    // "active"/"none" and "not determinable locally" tests above.
+    const add = await pinPeer(dir, 'b.example', stub.url);
+    assert.equal(add.exitCode, 0, add.stderr);
+    await seedRegistryEndpoint(dir, { endpointId: 'ep_bob@b.example', ownerId: 'usr_bob@b.example' });
+    const linkRef = crypto.randomUUID();
+    await pool.query(
+      `INSERT INTO federation_directory_links
+        (id, link_ref, local_owner_id, local_endpoint_id, remote_owner_id, remote_endpoint_id, remote_domain, role, status, local_confirmed_at, remote_confirmed_at, peer_domain, created_at, updated_at)
+        VALUES (gen_random_uuid(), $1, 'usr_alice@local', 'ep_alice@local', 'usr_bob@b.example', 'ep_bob@b.example', 'b.example', 'issuer', 'active', now(), now(), 'b.example', now(), now())`,
+      [linkRef],
+    );
+
+    // No --database-url on this invocation -- run() also forces
+    // SIGIL_DATABASE_URL='' so no env fallback reaches it either.
+    const res = await run(
+      ['route', 'test', 'ep_bob@b.example', '--identity', '.sigil/alice.identity.json'],
+      dir,
+    );
+    // Without a database, the peer directory itself is unreachable, so this
+    // stops at "Pinned: no" before the same-owner or directory-link
+    // advisories are ever computed -- but the assertion below is the
+    // regression lock: no future edit should make this print a
+    // "Directory link:" line (active, none, or not-determinable) when no
+    // database is available to back that claim.
+    assert.doesNotMatch(res.stdout, /Directory link:/);
+  },
+);
