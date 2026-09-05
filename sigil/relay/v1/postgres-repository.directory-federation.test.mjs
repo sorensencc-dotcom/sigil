@@ -179,17 +179,46 @@ test('partial unique index blocks second live link and allows a new row once pri
   await pool.query(`DELETE FROM federation_directory_links WHERE local_owner_id = 'usr_owner1@a.example'`);
 });
 
-test('concurrent redemption posts for one invite -> exactly one 202+link, one 202-idempotent or INVALID_FEDERATION_INVITE, exactly one link row', { skip: !connectionString }, async (t) => {
+test('concurrent redemption posts for one invite -> exactly one 202+link, one 202-idempotent, and provably serializes on the invite row lock', { skip: !connectionString }, async (t) => {
   const pool = new pg.Pool({ connectionString });
   t.after(() => pool.end());
   await applyMigrations(connectionString);
-  const repo = new PostgresRepository({ pool });
 
   const { acceptDirectoryRedemption } = await import('./accept-federation-directory.mjs');
 
   const linkRef = crypto.randomUUID();
   const segment = 'SECRET_SEGMENT_CONCURRENT';
   const codeHash = crypto.createHash('sha256').update(segment).digest('hex');
+
+  // Instrumented subclass: sleeps AFTER the real `getFederationDirectoryInviteByRef`
+  // query returns, before handing the row back to the caller. The Postgres row
+  // lock (when `forUpdate: true` is passed by accept-federation-directory.mjs) is
+  // acquired by the SELECT itself, not by this JS continuation, so the lock
+  // holder keeps it for the whole sleep -- its owning transaction stays open and
+  // uncommitted throughout. If the second concurrent transaction's own
+  // `FOR UPDATE` SELECT genuinely blocks on that lock, the two sleeps cannot
+  // overlap and total wall-clock time must be >= ~2x DELAY_MS. Without the lock,
+  // both SELECTs return immediately and their sleeps run concurrently, so total
+  // time stays close to ~1x DELAY_MS. This is the test's proof of real lock
+  // contention -- it would fail if `forUpdate: true` were removed from the
+  // `getFederationDirectoryInviteByRef` call site in accept-federation-directory.mjs.
+  const DELAY_MS = 300;
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  class InstrumentedRepo extends PostgresRepository {
+    async getFederationDirectoryInviteByRef(...args) {
+      const row = await super.getFederationDirectoryInviteByRef(...args);
+      await sleep(DELAY_MS);
+      return row;
+    }
+  }
+  const repo = new InstrumentedRepo({ pool });
+  // Rate-limit reservation (`quota_usage` upsert, keyed by scope+window) also
+  // serializes two same-peer-domain concurrent requests, independent of the
+  // invite row lock this test targets. Disable it here so timing isolates the
+  // invite lock alone -- an own-property `undefined` shadows the inherited
+  // method, so `typeof repository.reserveRateLimit === 'function'` is false
+  // and acceptDirectoryRedemption's rate-limit branch is skipped entirely.
+  repo.reserveRateLimit = undefined;
 
   await repo.createFederationDirectoryInvite({
     linkRef, issuerEndpointId: 'ep_codex@a.example', issuerOwnerId: 'usr_chris@a.example',
@@ -213,10 +242,15 @@ test('concurrent redemption posts for one invite -> exactly one 202+link, one 20
     requested_at: new Date().toISOString(),
   };
 
-  // Run two concurrent acceptDirectoryRedemption calls inside transactions
+  // Run two concurrent acceptDirectoryRedemption calls inside transactions,
+  // timing each to completion (post-commit) so we can measure serialization.
+  const t0 = Date.now();
+  const timestamps = {};
   const [res1, res2] = await Promise.all([
-    repo.withTransaction(async (c1) => acceptDirectoryRedemption(parsedBody, ctxFor(c1))),
-    repo.withTransaction(async (c2) => acceptDirectoryRedemption(parsedBody, ctxFor(c2))),
+    repo.withTransaction((c1) => acceptDirectoryRedemption(parsedBody, ctxFor(c1)))
+      .then((r) => { timestamps.a = Date.now() - t0; return r; }),
+    repo.withTransaction((c2) => acceptDirectoryRedemption(parsedBody, ctxFor(c2)))
+      .then((r) => { timestamps.b = Date.now() - t0; return r; }),
   ]);
 
   // Both return 202 (one first-time success, one idempotent replay)
@@ -224,6 +258,13 @@ test('concurrent redemption posts for one invite -> exactly one 202+link, one 20
   assert.equal(res2.status, 202);
   assert.equal(res1.body.link_ref, linkRef);
   assert.equal(res2.body.link_ref, linkRef);
+
+  // Proof of real lock contention: see comment above InstrumentedRepo.
+  const laterFinish = Math.max(timestamps.a, timestamps.b);
+  assert.ok(
+    laterFinish >= DELAY_MS * 1.8,
+    `expected serialized completion >= ${DELAY_MS * 1.8}ms (proves the invite row's FOR UPDATE lock blocked the second transaction's read), got ${laterFinish}ms -- the two invite reads ran concurrently instead of being serialized by a row lock`,
+  );
 
   // Assert exactly one link row in the database
   const links = await pool.query('SELECT * FROM federation_directory_links WHERE link_ref = $1', [linkRef]);
