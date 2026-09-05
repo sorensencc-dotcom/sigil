@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
+import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
@@ -141,6 +142,123 @@ test('sigil federation invite create/list/revoke/redeem', { skip: !connectionStr
   const noDbRedeem = await run(['federation', 'invite', 'redeem', fakeCode, '--identity', bobIdentity], dir);
   assert.equal(noDbRedeem.exitCode, 1);
   assert.match(noDbRedeem.stderr, /sigil federation invite redeem requires --database-url/);
+});
+
+// A throwaway issuer relay that always answers the redemption POST with a
+// fixed status/body, so `invite redeem`'s success path (and its
+// federation_directory_redeem reservation, which only fires once the peer
+// has actually accepted the redemption) can be exercised without a second
+// live Sigil relay.
+async function startDirectoryStub(t, { status, body }) {
+  const server = http.createServer((req, res) => {
+    req.on('data', () => {});
+    req.on('end', () => {
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(body));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  return { url: `http://127.0.0.1:${server.address().port}` };
+}
+
+test('sigil federation invite create reserves federation_directory_invite_create quota keyed by endpoint:owner; aborts once exhausted', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  assertDisposableTestDatabase(connectionString);
+  await applyMigrations(connectionString, { reset: true });
+
+  const dir = await makeWorkdir(t);
+  const aliceIdentity = '.sigil/alice.identity.json';
+  const createArgs = ['federation', 'invite', 'create', '--peer', 'b.example', '--endpoint', 'ep_alice@local', '--identity', aliceIdentity, '--database-url', connectionString];
+
+  const first = await run(createArgs, dir);
+  assert.equal(first.exitCode, 0, first.stderr);
+
+  // Exact scope/key tuple: issuerEndpointId + ':' + issuerOwnerId.
+  const scopeId = 'ep_alice@local:usr_alice@local';
+  const usage = await pool.query(
+    "SELECT count FROM quota_usage WHERE scope_kind = 'federation_directory_invite_create' AND scope_id = $1",
+    [scopeId],
+  );
+  assert.equal(usage.rows.length, 1, 'expected exactly one quota_usage row for the endpoint:owner key');
+  assert.equal(Number(usage.rows[0].count), 1);
+
+  // Push that same window straight to the default limit (20) rather than
+  // making 20 real CLI calls, then confirm the next create aborts and writes
+  // nothing.
+  const windowStart = new Date(Math.floor(Date.now() / 60_000) * 60_000).toISOString();
+  await pool.query(
+    `INSERT INTO quota_usage (scope_kind, scope_id, window_start, count) VALUES ($1, $2, $3, 20)
+     ON CONFLICT (scope_kind, scope_id, window_start) DO UPDATE SET count = 20`,
+    ['federation_directory_invite_create', scopeId, windowStart],
+  );
+  const invitesBefore = await pool.query('SELECT count(*) FROM federation_directory_invites');
+
+  const exhausted = await run(createArgs, dir);
+  assert.equal(exhausted.exitCode, 1);
+  assert.match(exhausted.stderr, /invite-create rate limit reached/);
+  const invitesAfter = await pool.query('SELECT count(*) FROM federation_directory_invites');
+  assert.equal(Number(invitesAfter.rows[0].count), Number(invitesBefore.rows[0].count), 'no invite row should be written once the quota is exhausted');
+});
+
+test('sigil federation invite redeem reserves federation_directory_redeem quota keyed by endpoint:owner only on a successful redemption; aborts once exhausted', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  assertDisposableTestDatabase(connectionString);
+  await applyMigrations(connectionString, { reset: true });
+
+  const dir = await makeWorkdir(t);
+  const bobIdentity = '.sigil/bob.identity.json';
+  const codeFor = () => `sigil-fed-invite:b.example:${crypto.randomUUID()}:${crypto.randomBytes(24).toString('base64url')}`;
+
+  // --- an unpinned-peer error (local/infra, not a guess) consumes nothing --
+  const noQuotaYet = await pool.query("SELECT count(*) FROM quota_usage WHERE scope_kind = 'federation_directory_redeem'");
+  assert.equal(Number(noQuotaYet.rows[0].count), 0);
+  const unpinned = await run(['federation', 'invite', 'redeem', codeFor(), '--identity', bobIdentity, '--database-url', connectionString], dir);
+  assert.equal(unpinned.exitCode, 1);
+  assert.match(unpinned.stderr, /pin the peer relay first/);
+  const stillNoQuota = await pool.query("SELECT count(*) FROM quota_usage WHERE scope_kind = 'federation_directory_redeem'");
+  assert.equal(Number(stillNoQuota.rows[0].count), 0, 'an unpinned-peer error must not consume redeem quota');
+
+  // --- pin a stub issuer relay that always accepts the redemption ---------
+  const stub = await startDirectoryStub(t, {
+    status: 202,
+    body: { request_id: null, issuer: { owner_id: 'usr_carol@b.example', endpoint_id: 'ep_carol@b.example' } },
+  });
+  const pin = await run(
+    ['peer', 'add', 'b.example', '--relay-url', stub.url, '--public-key', 'AAAAC3NzaC1lZDI1NTE5AAAAITESTKEY', '--kid', 'key_directory_test', '--database-url', connectionString],
+    dir,
+  );
+  assert.equal(pin.exitCode, 0, pin.stderr);
+
+  const first = await run(['federation', 'invite', 'redeem', codeFor(), '--identity', bobIdentity, '--database-url', connectionString], dir);
+  assert.equal(first.exitCode, 0, first.stderr);
+
+  // Exact scope/key tuple: redeemerEndpointId + ':' + redeemerOwnerId.
+  const scopeId = 'ep_bob@local:usr_bob@local';
+  const usage = await pool.query(
+    "SELECT count FROM quota_usage WHERE scope_kind = 'federation_directory_redeem' AND scope_id = $1",
+    [scopeId],
+  );
+  assert.equal(usage.rows.length, 1, 'expected exactly one quota_usage row for the endpoint:owner key');
+  assert.equal(Number(usage.rows[0].count), 1);
+
+  // Push that same window straight to the default limit (10), then confirm
+  // the next accepted redemption aborts before writing the local link row.
+  const windowStart = new Date(Math.floor(Date.now() / 60_000) * 60_000).toISOString();
+  await pool.query(
+    `INSERT INTO quota_usage (scope_kind, scope_id, window_start, count) VALUES ($1, $2, $3, 10)
+     ON CONFLICT (scope_kind, scope_id, window_start) DO UPDATE SET count = 10`,
+    ['federation_directory_redeem', scopeId, windowStart],
+  );
+  const linksBefore = await pool.query('SELECT count(*) FROM federation_directory_links');
+
+  const exhausted = await run(['federation', 'invite', 'redeem', codeFor(), '--identity', bobIdentity, '--database-url', connectionString], dir);
+  assert.equal(exhausted.exitCode, 1);
+  assert.match(exhausted.stderr, /invite-redeem rate limit reached/);
+  const linksAfter = await pool.query('SELECT count(*) FROM federation_directory_links');
+  assert.equal(Number(linksAfter.rows[0].count), Number(linksBefore.rows[0].count), 'no link row should be written once the quota is exhausted');
 });
 
 // Seeds a federation_directory_links row directly (Task 14's CLI never

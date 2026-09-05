@@ -1053,18 +1053,6 @@ async function cmdFederationInviteRedeem(rest) {
 
   const requireMsg = 'sigil federation invite redeem requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable directory links';
   await withRepository(args, requireMsg, async (repository) => {
-    const now = new Date();
-
-    // (rate) Load-bearing redeem-attempt abuse scope, keyed per redeemer endpoint+owner.
-    if (typeof repository.reserveRateLimit === 'function') {
-      const windowStart = new Date(Math.floor(now.getTime() / 60_000) * 60_000).toISOString();
-      const limit = resolveRateLimits().federation_directory_redeem;
-      const reservation = await repository.reserveRateLimit('federation_directory_redeem', `${redeemer.endpoint_id}:${redeemer.owner_id}`, windowStart, limit);
-      if (reservation && reservation.allowed === false) {
-        throw new Error('invite-redeem rate limit reached');
-      }
-    }
-
     const peer = await repository.getPeerByDomain(issuerDomain);
     if (!peer) {
       console.error(`pin the peer relay first: sigil peer resolve --domain ${issuerDomain}`);
@@ -1073,6 +1061,7 @@ async function cmdFederationInviteRedeem(rest) {
     }
 
     const { buildRedemptionRequest, signRelayRequest, postDirectory } = await import('../relay/v1/federation-directory-client.mjs');
+    const now = new Date();
     const { body, canonicalBytes } = buildRedemptionRequest({ linkRef, code, redeemer, redeemerDomain, now });
     const signed = signRelayRequest(canonicalBytes, identity);
 
@@ -1099,6 +1088,21 @@ async function cmdFederationInviteRedeem(rest) {
     if (outcome.ok) {
       const issuer = outcome.body?.issuer;
       if (issuer && issuer.owner_id && issuer.endpoint_id) {
+        // (rate) Load-bearing redeem-attempt abuse scope, keyed per redeemer
+        // endpoint+owner. Placed here -- after the peer-pinned check has
+        // passed and the outbound POST has come back accepted -- so an
+        // unpinned-peer error or a transport failure (queued to the outbox,
+        // never reaching this branch) never consumes the redeemer's own
+        // quota; only a redemption that actually clears and is about to
+        // write the local link row does.
+        if (typeof repository.reserveRateLimit === 'function') {
+          const windowStart = new Date(Math.floor(now.getTime() / 60_000) * 60_000).toISOString();
+          const limit = resolveRateLimits().federation_directory_redeem;
+          const reservation = await repository.reserveRateLimit('federation_directory_redeem', `${redeemer.endpoint_id}:${redeemer.owner_id}`, windowStart, limit);
+          if (reservation && reservation.allowed === false) {
+            throw new Error('invite-redeem rate limit reached');
+          }
+        }
         try {
           await repository.createFederationDirectoryLink({
             linkRef,
