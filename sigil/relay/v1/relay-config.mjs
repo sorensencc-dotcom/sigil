@@ -2,7 +2,15 @@
 // "Generous defaults documented as not tuned for production" (design §8) --
 // override via the `overrides` param at call sites, never by editing these
 // constants for a specific deployment.
-export const DEFAULT_RATE_LIMITS = Object.freeze({ endpoint: 100, owner: 500, conversation: 200 });
+export const DEFAULT_RATE_LIMITS = Object.freeze({
+  endpoint: 100,
+  owner: 500,
+  conversation: 200,
+  // Cross-federation directory on-ramp scopes (spec #4, migration 018).
+  federation_directory_invite_create: 20,
+  federation_directory_redeem: 10,
+  federation_directory_redemption_inbound: 60,
+});
 export const DEFAULT_INBOX_DEPTH_LIMIT = 500;
 export const DEFAULT_HEARTBEAT = Object.freeze({ intervalMs: 15_000, missedBeforeTimeout: 3 });
 

@@ -98,6 +98,28 @@ test('owner-pair collision under a different link_ref -> 409 FEDERATION_LINK_EXI
   assert.equal(invite.status, 'pending');
 });
 
+test('redemption: a well-formed guess at an unknown code consumes redemption-inbound quota; a malformed body does not', async () => {
+  const reserved = [];
+  const repo = createMemoryRepository();
+  repo.reserveRateLimit = async (kind, id) => { reserved.push([kind, id]); return { allowed: true }; };
+  // malformed: bad code shape
+  await acceptDirectoryRedemption({ code: 'nope', link_ref: 'x', redeemer: { owner_id: 'a', endpoint_id: 'b' }, redeemer_domain: 'b.example' }, ctx(repo));
+  assert.equal(reserved.length, 0);
+  // well-formed guess at an unknown link_ref
+  const linkRef = crypto.randomUUID();
+  await acceptDirectoryRedemption(redemptionBody({ linkRef, segment: 'SEG' }), ctx(repo));
+  assert.deepEqual(reserved, [['federation_directory_redemption_inbound', 'b.example']]);
+});
+
+test('redemption: reserveRateLimit allowed:false -> 429 RATE_LIMITED', async () => {
+  const repo = createMemoryRepository();
+  repo.reserveRateLimit = async () => ({ allowed: false });
+  const linkRef = crypto.randomUUID();
+  const res = await acceptDirectoryRedemption(redemptionBody({ linkRef, segment: 'SEG' }), ctx(repo));
+  assert.equal(res.status, 429);
+  assert.equal(res.body.code, 'RATE_LIMITED');
+});
+
 async function seedLink(repo, { linkRef, role = 'issuer', status = 'pending', localConfirmedAt = null, remoteConfirmedAt = null, peerDomain = 'b.example' }) {
   await repo.createFederationDirectoryLink({
     linkRef, localOwnerId: 'usr_chris@a.example', localEndpointId: 'ep_codex@a.example',

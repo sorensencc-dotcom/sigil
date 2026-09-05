@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { parseDomain, parseFederatedId } from './federated-id.mjs';
+import { resolveRateLimits } from './relay-config.mjs';
 
 // Failure envelope shared with the /v1/federation/directory/redemptions route
 // (Task 10). Success / idempotent-replay returns a FLAT body instead
@@ -78,7 +79,7 @@ export async function acceptDirectoryRedemption(parsedBody, ctx) {
   if (typeof repository.reserveRateLimit === 'function') {
     const ms = now instanceof Date ? now.getTime() : Date.parse(now);
     const windowStart = new Date(Math.floor(ms / 60_000) * 60_000).toISOString();
-    const limit = ctx.rateLimits?.federation_directory_redemption_inbound ?? 60;
+    const limit = ctx.rateLimits?.federation_directory_redemption_inbound ?? resolveRateLimits().federation_directory_redemption_inbound;
     const r = await repository.reserveRateLimit('federation_directory_redemption_inbound', originDomain, windowStart, limit, client);
     if (r && r.allowed === false) {
       return respond(429, 'RATE_LIMITED', 'redemption rate limit for this peer domain exceeded', ctx, { scope_kind: 'federation_directory_redemption_inbound' });

@@ -30,6 +30,7 @@ import { formatInboxItem, INBOX_WAIT_EXIT_CODES, waitForOneInboxMessage, isRetry
 import { appendInboxLedger, readInboxLedger } from './ledger.mjs';
 import { signContract, verifyContract } from './contract-signing.mjs';
 import { checkRelayConnectivity } from './doctor.mjs';
+import { resolveRateLimits } from '../relay/v1/relay-config.mjs';
 
 const DEFAULT_CLI_CONFIG = path.join('.sigil', 'config.json');
 
@@ -925,6 +926,17 @@ async function cmdFederationInviteCreate(rest) {
   const requireMsg = 'sigil federation invite create requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable directory invites';
   await withRepository(args, requireMsg, async (repository) => {
     const now = new Date();
+
+    // (rate) Load-bearing invite-mint abuse scope, keyed per issuer endpoint+owner.
+    if (typeof repository.reserveRateLimit === 'function') {
+      const windowStart = new Date(Math.floor(now.getTime() / 60_000) * 60_000).toISOString();
+      const limit = resolveRateLimits().federation_directory_invite_create;
+      const reservation = await repository.reserveRateLimit('federation_directory_invite_create', `${endpoint}:${identity.owner_id}`, windowStart, limit);
+      if (reservation && reservation.allowed === false) {
+        throw new Error('invite-create rate limit reached');
+      }
+    }
+
     const linkRef = crypto.randomUUID();
     const segment = crypto.randomBytes(24).toString('base64url');
     const codeHash = crypto.createHash('sha256').update(segment).digest('hex');
@@ -1041,6 +1053,18 @@ async function cmdFederationInviteRedeem(rest) {
 
   const requireMsg = 'sigil federation invite redeem requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable directory links';
   await withRepository(args, requireMsg, async (repository) => {
+    const now = new Date();
+
+    // (rate) Load-bearing redeem-attempt abuse scope, keyed per redeemer endpoint+owner.
+    if (typeof repository.reserveRateLimit === 'function') {
+      const windowStart = new Date(Math.floor(now.getTime() / 60_000) * 60_000).toISOString();
+      const limit = resolveRateLimits().federation_directory_redeem;
+      const reservation = await repository.reserveRateLimit('federation_directory_redeem', `${redeemer.endpoint_id}:${redeemer.owner_id}`, windowStart, limit);
+      if (reservation && reservation.allowed === false) {
+        throw new Error('invite-redeem rate limit reached');
+      }
+    }
+
     const peer = await repository.getPeerByDomain(issuerDomain);
     if (!peer) {
       console.error(`pin the peer relay first: sigil peer resolve --domain ${issuerDomain}`);
@@ -1049,7 +1073,6 @@ async function cmdFederationInviteRedeem(rest) {
     }
 
     const { buildRedemptionRequest, signRelayRequest, postDirectory } = await import('../relay/v1/federation-directory-client.mjs');
-    const now = new Date();
     const { body, canonicalBytes } = buildRedemptionRequest({ linkRef, code, redeemer, redeemerDomain, now });
     const signed = signRelayRequest(canonicalBytes, identity);
 
