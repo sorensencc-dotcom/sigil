@@ -1404,14 +1404,38 @@ async function cmdRoute(argv) {
   // Look up by the normalized federated id (localPart@domain), not the raw CLI
   // arg -- the registry is keyed on the canonical form printed above.
   const recipientEntry = localRegistry.get(`${parsed.localPart}@${parsed.domain}`);
+  const identity = loadIdentity(identityPath);
+  let sameOwner = false;
   if (!recipientEntry) {
     console.log('Same-owner exemption: not determinable locally');
-  } else if (recipientEntry.owner_id === loadIdentity(identityPath).owner_id) {
+  } else if (recipientEntry.owner_id === identity.owner_id) {
+    sameOwner = true;
     console.log('Same-owner exemption: would apply (advisory)');
   } else {
     console.log('Same-owner exemption: would NOT apply (advisory) — owner ids differ');
   }
   console.log('(advisory only — the receiving relay re-checks against its own registry)');
+
+  // Step 5: advisory directory-link line. Only meaningful when the recipient
+  // is foreign (peer pinned above) and the same-owner exemption would not
+  // apply -- same-owner delivery never needs a directory link. Requires a
+  // database, since the directory only exists in PostgreSQL. `route test`
+  // only has the recipient's federated id, not its owner, so this can only
+  // run when the local registry resolved the recipient entry above; without
+  // that, the recipient owner is not derivable here.
+  if (peer && !sameOwner) {
+    if (!databaseUrl) {
+      // No database, so no durable directory to consult either way.
+    } else if (!recipientEntry) {
+      console.log('Directory link: not determinable locally');
+    } else {
+      await withRepository(args, '', async (repository) => {
+        const link = await repository.getActiveFederationDirectoryLink(identity.owner_id, recipientEntry.owner_id, parsed.domain);
+        if (link) console.log(`Directory link: active (link_ref ${link.link_ref})`);
+        else console.log('Directory link: none — delivery would be DIRECTORY_LINK_REQUIRED');
+      });
+    }
+  }
 }
 
 export async function main() {

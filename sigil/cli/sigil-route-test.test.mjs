@@ -238,3 +238,76 @@ test(
     assert.match(res.stdout, /Same-owner exemption: would NOT apply \(advisory\) — owner ids differ/);
   },
 );
+
+// alice's owner id is usr_alice@local (init default) throughout this file.
+test(
+  'route test: prints "Directory link: active" for an active link, then "none" once revoked',
+  { skip: !connectionString },
+  async (t) => {
+    const { default: pg } = await import('pg');
+    const { assertDisposableTestDatabase } = await import('../scripts/assert-disposable-test-db.mjs');
+    assertDisposableTestDatabase(connectionString);
+    const pool = new pg.Pool({ connectionString });
+    t.after(() => pool.end());
+    await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+
+    const dir = await makeWorkdir(t);
+    const stub = await startStubRelay(t);
+    const add = await pinPeer(dir, 'b.example', stub.url);
+    assert.equal(add.exitCode, 0, add.stderr);
+    // Different owner than alice, so the same-owner exemption would NOT
+    // apply and the directory-link advisory is reachable.
+    await seedRegistryEndpoint(dir, { endpointId: 'ep_bob@b.example', ownerId: 'usr_bob@b.example' });
+
+    const linkRef = crypto.randomUUID();
+    await pool.query(
+      `INSERT INTO federation_directory_links
+        (id, link_ref, local_owner_id, local_endpoint_id, remote_owner_id, remote_endpoint_id, remote_domain, role, status, local_confirmed_at, remote_confirmed_at, peer_domain, created_at, updated_at)
+        VALUES (gen_random_uuid(), $1, 'usr_alice@local', 'ep_alice@local', 'usr_bob@b.example', 'ep_bob@b.example', 'b.example', 'issuer', 'active', now(), now(), 'b.example', now(), now())`,
+      [linkRef],
+    );
+
+    const active = await run(
+      ['route', 'test', 'ep_bob@b.example', '--identity', '.sigil/alice.identity.json', '--database-url', connectionString],
+      dir,
+    );
+    assert.equal(active.exitCode, 0, active.stderr);
+    assert.match(active.stdout, new RegExp(`Directory link: active \\(link_ref ${linkRef}\\)`));
+
+    await pool.query(`UPDATE federation_directory_links SET status = 'revoked', revoked_at = now(), revoked_by = 'local' WHERE link_ref = $1`, [linkRef]);
+
+    const revoked = await run(
+      ['route', 'test', 'ep_bob@b.example', '--identity', '.sigil/alice.identity.json', '--database-url', connectionString],
+      dir,
+    );
+    assert.equal(revoked.exitCode, 0, revoked.stderr);
+    assert.match(revoked.stdout, /Directory link: none — delivery would be DIRECTORY_LINK_REQUIRED/);
+  },
+);
+
+test(
+  'route test: prints "Directory link: not determinable locally" when the recipient owner is unknown',
+  { skip: !connectionString },
+  async (t) => {
+    const { default: pg } = await import('pg');
+    const { assertDisposableTestDatabase } = await import('../scripts/assert-disposable-test-db.mjs');
+    assertDisposableTestDatabase(connectionString);
+    const pool = new pg.Pool({ connectionString });
+    t.after(() => pool.end());
+    await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+
+    const dir = await makeWorkdir(t);
+    const stub = await startStubRelay(t);
+    const add = await pinPeer(dir, 'b.example', stub.url);
+    assert.equal(add.exitCode, 0, add.stderr);
+    // No registry entry for ep_bob@b.example -> recipient owner unknown.
+
+    const res = await run(
+      ['route', 'test', 'ep_bob@b.example', '--identity', '.sigil/alice.identity.json', '--database-url', connectionString],
+      dir,
+    );
+    assert.equal(res.exitCode, 0, res.stderr);
+    assert.match(res.stdout, /Same-owner exemption: not determinable locally/);
+    assert.match(res.stdout, /Directory link: not determinable locally/);
+  },
+);
