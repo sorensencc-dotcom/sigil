@@ -84,14 +84,52 @@ test('checkRelayConnectivity reports ok: false with the underlying error message
   assert.match(result.error, /ECONNREFUSED/);
 });
 
-test('findPackageRoot resolves to the directory containing this module\'s nearest package.json, not process.cwd()', () => {
+test('findPackageRoot resolves to the audit package root, not process.cwd()', () => {
   const originalCwd = process.cwd();
   process.chdir(os.tmpdir());
   try {
     const root = findPackageRoot();
     assert.ok(fs.existsSync(path.join(root, 'package.json')));
+    assert.ok(
+      fs.existsSync(path.join(root, 'jcs-audit-lib.mjs')) ||
+      fs.existsSync(path.join(root, 'sigil', 'relay', 'v1')),
+      'expected the package root that owns the audit tree',
+    );
     assert.notEqual(root, process.cwd());
   } finally {
     process.chdir(originalCwd);
+  }
+});
+
+test('findPackageRoot skips a nested CLI package.json in favor of the real sigil package root', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-doctor-root-'));
+  try {
+    const realRoot = path.join(tmp, 'pkg');
+    const cliDir = path.join(realRoot, 'sigil', 'cli');
+    fs.mkdirSync(cliDir, { recursive: true });
+    fs.mkdirSync(path.join(realRoot, 'sigil', 'relay', 'v1'), { recursive: true });
+    fs.writeFileSync(path.join(realRoot, 'package.json'), JSON.stringify({ name: '@sorensencc/sigil', version: '0.0.0' }));
+    fs.writeFileSync(path.join(realRoot, 'jcs-audit-lib.mjs'), '// stub\n');
+    fs.writeFileSync(path.join(cliDir, 'package.json'), JSON.stringify({ name: '@sorensencc/sigil-cli', version: '0.0.0' }));
+
+    const root = findPackageRoot(cliDir);
+    assert.equal(root, realRoot);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('findPackageRoot falls back to the nearest package.json when no audit-root signals exist', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-doctor-fallback-'));
+  try {
+    const nested = path.join(tmp, 'only-cli');
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(path.join(nested, 'package.json'), JSON.stringify({ name: '@sorensencc/sigil-cli', version: '0.0.0' }));
+    const deeper = path.join(nested, 'src');
+    fs.mkdirSync(deeper);
+    const root = findPackageRoot(deeper);
+    assert.equal(root, nested);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 });

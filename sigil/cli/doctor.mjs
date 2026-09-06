@@ -7,17 +7,39 @@ import { runJcsAudit as defaultRunJcsAudit } from '../../jcs-audit-lib.mjs';
 import { runDepAudit as defaultRunDepAudit } from '../../dep-audit-lib.mjs';
 
 /**
- * Locates the sigil package's own root (nearest ancestor with package.json)
- * from this module's file location -- not process.cwd(), since `sigil
- * doctor` audits the installed package's source tree regardless of which
- * directory the operator invoked it from.
+ * Locates the sigil package's own root from this module's file location --
+ * not process.cwd(), since `sigil doctor` audits the installed package's
+ * source tree regardless of which directory the operator invoked it from.
+ *
+ * Walks ancestors looking for package.json. Prefers a root that owns the
+ * audit tree (jcs-audit-lib.mjs and/or sigil/relay/v1) or is named
+ * @sorensencc/sigil, so a nested sigil/cli/package.json does not shadow
+ * the real package root. Falls back to the nearest package.json ancestor
+ * when no stronger signal exists.
  */
+function isSigilPackageRoot(dir, packageJsonPath) {
+  if (fs.existsSync(path.join(dir, 'jcs-audit-lib.mjs'))) return true;
+  if (fs.existsSync(path.join(dir, 'sigil', 'relay', 'v1'))) return true;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+    if (pkg?.name === '@sorensencc/sigil') return true;
+  } catch {
+    // ignore unreadable/malformed package.json and keep walking
+  }
+  return false;
+}
+
 export function findPackageRoot(fromDir = path.dirname(fileURLToPath(import.meta.url))) {
   let dir = fromDir;
+  let nearestWithPackageJson = null;
   while (true) {
-    if (fs.existsSync(path.join(dir, 'package.json'))) return dir;
+    const packageJsonPath = path.join(dir, 'package.json');
+    if (fs.existsSync(packageJsonPath)) {
+      if (!nearestWithPackageJson) nearestWithPackageJson = dir;
+      if (isSigilPackageRoot(dir, packageJsonPath)) return dir;
+    }
     const parent = path.dirname(dir);
-    if (parent === dir) return fromDir;
+    if (parent === dir) return nearestWithPackageJson ?? fromDir;
     dir = parent;
   }
 }
