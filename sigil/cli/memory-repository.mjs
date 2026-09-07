@@ -55,6 +55,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
   const directoryMatchRequests = new Map();
   const federationDirectoryInvites = new Map(); // link_ref -> invite row (migration 018, cross-federation directory)
   const federationDirectoryLinks = new Map(); // link_ref -> link row (migration 018, cross-federation directory)
+  const federationRelayNonces = new Map(); // nonce -> expiresAt ISO (migration 019, replay guard)
   const humanSessions = new Map();
   const consumedLoginJtis = new Map();
   const oidcIssuerAllowlist = new Map();
@@ -588,6 +589,24 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
         }
       }
       return null;
+    },
+    // Relay-to-relay replay guard (migration 019). Parity with the Postgres
+    // consumeRelayNonce: a repeat nonce throws RELAY_REPLAYED; pruneRelayNonces
+    // sweeps entries whose expires_at is before `now`.
+    async consumeRelayNonce(nonce, { expiresAt } = {}) {
+      if (federationRelayNonces.has(nonce)) {
+        throw Object.assign(new Error('relay request nonce already seen'), { code: 'RELAY_REPLAYED' });
+      }
+      const iso = expiresAt instanceof Date ? expiresAt.toISOString() : new Date(expiresAt).toISOString();
+      federationRelayNonces.set(nonce, iso);
+    },
+    async pruneRelayNonces(now = new Date()) {
+      const cutoff = (now instanceof Date ? now : new Date(now)).toISOString();
+      let deleted = 0;
+      for (const [nonce, exp] of federationRelayNonces) {
+        if (exp < cutoff) { federationRelayNonces.delete(nonce); deleted += 1; }
+      }
+      return { deleted };
     },
     _debugGetEnvelope(messageId) { return envelopes.get(messageId) ?? null; }
   };

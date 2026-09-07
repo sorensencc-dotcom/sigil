@@ -1029,6 +1029,24 @@ export class PostgresRepository {
       throw error;
     }
   }
+  // Relay-to-relay replay guard (migration 019). The PRIMARY KEY uniqueness
+  // constraint on federation_relay_nonces.nonce makes a second insert fail
+  // 23505, mapped here to RELAY_REPLAYED. Callers pass the transaction `client`
+  // so a handler that rolls back does not burn the nonce.
+  async consumeRelayNonce(nonce, { now = new Date(), expiresAt, client = this.pool } = {}) {
+    const expires = expiresAt instanceof Date ? expiresAt.toISOString() : new Date(expiresAt).toISOString();
+    try {
+      await client.query('INSERT INTO federation_relay_nonces (nonce, expires_at) VALUES ($1, $2)', [nonce, expires]);
+    } catch (error) {
+      if (error.code === '23505') throw Object.assign(new Error('relay request nonce already seen'), { code: 'RELAY_REPLAYED' });
+      throw error;
+    }
+  }
+  async pruneRelayNonces(now = new Date()) {
+    const cutoff = (now instanceof Date ? now : new Date(now)).toISOString();
+    const r = await this.pool.query('DELETE FROM federation_relay_nonces WHERE expires_at < $1', [cutoff]);
+    return { deleted: r.rowCount };
+  }
   // Scoped strictly to enableMockOidc's opt-in startup path (Task 7) -- a
   // production relay that never sets --enable-mock-oidc never touches this
   // table for the fixture issuer.
