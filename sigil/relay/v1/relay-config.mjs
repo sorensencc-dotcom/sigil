@@ -34,3 +34,18 @@ export function resolveRateLimits(overrides = {}) {
 export function resolveHeartbeat(overrides = {}) {
   return { ...DEFAULT_HEARTBEAT, ...overrides };
 }
+
+// Relay-to-relay request freshness window (design Section 3). Bounds how long a
+// captured signed request stays replayable and gives the nonce table a prune
+// horizon. Clamped at load; the effective value is logged once at startup by
+// the caller.
+export const DEFAULT_RELAY_REQUEST_FRESHNESS_MS = 300_000;
+const RELAY_REQUEST_FRESHNESS_MIN_MS = 60_000;
+const RELAY_REQUEST_FRESHNESS_MAX_MS = 3_600_000;
+
+export function resolveRelayRequestFreshnessMs(raw) {
+  if (raw == null) return DEFAULT_RELAY_REQUEST_FRESHNESS_MS; // undefined or null
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_RELAY_REQUEST_FRESHNESS_MS;
+  return Math.min(RELAY_REQUEST_FRESHNESS_MAX_MS, Math.max(RELAY_REQUEST_FRESHNESS_MIN_MS, n));
+}
