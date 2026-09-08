@@ -246,6 +246,28 @@ test('B3: signed_at outside the configured freshness window -> 401 RELAY_REQUEST
   assert.equal((await world.repo.listInbox(`ep_claude@${RELAY}`, '')).length, 0);
 });
 
+test('B3: the stale rejection audits the origin domain AND the signed_at skew', async () => {
+  // Spec Section 3 requires the skew on EVERY RELAY_REQUEST_STALE, from either
+  // inbound route. The verifier throws before the envelope route's destructure
+  // completes, so the audit row can only name an origin domain and a skew if
+  // the failure carries the resolved peer and parsed body back out with it.
+  const world = worldWithRecipient('usr_chris@primary.example');
+  await seedSelfPairLink(world);
+  const audits = [];
+  const repo = { ...world.repo, recordAuditEvent: async (event) => { audits.push(event); } };
+  const { body, headers } = forwardPayload(world, {}, { signedAt: new Date(SERVER_NOW.getTime() - 300_000) });
+
+  const r = await acceptFederatedEnvelope(body, headers, { ...opts9(world), repository: repo, relayRequestFreshnessMs: 60_000 });
+  assert.equal(r.status, 401);
+
+  const stale = audits.find((e) => e.reason === 'RELAY_REQUEST_STALE');
+  assert.ok(stale, 'a stale inbound relay request must be audited');
+  assert.equal(stale.eventType, 'federation.inbound_rejected');
+  assert.equal(stale.payload.origin_domain, ORIGIN);
+  // The request was signed 300s before the server clock -> +300s of skew.
+  assert.equal(stale.payload.signed_at_skew_seconds, 300);
+});
+
 // --- Task 12: step 8 active-link second pass --------------------------------
 // The #3 tests run with the receiver relay on `b.example` and the sending peer
 // on `a.example`. These cases invert that orientation (receiver `a.example`,

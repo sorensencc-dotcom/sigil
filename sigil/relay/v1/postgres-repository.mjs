@@ -1033,8 +1033,11 @@ export class PostgresRepository {
   // Relay-to-relay replay guard (migration 019). The PRIMARY KEY uniqueness
   // constraint on federation_relay_nonces.nonce makes a second insert fail
   // 23505, mapped here to RELAY_REPLAYED. Callers pass the transaction `client`
-  // so a handler that rolls back does not burn the nonce.
-  async consumeRelayNonce(nonce, { now = new Date(), expiresAt, client = this.pool } = {}) {
+  // so a handler that rolls back does not burn the nonce. There is deliberately
+  // no `now` option: the row's only timestamp is `expires_at`, which the caller
+  // already computes as signed_at + freshnessMs, so a second clock here would
+  // be dead weight and would drift from the memory repository's signature.
+  async consumeRelayNonce(nonce, { expiresAt, client = this.pool } = {}) {
     const expires = expiresAt instanceof Date ? expiresAt.toISOString() : new Date(expiresAt).toISOString();
     try {
       await client.query('INSERT INTO federation_relay_nonces (nonce, expires_at) VALUES ($1, $2)', [nonce, expires]);

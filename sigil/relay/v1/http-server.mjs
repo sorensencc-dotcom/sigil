@@ -2,7 +2,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { acceptEnvelopeAsync } from './accept-envelope.mjs';
 import { acceptFederatedEnvelope } from './accept-federated-envelope.mjs';
-import { verifyInboundRelayRequest } from './federation-relay-auth.mjs';
+import { verifyInboundRelayRequest, relayRejectSkewPayload } from './federation-relay-auth.mjs';
 import { acceptDirectoryRedemption, acceptDirectoryConfirmation, acceptDirectoryRevocation } from './accept-federation-directory.mjs';
 import { transitionDelivery } from './delivery-state.mjs';
 import { createBearerAuthenticator } from './transport-auth.mjs';
@@ -27,13 +27,15 @@ function normalizeIssuerOrRespond(rawIssuer, response, requestId) {
 }
 
 // relay-config.mjs's contract for the freshness window is "the effective value
-// is logged once at startup by the caller". Only a federated relay ever applies
-// the window, and only the first server built in a process is "startup" -- a
-// test process that spins up dozens of servers must not spam the log.
-let loggedRelayRequestFreshness = false;
+// is logged once at startup". Only a federated relay ever applies the window.
+// The "once" is per WINDOW VALUE, not per process: two federated relays in one
+// process with different windows must both announce theirs, or the second
+// one's configuration is invisible in the log. Repeated servers built on the
+// same value (a test process spinning up dozens) still log once.
+const loggedRelayRequestFreshness = new Set();
 function logRelayRequestFreshnessOnce(freshnessMs, federationMode) {
-  if (loggedRelayRequestFreshness || !federationMode) return;
-  loggedRelayRequestFreshness = true;
+  if (!federationMode || loggedRelayRequestFreshness.has(freshnessMs)) return;
+  loggedRelayRequestFreshness.add(freshnessMs);
   console.error(`sigil: relay request freshness window = ${freshnessMs} ms`);
 }
 
@@ -227,13 +229,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         // request is audited here, and a stale one carries the signed_at skew
         // so an operator can tell a clock-drift peer from a replay attempt.
         const code = error.code ?? 'INVALID_FEDERATION_REQUEST';
-        const payload = { reason: code };
-        if (code === 'RELAY_REQUEST_STALE') {
-          try {
-            const skewMs = nowMs - Date.parse(JSON.parse(raw).signed_at);
-            if (Number.isFinite(skewMs)) payload.signed_at_skew_seconds = Math.round(skewMs / 1000);
-          } catch { /* unparseable body: report the rejection without a skew */ }
-        }
+        const payload = { reason: code, ...relayRejectSkewPayload(code, error.parsedBody ?? raw, nowMs) };
         const audit = repository.recordAuditEvent?.({
           eventType: 'federation.inbound_rejected', outcome: 'rejected', reason: code, payload, now,
         });
@@ -251,7 +247,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         // rolls the consume back with the rest of its writes.
         result = await repository.withTransaction(async (client) => {
           await repository.consumeRelayNonce(verified.nonce, {
-            now, expiresAt: verified.signedAtMs + freshnessMs, client,
+            expiresAt: verified.signedAtMs + freshnessMs, client,
           });
           return handler(verified.parsedBody, {
             repository, client, originDomain: verified.originDomain, now, request_id: requestId, relayDomain,

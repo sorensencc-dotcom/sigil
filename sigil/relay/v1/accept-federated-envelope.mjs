@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { parseFederatedId } from './federated-id.mjs';
-import { verifyInboundRelayRequest } from './federation-relay-auth.mjs';
+import { verifyInboundRelayRequest, relayRejectSkewPayload } from './federation-relay-auth.mjs';
 import { validateEnvelope, signedBytes, reject } from './validate-envelope.mjs';
 import { resolveRateLimits, resolveRelayRequestFreshnessMs, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
 
@@ -25,7 +25,7 @@ export async function acceptFederatedEnvelope(body, headers, options) {
   // federation.inbound_rejected here rather than via the transaction's catch.
   // Check 1 has no reliable message_id (mirrors accept-envelope.mjs's
   // deliberate exclusion of pre-signature INVALID_ENVELOPE) and does not audit.
-  const auditInboundReject = async (code) => {
+  const auditInboundReject = async (code, payloadExtra = {}) => {
     if (repository.recordAuditEvent) {
       await repository.recordAuditEvent({
         eventType: 'federation.inbound_rejected',
@@ -33,7 +33,7 @@ export async function acceptFederatedEnvelope(body, headers, options) {
         endpointId: envelope?.sender?.endpoint_id ?? null,
         outcome: 'rejected',
         reason: code,
-        payload: { origin_domain: originDomain },
+        payload: { origin_domain: originDomain, ...payloadExtra },
         now,
       }).catch(() => {});
     }
@@ -54,9 +54,18 @@ export async function acceptFederatedEnvelope(body, headers, options) {
     ({ envelope, sender_key: senderKey, sender_owner_id: senderOwnerId } = parsedBody);
   } catch (error) {
     const code = error.code ?? 'INVALID_FEDERATION_REQUEST';
+    // The destructure above never completed, so `originDomain` is still
+    // undefined here. Any failure raised AFTER the signature verified carries
+    // the resolved `peerRecord`, so the audit row can still name the origin
+    // domain -- and a RELAY_REQUEST_STALE carries the signed_at skew, which
+    // spec Section 3 requires on every stale rejection, from either route.
+    const nowMs = now instanceof Date ? now.getTime() : Date.parse(now);
+    originDomain = error.peerRecord?.domain;
     // Parity with #3: PEER_NOT_TRUSTED / RELAY_SIGNATURE_INVALID audit here;
     // a pre-signature parse failure (INVALID_FEDERATION_REQUEST) does not.
-    if (code !== 'INVALID_FEDERATION_REQUEST') await auditInboundReject(code);
+    if (code !== 'INVALID_FEDERATION_REQUEST') {
+      await auditInboundReject(code, relayRejectSkewPayload(code, error.parsedBody ?? options.rawBody ?? body, nowMs));
+    }
     return respond(error.httpStatus ?? 400, code, error.message, options);
   }
 
@@ -117,7 +126,15 @@ export async function acceptFederatedEnvelope(body, headers, options) {
     // inside the transaction so a handler that rejects further down rolls the
     // consume back with everything else and the peer can retry the same bytes.
     // The values come from the verifier's return, never a re-read of the body.
-    await repository.consumeRelayNonce(relayNonce, { now, expiresAt: relaySignedAtMs + freshnessMs, client });
+    //
+    // A repository without `consumeRelayNonce` has no replay defense at all, so
+    // this must be a loud precondition failure and never an unguarded call --
+    // a raw TypeError would be collapsed to a misleading 400 by the catch below
+    // while the envelope was, in fact, accepted unreplay-protected.
+    if (typeof repository.consumeRelayNonce !== 'function') {
+      throw new Error('federation inbound: repository does not implement consumeRelayNonce (relay replay defense is required)');
+    }
+    await repository.consumeRelayNonce(relayNonce, { expiresAt: relaySignedAtMs + freshnessMs, client });
     // 10 (first): idempotent-duplicate lookup, before any re-verification.
     const priorIdem = await repository.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key, client);
     if (priorIdem) {
