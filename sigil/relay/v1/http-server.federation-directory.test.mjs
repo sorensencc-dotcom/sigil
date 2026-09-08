@@ -11,11 +11,10 @@ import {
 } from './federation-directory-client.mjs';
 import { canonicalJsonBytes } from './jcs.mjs';
 
-// Task 4: the inbound relay verifier now requires a fresh signed_at plus a
-// 22-char base64url nonce on every relay request body. The directory route
-// invokes the verifier without a `now` override (Task 10 threads the configured
-// clock/window through), so freshness is judged against wall-clock time -- the
-// fixtures sign with a real current timestamp.
+// Task 4: the inbound relay verifier requires a fresh signed_at plus a 22-char
+// base64url nonce on every relay request body. Task 10 threads the server's
+// configured clock (`now`) and freshness window into the verifier, so every
+// fixture signs `signed_at` relative to SERVER_NOW -- never wall-clock time.
 const NONCE_OK = 'abcdefghijklmnopqrstuv';
 
 // This relay is the invite ISSUER domain; PEER is the redeemer's relay, i.e. the
@@ -72,6 +71,7 @@ async function startServer(repo, opts = {}) {
     relayDomain: RELAY,
     now: () => SERVER_NOW,
     federationMode,
+    relayRequestFreshnessMs: opts.relayRequestFreshnessMs,
   });
   await new Promise((resolve) => server.listen(0, resolve));
   return { server, port: server.address().port };
@@ -87,34 +87,41 @@ async function post(port, path, bodyObj, headers = {}) {
   return { status: res.status, body: text ? JSON.parse(text) : null };
 }
 
-function signedRedemption(identity, { linkRef, segment, now = SERVER_NOW }) {
+function signedRedemption(identity, { linkRef, segment, now = SERVER_NOW, nonce = NONCE_OK }) {
   const { body } = buildRedemptionRequest({
     linkRef,
     code: `sigil-fed-invite:${RELAY}:${linkRef}:${segment}`,
     redeemer: { owner_id: 'usr_bob@b.example', endpoint_id: 'ep_c@b.example' },
     redeemerDomain: PEER,
     now,
+    nonce,
   });
-  body.nonce = NONCE_OK;
-  body.signed_at = new Date().toISOString();
   const { signature, keyId } = signRelayRequest(canonicalJsonBytes(body), identity);
   return { body, headers: { 'sigil-relay-signature': signature, 'sigil-relay-key-id': keyId } };
 }
 
-function signedConfirmation(identity, { linkRef, now = SERVER_NOW }) {
-  const { body } = buildConfirmationRequest({ linkRef, now });
-  body.nonce = NONCE_OK;
-  body.signed_at = new Date().toISOString();
+function signedConfirmation(identity, { linkRef, now = SERVER_NOW, nonce = NONCE_OK }) {
+  const { body } = buildConfirmationRequest({ linkRef, now, nonce });
   const { signature, keyId } = signRelayRequest(canonicalJsonBytes(body), identity);
   return { body, headers: { 'sigil-relay-signature': signature, 'sigil-relay-key-id': keyId } };
 }
 
-function signedRevocation(identity, { linkRef, now = SERVER_NOW }) {
-  const { body } = buildRevocationRequest({ linkRef, now });
-  body.nonce = NONCE_OK;
-  body.signed_at = new Date().toISOString();
+function signedRevocation(identity, { linkRef, now = SERVER_NOW, nonce = NONCE_OK }) {
+  const { body } = buildRevocationRequest({ linkRef, now, nonce });
   const { signature, keyId } = signRelayRequest(canonicalJsonBytes(body), identity);
   return { body, headers: { 'sigil-relay-signature': signature, 'sigil-relay-key-id': keyId } };
+}
+
+// A pending issuer-side link owned by PEER, the shape acceptDirectoryRevocation
+// needs to reach its real (non-noop) revoke branch.
+function seedPendingLink(repo, linkRef) {
+  return repo.createFederationDirectoryLink({
+    linkRef,
+    localOwnerId: 'usr_chris@a.example', localEndpointId: 'ep_codex@a.example',
+    remoteOwnerId: 'usr_bob@b.example', remoteEndpointId: 'ep_c@b.example',
+    remoteDomain: PEER, role: 'issuer', initiatedVia: 'invite', status: 'pending',
+    localConfirmedAt: null, remoteConfirmedAt: SERVER_NOW, sourceInviteId: null, peerDomain: PEER,
+  }, null);
 }
 
 // --- 501 pre-gate (no DB, no signature work) --------------------------------
@@ -212,6 +219,69 @@ test('confirmation with a tampered signature -> 401 RELAY_SIGNATURE_INVALID', as
     const res = await post(port, '/v1/federation/directory/confirmations', body, headers);
     assert.equal(res.status, 401);
     assert.equal(res.body.code, 'RELAY_SIGNATURE_INVALID');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+// --- B3: nonce consumption inside the handler transaction -------------------
+
+test('B3: a verbatim replayed revocation within the freshness window -> 409 RELAY_REPLAYED', async () => {
+  const { repo, identity, relayPub } = makeWorld();
+  withOutbox(repo);
+  await pinPeer(repo, relayPub);
+  const linkRef = crypto.randomUUID();
+  await seedPendingLink(repo, linkRef);
+  const { server, port } = await startServer(repo, { federationMode: 'queue' });
+  try {
+    // arrange: one signed revocation body, fixed nonce + signed_at == SERVER_NOW
+    const { body, headers } = signedRevocation(identity, { linkRef });
+
+    // act: POST it, then POST the identical bytes again
+    const first = await post(port, '/v1/federation/directory/revocations', body, headers);
+    const second = await post(port, '/v1/federation/directory/revocations', body, headers);
+
+    // assert
+    assert.equal(first.status, 202);
+    assert.equal(first.body.outcome, 'revoked');
+    assert.equal(second.status, 409);
+    assert.equal(second.body.code, 'RELAY_REPLAYED');
+    assert.deepEqual(second.body.details, {});
+    const link = await repo.getFederationDirectoryLinkByRef(linkRef, null, {});
+    assert.equal(link.status, 'revoked');
+    const revocations = repo._debugGetAuditEvents().filter((e) => e.event_type === 'federation_directory.revocation_accepted');
+    assert.equal(revocations.length, 1, 'the link must be revoked exactly once');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('B3: a revocation whose signed_at is older than relayRequestFreshnessMs -> 401 RELAY_REQUEST_STALE + audit', async () => {
+  const { repo, identity, relayPub } = makeWorld();
+  withOutbox(repo);
+  await pinPeer(repo, relayPub);
+  const linkRef = crypto.randomUUID();
+  await seedPendingLink(repo, linkRef);
+  const { server, port } = await startServer(repo, { federationMode: 'queue', relayRequestFreshnessMs: 60_000 });
+  try {
+    // arrange: signed_at is 5 minutes behind the server's pinned clock
+    const staleAt = new Date(SERVER_NOW.getTime() - 300_000);
+    const { body, headers } = signedRevocation(identity, { linkRef, now: staleAt });
+
+    // act
+    const res = await post(port, '/v1/federation/directory/revocations', body, headers);
+
+    // assert
+    assert.equal(res.status, 401);
+    assert.equal(res.body.code, 'RELAY_REQUEST_STALE');
+    const link = await repo.getFederationDirectoryLinkByRef(linkRef, null, {});
+    assert.equal(link.status, 'pending', 'a stale request must not revoke the link');
+    const rejected = repo._debugGetAuditEvents().filter(
+      (e) => e.event_type === 'federation.inbound_rejected' && e.reason === 'RELAY_REQUEST_STALE',
+    );
+    assert.equal(rejected.length, 1);
+    assert.equal(rejected[0].outcome, 'rejected');
+    assert.equal(rejected[0].payload.signed_at_skew_seconds, 300);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

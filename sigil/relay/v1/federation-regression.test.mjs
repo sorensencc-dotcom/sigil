@@ -33,9 +33,14 @@ function signedEnvelope(privateKey, keyId, overrides = {}) {
 }
 
 const NOW = new Date('2026-08-30T12:00:30.000Z');
-// Task 4: the inbound relay verifier now requires a fresh signed_at plus a
-// 22-char base64url nonce on every relay request body.
+// Task 4: the inbound relay verifier requires a fresh signed_at plus a 22-char
+// base64url nonce on every relay request body. Task 10 threads `options.now`
+// into the verifier, so `signed_at` is stamped from SIGNED_AT (25s before the
+// pinned NOW) rather than wall-clock time, and each request in a test that
+// posts more than once needs its own nonce.
 const NONCE_OK = 'abcdefghijklmnopqrstuv';
+const NONCE_2 = 'bcdefghijklmnopqrstuvw';
+const SIGNED_AT = new Date('2026-08-30T12:00:05.000Z');
 
 test('a --domain relay with NO --federation-mode still rejects a foreign recipient RECIPIENT_NOT_LOCAL', async () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
@@ -124,10 +129,9 @@ function forwardPayload(world, envelopeOverrides = {}, opts = {}) {
     originDomain: opts.originDomain ?? ORIGIN,
     senderKey: { kid: `key_ep_codex@${ORIGIN}`, alg: 'Ed25519', publicKey: opts.senderPub ?? world.senderPub },
     senderOwnerId: opts.senderOwnerId ?? 'usr_chris@primary.example',
-    now: new Date('2026-08-30T12:00:05.000Z'),
+    now: opts.signedAt ?? SIGNED_AT,
+    nonce: opts.nonce ?? NONCE_OK,
   });
-  body.nonce = opts.nonce ?? NONCE_OK;
-  body.signed_at = opts.signedAt ?? new Date().toISOString();
   const { signature, keyId } = signForwardRequest(canonicalJsonBytes(body), opts.relayIdentity ?? world.relayIdentity);
   return { body, headers: { 'sigil-relay-signature': signature, 'sigil-relay-key-id': keyId } };
 }
@@ -143,7 +147,7 @@ function worldWithRecipient(recipientOwnerId = 'usr_chris@primary.example') {
   repo.upsertPeer({ domain: ORIGIN, relayUrl: 'https://a.example/relay', keys: [{ kid: relayIdentity.key_id, alg: 'Ed25519', publicKey: relayPub }], trustMode: 'tofu' });
   return { relayKeys, senderKeys, relayIdentity, relayPub, senderPub, repo, registered: registry };
 }
-const opts9 = (world) => ({ repository: world.repo, registered: world.registered, relayDomain: RELAY, request_id: 'req_1', now: new Date('2026-08-30T12:00:30.000Z') });
+const opts9 = (world) => ({ repository: world.repo, registered: world.registered, relayDomain: RELAY, request_id: 'req_1', now: NOW });
 
 test('two federated recipients differing only in local-part case stay distinct through the federated-inbound registry lookup', async () => {
   const world = worldWithRecipient('usr_chris@primary.example'); // ep_claude@b.example -> usr_chris@primary.example
@@ -179,7 +183,7 @@ test('two federated recipients differing only in local-part case stay distinct t
     message_id: 'msg_fed_2', idempotency_key: 'idem_2',
     recipient: { owner_id: 'usr_chris@primary.example', endpoint_id: `ep_Claude@${RELAY}`, kind: 'agent' },
   });
-  const b = forwardPayload(world, {}, { envelope: envelopeB });
+  const b = forwardPayload(world, {}, { envelope: envelopeB, nonce: NONCE_2 });
   const rb = await acceptFederatedEnvelope(b.body, b.headers, opts9(world));
   assert.equal(rb.status, 403);
   assert.equal(rb.body.code, 'DIRECTORY_LINK_REQUIRED');
@@ -205,11 +209,10 @@ test('federated envelope: body origin_domain disagreeing with the signing kid ->
     originDomain: ORIGIN,
     senderKey: { kid: `key_ep_codex@${ORIGIN}`, alg: 'Ed25519', publicKey: world.senderPub },
     senderOwnerId: 'usr_chris@primary.example',
-    now: new Date('2026-08-30T12:00:05.000Z'),
+    now: SIGNED_AT,
+    nonce: NONCE_OK,
   });
   body.origin_domain = 'c.example';
-  body.nonce = NONCE_OK;
-  body.signed_at = new Date().toISOString();
   const raw = Buffer.from(canonicalJsonBytes(body));
   const { signature, keyId } = signForwardRequest(raw, world.relayIdentity);
 

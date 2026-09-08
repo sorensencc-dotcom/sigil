@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { parseFederatedId } from './federated-id.mjs';
 import { verifyInboundRelayRequest } from './federation-relay-auth.mjs';
 import { validateEnvelope, signedBytes, reject } from './validate-envelope.mjs';
-import { resolveRateLimits, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
+import { resolveRateLimits, resolveRelayRequestFreshnessMs, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
 
 function respond(status, code, message, options, details = {}) {
   return { status, body: { request_id: options.request_id ?? null, code, message, details } };
@@ -14,6 +14,12 @@ function isNonEmptyString(v) { return typeof v === 'string' && v.length > 0; }
 // checks in order; the first failure returns immediately.
 export async function acceptFederatedEnvelope(body, headers, options) {
   const { repository } = options;
+  // B3: one clock and one freshness window for the whole request. `now` is
+  // hoisted above the verifier call (checks 6-10 used to re-destructure it
+  // further down) so signed_at freshness is judged against the SAME clock the
+  // handler and its audit events use, never wall time.
+  const now = options.now ?? new Date();
+  const freshnessMs = resolveRelayRequestFreshnessMs(options.relayRequestFreshnessMs);
 
   // Checks 2-5 each return before the transactional body runs, so they emit
   // federation.inbound_rejected here rather than via the transaction's catch.
@@ -28,7 +34,7 @@ export async function acceptFederatedEnvelope(body, headers, options) {
         outcome: 'rejected',
         reason: code,
         payload: { origin_domain: originDomain },
-        now: options.now ?? new Date(),
+        now,
       }).catch(() => {});
     }
   };
@@ -38,12 +44,12 @@ export async function acceptFederatedEnvelope(body, headers, options) {
   // peer is resolved from WHICH pinned key signed the request (never a body
   // field), and the signature is checked over bytes re-canonicalized from the
   // same raw source the sender signed.
-  let originDomain, peer, parsedBody, envelope, senderKey, senderOwnerId;
+  let originDomain, peer, parsedBody, envelope, senderKey, senderOwnerId, relayNonce, relaySignedAtMs;
   try {
-    ({ originDomain, peerRecord: peer, parsedBody } = await verifyInboundRelayRequest(
+    ({ originDomain, peerRecord: peer, parsedBody, nonce: relayNonce, signedAtMs: relaySignedAtMs } = await verifyInboundRelayRequest(
       options.rawBody ?? Buffer.from(JSON.stringify(body)),
       headers,
-      { getPeerByKid: (kid) => repository.getPeerByKid(kid) },
+      { getPeerByKid: (kid) => repository.getPeerByKid(kid), now, freshnessMs },
     ));
     ({ envelope, sender_key: senderKey, sender_owner_id: senderOwnerId } = parsedBody);
   } catch (error) {
@@ -95,7 +101,7 @@ export async function acceptFederatedEnvelope(body, headers, options) {
   if (!ok) { await auditInboundReject('INVALID_SIGNATURE'); return respond(401, 'INVALID_SIGNATURE', 'Envelope signature verification failed against sender_key', options); }
 
   // --- Checks 6-10: validate, same-owner exemption, deliver ---
-  const { registered, relayDomain, now = new Date() } = options;
+  const { registered, relayDomain } = options;
 
   const auditReject = async (status, code, message, details = {}) => {
     if (repository.recordAuditEvent) {
@@ -105,6 +111,13 @@ export async function acceptFederatedEnvelope(body, headers, options) {
   };
 
   return repository.withTransaction(async (client) => {
+    // B3 (first statement): spend the relay-request nonce on the transaction's
+    // own client, BEFORE the idempotency lookup, so a captured-and-replayed
+    // signed request is rejected rather than answered `duplicate: true`. Placed
+    // inside the transaction so a handler that rejects further down rolls the
+    // consume back with everything else and the peer can retry the same bytes.
+    // The values come from the verifier's return, never a re-read of the body.
+    await repository.consumeRelayNonce(relayNonce, { now, expiresAt: relaySignedAtMs + freshnessMs, client });
     // 10 (first): idempotent-duplicate lookup, before any re-verification.
     const priorIdem = await repository.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key, client);
     if (priorIdem) {
@@ -191,7 +204,7 @@ export async function acceptFederatedEnvelope(body, headers, options) {
     // driver error (23503 / 23514 / 23502, etc.) is not a protocol enum
     // value and must never be echoed to the peer -- collapse anything
     // unrecognised to INVALID_FEDERATION_REQUEST / 400.
-    const statusByCode = { REPLAY_DETECTED: 409, MESSAGE_EXPIRED: 422, RECIPIENT_NOT_FOUND: 400, DIRECTORY_LINK_REQUIRED: 403, SENDER_OWNER_ASSERTION_MISMATCH: 403, RATE_LIMITED: 429, QUOTA_EXCEEDED: 429, INVALID_ENVELOPE: 400, INVALID_SIGNATURE: 401, VERSION_UNSUPPORTED: 400, CAPABILITY_DENIED: 403 };
+    const statusByCode = { RELAY_REPLAYED: 409, REPLAY_DETECTED: 409, MESSAGE_EXPIRED: 422, RECIPIENT_NOT_FOUND: 400, DIRECTORY_LINK_REQUIRED: 403, SENDER_OWNER_ASSERTION_MISMATCH: 403, RATE_LIMITED: 429, QUOTA_EXCEEDED: 429, INVALID_ENVELOPE: 400, INVALID_SIGNATURE: 401, VERSION_UNSUPPORTED: 400, CAPABILITY_DENIED: 403 };
     const known = Object.prototype.hasOwnProperty.call(statusByCode, error.code);
     const code = known ? error.code : 'INVALID_FEDERATION_REQUEST';
     const status = known ? statusByCode[error.code] : 400;

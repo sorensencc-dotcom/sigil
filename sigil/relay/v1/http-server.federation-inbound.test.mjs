@@ -10,9 +10,13 @@ import { createMemoryRepository } from '../../cli/memory-repository.mjs';
 const ORIGIN = 'a.example';
 const RELAY = 'b.example';
 const SERVER_NOW = new Date('2026-08-30T12:00:30.000Z');
-// Task 4: the inbound relay verifier now requires a fresh signed_at plus a
-// 22-char base64url nonce on every relay request body.
+// Task 4: the inbound relay verifier requires a fresh signed_at plus a 22-char
+// base64url nonce on every relay request body. Task 10 threads the server clock
+// into the verifier, so signed_at is stamped from SIGNED_AT (25s before
+// SERVER_NOW) rather than wall-clock time, and a retry needs a fresh nonce.
 const NONCE_OK = 'abcdefghijklmnopqrstuv';
+const NONCE_2 = 'bcdefghijklmnopqrstuvw';
+const SIGNED_AT = new Date('2026-08-30T12:00:05.000Z');
 
 // worldWithRecipient mirrors accept-federated-envelope.test.mjs: a memory repo
 // seeded with a pinned origin peer plus an active local recipient.
@@ -58,13 +62,9 @@ function forwardPayload(world, envelopeOverrides = {}, opts = {}) {
     originDomain: opts.originDomain ?? ORIGIN,
     senderKey: { kid: `key_ep_codex@${ORIGIN}`, alg: 'Ed25519', publicKey: opts.senderPub ?? world.senderPub },
     senderOwnerId: opts.senderOwnerId ?? 'usr_chris@primary.example',
-    now: new Date('2026-08-30T12:00:05.000Z'),
+    now: opts.signedAt ?? SIGNED_AT,
+    nonce: opts.nonce ?? NONCE_OK,
   });
-  body.nonce = opts.nonce ?? NONCE_OK;
-  // The inbound verifier is invoked by acceptFederatedEnvelope without a `now`
-  // override (Task 10 threads the configured clock/window in), so it judges
-  // freshness against wall-clock time -- sign with a real current timestamp.
-  body.signed_at = opts.signedAt ?? new Date().toISOString();
   const { signature, keyId } = signForwardRequest(canonicalJsonBytes(body), opts.relayIdentity ?? world.relayIdentity);
   return { body, headers: { 'sigil-relay-signature': signature, 'sigil-relay-key-id': keyId } };
 }
@@ -103,7 +103,10 @@ test('POST /v1/federation/envelopes delivers a signed forward and is idempotent'
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0].endpointId, `ep_claude@${RELAY}`);
 
-    const second = await postForward(port, payload);
+    // B3: the peer's retry carries a fresh nonce (a verbatim replay is a 409);
+    // the envelope inside is identical, so idempotency still reports duplicate.
+    const retry = forwardPayload(world, {}, { nonce: NONCE_2 });
+    const second = await postForward(port, retry);
     assert.equal(second.status, 202);
     assert.equal(second.body.duplicate, true);
     assert.equal((await world.repo.listInbox(`ep_claude@${RELAY}`, '')).length, 1);

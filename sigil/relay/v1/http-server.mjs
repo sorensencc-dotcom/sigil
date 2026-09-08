@@ -14,7 +14,7 @@ import { assertAccountLinkCeremony, assertAllowedIssuer, boundedDirectoryExpiry,
 import { verifyMockIdToken } from './mock-oidc.mjs';
 import { verifyRealIdToken, createJwksCache, createDiscoveryCache, CLOCK_SKEW_SECONDS } from './oidc-client.mjs';
 import { attemptDirectoryMatchOnOidcLogin } from './directory-trust.mjs';
-import { resolveDirectoryRateLimits } from './relay-config.mjs';
+import { resolveDirectoryRateLimits, resolveRelayRequestFreshnessMs } from './relay-config.mjs';
 
 function normalizeIssuerOrRespond(rawIssuer, response, requestId) {
   try {
@@ -26,13 +26,29 @@ function normalizeIssuerOrRespond(rawIssuer, response, requestId) {
   }
 }
 
+// relay-config.mjs's contract for the freshness window is "the effective value
+// is logged once at startup by the caller". Only a federated relay ever applies
+// the window, and only the first server built in a process is "startup" -- a
+// test process that spins up dozens of servers must not spam the log.
+let loggedRelayRequestFreshness = false;
+function logRelayRequestFreshnessOnce(freshnessMs, federationMode) {
+  if (loggedRelayRequestFreshness || !federationMode) return;
+  loggedRelayRequestFreshness = true;
+  console.error(`sigil: relay request freshness window = ${freshnessMs} ms`);
+}
+
 async function readBody(request, maxBytes = 1024 * 1024) {
   let raw = ''; let size = 0;
   for await (const chunk of request) { size += Buffer.byteLength(chunk); if (size > maxBytes) throw Object.assign(new Error('Request body too large'), { code: 'REQUEST_TOO_LARGE' }); raw += chunk; }
   return raw;
 }
 
-export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain, federationMode, federationIdentity, fetchImpl } = {}) {
+export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain, federationMode, federationIdentity, fetchImpl, relayRequestFreshnessMs } = {}) {
+  // B3: one clamped relay-request freshness window for this server. It bounds
+  // how long a captured signed peer request stays replayable and doubles as the
+  // nonce row's expiry horizon (expiresAt = signed_at + freshnessMs).
+  const freshnessMs = resolveRelayRequestFreshnessMs(relayRequestFreshnessMs);
+  logRelayRequestFreshnessOnce(freshnessMs, federationMode);
   const jwksCache = createJwksCache({ fetchImpl: oidcFetchImpl });
   const discoveryCache = createDiscoveryCache({ fetchImpl: oidcFetchImpl });
   const authenticateRequest = authenticate ?? (tokenHashes ? createBearerAuthenticator(tokenHashes, registry) : null);
@@ -168,6 +184,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       for (const [k, v] of Object.entries(request.headers)) headers[k.toLowerCase()] = Array.isArray(v) ? v[0] : v;
       const result = await acceptFederatedEnvelope(body, headers, {
         repository, registered: registry, relayDomain, request_id: requestId, now, rawBody: Buffer.from(raw),
+        relayRequestFreshnessMs: freshnessMs,
         onPersisted: async ({ envelope: accepted, persisted }) => {
           if (!stream || persisted?.duplicate) return;
           if (accepted.recipient?.endpoint_id) stream.notify(accepted.recipient.endpoint_id, persisted.message_id);
@@ -202,16 +219,51 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
 
       let verified;
       try {
-        verified = await verifyInboundRelayRequest(Buffer.from(raw), headers, { getPeerByKid: (kid) => repository.getPeerByKid(kid) });
+        verified = await verifyInboundRelayRequest(Buffer.from(raw), headers, {
+          getPeerByKid: (kid) => repository.getPeerByKid(kid), now, freshnessMs,
+        });
       } catch (error) {
+        // Operational visibility (spec Section 3): a rejected inbound relay
+        // request is audited here, and a stale one carries the signed_at skew
+        // so an operator can tell a clock-drift peer from a replay attempt.
+        const code = error.code ?? 'INVALID_FEDERATION_REQUEST';
+        const payload = { reason: code };
+        if (code === 'RELAY_REQUEST_STALE') {
+          try {
+            const skewMs = nowMs - Date.parse(JSON.parse(raw).signed_at);
+            if (Number.isFinite(skewMs)) payload.signed_at_skew_seconds = Math.round(skewMs / 1000);
+          } catch { /* unparseable body: report the rejection without a skew */ }
+        }
+        const audit = repository.recordAuditEvent?.({
+          eventType: 'federation.inbound_rejected', outcome: 'rejected', reason: code, payload, now,
+        });
+        if (audit?.catch) audit.catch(() => {});
         response.writeHead(error.httpStatus ?? 400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
-        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'INVALID_FEDERATION_REQUEST', message: error.message, details: {} }));
+        return response.end(JSON.stringify({ request_id: requestId, code, message: error.message, details: {} }));
       }
 
       const handler = DIRECTORY_ROUTES[parsedUrl.pathname];
-      const result = await repository.withTransaction((client) => handler(verified.parsedBody, {
-        repository, client, originDomain: verified.originDomain, now, request_id: requestId, relayDomain,
-      }));
+      let result;
+      try {
+        // B3: spend the relay-request nonce as the FIRST statement inside the
+        // transaction, so a verbatim replay within the freshness window is a
+        // 409 instead of a second execution -- and so a handler that rejects
+        // rolls the consume back with the rest of its writes.
+        result = await repository.withTransaction(async (client) => {
+          await repository.consumeRelayNonce(verified.nonce, {
+            now, expiresAt: verified.signedAtMs + freshnessMs, client,
+          });
+          return handler(verified.parsedBody, {
+            repository, client, originDomain: verified.originDomain, now, request_id: requestId, relayDomain,
+          });
+        });
+      } catch (error) {
+        if (error?.code === 'RELAY_REPLAYED') {
+          response.writeHead(409, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+          return response.end(JSON.stringify({ request_id: requestId, code: 'RELAY_REPLAYED', message: 'This relay request was already processed', details: {} }));
+        }
+        throw error;
+      }
       response.writeHead(result.status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(result.body ? JSON.stringify(result.body) : '');
     }

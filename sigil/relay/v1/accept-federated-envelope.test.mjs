@@ -9,12 +9,17 @@ import { createMemoryRepository } from '../../cli/memory-repository.mjs';
 
 const ORIGIN = 'a.example';
 const RELAY = 'b.example';
-// Task 4: the inbound relay verifier now requires a fresh signed_at plus a
-// 22-char base64url nonce on every relay request body. acceptFederatedEnvelope
-// invokes the verifier without a `now` override (Task 10 threads the configured
-// clock/window through), so freshness is judged against wall-clock time -- the
-// fixtures sign with a real current timestamp.
+// Task 4: the inbound relay verifier requires a fresh signed_at plus a 22-char
+// base64url nonce on every relay request body. Task 10 threads `options.now`
+// and the freshness window into the verifier, so `signed_at` is signed relative
+// to SERVER_NOW (buildForwardRequest stamps it from the `now` it is given) --
+// never wall-clock time. Task 10 also consumes the nonce inside the handler
+// transaction, so any test that posts twice must vary the nonce unless it is
+// deliberately exercising the replay guard.
 const NONCE_OK = 'abcdefghijklmnopqrstuv';
+const NONCE_2 = 'bcdefghijklmnopqrstuvw';
+const SERVER_NOW = new Date('2026-08-30T12:00:30.000Z');
+const SIGNED_AT = new Date('2026-08-30T12:00:05.000Z');
 
 function makeWorld() {
   const relayKeys = crypto.generateKeyPairSync('ed25519');
@@ -46,15 +51,14 @@ function forwardPayload(world, envelopeOverrides = {}, opts = {}) {
     originDomain: opts.originDomain ?? ORIGIN,
     senderKey: { kid: `key_ep_codex@${ORIGIN}`, alg: 'Ed25519', publicKey: opts.senderPub ?? world.senderPub },
     senderOwnerId: opts.senderOwnerId ?? 'usr_chris@primary.example',
-    now: new Date('2026-08-30T12:00:05.000Z'),
+    now: opts.signedAt ?? SIGNED_AT,
+    nonce: opts.nonce ?? NONCE_OK,
   });
-  body.nonce = opts.nonce ?? NONCE_OK;
-  body.signed_at = opts.signedAt ?? new Date().toISOString();
   const { signature, keyId } = signForwardRequest(canonicalJsonBytes(body), opts.relayIdentity ?? world.relayIdentity);
   return { body, headers: { 'sigil-relay-signature': signature, 'sigil-relay-key-id': keyId } };
 }
 
-const baseOpts = (repo) => ({ repository: repo, registered: new Map(), relayDomain: RELAY, request_id: 'req_1', now: new Date('2026-08-30T12:00:30.000Z') });
+const baseOpts = (repo) => ({ repository: repo, registered: new Map(), relayDomain: RELAY, request_id: 'req_1', now: SERVER_NOW });
 
 test('check 1: structural garbage → 400 INVALID_FEDERATION_REQUEST', async () => {
   const world = makeWorld();
@@ -128,7 +132,7 @@ function worldWithRecipient(recipientOwnerId = 'usr_chris@primary.example') {
   repo.upsertPeer({ domain: ORIGIN, relayUrl: 'https://a.example/relay', keys: [{ kid: relayIdentity.key_id, alg: 'Ed25519', publicKey: relayPub }], trustMode: 'tofu' });
   return { relayKeys, senderKeys, relayIdentity, relayPub, senderPub, repo, registered: registry };
 }
-const opts9 = (world) => ({ repository: world.repo, registered: world.registered, relayDomain: RELAY, request_id: 'req_1', now: new Date('2026-08-30T12:00:30.000Z') });
+const opts9 = (world) => ({ repository: world.repo, registered: world.registered, relayDomain: RELAY, request_id: 'req_1', now: SERVER_NOW });
 
 // B1: the same-owner exemption is gone; same-owner federated delivery now needs
 // an active self-pair directory link. `worldWithRecipient` defaults both the
@@ -199,7 +203,10 @@ test('re-POST of an accepted (sender.endpoint_id, idempotency_key) → 202 dupli
   await seedSelfPairLink(world);
   const { body, headers } = forwardPayload(world);
   await acceptFederatedEnvelope(body, headers, opts9(world));
-  const r2 = await acceptFederatedEnvelope(body, headers, opts9(world));
+  // B3: a legitimate peer retry carries a FRESH nonce; the envelope inside is
+  // byte-identical, so the idempotency lookup still reports duplicate:true.
+  const retry = forwardPayload(world, {}, { nonce: NONCE_2 });
+  const r2 = await acceptFederatedEnvelope(retry.body, retry.headers, opts9(world));
   assert.equal(r2.status, 202); assert.equal(r2.body.duplicate, true);
   assert.equal((await world.repo.listInbox(`ep_claude@${RELAY}`, '')).length, 1);
 });
@@ -209,9 +216,34 @@ test('replay: same message_id under a new idempotency_key → 409 REPLAY_DETECTE
   const { body, headers } = forwardPayload(world);
   await acceptFederatedEnvelope(body, headers, opts9(world));
   const envelope2 = senderEnvelope(world.senderKeys.privateKey, { idempotency_key: 'idem_2' });
-  const p2 = forwardPayload(world, {}, { envelope: envelope2 });
+  const p2 = forwardPayload(world, {}, { envelope: envelope2, nonce: NONCE_2 });
   const r = await acceptFederatedEnvelope(p2.body, p2.headers, opts9(world));
   assert.equal(r.status, 409); assert.equal(r.body.code, 'REPLAY_DETECTED');
+});
+
+// --- Task 10 / B3: relay-request nonce consumed inside the transaction -------
+
+test('B3: replaying a federated envelope with the same nonce -> 409 RELAY_REPLAYED', async () => {
+  const world = worldWithRecipient('usr_chris@primary.example');
+  await seedSelfPairLink(world);
+  const { body, headers } = forwardPayload(world); // nonce comes from buildForwardRequest
+  const first = await acceptFederatedEnvelope(body, headers, opts9(world));
+  assert.equal(first.status, 202);
+  const second = await acceptFederatedEnvelope(body, headers, { ...opts9(world), request_id: 'req_2' });
+  assert.equal(second.status, 409);
+  assert.equal(second.body.code, 'RELAY_REPLAYED');
+  // the replay is rejected before any second delivery
+  assert.equal((await world.repo.listInbox(`ep_claude@${RELAY}`, '')).length, 1);
+});
+
+test('B3: signed_at outside the configured freshness window -> 401 RELAY_REQUEST_STALE, nothing delivered', async () => {
+  const world = worldWithRecipient('usr_chris@primary.example');
+  await seedSelfPairLink(world);
+  const { body, headers } = forwardPayload(world, {}, { signedAt: new Date(SERVER_NOW.getTime() - 300_000) });
+  const r = await acceptFederatedEnvelope(body, headers, { ...opts9(world), relayRequestFreshnessMs: 60_000 });
+  assert.equal(r.status, 401);
+  assert.equal(r.body.code, 'RELAY_REQUEST_STALE');
+  assert.equal((await world.repo.listInbox(`ep_claude@${RELAY}`, '')).length, 0);
 });
 
 // --- Task 12: step 8 active-link second pass --------------------------------
@@ -252,13 +284,12 @@ async function seedFederatedInboundFixture({ recipient }) {
       originDomain: SEND_DOMAIN,
       senderKey: { kid: `key_${senderEndpoint}`, alg: 'Ed25519', publicKey: senderPub },
       senderOwnerId,
-      now: new Date('2026-08-30T12:00:05.000Z'),
+      now: SIGNED_AT,
+      nonce: NONCE_OK,
     });
-    body.nonce = NONCE_OK;
-    body.signed_at = new Date().toISOString();
     const { signature, keyId } = signForwardRequest(canonicalJsonBytes(body), relayIdentity);
     const res = await acceptFederatedEnvelope(body, { 'sigil-relay-signature': signature, 'sigil-relay-key-id': keyId }, {
-      repository, registered: registry, relayDomain: RECV_DOMAIN, request_id: 'req_1', now: new Date('2026-08-30T12:00:30.000Z'),
+      repository, registered: registry, relayDomain: RECV_DOMAIN, request_id: 'req_1', now: SERVER_NOW,
     });
     return { status: res.status, body: res.body };
   }

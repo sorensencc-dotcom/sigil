@@ -15,6 +15,10 @@ import { assertDisposableTestDatabase } from '../../scripts/assert-disposable-te
 const connectionString = process.env.SIGIL_TEST_DATABASE_URL;
 const ORIGIN = 'a.example';
 const RELAY = 'b.example';
+// One pinned timeline for both fixtures: the relay request is signed 25s before
+// the clock acceptFederatedEnvelope is handed, well inside the default window.
+const SIGNED_AT = new Date('2029-12-31T12:00:05.000Z');
+const SERVER_NOW = new Date('2029-12-31T12:00:30.000Z');
 
 // R10 + R11 live-DB pin: a federated envelope whose sender is absent from this
 // relay's humans / endpoints / endpoint_keys must still be accepted -- the
@@ -87,17 +91,16 @@ test('federated envelope with an unregistered foreign sender is accepted and sha
     originDomain: ORIGIN,
     senderKey: { kid: ids.senderKey, alg: 'Ed25519', publicKey: senderPub },
     senderOwnerId: ids.owner,
-    now: new Date('2029-12-31T12:00:05.000Z'),
+    // Task 10: acceptFederatedEnvelope now judges signed_at against the `now`
+    // it is given, so the fixture's own pinned clock is the reference -- no
+    // wall-clock re-stamp, and the whole fixture stays on one timeline.
+    now: SIGNED_AT,
   });
-  // Task 4: verifyInboundRelayRequest judges signed_at freshness against
-  // wall-clock time (acceptFederatedEnvelope does not thread options.now into
-  // the verifier), so re-stamp signed_at now and re-sign the canonical body.
-  body.signed_at = new Date().toISOString();
   const { signature, keyId } = signForwardRequest(canonicalJsonBytes(body), relayIdentity);
   const headers = { 'sigil-relay-signature': signature, 'sigil-relay-key-id': keyId };
 
   const r = await acceptFederatedEnvelope(body, headers, {
-    repository, registered: new Map(), relayDomain: RELAY, request_id: 'req_pg_1', now: new Date('2029-12-31T12:00:30.000Z'),
+    repository, registered: new Map(), relayDomain: RELAY, request_id: 'req_pg_1', now: SERVER_NOW,
   });
   assert.equal(r.status, 202);
   assert.equal(r.body.code, 'ACCEPTED');
@@ -200,16 +203,14 @@ test('federated envelope whose signature.key_id collides with a local endpoint k
     originDomain: ORIGIN,
     senderKey: { kid: ids.collidingKey, alg: 'Ed25519', publicKey: senderPub },
     senderOwnerId: ids.owner,
-    now: new Date('2029-12-31T12:00:05.000Z'),
+    // Task 10: signed_at is judged against the fixture's own pinned clock.
+    now: SIGNED_AT,
   });
-  // Task 4: re-stamp signed_at to wall-clock now and re-sign (see the sibling
-  // test for why the fixture's 2029 timestamp is not fresh enough).
-  body.signed_at = new Date().toISOString();
   const { signature, keyId } = signForwardRequest(canonicalJsonBytes(body), relayIdentity);
   const headers = { 'sigil-relay-signature': signature, 'sigil-relay-key-id': keyId };
 
   const r = await acceptFederatedEnvelope(body, headers, {
-    repository, registered: new Map(), relayDomain: RELAY, request_id: 'req_pg_collide', now: new Date('2029-12-31T12:00:30.000Z'),
+    repository, registered: new Map(), relayDomain: RELAY, request_id: 'req_pg_collide', now: SERVER_NOW,
   });
   assert.equal(r.status, 400);
   assert.equal(r.body.code, 'INVALID_FEDERATION_REQUEST');
