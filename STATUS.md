@@ -7,11 +7,11 @@ Federation #4 (cross-federation directory / presence) — completed Task 17 (fin
 - Executed all 17 tasks of `docs/superpowers/plans/2026-09-03-sigil-cross-federation-directory.md` (subagent-driven-development) against spec `docs/superpowers/specs/2026-09-02-sigil-cross-federation-directory-design.md`.
 - Migration `018_federation_directory.sql`: `federation_directory_invites`, `federation_directory_links`, `federation_outbox.kind` / `directory_payload`, and quota usage scopes (`federation_directory_invite_create`, `federation_directory_redeem`, `federation_directory_redemption_inbound`).
 - Repository methods & state machines for directory invites and links across Postgres and memory repositories.
-- Inbound relay authentication and verification (`verifyInboundRelayRequest`) with timestamp, replay, and domain pinning validation.
+- Inbound relay authentication and verification (`verifyInboundRelayRequest`): relay-to-relay requests carry a `nonce` + `signed_at`; verification enforces a configurable freshness window (`relayRequestFreshnessMs`, default 300 s) and the 22-char base64url nonce format, and each handler consumes the nonce inside its own transaction against `federation_relay_nonces`; redeemer and issuer owner-id domains are pinned on both sides.
 - Directory request signing, transmission, and client routing (`postDirectory`, `signRelayRequest`, `buildDirectoryRedemptionRequest`, etc.).
 - Handlers for directory invite redemption, link confirmation, and revocation with 202/403/404/409 semantics and fail-closed audit logging.
 - HTTP server wiring for directory routes with 501 capability gating on unconfigured / non-Postgres relays.
-- Reaper support for directory outbox processing with backoff (1m/5m/30m) and automatic redeemer link persistence on successful redemption.
+- Reaper support for directory outbox processing with backoff (1m/5m/30m): the reaper rebuilds the directory confirmation and revocation requests each pass with a fresh `nonce` + `signed_at`. Invite redemption writes no outbox row and has no durable retry — on transport failure the operator re-runs the redeem command manually.
 - Step 8 federated envelope delivery checks enforcing active cross-federation directory links between distinct domains.
 - CLI commands: `sigil federation invite create|list|show|revoke|redeem`, `sigil federation link list|show|confirm|revoke`, and route test advisory indicators.
 - Rate limiting and quota reservation for directory invitations and redemption endpoints.
