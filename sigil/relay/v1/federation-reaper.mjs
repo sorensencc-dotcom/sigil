@@ -128,7 +128,7 @@ async function settleForward({ repository, row, auditBase, counts, nowMs, outcom
   return { state: 'forward_rejected', reasonCode: peerCode, updated };
 }
 
-async function dispatchDirectoryRow({ repository, row, identity, now, nowMs, fetchImpl, doPostDir, counts }) {
+async function dispatchDirectoryRow({ repository, row, identity, now, nowMs, nowProvider, fetchImpl, doPostDir, counts }) {
   const auditBase = { subjectId: row.messageId, endpointId: undefined, now };
   const path = PATH_BY_KIND[row.kind];
 
@@ -137,13 +137,21 @@ async function dispatchDirectoryRow({ repository, row, identity, now, nowMs, fet
   // is never byte-identical to a prior attempt (replay defense + freshness
   // window). A missing path or an unbuildable request is a poison row:
   // dead-letter it (ownership-guarded) rather than aborting the whole pass.
+  //
+  // `sendNow` is the SEND clock, sampled at the build moment for THIS row --
+  // not the pass clock. A single hung peer (`postDirectory` has a 5s timeout)
+  // can burn minutes inside one pass; stamping `signed_at` from the pass clock
+  // would push later rows past the receiver's freshness window (401
+  // RELAY_REQUEST_STALE -> terminal `forward_rejected`, silently dropping
+  // envelopes and revocations). Lease/backoff/audit stay on the pass clock.
+  const sendNow = nowProvider();
   let canonicalBytes;
   let signed;
   try {
     if (!path) throw new Error(`federation reaper: unknown directory kind ${row.kind}`);
     const built = row.kind === 'directory_confirmation'
-      ? buildConfirmationRequest({ linkRef: row.directoryPayload.link_ref, now })
-      : buildRevocationRequest({ linkRef: row.directoryPayload.link_ref, now });
+      ? buildConfirmationRequest({ linkRef: row.directoryPayload.link_ref, now: sendNow })
+      : buildRevocationRequest({ linkRef: row.directoryPayload.link_ref, now: sendNow });
     canonicalBytes = built.canonicalBytes;
     signed = signRelayRequest(canonicalBytes, identity);
   } catch {
@@ -190,6 +198,10 @@ export async function runFederationReaperPass({
   identity,
   originDomain,
   now = new Date(),
+  // The SEND clock. Sampled once per row at its build moment so a slow
+  // dispatch earlier in the pass cannot stamp a later row with a stale
+  // `signed_at`. `now`/`nowMs` remain the PASS clock (lease, backoff, audit).
+  nowProvider = () => new Date(),
   fetchImpl,
   postForwardImpl,
   postDirectoryImpl,
@@ -210,7 +222,7 @@ export async function runFederationReaperPass({
     // nonce + `signed_at`) and POST it to the matching directory path; envelope
     // rows fall through to the unchanged path below.
     if (row.kind && row.kind !== 'envelope') {
-      await dispatchDirectoryRow({ repository, row, identity, now, nowMs, fetchImpl, doPostDir, counts });
+      await dispatchDirectoryRow({ repository, row, identity, now, nowMs, nowProvider, fetchImpl, doPostDir, counts });
       continue;
     }
 
@@ -243,6 +255,12 @@ export async function runFederationReaperPass({
     // / signForwardRequest throw. That throw precedes every finalize below, so an
     // unguarded one aborts the whole pass and wedges every row behind this one.
     // Route the poison row to dead_letter (ownership-guarded) and move on.
+    //
+    // `sendNow` is the per-row SEND clock (see dispatchDirectoryRow): the
+    // forward's `signed_at` must be fresh relative to ITS dispatch, not to the
+    // pass start, or a slow peer earlier in the pass makes the receiver reject
+    // this row 401 RELAY_REQUEST_STALE (terminal, no retry).
+    const sendNow = nowProvider();
     let canonicalBytes;
     let signed;
     try {
@@ -250,7 +268,7 @@ export async function runFederationReaperPass({
         originDomain,
         senderKey: row.senderKey,
         senderOwnerId: row.senderOwnerId,
-        now,
+        now: sendNow,
       }));
       signed = signForwardRequest(canonicalBytes, identity);
     } catch {

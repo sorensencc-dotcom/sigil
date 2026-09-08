@@ -371,7 +371,14 @@ test('a directory_confirmation row posts a rebuilt {link_ref,nonce,signed_at} bo
   const row = makeDirRow({ id: 'r1' });
   const repo = makeRepo({ rows: [row], peers: DIR_PEERS });
   const counts = await runFederationReaperPass({
-    repository: repo, identity: makeIdentity(), originDomain: 'a.example', now: new Date('2026-09-05T00:00:00.000Z'), postDirectoryImpl,
+    repository: repo,
+    identity: makeIdentity(),
+    originDomain: 'a.example',
+    now: new Date('2026-09-05T00:00:00.000Z'),
+    // `signed_at` is stamped from the per-row SEND clock (Critical #1); mirror
+    // the fake pass clock into it so the exact-value assertion below is stable.
+    nowProvider: () => new Date('2026-09-05T00:00:00.000Z'),
+    postDirectoryImpl,
   });
   assert.equal(counts.forwarded, 1);
   assert.equal(posts.length, 1);
@@ -415,13 +422,16 @@ test('B3: a directory_confirmation row is re-signed with a fresh nonce + signed_
 
   // Pass 1: transport failure re-queues the row (attempt 1, +60s backoff).
   const now1 = new Date('2026-09-05T00:00:00.000Z');
-  const c1 = await runFederationReaperPass({ repository: repo, identity, originDomain: 'a.example', now: now1, postDirectoryImpl });
+  // `signed_at` now comes from the per-row SEND clock (Critical #1), so the
+  // fake pass clock has to be mirrored into `nowProvider` for this assertion to
+  // stay deterministic; in production the two passes are >= 60s apart.
+  const c1 = await runFederationReaperPass({ repository: repo, identity, originDomain: 'a.example', now: now1, nowProvider: () => now1, postDirectoryImpl });
   assert.equal(c1.failed, 1);
   assert.equal(repo.store.get('b3').state, 'pending');
 
   // Pass 2: `now` advanced past the backoff; the row is rebuilt + re-signed.
   const now2 = new Date(now1.getTime() + 61_000);
-  const c2 = await runFederationReaperPass({ repository: repo, identity, originDomain: 'a.example', now: now2, postDirectoryImpl });
+  const c2 = await runFederationReaperPass({ repository: repo, identity, originDomain: 'a.example', now: now2, nowProvider: () => now2, postDirectoryImpl });
   assert.equal(c2.forwarded, 1);
   assert.equal(repo.store.get('b3').state, 'forwarded');
 
@@ -430,6 +440,71 @@ test('B3: a directory_confirmation row is re-signed with a fresh nonce + signed_
   assert.notEqual(sent[0].nonce, sent[1].nonce);
   assert.notEqual(sent[0].signed_at, sent[1].signed_at);
   assert.match(sent[1].nonce, /^[A-Za-z0-9_-]{22}$/);
+});
+
+test('the send clock advances per row: a slow first dispatch does not stamp row 2 with a stale signed_at', async () => {
+  // Critical #1. `postDirectory` has a 5s timeout, so one unreachable peer with
+  // a queue of rows can burn minutes of wall-clock inside a SINGLE pass. If
+  // `signed_at` were stamped from the pass-start clock, every row dispatched
+  // after the freshness window (300s) elapsed would arrive at the receiver as
+  // RELAY_REQUEST_STALE -> 401 -> the terminal forward_rejected branch.
+  // The fake clock below advances 400s (> the 300s window) between row 1 and
+  // row 2, exactly like a hung peer would.
+  const PASS_START = new Date('2026-09-05T00:00:00.000Z');
+  let clockMs = PASS_START.getTime();
+  const sent = [];
+  const postDirectoryImpl = async (_peer, _path, canonicalBytes) => {
+    sent.push({ dispatchedAtMs: clockMs, body: JSON.parse(Buffer.from(canonicalBytes).toString('utf8')) });
+    clockMs += 400_000; // the peer hung until well past the freshness window
+    return { ok: true, status: 202 };
+  };
+  const rows = [
+    makeDirRow({ id: 'slow1', directoryPayload: { link_ref: 'L_SLOW_1' } }),
+    makeDirRow({ id: 'slow2', directoryPayload: { link_ref: 'L_SLOW_2' } }),
+  ];
+  const repo = makeRepo({ rows, peers: DIR_PEERS });
+
+  const counts = await runFederationReaperPass({
+    repository: repo,
+    identity: makeIdentity(),
+    originDomain: 'a.example',
+    now: PASS_START,
+    nowProvider: () => new Date(clockMs),
+    postDirectoryImpl,
+  });
+
+  assert.equal(counts.forwarded, 2);
+  assert.equal(sent.length, 2);
+  // Row 1 is stamped at (its own) dispatch time, which is also the pass start.
+  assert.equal(Date.parse(sent[0].body.signed_at), sent[0].dispatchedAtMs);
+  // Row 2's signed_at must be fresh relative to ITS dispatch, not the pass
+  // start -- which is now 400s (> the 300s freshness window) in the past.
+  assert.equal(Date.parse(sent[1].body.signed_at), sent[1].dispatchedAtMs);
+  assert.ok(
+    Math.abs(Date.parse(sent[1].body.signed_at) - sent[1].dispatchedAtMs) <= 300_000,
+    'row 2 was signed with a stale clock: the receiver would reject it RELAY_REQUEST_STALE',
+  );
+  assert.notEqual(sent[0].body.signed_at, sent[1].body.signed_at);
+});
+
+test('the pass clock still drives lease/backoff/audit even when the send clock advances mid-pass', async () => {
+  // The companion to the test above: only `signed_at` is per-row. Backoff
+  // arithmetic (`nextAttemptAt`) and audit timestamps must stay anchored to the
+  // pass clock, so a mid-pass send-clock advance must not move them.
+  const PASS_START = new Date('2026-09-05T00:00:00.000Z');
+  let clockMs = PASS_START.getTime();
+  const repo = makeRepo({ rows: [makeDirRow({ id: 'anchor' })], peers: DIR_PEERS });
+  const counts = await runFederationReaperPass({
+    repository: repo,
+    identity: makeIdentity(),
+    originDomain: 'a.example',
+    now: PASS_START,
+    nowProvider: () => new Date((clockMs += 400_000)),
+    postDirectoryImpl: async () => { throw Object.assign(new Error('boom'), { code: 'FORWARD_TRANSPORT_FAILED' }); },
+  });
+  assert.equal(counts.failed, 1);
+  assert.equal(repo.store.get('anchor').nextAttemptAt, new Date(PASS_START.getTime() + 60_000).toISOString());
+  assert.equal(repo.audits.at(-1).now, PASS_START);
 });
 
 test('a directory_confirmation transport failure walks the same 1m backoff as an envelope row', async () => {
