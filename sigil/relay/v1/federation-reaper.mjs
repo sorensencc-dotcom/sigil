@@ -11,14 +11,21 @@
 // lease, so the result is discarded silently (no audit, no counter bump).
 //
 // A claimed row carries a `kind`: `envelope` (the default) takes the
-// buildForwardRequest / postForward path unchanged; every `directory_*` kind
-// sends its `directoryPayload` verbatim as the wire body (it was fixed at
-// enqueue time), re-canonicalized only for the Ed25519 signing input, to the
-// matching `/v1/federation/directory/*` path via `postDirectory`.
+// buildForwardRequest / postForward path unchanged; a `directory_confirmation`
+// or `directory_revocation` row is REBUILT through buildConfirmationRequest /
+// buildRevocationRequest each pass from its stored `{ link_ref }`, so every
+// retry carries a fresh nonce + `signed_at` (replay defense + freshness
+// window) rather than re-sending a byte-identical body. The rebuilt request is
+// signed and POSTed to the matching `/v1/federation/directory/*` path via
+// `postDirectory`.
 
 import { buildForwardRequest, signForwardRequest, postForward } from './federation-router.mjs';
-import { canonicalJsonBytes } from './jcs.mjs';
-import { signRelayRequest, postDirectory } from './federation-directory-client.mjs';
+import {
+  signRelayRequest,
+  postDirectory,
+  buildConfirmationRequest,
+  buildRevocationRequest,
+} from './federation-directory-client.mjs';
 
 // Backoff before the Nth retry (index = attemptCount - 1): 1 min, 5 min, 30 min.
 // MAX_ATTEMPTS is 4 so all three backoffs are walked: transport failures 1-3
@@ -29,7 +36,6 @@ const BACKOFF_MS = [60_000, 300_000, 1_800_000];
 const MAX_ATTEMPTS = 4;
 
 const PATH_BY_KIND = {
-  directory_redemption: '/v1/federation/directory/redemptions',
   directory_confirmation: '/v1/federation/directory/confirmations',
   directory_revocation: '/v1/federation/directory/revocations',
 };
@@ -43,8 +49,7 @@ function finalize(repository, row, state, patch) {
 // `directory_*` branches: finalize the row (ownership-guarded), bump the matching
 // counter, and record the matching audit event. Returns the terminal (or
 // re-queued) state plus the reason code that was written and whether the
-// ownership-guarded finalize actually landed, so a caller can chain
-// kind-specific follow-up work (the directory_redemption link write / expire).
+// ownership-guarded finalize actually landed.
 async function settleForward({ repository, row, auditBase, counts, nowMs, outcome, transportFailed, transportReason }) {
   const kindPayload = row.kind && row.kind !== 'envelope' ? { kind: row.kind } : {};
 
@@ -123,51 +128,23 @@ async function settleForward({ repository, row, auditBase, counts, nowMs, outcom
   return { state: 'forward_rejected', reasonCode: peerCode, updated };
 }
 
-// directory_redemption only: on a 2xx from the redeemer relay, mirror the
-// issuer relay's `federation_directory_links` row locally from the 202 body,
-// idempotently. The sync `redeem` POST (Task 12) usually wrote this row already;
-// a prior reaper pass may have too. A non-compliant peer that omits `issuer`
-// leaves the row absent -- not an error (see task-11 report concern).
-async function writeRedeemerLink({ repository, row, outcome, now }) {
-  const issuer = outcome && outcome.body && outcome.body.issuer;
-  if (!issuer || !issuer.owner_id || !issuer.endpoint_id) return;
-  await repository.withTransaction(async (client) => {
-    const existing = await repository.getFederationDirectoryLinkByRef(row.directoryPayload.link_ref, client);
-    if (existing) return;
-    try {
-      await repository.createFederationDirectoryLink({
-        linkRef: row.directoryPayload.link_ref,
-        localOwnerId: row.directoryPayload.redeemer.owner_id,
-        localEndpointId: row.directoryPayload.redeemer.endpoint_id,
-        remoteOwnerId: issuer.owner_id,
-        remoteEndpointId: issuer.endpoint_id,
-        remoteDomain: row.recipientDomain,
-        role: 'redeemer',
-        status: 'pending',
-        localConfirmedAt: now,
-        remoteConfirmedAt: null,
-        sourceInviteId: null,
-        peerDomain: row.recipientDomain,
-      }, client);
-    } catch (error) {
-      // A concurrent writer (sync redeem, or another reaper) won the race.
-      if (!error || error.code !== 'FEDERATION_LINK_EXISTS') throw error;
-    }
-  });
-}
-
 async function dispatchDirectoryRow({ repository, row, identity, now, nowMs, fetchImpl, doPostDir, counts }) {
   const auditBase = { subjectId: row.messageId, endpointId: undefined, now };
   const path = PATH_BY_KIND[row.kind];
 
-  // Sign the payload verbatim -- never re-run build*Request for a directory row.
-  // A missing path or an uncanonicalizable payload is a poison row: dead-letter
-  // it (ownership-guarded) rather than aborting the whole pass.
+  // REBUILD the confirmation/revocation request from the stored `{ link_ref }`
+  // on every pass -- the builders mint a fresh nonce + `signed_at`, so a retry
+  // is never byte-identical to a prior attempt (replay defense + freshness
+  // window). A missing path or an unbuildable request is a poison row:
+  // dead-letter it (ownership-guarded) rather than aborting the whole pass.
   let canonicalBytes;
   let signed;
   try {
     if (!path) throw new Error(`federation reaper: unknown directory kind ${row.kind}`);
-    canonicalBytes = canonicalJsonBytes(row.directoryPayload);
+    const built = row.kind === 'directory_confirmation'
+      ? buildConfirmationRequest({ linkRef: row.directoryPayload.link_ref, now })
+      : buildRevocationRequest({ linkRef: row.directoryPayload.link_ref, now });
+    canonicalBytes = built.canonicalBytes;
     signed = signRelayRequest(canonicalBytes, identity);
   } catch {
     const { updated } = await finalize(repository, row, 'dead_letter', {
@@ -203,18 +180,9 @@ async function dispatchDirectoryRow({ repository, row, identity, now, nowMs, fet
     else throw error;
   }
 
-  const result = await settleForward({
+  await settleForward({
     repository, row, auditBase, counts, nowMs, outcome, transportFailed, transportReason,
   });
-
-  if (row.kind !== 'directory_redemption' || !result.updated) return;
-  if (result.state === 'forwarded') {
-    await writeRedeemerLink({ repository, row, outcome, now });
-  } else if (result.state === 'forward_rejected' || result.state === 'dead_letter') {
-    const reason = row.lastReasonCode ?? result.reasonCode ?? result.state;
-    await repository.withTransaction((client) =>
-      repository.markFederationDirectoryLinkExpired(row.directoryPayload.link_ref, reason, now, client));
-  }
 }
 
 export async function runFederationReaperPass({
@@ -238,8 +206,9 @@ export async function runFederationReaperPass({
   const nowMs = now.getTime();
 
   for (const row of rows) {
-    // `directory_*` rows: sign the stored wire body and POST it to the matching
-    // directory path; envelope rows fall through to the unchanged path below.
+    // `directory_*` rows: rebuild the confirmation/revocation request (fresh
+    // nonce + `signed_at`) and POST it to the matching directory path; envelope
+    // rows fall through to the unchanged path below.
     if (row.kind && row.kind !== 'envelope') {
       await dispatchDirectoryRow({ repository, row, identity, now, nowMs, fetchImpl, doPostDir, counts });
       continue;

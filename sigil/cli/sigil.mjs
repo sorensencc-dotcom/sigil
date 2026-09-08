@@ -1281,16 +1281,16 @@ async function cmdFederationLinkConfirm(rest) {
     }
 
     if (typeof repository.enqueueFederationForward === 'function') {
-      const { buildConfirmationRequest } = await import('../relay/v1/federation-directory-client.mjs');
       const { parseFederatedId } = await import('../relay/v1/federated-id.mjs');
-      const { body } = buildConfirmationRequest({ linkRef, now });
+      // Store only { link_ref }; the reaper rebuilds the signed confirmation
+      // request (fresh nonce + signed_at) on every pass.
       await repository.enqueueFederationForward({
         kind: 'directory_confirmation',
         messageId: linkRef,
         idempotencyKey: `${linkRef}:confirm`,
         recipientDomain: row.remote_domain,
         originDomain: parseFederatedId(identity.endpoint_id).domain,
-        directoryPayload: body,
+        directoryPayload: { link_ref: linkRef },
         now,
       });
     }
@@ -1359,16 +1359,16 @@ async function cmdFederationLinkRevoke(rest) {
     }
 
     if (typeof repository.enqueueFederationForward === 'function') {
-      const { buildRevocationRequest } = await import('../relay/v1/federation-directory-client.mjs');
       const { parseFederatedId } = await import('../relay/v1/federated-id.mjs');
-      const { body } = buildRevocationRequest({ linkRef, now });
+      // Store only { link_ref }; the reaper rebuilds the signed revocation
+      // request (fresh nonce + signed_at) on every pass.
       await repository.enqueueFederationForward({
         kind: 'directory_revocation',
         messageId: linkRef,
         idempotencyKey: `${linkRef}:revoke`,
         recipientDomain: row.remote_domain,
         originDomain: parseFederatedId(identity.endpoint_id).domain,
-        directoryPayload: body,
+        directoryPayload: { link_ref: linkRef },
         now,
       });
     }
