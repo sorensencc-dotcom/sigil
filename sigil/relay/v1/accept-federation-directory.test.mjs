@@ -247,3 +247,17 @@ test('equal issuer/redeemer owner: redemption writes a self_pair issuer-side lin
   assert.equal(link.initiated_via, 'self_pair');
 });
 
+test('B2: redeemer.owner_id on a foreign domain → 400 and no issuer-side link', async () => {
+  const repo = createMemoryRepository();
+  const linkRef = crypto.randomUUID();
+  await seedInvite(repo, { linkRef, segment: 'SEG' });
+  const body = redemptionBody({ linkRef, segment: 'SEG' });
+  body.redeemer.owner_id = 'usr_x@third-domain.example'; // endpoint_id stays on b.example
+  const res = await acceptDirectoryRedemption(body, ctx(repo));
+  assert.equal(res.status, 400);
+  assert.equal(res.body.code, 'INVALID_FEDERATION_REQUEST');
+  assert.equal(await repo.getFederationDirectoryLinkByRef(linkRef, null, {}), null);
+  const invite = await repo.getFederationDirectoryInviteByRef(linkRef, null, {});
+  assert.equal(invite.status, 'pending', 'the invite must not be marked redeemed');
+});
+

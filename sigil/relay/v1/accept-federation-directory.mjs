@@ -63,7 +63,9 @@ export async function acceptDirectoryRedemption(parsedBody, ctx) {
     return respond(400, 'INVALID_FEDERATION_REQUEST', 'redeemer is required', ctx);
   }
   try {
-    parseFederatedId(redeemer.owner_id);
+    if (parseFederatedId(redeemer.owner_id).domain.toLowerCase() !== String(originDomain).toLowerCase()) {
+      throw new Error('owner domain');
+    }
     if (parseFederatedId(redeemer.endpoint_id).domain.toLowerCase() !== String(originDomain).toLowerCase()) {
       throw new Error('endpoint domain');
     }
