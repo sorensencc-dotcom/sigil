@@ -241,6 +241,28 @@ async function cmdRelayUp(argv) {
           ON CONFLICT (key_id) DO NOTHING
         `, [ep.key_id, ep.endpoint_id, pubKeyBuf]);
       }
+      const defaultGrants = [
+        { cap: 'sigil.task/submit', scope: 'scope:conversation' },
+        { cap: 'sigil.task/process', scope: 'scope:conversation' },
+        { cap: 'sigil.task/submit_result', scope: 'scope:conversation' },
+        { cap: 'sigil.task/read_inbox', scope: 'scope:conversation' },
+        { cap: 'sigil.task/read_result', scope: 'scope:conversation' },
+        { cap: 'sigil.core/read_shared_context', scope: 'wiki' },
+        { cap: 'sigil.core/read_shared_context', scope: 'docs' },
+        { cap: 'sigil.core/read_shared_context', scope: 'src' },
+        { cap: 'sigil.core/read_shared_context', scope: 'research' },
+        { cap: 'sigil.core/read_shared_context', scope: 'scope:context' },
+        { cap: 'sigil.core/broadcast_message', scope: 'scope:conversation' },
+        { cap: 'sigil.approval/request', scope: 'scope:conversation' }
+      ];
+      for (const g of defaultGrants) {
+        const grantId = `grant_${ep.endpoint_id}_${g.cap.replace(/[/.]/g, '_')}_${g.scope.replace(/[/:]/g, '_')}`;
+        await pool.query(`
+          INSERT INTO capability_grants (grant_id, capability, scope, granted_to, granted_by, granted_at, expires_at)
+          VALUES ($1, $2, $3, $4, $5, NOW(), NOW() + INTERVAL '10 years')
+          ON CONFLICT (grant_id) DO NOTHING
+        `, [grantId, g.cap, g.scope, ep.endpoint_id, ep.owner_id]);
+      }
     }
   } else {
     repository = createMemoryRepository({ registry });

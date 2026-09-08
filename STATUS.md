@@ -1,29 +1,21 @@
 # Status
 
 ## Current goal
-Federation #4 (cross-federation directory / presence) — completed Task 17 (final live-DB matrix, full-suite regression sweep, deferred-minor fold-ins, and CI verification). All live-DB and unit/contract test suites passing locally. Ready for human-supervised whole-branch review and final landing.
+Path 3 (Package & Serviceize the Sigil Relay / CLI) — completed Step 1 (CLI Distribution & Scoped Binary Mapping) and Step 2 (PostgreSQL durable relay wiring & supervisor persistence). Full test suite and end-to-end persistence dispatch verification passing.
 
 ## Completed work
+- Packaged CLI and verified local npm binary mapping (`sigil --help`).
+- Applied PostgreSQL schema migrations 001 through 019 against the live container on port 55432.
+- Updated `sigil/cli/sigil.mjs` to auto-seed default capability grants for registered endpoints when persisting to PostgreSQL.
+- Updated `sigil/relay/v1/postgres-repository.mjs` to include `status` in `lookupRecipientEndpoint` queries and JSON-stringify payload structures (`body`, `context_refs`, `broadcast_scope`) for `jsonb` column binding.
+- Updated supervisor script `C:\dev\scripts\run-sigil-daemon.ps1` to configure `$env:SIGIL_DATABASE_URL` and pass `--database-url` to persistent relay child processes.
+- Verified persistent dispatch round-trip from `ep_grokbot` to `ep_claude` (`conv_persistence_test`), verified database records in `envelopes` and `deliveries`, interrupted and restarted daemon, and retrieved delivery from recipient mailbox using `sigil inbox`.
 - Executed all 17 tasks of `docs/superpowers/plans/2026-09-03-sigil-cross-federation-directory.md` (subagent-driven-development) against spec `docs/superpowers/specs/2026-09-02-sigil-cross-federation-directory-design.md`.
-- Migration `018_federation_directory.sql`: `federation_directory_invites`, `federation_directory_links`, `federation_outbox.kind` / `directory_payload`, and quota usage scopes (`federation_directory_invite_create`, `federation_directory_redeem`, `federation_directory_redemption_inbound`).
-- Repository methods & state machines for directory invites and links across Postgres and memory repositories.
-- Inbound relay authentication and verification (`verifyInboundRelayRequest`): relay-to-relay requests carry a `nonce` + `signed_at`; verification enforces a freshness window (default 300 s, clamped to 60 s–1 h; set it with `sigil relay up --relay-request-freshness-ms` or `SIGIL_RELAY_REQUEST_FRESHNESS_MS`) and the 22-char base64url nonce format, and each handler consumes the nonce inside its own transaction against `federation_relay_nonces`; redeemer and issuer owner-id domains are pinned on both sides.
-- Directory request signing, transmission, and client routing (`postDirectory`, `signRelayRequest`, `buildDirectoryRedemptionRequest`, etc.).
-- Handlers for directory invite redemption, link confirmation, and revocation with 202/403/404/409 semantics and fail-closed audit logging.
-- HTTP server wiring for directory routes with 501 capability gating on unconfigured / non-Postgres relays.
-- Reaper support for directory outbox processing with backoff (1m/5m/30m): the reaper rebuilds the directory confirmation and revocation requests each pass with a fresh `nonce` + `signed_at`. Invite redemption writes no outbox row and has no durable retry — on transport failure the operator re-runs the redeem command manually.
-- Step 8 federated envelope delivery checks enforcing an active cross-federation directory link on EVERY federated delivery. The same-owner exemption is removed: an owner federating with itself needs a `self_pair` link like any other pair.
-- CLI commands: `sigil federation invite create|list|show|revoke|redeem`, `sigil federation link list|show|confirm|revoke`, and route test advisory indicators.
-- Rate limiting and quota reservation for directory invitations and redemption endpoints.
-- Task 17: Live-DB test matrix in `postgres-repository.directory-federation.test.mjs`, comprehensive regression sweep, and deferred-minor fold-in.
 
 ## Tests
-- Full test suite: `npm test` — 812 pass, 0 fail, 103 skipped across all suites.
-- Live PostgreSQL gate: `npm run test:live` — 112 pass, 0 fail across 23 schema-resetting suites run sequentially.
-- Targeted Step 3 Live-DB matrix: 36 pass, 0 fail across directory federation, peer repo, CLI directory, CLI route-test, and HTTP server directory suites.
-- Targeted Step 4 Regressions: 79 pass, 0 fail across sync mode 501 gates, trust mode, and inter-relay routing suites.
+- Full test suite: `npm test` — 336 pass, 0 fail (unit/contract/audit suite) and 841 pass, 0 fail across live worker suites.
+- Verified end-to-end task persistence across daemon cycle: `sigil inbox` confirmed delivery retention.
 - Preflight verified via `pwsh -NoProfile -File C:\dev\scripts\verify-repo-context.ps1 -Path C:\dev\sigil-repo`.
-- CI live-DB runner (`sigil/scripts/live-db-tests.mjs`) automatically discovers any suite referencing `SIGIL_TEST_DATABASE_URL`, fully covering all directory DB suites.
 
 ## Decisions
 - Compound primary key scoping `(profile_id, endpoint_id, key_id)` to isolate connector profiles.
