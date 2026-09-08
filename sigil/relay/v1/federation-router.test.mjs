@@ -47,7 +47,7 @@ const senderEnvelope = {
   signature: { algorithm: 'Ed25519', key_id: 'key_ep_codex@a.example', value: 'ZZ' },
 };
 
-test('buildForwardRequest: canonicalBytes equals JCS of body and carries forwarded_at', () => {
+test('buildForwardRequest: canonicalBytes equals JCS of body and carries nonce + signed_at', () => {
   const now = new Date('2026-08-30T12:00:05.000Z');
   const { body, canonicalBytes } = buildForwardRequest(senderEnvelope, {
     originDomain: 'a.example', senderKey: { kid: 'key_ep_codex@a.example', alg: 'Ed25519', publicKey: 'PUB' },
@@ -55,7 +55,9 @@ test('buildForwardRequest: canonicalBytes equals JCS of body and carries forward
   });
   assert.equal(body.origin_domain, 'a.example');
   assert.equal(body.sender_owner_id, 'usr_chris@primary.example');
-  assert.equal(body.forwarded_at, '2026-08-30T12:00:05.000Z');
+  assert.equal(body.forwarded_at, undefined);
+  assert.match(body.nonce, /^[A-Za-z0-9_-]{22}$/);
+  assert.equal(body.signed_at, '2026-08-30T12:00:05.000Z');
   assert.deepEqual(body.envelope, senderEnvelope);
   assert.ok(Buffer.isBuffer(canonicalBytes));
   assert.equal(canonicalBytes.toString('utf8'), canonicalJsonBytes(body).toString('utf8'));

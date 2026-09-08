@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { parseFederatedId } from './federated-id.mjs';
 import { checkRecipientLocality, reject } from './validate-envelope.mjs';
 import { canonicalJsonBytes } from './jcs.mjs';
-import { postDirectory, readPeerCode } from './federation-directory-client.mjs';
+import { postDirectory, readPeerCode, newRelayNonce } from './federation-directory-client.mjs';
 
 export { readPeerCode };
 
@@ -45,13 +45,14 @@ export async function decideRoute(envelope, { relayDomain, federationMode, getPe
   return { action: 'forward', peer, recipientDomain: recipientId.domain };
 }
 
-export function buildForwardRequest(envelope, { originDomain, senderKey, senderOwnerId, now } = {}) {
+export function buildForwardRequest(envelope, { originDomain, senderKey, senderOwnerId, now, nonce = newRelayNonce() } = {}) {
   const body = {
     origin_domain: originDomain,
     envelope,
     sender_key: { kid: senderKey.kid, alg: senderKey.alg ?? 'Ed25519', publicKey: senderKey.publicKey },
     sender_owner_id: senderOwnerId,
-    forwarded_at: (now instanceof Date ? now : new Date(now)).toISOString(),
+    nonce,
+    signed_at: (now instanceof Date ? now : new Date(now)).toISOString(),
   };
   return { body, canonicalBytes: canonicalJsonBytes(body) };
 }

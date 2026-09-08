@@ -181,8 +181,8 @@ export async function acceptDirectoryConfirmation(parsedBody, ctx) {
   const audit = fdlAudit(repository, originDomain, parsedBody?.link_ref, now);
 
   // 1. Structural.
-  if (!UUID_RE.test(parsedBody?.link_ref ?? '') || !isoString(parsedBody?.confirmed_at)) {
-    return respond(400, 'INVALID_FEDERATION_REQUEST', 'link_ref must be a uuid and confirmed_at an ISO timestamp', ctx);
+  if (!UUID_RE.test(parsedBody?.link_ref ?? '') || !isoString(parsedBody?.signed_at)) {
+    return respond(400, 'INVALID_FEDERATION_REQUEST', 'link_ref must be a uuid and signed_at an ISO timestamp', ctx);
   }
   // 2. Link lookup (FOR UPDATE) + peer_domain pin.
   const link = await repository.getFederationDirectoryLinkByRef(parsedBody.link_ref, client, { forUpdate: true });
@@ -213,8 +213,8 @@ export async function acceptDirectoryConfirmation(parsedBody, ctx) {
 export async function acceptDirectoryRevocation(parsedBody, ctx) {
   const { repository, client, originDomain, now } = ctx;
 
-  if (!UUID_RE.test(parsedBody?.link_ref ?? '') || !isoString(parsedBody?.revoked_at)) {
-    return respond(400, 'INVALID_FEDERATION_REQUEST', 'link_ref must be a uuid and revoked_at an ISO timestamp', ctx);
+  if (!UUID_RE.test(parsedBody?.link_ref ?? '') || !isoString(parsedBody?.signed_at)) {
+    return respond(400, 'INVALID_FEDERATION_REQUEST', 'link_ref must be a uuid and signed_at an ISO timestamp', ctx);
   }
   const link = await repository.getFederationDirectoryLinkByRef(parsedBody.link_ref, client, { forUpdate: true });
   if (!link) return acceptedBody(202, ctx, { link_ref: parsedBody.link_ref, outcome: 'noop' }); // no existence leak

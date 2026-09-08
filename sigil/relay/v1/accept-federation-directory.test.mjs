@@ -132,7 +132,7 @@ test('confirmation: sets remote_confirmed_at; flips to active only when local is
   const repo = createMemoryRepository();
   const linkRef = crypto.randomUUID();
   await seedLink(repo, { linkRef, localConfirmedAt: new Date() });   // local already set on the issuer relay
-  const res = await acceptDirectoryConfirmation({ link_ref: linkRef, confirmed_at: '2026-09-02T12:05:00Z' }, ctx(repo));
+  const res = await acceptDirectoryConfirmation({ link_ref: linkRef, signed_at: '2026-09-02T12:05:00Z' }, ctx(repo));
   assert.equal(res.status, 202);
   const link = await repo.getFederationDirectoryLinkByRef(linkRef, null, {});
   assert.equal(link.status, 'active');
@@ -141,7 +141,7 @@ test('confirmation: sets remote_confirmed_at; flips to active only when local is
 
 test('confirmation: unknown link_ref -> 404 FEDERATION_LINK_NOT_FOUND', async () => {
   const repo = createMemoryRepository();
-  const res = await acceptDirectoryConfirmation({ link_ref: crypto.randomUUID(), confirmed_at: '2026-09-02T12:05:00Z' }, ctx(repo));
+  const res = await acceptDirectoryConfirmation({ link_ref: crypto.randomUUID(), signed_at: '2026-09-02T12:05:00Z' }, ctx(repo));
   assert.equal(res.status, 404);
   assert.equal(res.body.code, 'FEDERATION_LINK_NOT_FOUND');
 });
@@ -150,7 +150,7 @@ test('confirmation: posting relay != row peer_domain -> 403 PEER_NOT_TRUSTED', a
   const repo = createMemoryRepository();
   const linkRef = crypto.randomUUID();
   await seedLink(repo, { linkRef, peerDomain: 'other.example' });
-  const res = await acceptDirectoryConfirmation({ link_ref: linkRef, confirmed_at: '2026-09-02T12:05:00Z' }, ctx(repo));
+  const res = await acceptDirectoryConfirmation({ link_ref: linkRef, signed_at: '2026-09-02T12:05:00Z' }, ctx(repo));
   assert.equal(res.status, 403);
   assert.equal(res.body.code, 'PEER_NOT_TRUSTED');
 });
@@ -159,7 +159,7 @@ test('confirmation after revocation never reactivates (revocation wins)', async 
   const repo = createMemoryRepository();
   const linkRef = crypto.randomUUID();
   await seedLink(repo, { linkRef, status: 'revoked' });
-  const res = await acceptDirectoryConfirmation({ link_ref: linkRef, confirmed_at: '2026-09-02T12:05:00Z' }, ctx(repo));
+  const res = await acceptDirectoryConfirmation({ link_ref: linkRef, signed_at: '2026-09-02T12:05:00Z' }, ctx(repo));
   assert.equal(res.status, 202);
   const link = await repo.getFederationDirectoryLinkByRef(linkRef, null, {});
   assert.equal(link.status, 'revoked');
@@ -169,7 +169,7 @@ test('duplicate confirmation on an already-active row -> 202 no-op', async () =>
   const repo = createMemoryRepository();
   const linkRef = crypto.randomUUID();
   await seedLink(repo, { linkRef, status: 'active', localConfirmedAt: new Date(), remoteConfirmedAt: new Date() });
-  const res = await acceptDirectoryConfirmation({ link_ref: linkRef, confirmed_at: '2026-09-02T12:05:00Z' }, ctx(repo));
+  const res = await acceptDirectoryConfirmation({ link_ref: linkRef, signed_at: '2026-09-02T12:05:00Z' }, ctx(repo));
   assert.equal(res.status, 202);
 });
 
@@ -177,19 +177,19 @@ test('revocation: sets revoked/remote; repeat -> 202; unknown ref -> 202 no-op (
   const repo = createMemoryRepository();
   const linkRef = crypto.randomUUID();
   await seedLink(repo, { linkRef, status: 'active', localConfirmedAt: new Date(), remoteConfirmedAt: new Date() });
-  let res = await acceptDirectoryRevocation({ link_ref: linkRef, revoked_at: '2026-09-02T13:00:00Z' }, ctx(repo));
+  let res = await acceptDirectoryRevocation({ link_ref: linkRef, signed_at: '2026-09-02T13:00:00Z' }, ctx(repo));
   assert.equal(res.status, 202);
   let link = await repo.getFederationDirectoryLinkByRef(linkRef, null, {});
   assert.equal(link.status, 'revoked');
   assert.equal(link.revoked_by, 'remote');
-  res = await acceptDirectoryRevocation({ link_ref: linkRef, revoked_at: '2026-09-02T13:00:00Z' }, ctx(repo));
+  res = await acceptDirectoryRevocation({ link_ref: linkRef, signed_at: '2026-09-02T13:00:00Z' }, ctx(repo));
   assert.equal(res.status, 202); // idempotent
-  res = await acceptDirectoryRevocation({ link_ref: crypto.randomUUID(), revoked_at: '2026-09-02T13:00:00Z' }, ctx(repo));
+  res = await acceptDirectoryRevocation({ link_ref: crypto.randomUUID(), signed_at: '2026-09-02T13:00:00Z' }, ctx(repo));
   assert.equal(res.status, 202); // unknown -> no-op, no existence leak
 
   const other = crypto.randomUUID();
   await seedLink(repo, { linkRef: other, peerDomain: 'other.example' });
-  res = await acceptDirectoryRevocation({ link_ref: other, revoked_at: '2026-09-02T13:00:00Z' }, ctx(repo));
+  res = await acceptDirectoryRevocation({ link_ref: other, signed_at: '2026-09-02T13:00:00Z' }, ctx(repo));
   assert.equal(res.status, 403);
 });
 
@@ -197,7 +197,7 @@ test('confirmation: stays pending when local_confirmed_at is unset', async () =>
   const repo = createMemoryRepository();
   const linkRef = crypto.randomUUID();
   await seedLink(repo, { linkRef, localConfirmedAt: null, remoteConfirmedAt: null });
-  const res = await acceptDirectoryConfirmation({ link_ref: linkRef, confirmed_at: '2026-09-02T12:05:00Z' }, ctx(repo));
+  const res = await acceptDirectoryConfirmation({ link_ref: linkRef, signed_at: '2026-09-02T12:05:00Z' }, ctx(repo));
   assert.equal(res.status, 202);
   const link = await repo.getFederationDirectoryLinkByRef(linkRef, null, {});
   assert.equal(link.status, 'pending');
@@ -211,22 +211,22 @@ test('confirmation / revocation: malformed body -> 400 INVALID_FEDERATION_REQUES
   await seedLink(repo, { linkRef, localConfirmedAt: new Date() });
 
   // Confirmation malformed link_ref
-  let res = await acceptDirectoryConfirmation({ link_ref: 'not-a-uuid', confirmed_at: '2026-09-02T12:05:00Z' }, ctx(repo));
+  let res = await acceptDirectoryConfirmation({ link_ref: 'not-a-uuid', signed_at: '2026-09-02T12:05:00Z' }, ctx(repo));
   assert.equal(res.status, 400);
   assert.equal(res.body.code, 'INVALID_FEDERATION_REQUEST');
 
-  // Confirmation malformed confirmed_at
-  res = await acceptDirectoryConfirmation({ link_ref: linkRef, confirmed_at: 'not-a-date' }, ctx(repo));
+  // Confirmation malformed signed_at (was confirmed_at)
+  res = await acceptDirectoryConfirmation({ link_ref: linkRef, signed_at: 'not-a-date' }, ctx(repo));
   assert.equal(res.status, 400);
   assert.equal(res.body.code, 'INVALID_FEDERATION_REQUEST');
 
   // Revocation malformed link_ref
-  res = await acceptDirectoryRevocation({ link_ref: 'not-a-uuid', revoked_at: '2026-09-02T13:00:00Z' }, ctx(repo));
+  res = await acceptDirectoryRevocation({ link_ref: 'not-a-uuid', signed_at: '2026-09-02T13:00:00Z' }, ctx(repo));
   assert.equal(res.status, 400);
   assert.equal(res.body.code, 'INVALID_FEDERATION_REQUEST');
 
-  // Revocation malformed revoked_at
-  res = await acceptDirectoryRevocation({ link_ref: linkRef, revoked_at: 'not-a-date' }, ctx(repo));
+  // Revocation malformed signed_at (was revoked_at)
+  res = await acceptDirectoryRevocation({ link_ref: linkRef, signed_at: 'not-a-date' }, ctx(repo));
   assert.equal(res.status, 400);
   assert.equal(res.body.code, 'INVALID_FEDERATION_REQUEST');
 });

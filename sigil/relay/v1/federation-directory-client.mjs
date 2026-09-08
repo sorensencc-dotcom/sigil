@@ -10,24 +10,30 @@ import { canonicalJsonBytes } from './jcs.mjs';
 
 const isoOf = (now) => (now instanceof Date ? now : new Date(now)).toISOString();
 
-export function buildRedemptionRequest({ linkRef, code, redeemer, redeemerDomain, now }) {
+// Shared relay-auth nonce: 16 random bytes as base64url (22 chars). Every
+// outbound relay-signed body carries one so the inbound verifier's replay
+// window (verifyInboundRelayRequest, Task 4) is satisfied by real senders.
+export const newRelayNonce = () => crypto.randomBytes(16).toString('base64url');
+
+export function buildRedemptionRequest({ linkRef, code, redeemer, redeemerDomain, now, nonce = newRelayNonce() }) {
   const body = {
     link_ref: linkRef,
     code,
     redeemer: { owner_id: redeemer.owner_id, endpoint_id: redeemer.endpoint_id },
     redeemer_domain: redeemerDomain,
-    requested_at: isoOf(now),
+    nonce,
+    signed_at: isoOf(now),
   };
   return { body, canonicalBytes: canonicalJsonBytes(body) };
 }
 
-export function buildConfirmationRequest({ linkRef, now }) {
-  const body = { link_ref: linkRef, confirmed_at: isoOf(now) };
+export function buildConfirmationRequest({ linkRef, now, nonce = newRelayNonce() }) {
+  const body = { link_ref: linkRef, nonce, signed_at: isoOf(now) };
   return { body, canonicalBytes: canonicalJsonBytes(body) };
 }
 
-export function buildRevocationRequest({ linkRef, now }) {
-  const body = { link_ref: linkRef, revoked_at: isoOf(now) };
+export function buildRevocationRequest({ linkRef, now, nonce = newRelayNonce() }) {
+  const body = { link_ref: linkRef, nonce, signed_at: isoOf(now) };
   return { body, canonicalBytes: canonicalJsonBytes(body) };
 }
 

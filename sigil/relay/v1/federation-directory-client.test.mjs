@@ -8,24 +8,30 @@ import {
 } from './federation-directory-client.mjs';
 
 const NOW = new Date('2026-09-02T12:00:00.000Z');
+const NONCE = 'AAAAAAAAAAAAAAAAAAAAAA';
 
-test('buildRedemptionRequest: canonicalBytes is both the wire body and the signing input', () => {
+test('buildConfirmationRequest / buildRevocationRequest shapes carry nonce + signed_at, not confirmed_at/revoked_at', () => {
+  const c = buildConfirmationRequest({ linkRef: 'L1', now: NOW, nonce: NONCE }).body;
+  assert.deepEqual(c, { link_ref: 'L1', nonce: NONCE, signed_at: '2026-09-02T12:00:00.000Z' });
+  const r = buildRevocationRequest({ linkRef: 'L1', now: NOW, nonce: NONCE }).body;
+  assert.deepEqual(r, { link_ref: 'L1', nonce: NONCE, signed_at: '2026-09-02T12:00:00.000Z' });
+});
+
+test('buildRedemptionRequest body carries nonce + signed_at and no requested_at', () => {
   const { body, canonicalBytes } = buildRedemptionRequest({
     linkRef: 'L1', code: 'sigil-fed-invite:a.example:L1:SEG',
-    redeemer: { owner_id: 'usr_bob@b.example', endpoint_id: 'ep_c@b.example' },
-    redeemerDomain: 'b.example', now: NOW,
+    redeemer: { owner_id: 'usr_b@b.example', endpoint_id: 'ep_c@b.example' },
+    redeemerDomain: 'b.example', now: NOW, nonce: NONCE,
   });
-  assert.deepEqual(body, {
-    link_ref: 'L1', code: 'sigil-fed-invite:a.example:L1:SEG',
-    redeemer: { owner_id: 'usr_bob@b.example', endpoint_id: 'ep_c@b.example' },
-    redeemer_domain: 'b.example', requested_at: '2026-09-02T12:00:00.000Z',
-  });
+  assert.equal(body.requested_at, undefined);
+  assert.equal(body.nonce, NONCE);
+  assert.equal(body.signed_at, '2026-09-02T12:00:00.000Z');
   assert.deepEqual(canonicalBytes, canonicalJsonBytes(body));
 });
 
-test('buildConfirmationRequest / buildRevocationRequest shapes', () => {
-  assert.deepEqual(buildConfirmationRequest({ linkRef: 'L1', now: NOW }).body, { link_ref: 'L1', confirmed_at: '2026-09-02T12:00:00.000Z' });
-  assert.deepEqual(buildRevocationRequest({ linkRef: 'L1', now: NOW }).body, { link_ref: 'L1', revoked_at: '2026-09-02T12:00:00.000Z' });
+test('nonce defaults to 22 base64url chars when not provided', () => {
+  const { body } = buildConfirmationRequest({ linkRef: 'L1', now: NOW });
+  assert.match(body.nonce, /^[A-Za-z0-9_-]{22}$/);
 });
 
 test('signRelayRequest signs the exact bytes with the identity key', () => {
