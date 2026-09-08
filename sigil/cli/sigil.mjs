@@ -1060,7 +1060,7 @@ async function cmdFederationInviteRedeem(rest) {
       return;
     }
 
-    const { buildRedemptionRequest, signRelayRequest, postDirectory } = await import('../relay/v1/federation-directory-client.mjs');
+    const { buildRedemptionRequest, signRelayRequest, postDirectory, assertIssuerResponseIdentity } = await import('../relay/v1/federation-directory-client.mjs');
     const now = new Date();
     const { body, canonicalBytes } = buildRedemptionRequest({ linkRef, code, redeemer, redeemerDomain, now });
     const signed = signRelayRequest(canonicalBytes, identity);
@@ -1088,6 +1088,24 @@ async function cmdFederationInviteRedeem(rest) {
     if (outcome.ok) {
       const issuer = outcome.body?.issuer;
       if (issuer && issuer.owner_id && issuer.endpoint_id) {
+        // (E2) Do not trust the issuer relay's self-description: its 202 must
+        // name an owner/endpoint that are well-formed federated ids on its own
+        // domain. Reject before reserving quota or writing the link row.
+        try {
+          assertIssuerResponseIdentity(issuer, issuerDomain);
+        } catch (err) {
+          if (err?.code !== 'ISSUER_IDENTITY_DOMAIN_MISMATCH') throw err;
+          await repository.recordAuditEvent({
+            eventType: 'federation_directory.invite_redeem_rejected',
+            subjectId: linkRef, actorId: redeemer.owner_id, endpointId: redeemer.endpoint_id,
+            objectType: 'federation_directory_invite', objectId: linkRef,
+            outcome: 'rejected', reason: 'ISSUER_IDENTITY_DOMAIN_MISMATCH',
+            payload: { peer_domain: issuerDomain }, now,
+          });
+          console.error(`sigil federation invite redeem: issuer relay response names an owner/endpoint outside ${issuerDomain}; refusing to write the link`);
+          process.exitCode = 1;
+          return;
+        }
         // (rate) Load-bearing redeem-attempt abuse scope, keyed per redeemer
         // endpoint+owner. Placed here -- after the peer-pinned check has
         // passed and the outbound POST has come back accepted -- so an

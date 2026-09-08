@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { canonicalJsonBytes } from './jcs.mjs';
 import {
   buildRedemptionRequest, buildConfirmationRequest, buildRevocationRequest,
-  signRelayRequest, postDirectory,
+  signRelayRequest, postDirectory, assertIssuerResponseIdentity,
 } from './federation-directory-client.mjs';
 
 const NOW = new Date('2026-09-02T12:00:00.000Z');
@@ -75,5 +75,27 @@ test('postDirectory: transport error / 5xx -> throws FORWARD_TRANSPORT_FAILED', 
   await assert.rejects(
     postDirectory({ relayUrl: 'https://r' }, '/v1/federation/directory/revocations', Buffer.from('{}'), { signature: 's', keyId: 'k' }, { fetchImpl: async () => ({ status: 503 }) }),
     (e) => e.code === 'FORWARD_TRANSPORT_FAILED',
+  );
+});
+
+test('assertIssuerResponseIdentity: accepts matching domain, rejects a foreign one', () => {
+  assert.doesNotThrow(() => assertIssuerResponseIdentity(
+    { owner_id: 'usr_x@issuer.example', endpoint_id: 'ep_i@issuer.example' }, 'issuer.example',
+  ));
+  // case-insensitive on both sides
+  assert.doesNotThrow(() => assertIssuerResponseIdentity(
+    { owner_id: 'usr_x@Issuer.Example', endpoint_id: 'ep_i@issuer.example' }, 'ISSUER.EXAMPLE',
+  ));
+  assert.throws(
+    () => assertIssuerResponseIdentity({ owner_id: 'usr_x@evil.example', endpoint_id: 'ep_i@issuer.example' }, 'issuer.example'),
+    (e) => e.code === 'ISSUER_IDENTITY_DOMAIN_MISMATCH',
+  );
+  assert.throws(
+    () => assertIssuerResponseIdentity({ owner_id: 'usr_x@issuer.example', endpoint_id: 'ep_i@evil.example' }, 'issuer.example'),
+    (e) => e.code === 'ISSUER_IDENTITY_DOMAIN_MISMATCH',
+  );
+  assert.throws(
+    () => assertIssuerResponseIdentity({ owner_id: 'not-a-fid', endpoint_id: 'ep_i@issuer.example' }, 'issuer.example'),
+    (e) => e.code === 'ISSUER_IDENTITY_DOMAIN_MISMATCH',
   );
 });

@@ -261,6 +261,53 @@ test('sigil federation invite redeem reserves federation_directory_redeem quota 
   assert.equal(Number(linksAfter.rows[0].count), Number(linksBefore.rows[0].count), 'no link row should be written once the quota is exhausted');
 });
 
+test('sigil federation invite redeem rejects an issuer 202 whose issuer block names an owner/endpoint outside the issuer relay domain (E2)', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  assertDisposableTestDatabase(connectionString);
+  await applyMigrations(connectionString, { reset: true });
+
+  const dir = await makeWorkdir(t);
+  const bobIdentity = '.sigil/bob.identity.json';
+
+  // Issuer relay on b.example accepts the redemption but claims an owner and
+  // endpoint on evil.example -- a domain it has no authority over.
+  const stub = await startDirectoryStub(t, {
+    status: 202,
+    body: { request_id: null, issuer: { owner_id: 'usr_mallory@evil.example', endpoint_id: 'ep_mallory@evil.example' } },
+  });
+  const pin = await run(
+    ['peer', 'add', 'b.example', '--relay-url', stub.url, '--public-key', 'AAAAC3NzaC1lZDI1NTE5AAAAITESTKEY', '--kid', 'key_directory_test', '--database-url', connectionString],
+    dir,
+  );
+  assert.equal(pin.exitCode, 0, pin.stderr);
+
+  const linkRef = crypto.randomUUID();
+  const code = `sigil-fed-invite:b.example:${linkRef}:${crypto.randomBytes(24).toString('base64url')}`;
+  const redeem = await run(
+    ['federation', 'invite', 'redeem', code, '--identity', bobIdentity, '--database-url', connectionString],
+    dir,
+  );
+
+  assert.equal(redeem.exitCode, 1);
+  assert.match(redeem.stderr, /issuer relay response names an owner\/endpoint outside b\.example; refusing to write the link/);
+
+  const links = await pool.query('SELECT count(*) FROM federation_directory_links WHERE link_ref = $1', [linkRef]);
+  assert.equal(Number(links.rows[0].count), 0, 'no federation_directory_links row may be written on a domain-mismatched issuer response');
+
+  const noQuota = await pool.query("SELECT count(*) FROM quota_usage WHERE scope_kind = 'federation_directory_redeem'");
+  assert.equal(Number(noQuota.rows[0].count), 0, 'a rejected redemption must not consume redeem quota');
+
+  const audit = await pool.query(
+    "SELECT outcome, reason, payload FROM audit_events WHERE event_type = 'federation_directory.invite_redeem_rejected' AND subject_id = $1",
+    [linkRef],
+  );
+  assert.equal(audit.rows.length, 1, 'exactly one invite_redeem_rejected audit event');
+  assert.equal(audit.rows[0].outcome, 'rejected');
+  assert.equal(audit.rows[0].reason, 'ISSUER_IDENTITY_DOMAIN_MISMATCH');
+  assert.equal(audit.rows[0].payload.peer_domain, 'b.example');
+});
+
 // Seeds a federation_directory_links row directly (Task 14's CLI never
 // creates one itself -- that is invite redeem/reaper's job, Tasks 13/11) so
 // `link list|show|confirm|revoke` can be exercised without a second live

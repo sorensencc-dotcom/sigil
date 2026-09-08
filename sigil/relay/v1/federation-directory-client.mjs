@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { canonicalJsonBytes } from './jcs.mjs';
+import { parseFederatedId } from './federated-id.mjs';
 
 // Origin-side (outbound) half of the cross-federation directory protocol
 // (design §"New module: federation-directory-client.mjs"). Pure builders for
@@ -14,6 +15,27 @@ const isoOf = (now) => (now instanceof Date ? now : new Date(now)).toISOString()
 // outbound relay-signed body carries one so the inbound verifier's replay
 // window (verifyInboundRelayRequest, Task 4) is satisfied by real senders.
 export const newRelayNonce = () => crypto.randomBytes(16).toString('base64url');
+
+// Defect E2: a redeeming CLI must not trust the `issuer` block in an issuer
+// relay's 202 redemption response verbatim. A hostile issuer relay could name
+// an owner/endpoint on any domain and have the redeemer persist it into a
+// federation_directory_links row. Both ids must be well-formed federated ids
+// whose domain equals the issuer relay's own domain (case-insensitive), i.e.
+// the domain the redemption was POSTed to.
+export function assertIssuerResponseIdentity(issuer, issuerDomain) {
+  const want = String(issuerDomain).toLowerCase();
+  for (const field of ['owner_id', 'endpoint_id']) {
+    let domain;
+    try {
+      domain = parseFederatedId(issuer?.[field]).domain.toLowerCase();
+    } catch {
+      throw Object.assign(new Error(`issuer.${field} is not a well-formed federated id`), { code: 'ISSUER_IDENTITY_DOMAIN_MISMATCH' });
+    }
+    if (domain !== want) {
+      throw Object.assign(new Error(`issuer.${field} domain does not equal the issuer relay domain`), { code: 'ISSUER_IDENTITY_DOMAIN_MISMATCH' });
+    }
+  }
+}
 
 export function buildRedemptionRequest({ linkRef, code, redeemer, redeemerDomain, now, nonce = newRelayNonce() }) {
   const body = {
