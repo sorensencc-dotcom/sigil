@@ -28,6 +28,17 @@ function worldWithRecipient(recipientOwnerId = 'usr_chris@primary.example') {
   return { relayKeys, senderKeys, relayIdentity, relayPub, senderPub, repo, registered: registry };
 }
 
+// B1: the same-owner exemption is gone; same-owner federated delivery now needs
+// an active self-pair directory link. Both owner ids default to
+// usr_chris@primary.example in worldWithRecipient / senderEnvelope.
+const seedSelfPairLink = (world, ownerId = 'usr_chris@primary.example') => world.repo.createFederationDirectoryLink({
+  linkRef: crypto.randomUUID(),
+  localOwnerId: ownerId, localEndpointId: `ep_claude@${RELAY}`,
+  remoteOwnerId: ownerId, remoteEndpointId: `ep_codex@${ORIGIN}`,
+  remoteDomain: ORIGIN, role: 'issuer', initiatedVia: 'self_pair', status: 'active',
+  localConfirmedAt: new Date(), remoteConfirmedAt: new Date(), sourceInviteId: null, peerDomain: ORIGIN,
+}, null);
+
 function senderEnvelope(senderPrivateKey, overrides = {}) {
   const base = {
     protocol: 'sigil/1', message_id: 'msg_fed_1', conversation_id: 'conv_1', message_type: 'chat.message',
@@ -78,6 +89,7 @@ async function postForward(port, { body, headers }) {
 
 test('POST /v1/federation/envelopes delivers a signed forward and is idempotent', async () => {
   const world = worldWithRecipient();
+  await seedSelfPairLink(world);
   const notifications = [];
   const stream = { notify: (endpointId, messageId) => { notifications.push({ endpointId, messageId }); return true; } };
   const { server, port } = await startServer(world, { stream });
@@ -118,6 +130,7 @@ test('no federationMode → POST /v1/federation/envelopes falls through to 404 e
 
 test('federationMode:"queue" still routes a valid signed forward into acceptFederatedEnvelope', async () => {
   const world = worldWithRecipient();
+  await seedSelfPairLink(world);
   const { server, port } = await startServer(world, { federationMode: 'queue' });
   try {
     const payload = forwardPayload(world);

@@ -136,22 +136,22 @@ export async function acceptFederatedEnvelope(body, headers, options) {
     if (!recipient || (recipient.status !== undefined && recipient.status !== 'active')) {
       throw reject('RECIPIENT_NOT_FOUND', 'The recipient endpoint does not exist in this relay\'s registry.', { recipient_id: recipientId });
     }
-    // 8: directory gate.
-    if (senderOwnerId === recipient.owner_id) {
-      // same-owner exemption (design #3) — checked first, unchanged.
-    } else {
-      const link = typeof repository.getActiveFederationDirectoryLink === 'function'
-        ? await repository.getActiveFederationDirectoryLink(recipient.owner_id, senderOwnerId, originDomain, client)
-        : null;
-      if (!link) {
-        throw reject('DIRECTORY_LINK_REQUIRED', 'No active cross-federation directory link authorises this cross-owner delivery', {
-          sender_owner_id: senderOwnerId,
-          recipient_endpoint_id: recipientId,
-          reason: 'no_active_federation_directory_link',
-        });
-      }
-      // link.status === 'active' — deliver.
+    // 8: directory gate (design Section 1 — the same-owner exemption is
+    // removed; a self-pair link authorises same-owner cross-federation
+    // delivery). sender_owner_id stays informational and is NOT domain-pinned:
+    // #3's --federation-owner deliberately lets one owner id live on two
+    // relays under a domain that differs from the relay domain.
+    const link = typeof repository.getActiveFederationDirectoryLink === 'function'
+      ? await repository.getActiveFederationDirectoryLink(recipient.owner_id, senderOwnerId, originDomain, client)
+      : null;
+    if (!link) {
+      throw reject('DIRECTORY_LINK_REQUIRED', 'No active cross-federation directory link authorises this delivery', {
+        sender_owner_id: senderOwnerId,
+        recipient_endpoint_id: recipientId,
+        reason: 'no_active_federation_directory_link',
+      });
     }
+    // link.status === 'active' — deliver.
     // 9: rate reservations (verified federated sender id) + federation_origin + inbox depth.
     const limits = resolveRateLimits(options.rateLimits);
     const windowStart = new Date(Math.floor((now instanceof Date ? now.getTime() : Date.parse(now)) / 60_000) * 60_000).toISOString();

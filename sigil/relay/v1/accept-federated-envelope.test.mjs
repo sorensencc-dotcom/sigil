@@ -130,11 +130,33 @@ function worldWithRecipient(recipientOwnerId = 'usr_chris@primary.example') {
 }
 const opts9 = (world) => ({ repository: world.repo, registered: world.registered, relayDomain: RELAY, request_id: 'req_1', now: new Date('2026-08-30T12:00:30.000Z') });
 
-test('same-owner exemption: relay-attested owner == recipient registry owner → 202 delivered, federation_hop stored', async () => {
+// B1: the same-owner exemption is gone; same-owner federated delivery now needs
+// an active self-pair directory link. `worldWithRecipient` defaults both the
+// sender-attested owner and the recipient owner to usr_chris@primary.example.
+const seedSelfPairLink = (world, ownerId = 'usr_chris@primary.example') => world.repo.createFederationDirectoryLink({
+  linkRef: crypto.randomUUID(),
+  localOwnerId: ownerId, localEndpointId: `ep_claude@${RELAY}`,
+  remoteOwnerId: ownerId, remoteEndpointId: `ep_codex@${ORIGIN}`,
+  remoteDomain: ORIGIN, role: 'issuer', initiatedVia: 'self_pair', status: 'active',
+  localConfirmedAt: new Date(), remoteConfirmedAt: new Date(), sourceInviteId: null, peerDomain: ORIGIN,
+}, null);
+
+test('B1: same-owner federated delivery with NO directory link → 403 DIRECTORY_LINK_REQUIRED (exemption removed)', async () => {
   const world = worldWithRecipient('usr_chris@primary.example');
+  const { body, headers } = forwardPayload(world); // senderOwnerId defaults to usr_chris@primary.example == recipient owner
+  const r = await acceptFederatedEnvelope(body, headers, opts9(world));
+  assert.equal(r.status, 403);
+  assert.equal(r.body.code, 'DIRECTORY_LINK_REQUIRED');
+  const inbox = await world.repo.listInbox(`ep_claude@${RELAY}`, '');
+  assert.equal(inbox.length, 0, 'the forged same-owner envelope must not be delivered');
+});
+test('B1: same-owner federated delivery WITH an active self-pair link → 202 delivered', async () => {
+  const world = worldWithRecipient('usr_chris@primary.example');
+  await seedSelfPairLink(world);
   const { body, headers } = forwardPayload(world);
   const r = await acceptFederatedEnvelope(body, headers, opts9(world));
-  assert.equal(r.status, 202); assert.equal(r.body.code, 'ACCEPTED'); assert.equal(r.body.duplicate, false);
+  assert.equal(r.status, 202);
+  assert.equal(r.body.code, 'ACCEPTED');
   const inbox = await world.repo.listInbox(`ep_claude@${RELAY}`, '');
   assert.equal(inbox.length, 1);
   assert.equal(world.repo._debugGetEnvelope(inbox[0].message_id).federation_hop, true);
@@ -174,6 +196,7 @@ test('expired envelope → 422 MESSAGE_EXPIRED', async () => {
 });
 test('re-POST of an accepted (sender.endpoint_id, idempotency_key) → 202 duplicate:true, no second delivery', async () => {
   const world = worldWithRecipient();
+  await seedSelfPairLink(world);
   const { body, headers } = forwardPayload(world);
   await acceptFederatedEnvelope(body, headers, opts9(world));
   const r2 = await acceptFederatedEnvelope(body, headers, opts9(world));
@@ -182,6 +205,7 @@ test('re-POST of an accepted (sender.endpoint_id, idempotency_key) → 202 dupli
 });
 test('replay: same message_id under a new idempotency_key → 409 REPLAY_DETECTED', async () => {
   const world = worldWithRecipient();
+  await seedSelfPairLink(world);
   const { body, headers } = forwardPayload(world);
   await acceptFederatedEnvelope(body, headers, opts9(world));
   const envelope2 = senderEnvelope(world.senderKeys.privateKey, { idempotency_key: 'idem_2' });
@@ -297,10 +321,24 @@ test('step 8: an active link for one remote owner does not authorise a different
   assert.equal(res.body.details.reason, 'no_active_federation_directory_link');
 });
 
-test('step 8: same-owner still delivers with no link row (unchanged)', async () => {
-  const { deliverForwardBody } = await seedFederatedInboundFixture({
+test('step 8 / B1: same-owner with NO link row -> 403 (exemption removed); with an active self-pair link -> 202', async () => {
+  const noLink = await seedFederatedInboundFixture({
     recipient: { endpoint_id: 'ep_claude@a.example', owner_id: 'usr_shared@a.example' },
   });
-  const res = await deliverForwardBody({ senderOwnerId: 'usr_shared@a.example', senderEndpoint: 'ep_codex@b.example' });
-  assert.equal(res.status, 202);
+  const rejected = await noLink.deliverForwardBody({ senderOwnerId: 'usr_shared@a.example', senderEndpoint: 'ep_codex@b.example' });
+  assert.equal(rejected.status, 403);
+  assert.equal(rejected.body.code, 'DIRECTORY_LINK_REQUIRED');
+
+  const withLink = await seedFederatedInboundFixture({
+    recipient: { endpoint_id: 'ep_claude@a.example', owner_id: 'usr_shared@a.example' },
+  });
+  await withLink.repository.createFederationDirectoryLink({
+    linkRef: crypto.randomUUID(),
+    localOwnerId: 'usr_shared@a.example', localEndpointId: 'ep_claude@a.example',
+    remoteOwnerId: 'usr_shared@a.example', remoteEndpointId: 'ep_codex@b.example',
+    remoteDomain: 'b.example', role: 'issuer', initiatedVia: 'self_pair', status: 'active',
+    localConfirmedAt: new Date(), remoteConfirmedAt: new Date(), sourceInviteId: null, peerDomain: 'b.example',
+  }, null);
+  const delivered = await withLink.deliverForwardBody({ senderOwnerId: 'usr_shared@a.example', senderEndpoint: 'ep_codex@b.example' });
+  assert.equal(delivered.status, 202);
 });

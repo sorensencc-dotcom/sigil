@@ -156,8 +156,16 @@ test('two federated recipients differing only in local-part case stay distinct t
   assert.notEqual(world.registered.get(`ep_claude@${RELAY}`), world.registered.get(`ep_Claude@${RELAY}`));
   assert.equal(world.registered.size, 2);
 
-  // A: lower-case recipient, same owner as the relay-attested sender ->
-  // same-owner exemption delivers it, 202 ACCEPTED.
+  // A: lower-case recipient, same owner as the relay-attested sender. The
+  // same-owner exemption is gone (B1), so an active self-pair directory link
+  // authorises the delivery -> 202 ACCEPTED.
+  await world.repo.createFederationDirectoryLink({
+    linkRef: crypto.randomUUID(),
+    localOwnerId: 'usr_chris@primary.example', localEndpointId: `ep_claude@${RELAY}`,
+    remoteOwnerId: 'usr_chris@primary.example', remoteEndpointId: `ep_codex@${ORIGIN}`,
+    remoteDomain: ORIGIN, role: 'issuer', initiatedVia: 'self_pair', status: 'active',
+    localConfirmedAt: new Date(), remoteConfirmedAt: new Date(), sourceInviteId: null, peerDomain: ORIGIN,
+  }, null);
   const a = forwardPayload(world);
   const ra = await acceptFederatedEnvelope(a.body, a.headers, opts9(world));
   assert.equal(ra.status, 202);

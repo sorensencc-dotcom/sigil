@@ -9,6 +9,7 @@ import { PostgresRepository } from './postgres-repository.mjs';
 import { acceptFederatedEnvelope } from './accept-federated-envelope.mjs';
 import { signedBytes } from './validate-envelope.mjs';
 import { buildForwardRequest, signForwardRequest } from './federation-router.mjs';
+import { canonicalJsonBytes } from './jcs.mjs';
 import { assertDisposableTestDatabase } from '../../scripts/assert-disposable-test-db.mjs';
 
 const connectionString = process.env.SIGIL_TEST_DATABASE_URL;
@@ -61,6 +62,17 @@ test('federated envelope with an unregistered foreign sender is accepted and sha
   const repository = new PostgresRepository({ pool });
   await repository.upsertPeer({ domain: ORIGIN, relayUrl: 'https://a.example/relay', keys: [{ kid: relayIdentity.key_id, alg: 'Ed25519', publicKey: relayPub }], trustMode: 'tofu' });
 
+  // B1: the same-owner exemption is gone -- same-owner federated delivery now
+  // needs an active self-pair directory link (migration 019 permits equal
+  // local/remote owner ids only when initiated_via = 'self_pair').
+  await repository.createFederationDirectoryLink({
+    linkRef: crypto.randomUUID(),
+    localOwnerId: ids.owner, localEndpointId: ids.recipient,
+    remoteOwnerId: ids.owner, remoteEndpointId: ids.sender,
+    remoteDomain: ORIGIN, role: 'issuer', initiatedVia: 'self_pair', status: 'active',
+    localConfirmedAt: new Date(), remoteConfirmedAt: new Date(), sourceInviteId: null, peerDomain: ORIGIN,
+  });
+
   const base = {
     protocol: 'sigil/1', message_id: ids.message, conversation_id: ids.conversation, message_type: 'chat.message',
     sender: { owner_id: ids.owner, endpoint_id: ids.sender, kind: 'agent' },
@@ -71,13 +83,17 @@ test('federated envelope with an unregistered foreign sender is accepted and sha
   const value = crypto.sign(null, signedBytes({ ...base, signature: undefined }), senderKeys.privateKey).toString('base64url');
   const envelope = { ...base, signature: { algorithm: 'Ed25519', key_id: ids.senderKey, value } };
 
-  const { body, canonicalBytes } = buildForwardRequest(envelope, {
+  const { body } = buildForwardRequest(envelope, {
     originDomain: ORIGIN,
     senderKey: { kid: ids.senderKey, alg: 'Ed25519', publicKey: senderPub },
     senderOwnerId: ids.owner,
     now: new Date('2029-12-31T12:00:05.000Z'),
   });
-  const { signature, keyId } = signForwardRequest(canonicalBytes, relayIdentity);
+  // Task 4: verifyInboundRelayRequest judges signed_at freshness against
+  // wall-clock time (acceptFederatedEnvelope does not thread options.now into
+  // the verifier), so re-stamp signed_at now and re-sign the canonical body.
+  body.signed_at = new Date().toISOString();
+  const { signature, keyId } = signForwardRequest(canonicalJsonBytes(body), relayIdentity);
   const headers = { 'sigil-relay-signature': signature, 'sigil-relay-key-id': keyId };
 
   const r = await acceptFederatedEnvelope(body, headers, {
@@ -158,6 +174,17 @@ test('federated envelope whose signature.key_id collides with a local endpoint k
   const repository = new PostgresRepository({ pool });
   await repository.upsertPeer({ domain: ORIGIN, relayUrl: 'https://a.example/relay', keys: [{ kid: relayIdentity.key_id, alg: 'Ed25519', publicKey: relayPub }], trustMode: 'tofu' });
 
+  // B1: the same-owner exemption is gone. Seed the self-pair link so the
+  // request clears the directory gate and reaches the key_id-collision check
+  // this test targets.
+  await repository.createFederationDirectoryLink({
+    linkRef: crypto.randomUUID(),
+    localOwnerId: ids.owner, localEndpointId: ids.recipient,
+    remoteOwnerId: ids.owner, remoteEndpointId: ids.sender,
+    remoteDomain: ORIGIN, role: 'issuer', initiatedVia: 'self_pair', status: 'active',
+    localConfirmedAt: new Date(), remoteConfirmedAt: new Date(), sourceInviteId: null, peerDomain: ORIGIN,
+  });
+
   const base = {
     protocol: 'sigil/1', message_id: ids.message, conversation_id: ids.conversation, message_type: 'chat.message',
     sender: { owner_id: ids.owner, endpoint_id: ids.sender, kind: 'agent' },
@@ -169,13 +196,16 @@ test('federated envelope whose signature.key_id collides with a local endpoint k
   // signature.key_id deliberately set to the local endpoint's key id.
   const envelope = { ...base, signature: { algorithm: 'Ed25519', key_id: ids.collidingKey, value } };
 
-  const { body, canonicalBytes } = buildForwardRequest(envelope, {
+  const { body } = buildForwardRequest(envelope, {
     originDomain: ORIGIN,
     senderKey: { kid: ids.collidingKey, alg: 'Ed25519', publicKey: senderPub },
     senderOwnerId: ids.owner,
     now: new Date('2029-12-31T12:00:05.000Z'),
   });
-  const { signature, keyId } = signForwardRequest(canonicalBytes, relayIdentity);
+  // Task 4: re-stamp signed_at to wall-clock now and re-sign (see the sibling
+  // test for why the fixture's 2029 timestamp is not fresh enough).
+  body.signed_at = new Date().toISOString();
+  const { signature, keyId } = signForwardRequest(canonicalJsonBytes(body), relayIdentity);
   const headers = { 'sigil-relay-signature': signature, 'sigil-relay-key-id': keyId };
 
   const r = await acceptFederatedEnvelope(body, headers, {
