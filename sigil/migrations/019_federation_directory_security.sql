@@ -17,15 +17,21 @@ CREATE INDEX IF NOT EXISTS federation_relay_nonces_expires_at_idx
 
 -- 2. CHECK-constraint replacements. Fail loudly if 018's constraint names are
 --    not what this migration expects, rather than letting a silent
---    DROP ... IF EXISTS no-op leave a stale constraint in place.
+--    DROP ... IF EXISTS no-op leave a stale constraint in place. Both probes
+--    pin `table_name` as well as `constraint_name`: constraint names are unique
+--    per schema, not globally, so without the table predicate a same-named
+--    constraint on some other table would satisfy the check and let this
+--    migration run against a federation_directory_links that never had it.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints
-                 WHERE constraint_name = 'federation_directory_links_distinct_owners') THEN
+                 WHERE constraint_name = 'federation_directory_links_distinct_owners'
+                   AND table_name = 'federation_directory_links') THEN
     RAISE EXCEPTION 'migration 019: expected constraint federation_directory_links_distinct_owners not found';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints
-                 WHERE constraint_name = 'federation_directory_links_initiated_via_check') THEN
+                 WHERE constraint_name = 'federation_directory_links_initiated_via_check'
+                   AND table_name = 'federation_directory_links') THEN
     RAISE EXCEPTION 'migration 019: expected constraint federation_directory_links_initiated_via_check not found';
   END IF;
 END $$;
