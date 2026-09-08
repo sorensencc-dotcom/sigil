@@ -1064,7 +1064,7 @@ async function cmdFederationInviteRedeem(rest) {
 
     const { buildRedemptionRequest, signRelayRequest, postDirectory, assertIssuerResponseIdentity } = await import('../relay/v1/federation-directory-client.mjs');
     const now = new Date();
-    const { body, canonicalBytes } = buildRedemptionRequest({ linkRef, code, redeemer, redeemerDomain, now });
+    const { canonicalBytes } = buildRedemptionRequest({ linkRef, code, redeemer, redeemerDomain, now });
     const signed = signRelayRequest(canonicalBytes, identity);
 
     let outcome;
@@ -1072,16 +1072,12 @@ async function cmdFederationInviteRedeem(rest) {
       outcome = await postDirectory(peer, '/v1/federation/directory/redemptions', canonicalBytes, signed);
     } catch (error) {
       if (error && error.code === 'FORWARD_TRANSPORT_FAILED') {
-        await repository.enqueueFederationForward({
-          kind: 'directory_redemption',
-          messageId: linkRef,
-          idempotencyKey: linkRef,
-          recipientDomain: issuerDomain,
-          originDomain: redeemerDomain,
-          directoryPayload: body,
-          now,
-        });
-        console.log(`issuer relay unreachable; redemption queued for retry — run \`sigil federation link show ${linkRef}\` after it drains`);
+        // Do NOT enqueue a durable federation_outbox retry row here: its
+        // directory_payload carries the plaintext invite code (Q4). The
+        // redemption is cheap to re-drive by hand, so ask the operator to
+        // re-run the command once the issuer relay is reachable again.
+        console.error(`issuer relay unreachable; re-run 'sigil federation invite redeem ${code}' when it is back`);
+        process.exitCode = 1;
         return;
       }
       throw error;

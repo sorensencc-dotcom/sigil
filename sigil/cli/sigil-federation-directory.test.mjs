@@ -341,6 +341,91 @@ async function insertDirectoryLink(pool, overrides = {}) {
   return row.linkRef;
 }
 
+test('Q4: a redemption transport failure writes no outbox row and exits non-zero', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  assertDisposableTestDatabase(connectionString);
+  await applyMigrations(connectionString, { reset: true });
+
+  const dir = await makeWorkdir(t);
+  const bobIdentity = '.sigil/bob.identity.json';
+
+  // arrange: issuer relay is pinned but unreachable at the transport layer.
+  // postDirectory maps a 5xx to a FORWARD_TRANSPORT_FAILED throw.
+  const stub = await startDirectoryStub(t, { status: 503, body: {} });
+  const pin = await run(
+    ['peer', 'add', 'b.example', '--relay-url', stub.url, '--public-key', 'AAAAC3NzaC1lZDI1NTE5AAAAITESTKEY', '--kid', 'key_directory_test', '--database-url', connectionString],
+    dir,
+  );
+  assert.equal(pin.exitCode, 0, pin.stderr);
+
+  const linkRef = crypto.randomUUID();
+  const code = `sigil-fed-invite:b.example:${linkRef}:${crypto.randomBytes(24).toString('base64url')}`;
+
+  // act
+  const redeem = await run(
+    ['federation', 'invite', 'redeem', code, '--identity', bobIdentity, '--database-url', connectionString],
+    dir,
+  );
+
+  // assert: non-zero exit, the re-run hint on stderr, and NO durable
+  // federation_outbox row (the old code enqueued one carrying the invite code).
+  assert.equal(redeem.exitCode, 1);
+  assert.match(redeem.stderr, /re-run 'sigil federation invite redeem/);
+  const outbox = await pool.query("SELECT count(*) FROM federation_outbox WHERE kind = 'directory_redemption'");
+  assert.equal(Number(outbox.rows[0].count), 0, 'a transport failure must not enqueue a durable retry row');
+});
+
+test('Q4 recovery: after "issuer committed, response lost", a second redeem run converges', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  assertDisposableTestDatabase(connectionString);
+  await applyMigrations(connectionString, { reset: true });
+
+  const dir = await makeWorkdir(t);
+  const bobIdentity = '.sigil/bob.identity.json';
+
+  // arrange: issuer relay returns an idempotent 202 with a valid issuer block...
+  const stub = await startDirectoryStub(t, {
+    status: 202,
+    body: { request_id: null, issuer: { owner_id: 'usr_carol@b.example', endpoint_id: 'ep_carol@b.example' } },
+  });
+  const pin = await run(
+    ['peer', 'add', 'b.example', '--relay-url', stub.url, '--public-key', 'AAAAC3NzaC1lZDI1NTE5AAAAITESTKEY', '--kid', 'key_directory_test', '--database-url', connectionString],
+    dir,
+  );
+  assert.equal(pin.exitCode, 0, pin.stderr);
+
+  // ...and the local link row already exists (a prior run wrote it before the
+  // issuer's response was lost), so createFederationDirectoryLink throws
+  // FEDERATION_LINK_EXISTS -- which the redeem path swallows as idempotent.
+  const linkRef = crypto.randomUUID();
+  await insertDirectoryLink(pool, {
+    linkRef,
+    localOwnerId: 'usr_bob@local',
+    localEndpointId: 'ep_bob@local',
+    remoteOwnerId: 'usr_carol@b.example',
+    remoteEndpointId: 'ep_carol@b.example',
+    remoteDomain: 'b.example',
+    role: 'redeemer',
+    status: 'pending',
+    peerDomain: 'b.example',
+  });
+  const code = `sigil-fed-invite:b.example:${linkRef}:${crypto.randomBytes(24).toString('base64url')}`;
+
+  // act
+  const redeem = await run(
+    ['federation', 'invite', 'redeem', code, '--identity', bobIdentity, '--database-url', connectionString],
+    dir,
+  );
+
+  // assert: converges cleanly -- exit 0, no throw, prints the linkRef and the
+  // "waiting for issuer confirmation." line.
+  assert.equal(redeem.exitCode, 0, redeem.stderr);
+  assert.match(redeem.stdout, new RegExp(linkRef));
+  assert.match(redeem.stdout, /waiting for issuer confirmation\./);
+});
+
 test('sigil federation link list/show/confirm/revoke', { skip: !connectionString }, async (t) => {
   const pool = new pg.Pool({ connectionString });
   t.after(() => pool.end());
