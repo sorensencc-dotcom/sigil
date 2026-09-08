@@ -119,8 +119,9 @@ test(
     assert.match(res.stdout, /Pinned: yes/);
     assert.match(res.stdout, new RegExp(`Peer relay URL: ${stub.url.replace(/[.]/g, '\\.')}`));
     assert.match(res.stdout, /Reachable: yes \(\d+ms\)/);
-    assert.match(res.stdout, /Same-owner exemption: not determinable locally/);
+    assert.doesNotMatch(res.stdout, /Same-owner exemption/);
     assert.match(res.stdout, /\(advisory only — the receiving relay re-checks against its own registry\)/);
+    assert.match(res.stdout, /Directory link: not determinable locally/);
 
     // The only thing `route test` ever asked the relay for is its health.
     assert.deepEqual(stub.seen, ['GET /v1/health']);
@@ -187,7 +188,7 @@ test(
 );
 
 test(
-  'route test: advisory says "would apply" when the recipient owner equals the sender owner',
+  'route test: a same-owner recipient still gets a directory-link lookup (B1 removed the exemption)',
   { skip: !connectionString },
   async (t) => {
     const { default: pg } = await import('pg');
@@ -201,7 +202,11 @@ test(
     const stub = await startStubRelay(t);
     const add = await pinPeer(dir, 'b.example', stub.url);
     assert.equal(add.exitCode, 0, add.stderr);
-    // alice's owner id is usr_alice@local (init default). Same owner => exemption applies.
+    // alice's owner id is usr_alice@local (init default), so this is a
+    // same-owner pair. B1 killed the same-owner exemption: an owner
+    // federating with itself needs a self-pair link like anyone else, so
+    // `route test` must run the lookup and report the missing link rather
+    // than printing an exemption that no longer exists.
     await seedRegistryEndpoint(dir, { endpointId: 'ep_bob@b.example', ownerId: 'usr_alice@local' });
 
     const res = await run(
@@ -209,12 +214,13 @@ test(
       dir,
     );
     assert.equal(res.exitCode, 0, res.stderr);
-    assert.match(res.stdout, /Same-owner exemption: would apply \(advisory\)/);
+    assert.doesNotMatch(res.stdout, /Same-owner exemption/);
+    assert.match(res.stdout, /Directory link: none — delivery would be DIRECTORY_LINK_REQUIRED/);
   },
 );
 
 test(
-  'route test: advisory says "would NOT apply" when the recipient owner differs',
+  'route test: a different-owner recipient prints no exemption line either',
   { skip: !connectionString },
   async (t) => {
     const { default: pg } = await import('pg');
@@ -235,7 +241,8 @@ test(
       dir,
     );
     assert.equal(res.exitCode, 0, res.stderr);
-    assert.match(res.stdout, /Same-owner exemption: would NOT apply \(advisory\) — owner ids differ/);
+    assert.doesNotMatch(res.stdout, /Same-owner exemption/);
+    assert.match(res.stdout, /Directory link: none — delivery would be DIRECTORY_LINK_REQUIRED/);
   },
 );
 
@@ -255,8 +262,8 @@ test(
     const stub = await startStubRelay(t);
     const add = await pinPeer(dir, 'b.example', stub.url);
     assert.equal(add.exitCode, 0, add.stderr);
-    // Different owner than alice, so the same-owner exemption would NOT
-    // apply and the directory-link advisory is reachable.
+    // Different owner than alice. The directory-link advisory runs for every
+    // pinned peer now, same-owner or not.
     await seedRegistryEndpoint(dir, { endpointId: 'ep_bob@b.example', ownerId: 'usr_bob@b.example' });
 
     const linkRef = crypto.randomUUID();
@@ -307,7 +314,7 @@ test(
       dir,
     );
     assert.equal(res.exitCode, 0, res.stderr);
-    assert.match(res.stdout, /Same-owner exemption: not determinable locally/);
+    assert.doesNotMatch(res.stdout, /Same-owner exemption/);
     assert.match(res.stdout, /Directory link: not determinable locally/);
   },
 );

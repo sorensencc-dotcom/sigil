@@ -43,7 +43,7 @@ Commands:
   init <name> [--owner <owner_id> | --federation-owner <federated_id>] [--registry path] [--domain domain]      Create a local identity and register it (domain defaults to "local"; --federation-owner allows an owner id whose domain differs from --domain)
   sign-contract --contract path --identity path [--output path]          Sign a TorqueQuery agent dispatch contract
   verify-contract --contract path --registry path                        Verify a signed TorqueQuery agent dispatch contract
-  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] Run a local relay (blocks; Ctrl+C to stop)
+  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] [--relay-request-freshness-ms N] Run a local relay (blocks; Ctrl+C to stop)
   relay well-known generate --identity path --domain domain --endpoint url [--ws-endpoint url] [--output path]
                                                             Emit this relay's .well-known/sigil discovery document from a designated endpoint identity
   oidc-issuer add <issuer> --client-id id [--label text] [--assurance level] [--database-url url]
@@ -165,7 +165,7 @@ export function startOidcIssuerAllowlistPolling({ repository, allowlistSet, inte
 }
 
 async function cmdRelayUp(argv) {
-  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' }, 'oidc-issuer-refresh-interval-ms': { type: 'string' }, domain: { type: 'string' }, 'federation-mode': { type: 'string' }, 'federation-identity': { type: 'string' } } });
+  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' }, 'oidc-issuer-refresh-interval-ms': { type: 'string' }, domain: { type: 'string' }, 'federation-mode': { type: 'string' }, 'federation-identity': { type: 'string' }, 'relay-request-freshness-ms': { type: 'string' } } });
   const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
   const port = Number(opt(args, ['port']) ?? 0);
   const streamPort = Number(opt(args, ['stream-port']) ?? (port ? port + 1 : 0));
@@ -176,6 +176,18 @@ async function cmdRelayUp(argv) {
   if (!Number.isInteger(oidcIssuerRefreshIntervalMs) || oidcIssuerRefreshIntervalMs <= 0) {
     throw new Error(`--oidc-issuer-refresh-interval-ms must be a positive integer, got "${oidcIssuerRefreshIntervalMsRaw}"`);
   }
+  // Inbound relay-request freshness window (signed_at skew tolerance). Flag
+  // beats env beats the built-in default; `resolveRelayRequestFreshnessMs`
+  // clamps to [60s, 1h] and falls back to 300s for anything unparseable. An
+  // empty string from either source counts as "unset" rather than 0, which
+  // would otherwise clamp up to the 60s floor and silently narrow the window.
+  const relayRequestFreshnessMsRaw =
+    opt(args, ['relay-request-freshness-ms'])
+    ?? (process.env.SIGIL_RELAY_REQUEST_FRESHNESS_MS || undefined);
+  const relayRequestFreshnessMs =
+    relayRequestFreshnessMsRaw === undefined || relayRequestFreshnessMsRaw === ''
+      ? undefined
+      : Number(relayRequestFreshnessMsRaw);
   const relayDomain = opt(args, ['domain']);
   let isLocalDomain;
   if (relayDomain !== undefined) {
@@ -252,7 +264,7 @@ async function cmdRelayUp(argv) {
     const addr = server?.address();
     return addr ? `http://127.0.0.1:${addr.port}` : `http://127.0.0.1:${port}`;
   };
-  server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity });
+  server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity, relayRequestFreshnessMs });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();
   let federationReaperTimer;
@@ -1021,11 +1033,13 @@ const INVITE_REDEEM_USAGE = 'usage: sigil federation invite redeem <code> --iden
 // Synchronous redemption (locked design decision (b)): POST to the issuer
 // relay and wait. A 202 lets us write the redeemer's federation_directory_links
 // row fully populated right away (we now know the issuer's identity from the
-// response body). A terminal 4xx writes nothing. A transport failure / 5xx
-// writes nothing either but falls back to the durable outbox so the redemption
-// is retried once the issuer relay comes back -- the reaper's directory_redemption
-// success branch (federation-reaper.mjs) writes the same link row from that
-// later 202, idempotently.
+// response body). A terminal 4xx writes nothing.
+//
+// A transport failure / 5xx writes nothing and is NOT retried: there is no
+// durable-outbox fallback for a redemption, because a `directory_redemption`
+// outbox row would have to persist the plaintext invite code in
+// `directory_payload` (Q4). The operator re-runs the command instead. Do not
+// reintroduce the fallback -- it leaks the code at rest.
 async function cmdFederationInviteRedeem(rest) {
   const args = parseArgs({
     args: rest,
@@ -1107,10 +1121,10 @@ async function cmdFederationInviteRedeem(rest) {
         // (rate) Load-bearing redeem-attempt abuse scope, keyed per redeemer
         // endpoint+owner. Placed here -- after the peer-pinned check has
         // passed and the outbound POST has come back accepted -- so an
-        // unpinned-peer error or a transport failure (queued to the outbox,
-        // never reaching this branch) never consumes the redeemer's own
-        // quota; only a redemption that actually clears and is about to
-        // write the local link row does.
+        // unpinned-peer error or a transport failure (both return before
+        // reaching this branch) never consumes the redeemer's own quota;
+        // only a redemption that actually clears and is about to write the
+        // local link row does.
         if (typeof repository.reserveRateLimit === 'function') {
           const windowStart = new Date(Math.floor(now.getTime() / 60_000) * 60_000).toISOString();
           const limit = resolveRateLimits().federation_directory_redeem;
@@ -1441,33 +1455,25 @@ async function cmdRoute(argv) {
     process.exitCode = 1;
   }
 
-  // Step 4: advisory same-owner-exemption line. Only informative when the
-  // recipient endpoint is present in the local registry -- the receiving
-  // relay re-checks against its own registry regardless.
+  // Step 4: resolve the recipient's owner from the local registry, which is
+  // what the directory-link lookup below needs. The receiving relay re-checks
+  // against its own registry regardless.
   const localRegistry = toRegistryMap(loadRegistryFile(registryPath));
   // Look up by the normalized federated id (localPart@domain), not the raw CLI
   // arg -- the registry is keyed on the canonical form printed above.
   const recipientEntry = localRegistry.get(`${parsed.localPart}@${parsed.domain}`);
   const identity = loadIdentity(identityPath);
-  let sameOwner = false;
-  if (!recipientEntry) {
-    console.log('Same-owner exemption: not determinable locally');
-  } else if (recipientEntry.owner_id === identity.owner_id) {
-    sameOwner = true;
-    console.log('Same-owner exemption: would apply (advisory)');
-  } else {
-    console.log('Same-owner exemption: would NOT apply (advisory) — owner ids differ');
-  }
   console.log('(advisory only — the receiving relay re-checks against its own registry)');
 
-  // Step 5: advisory directory-link line. Only meaningful when the recipient
-  // is foreign (peer pinned above) and the same-owner exemption would not
-  // apply -- same-owner delivery never needs a directory link. Requires a
-  // database, since the directory only exists in PostgreSQL. `route test`
-  // only has the recipient's federated id, not its owner, so this can only
-  // run when the local registry resolved the recipient entry above; without
-  // that, the recipient owner is not derivable here.
-  if (peer && !sameOwner) {
+  // Step 5: advisory directory-link line. EVERY federated delivery needs an
+  // active directory link, including a same-owner pair: B1 removed the
+  // same-owner exemption, so an owner federating with itself must hold a
+  // self-pair link like anyone else. Requires a database, since the directory
+  // only exists in PostgreSQL. `route test` only has the recipient's federated
+  // id, not its owner, so this can only run when the local registry resolved
+  // the recipient entry above; without that, the recipient owner is not
+  // derivable here.
+  if (peer) {
     if (!databaseUrl) {
       // No database, so no durable directory to consult either way.
     } else if (!recipientEntry) {
