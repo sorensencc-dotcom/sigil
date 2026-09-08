@@ -1112,6 +1112,7 @@ async function cmdFederationInviteRedeem(rest) {
             remoteEndpointId: issuer.endpoint_id,
             remoteDomain: issuerDomain,
             role: 'redeemer',
+            initiatedVia: redeemer.owner_id === issuer.owner_id ? 'self_pair' : 'invite',
             status: 'pending',
             localConfirmedAt: now,
             remoteConfirmedAt: null,

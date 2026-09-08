@@ -133,6 +133,7 @@ export async function acceptDirectoryRedemption(parsedBody, ctx) {
       remoteEndpointId: redeemer.endpoint_id,
       remoteDomain: originDomain,
       role: 'issuer',
+      initiatedVia: invite.issuer_owner_id === redeemer.owner_id ? 'self_pair' : 'invite',
       status: 'pending',
       localConfirmedAt: null,
       remoteConfirmedAt: now,

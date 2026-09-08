@@ -55,6 +55,7 @@ function rowToFederationDirectoryLink(row) {
     remote_endpoint_id: row.remote_endpoint_id,
     remote_domain: row.remote_domain,
     role: row.role,
+    initiated_via: row.initiated_via,
     status: row.status,
     local_confirmed_at: iso(row.local_confirmed_at),
     remote_confirmed_at: iso(row.remote_confirmed_at),
@@ -1345,12 +1346,12 @@ export class PostgresRepository {
       const r = await client.query(
         `INSERT INTO federation_directory_links
            (link_ref, local_owner_id, local_endpoint_id, remote_owner_id, remote_endpoint_id,
-            remote_domain, role, status, local_confirmed_at, remote_confirmed_at, source_invite_id,
+            remote_domain, role, initiated_via, status, local_confirmed_at, remote_confirmed_at, source_invite_id,
             peer_domain, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now(), now())
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now(), now())
          RETURNING *`,
         [row.linkRef, row.localOwnerId, row.localEndpointId, row.remoteOwnerId, row.remoteEndpointId,
-          row.remoteDomain, row.role, row.status, row.localConfirmedAt, row.remoteConfirmedAt,
+          row.remoteDomain, row.role, row.initiatedVia ?? 'invite', row.status, row.localConfirmedAt, row.remoteConfirmedAt,
           row.sourceInviteId, row.peerDomain],
       );
       return rowToFederationDirectoryLink(r.rows[0]);

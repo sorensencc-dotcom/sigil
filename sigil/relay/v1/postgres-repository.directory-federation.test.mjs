@@ -440,3 +440,18 @@ test('a directory row with null directory_payload is rejected by 018 CHECK const
   );
 });
 
+test('createFederationDirectoryLink writes a self_pair row with equal owners', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  const repo = new PostgresRepository({ pool });
+  t.after(() => pool.end());
+  await applyMigrations(connectionString, { reset: true });
+  const linkRef = crypto.randomUUID();
+  const row = await repo.createFederationDirectoryLink({
+    linkRef, localOwnerId: 'usr_x@home.example', localEndpointId: 'ep_a@home.example',
+    remoteOwnerId: 'usr_x@home.example', remoteEndpointId: 'ep_b@home.example',
+    remoteDomain: 'a.example', role: 'issuer', initiatedVia: 'self_pair', status: 'active',
+    localConfirmedAt: new Date(), remoteConfirmedAt: new Date(), sourceInviteId: null, peerDomain: 'a.example',
+  });
+  assert.equal(row.local_owner_id, row.remote_owner_id);
+});
+

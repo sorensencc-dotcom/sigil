@@ -231,3 +231,19 @@ test('confirmation / revocation: malformed body -> 400 INVALID_FEDERATION_REQUES
   assert.equal(res.body.code, 'INVALID_FEDERATION_REQUEST');
 });
 
+test('equal issuer/redeemer owner: redemption writes a self_pair issuer-side link', async () => {
+  const repo = createMemoryRepository();
+  const linkRef = crypto.randomUUID();
+  // seed an invite whose issuer owner equals the redeemer owner used in redemptionBody
+  await repo.createFederationDirectoryInvite({
+    linkRef, issuerEndpointId: 'ep_codex@a.example', issuerOwnerId: 'usr_bob@b.example',
+    peerDomain: 'b.example', codeHash: sha256('SEG'), expiresAt: new Date(Date.now() + 3600_000), now: new Date(),
+  }, null);
+  const res = await acceptDirectoryRedemption(redemptionBody({ linkRef, segment: 'SEG' }), ctx(repo));
+  assert.equal(res.status, 202);
+  const link = await repo.getFederationDirectoryLinkByRef(linkRef, null, {});
+  assert.equal(link.local_owner_id, 'usr_bob@b.example');
+  assert.equal(link.remote_owner_id, 'usr_bob@b.example');
+  assert.equal(link.initiated_via, 'self_pair');
+});
+
