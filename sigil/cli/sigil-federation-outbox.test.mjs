@@ -99,3 +99,34 @@ test('sigil federation outbox list|show|retry against a seeded federation_outbox
   assert.equal(bad.exitCode, 1);
   assert.match(bad.stderr, /usage: sigil federation outbox/);
 });
+
+test('Q4: outbox show strips directoryPayload (no invite code leak)', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  assertDisposableTestDatabase(connectionString);
+  await applyMigrations(connectionString, { reset: true });
+
+  // arrange: a directory_redemption federation_outbox row whose directory_payload
+  // still carries a stale plaintext invite code (the worst case a pre-019 build
+  // would have written before migration 019's scrub).
+  const id = crypto.randomUUID();
+  const linkRef = crypto.randomUUID();
+  const staleCode = `sigil-fed-invite:issuer.example:${linkRef}:SECRETSEGMENT`;
+  await pool.query(
+    `INSERT INTO federation_outbox
+       (id, kind, message_id, idempotency_key, recipient_domain, origin_domain, directory_payload, state, attempt_count, next_attempt_at, created_at, updated_at)
+     VALUES ($1, 'directory_redemption', $2, $2, 'issuer.example', 'redeemer.example', $3::jsonb, 'pending', 0, now(), now(), now())`,
+    [id, linkRef, JSON.stringify({ link_ref: linkRef, code: staleCode })],
+  );
+
+  // act: sigil federation outbox show <id>
+  const show = await run(['federation', 'outbox', 'show', id, '--database-url', connectionString]);
+
+  // assert: operator metadata still renders, but the directoryPayload key and any
+  // sigil-fed-invite: code string are gone from the output.
+  assert.equal(show.exitCode, 0, show.stderr);
+  assert.match(show.stdout, new RegExp(id));
+  assert.match(show.stdout, /directory_redemption/);
+  assert.doesNotMatch(show.stdout, /directoryPayload/);
+  assert.doesNotMatch(show.stdout, /sigil-fed-invite:/);
+});

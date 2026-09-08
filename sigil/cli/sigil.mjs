@@ -824,9 +824,11 @@ async function cmdFederationOutbox(action, rest) {
         process.exitCode = 1;
         return;
       }
-      // Strip the envelope body, the propagated sender key, and the internal
-      // lease fields (claim token / claimed-at) -- none belong in operator output.
-      const { envelope, senderKey, claimToken, claimedAt, ...meta } = record;
+      // Strip the envelope body, the propagated sender key, the internal lease
+      // fields (claim token / claimed-at), and the directory payload (a
+      // redemption row's payload historically carried the plaintext
+      // `sigil-fed-invite:` code) -- none belong in operator output.
+      const { envelope, senderKey, claimToken, claimedAt, directoryPayload, ...meta } = record;
       console.log(JSON.stringify(meta, null, 2));
     }, { migrate: true });
     return;
