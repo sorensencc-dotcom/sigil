@@ -238,7 +238,7 @@ git commit -m "feat(migrations): 019 federation_relay_nonces + directory-link CH
   - `async consumeRelayNonce(nonce, { now = new Date(), expiresAt, client = this.pool } = {})` — inserts the nonce; on a uniqueness violation throws `Object.assign(new Error('relay request nonce already seen'), { code: 'RELAY_REPLAYED' })`. No return value on success.
   - `async pruneRelayNonces(now = new Date())` — `DELETE FROM federation_relay_nonces WHERE expires_at < $1`; returns `{ deleted: <rowCount> }`.
   - Memory: same signatures; `consumeRelayNonce` uses a `Map<nonce, expiresAtIso>`; `pruneRelayNonces` sweeps entries with `expiresAt < now`.
-  - **`pruneRelayNonces` is deliberately not wired to a scheduler on this branch** (no existing periodic path prunes `login_jti_replays` either). Spec Section 3 accepts this: growth is bounded by the freshness window times request rate. Scheduler wiring is a deferred follow-up — see the TODO in Section 8 / eng-review finding C.
+  - **`pruneRelayNonces` is deliberately not wired to a scheduler on this branch** (no existing periodic path prunes `login_jti_replays` either). Spec Section 3 accepts this, but be precise about what is accepted: with no caller the table grows one row per inbound relay request and nothing ever removes them, so growth is **unbounded, not bounded by the freshness window** — the window only sets `expires_at`, which no sweep reads. What makes the deferral tolerable is the row size and the absence of GA traffic. Scheduler wiring is a deferred follow-up — see the TODO in Section 8 / eng-review finding C.
 
 - [ ] **Step 1: Write the failing memory test**
 
@@ -1654,7 +1654,7 @@ Consistent.
 
 ## NOT in scope (deferred, with rationale)
 
-- **`pruneRelayNonces` scheduler wiring** — the method exists (Task 2) but no periodic caller. Spec-sanctioned; growth bounded by freshness window × request rate on a pre-GA fleet. TODO below.
+- **`pruneRelayNonces` scheduler wiring** — the method exists (Task 2) but has no non-test caller, so `federation_relay_nonces` is **unbounded until the sweep is wired**: one row per inbound relay request, monotonic, for the life of the database. Nothing expires it. Deferral is still acceptable pre-GA on separate grounds — the rows are tiny (a 22-char nonce plus a timestamp) and there is no GA traffic — but those are mitigating factors, not a bound. TODO below.
 - **Dead `verifyRelaySignature` export in `federation-router.mjs`** — spec Non-goals; final-review cleanup pass.
 - **Memory/Postgres directory-method parity gaps** beyond the nonce store — spec Non-goals.
 - **Migration 018 `ADD CONSTRAINT` lock strategy on `federation_outbox`** — spec Non-goals; 018 is not amended.
@@ -1678,7 +1678,7 @@ Consistent.
 |---|---|---|---|---|
 | `verifyInboundRelayRequest` freshness | Relay clock drift > 300 s → legit peer requests rejected `RELAY_REQUEST_STALE`/401 | yes (Task 4, Task 10) | yes — 401 + audit event with skew seconds (Task 10 Step 3) | yes — audit `federation.inbound_rejected`; spec Section 7 says record observed fleet skew |
 | `consumeRelayNonce` inside tx | Handler throws after consume → nonce must NOT be burned | yes — Postgres rollback-safety test (Task 10 Step 5); memory NOT rollback-safe (spec-accepted, dev/test only) | yes — `RELAY_REPLAYED` → 409 | yes — 409 to caller; reaper surfaces as `forward_rejected` terminal |
-| `federation_relay_nonces` growth | prune unwired → table grows until manual `DELETE` | no (deferred) | none | no — silent until DB bloat. **Bounded** by freshness window × request rate; pre-GA. Finding C TODO. |
+| `federation_relay_nonces` growth | prune unwired → table grows until manual `DELETE` | no (deferred) | none | no — silent until DB bloat. **Unbounded until the sweep is wired**: one row per inbound relay request, monotonic, never expired. Mitigated (not bounded) by tiny rows and pre-GA traffic. Finding C TODO. |
 | B1 exemption removal | Same-owner federated delivery with no self-pair link → 403 where it used to 202 | yes (Task 7 RED + GREEN; `federation-regression.test.mjs:154` updated) | yes — `DIRECTORY_LINK_REQUIRED`/403 | yes — 403 to sender |
 | Redemption loses durable retry (Q4) | Issuer relay down at redeem time → no outbox row, operator must re-run | yes (Task 13) | yes — `process.exitCode = 1` + explicit re-run message | yes — stderr line names the exact command |
 | Migration 019 CHECK replacement | 018 constraint name differs from assumption → migration aborts | yes (Task 1 live-DB) | yes — `DO`-block `RAISE EXCEPTION` fails the migration loudly | yes — migration error names the missing constraint |
@@ -1687,7 +1687,7 @@ No critical gap (no failure mode is simultaneously untested **and** unhandled **
 
 ## TODOS.md
 
-- **Wire `pruneRelayNonces` to a periodic maintenance path.** *Why:* `federation_relay_nonces` grows one row per inbound relay request with no reaper; bounded only by freshness-window × rate. *Context:* method lands in Task 2 (both repos); spec Section 3 defers the scheduler. Co-locate with a future `pruneLoginJti` sweep — neither has one today. *Depends on:* this branch merged. *Blocked by:* nothing.
+- **Wire `pruneRelayNonces` to a periodic maintenance path.** *Why:* `federation_relay_nonces` grows one row per inbound relay request with no reaper, and nothing reads `expires_at` — growth is unbounded for the life of the database until this sweep exists. *Context:* method lands in Task 2 (both repos); spec Section 3 defers the scheduler. Co-locate with a future `pruneLoginJti` sweep — neither has one today. *Depends on:* this branch merged. *Blocked by:* nothing.
 
 ## Worktree parallelization
 
