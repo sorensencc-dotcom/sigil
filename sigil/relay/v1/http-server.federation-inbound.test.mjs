@@ -4,11 +4,15 @@ import crypto from 'node:crypto';
 import { createRelayServer } from './http-server.mjs';
 import { signedBytes } from './validate-envelope.mjs';
 import { buildForwardRequest, signForwardRequest } from './federation-router.mjs';
+import { canonicalJsonBytes } from './jcs.mjs';
 import { createMemoryRepository } from '../../cli/memory-repository.mjs';
 
 const ORIGIN = 'a.example';
 const RELAY = 'b.example';
 const SERVER_NOW = new Date('2026-08-30T12:00:30.000Z');
+// Task 4: the inbound relay verifier now requires a fresh signed_at plus a
+// 22-char base64url nonce on every relay request body.
+const NONCE_OK = 'abcdefghijklmnopqrstuv';
 
 // worldWithRecipient mirrors accept-federated-envelope.test.mjs: a memory repo
 // seeded with a pinned origin peer plus an active local recipient.
@@ -39,13 +43,18 @@ function senderEnvelope(senderPrivateKey, overrides = {}) {
 
 function forwardPayload(world, envelopeOverrides = {}, opts = {}) {
   const envelope = opts.envelope ?? senderEnvelope(world.senderKeys.privateKey, envelopeOverrides);
-  const { body, canonicalBytes } = buildForwardRequest(envelope, {
+  const { body } = buildForwardRequest(envelope, {
     originDomain: opts.originDomain ?? ORIGIN,
     senderKey: { kid: `key_ep_codex@${ORIGIN}`, alg: 'Ed25519', publicKey: opts.senderPub ?? world.senderPub },
     senderOwnerId: opts.senderOwnerId ?? 'usr_chris@primary.example',
     now: new Date('2026-08-30T12:00:05.000Z'),
   });
-  const { signature, keyId } = signForwardRequest(canonicalBytes, opts.relayIdentity ?? world.relayIdentity);
+  body.nonce = opts.nonce ?? NONCE_OK;
+  // The inbound verifier is invoked by acceptFederatedEnvelope without a `now`
+  // override (Task 10 threads the configured clock/window in), so it judges
+  // freshness against wall-clock time -- sign with a real current timestamp.
+  body.signed_at = opts.signedAt ?? new Date().toISOString();
+  const { signature, keyId } = signForwardRequest(canonicalJsonBytes(body), opts.relayIdentity ?? world.relayIdentity);
   return { body, headers: { 'sigil-relay-signature': signature, 'sigil-relay-key-id': keyId } };
 }
 

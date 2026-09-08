@@ -9,6 +9,14 @@ import {
   buildRevocationRequest,
   signRelayRequest,
 } from './federation-directory-client.mjs';
+import { canonicalJsonBytes } from './jcs.mjs';
+
+// Task 4: the inbound relay verifier now requires a fresh signed_at plus a
+// 22-char base64url nonce on every relay request body. The directory route
+// invokes the verifier without a `now` override (Task 10 threads the configured
+// clock/window through), so freshness is judged against wall-clock time -- the
+// fixtures sign with a real current timestamp.
+const NONCE_OK = 'abcdefghijklmnopqrstuv';
 
 // This relay is the invite ISSUER domain; PEER is the redeemer's relay, i.e. the
 // signing peer that POSTs the three directory messages. Mirrors the domain roles
@@ -80,26 +88,32 @@ async function post(port, path, bodyObj, headers = {}) {
 }
 
 function signedRedemption(identity, { linkRef, segment, now = SERVER_NOW }) {
-  const { body, canonicalBytes } = buildRedemptionRequest({
+  const { body } = buildRedemptionRequest({
     linkRef,
     code: `sigil-fed-invite:${RELAY}:${linkRef}:${segment}`,
     redeemer: { owner_id: 'usr_bob@b.example', endpoint_id: 'ep_c@b.example' },
     redeemerDomain: PEER,
     now,
   });
-  const { signature, keyId } = signRelayRequest(canonicalBytes, identity);
+  body.nonce = NONCE_OK;
+  body.signed_at = new Date().toISOString();
+  const { signature, keyId } = signRelayRequest(canonicalJsonBytes(body), identity);
   return { body, headers: { 'sigil-relay-signature': signature, 'sigil-relay-key-id': keyId } };
 }
 
 function signedConfirmation(identity, { linkRef, now = SERVER_NOW }) {
-  const { body, canonicalBytes } = buildConfirmationRequest({ linkRef, now });
-  const { signature, keyId } = signRelayRequest(canonicalBytes, identity);
+  const { body } = buildConfirmationRequest({ linkRef, now });
+  body.nonce = NONCE_OK;
+  body.signed_at = new Date().toISOString();
+  const { signature, keyId } = signRelayRequest(canonicalJsonBytes(body), identity);
   return { body, headers: { 'sigil-relay-signature': signature, 'sigil-relay-key-id': keyId } };
 }
 
 function signedRevocation(identity, { linkRef, now = SERVER_NOW }) {
-  const { body, canonicalBytes } = buildRevocationRequest({ linkRef, now });
-  const { signature, keyId } = signRelayRequest(canonicalBytes, identity);
+  const { body } = buildRevocationRequest({ linkRef, now });
+  body.nonce = NONCE_OK;
+  body.signed_at = new Date().toISOString();
+  const { signature, keyId } = signRelayRequest(canonicalJsonBytes(body), identity);
   return { body, headers: { 'sigil-relay-signature': signature, 'sigil-relay-key-id': keyId } };
 }
 

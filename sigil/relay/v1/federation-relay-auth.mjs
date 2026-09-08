@@ -5,11 +5,13 @@ function fail(code, httpStatus, message) {
   return Object.assign(new Error(message), { code, httpStatus });
 }
 
+const NONCE_RE = /^[A-Za-z0-9_-]{22}$/;
+
 // Shared inbound relay-signature verification (design "New module:
 // federation-relay-auth.mjs"). The acting relay's identity comes from WHICH
 // pinned key signed the request -- never a body field -- so bodies that carry
 // no domain (confirmation, revocation) authenticate exactly like redemption.
-export async function verifyInboundRelayRequest(rawBody, headers, { getPeerByKid } = {}) {
+export async function verifyInboundRelayRequest(rawBody, headers, { getPeerByKid, now = new Date(), freshnessMs = 300_000 } = {}) {
   // 1. Parse.
   let parsedBody;
   try {
@@ -46,6 +48,21 @@ export async function verifyInboundRelayRequest(rawBody, headers, { getPeerByKid
     throw fail('RELAY_SIGNATURE_INVALID', 401, 'Sigil-Relay-Signature failed verification against the pinned peer key');
   }
 
+  // 3b. Freshness: signed_at must parse and sit within +/- freshnessMs of the
+  //     verifier's clock. A captured-and-replayed request reads as stale once the
+  //     window passes -- this check runs before the nonce-format check.
+  const nowMs = now instanceof Date ? now.getTime() : Date.parse(now);
+  const signedAtMs = Date.parse(parsedBody.signed_at);
+  if (!Number.isFinite(signedAtMs) || Math.abs(nowMs - signedAtMs) > freshnessMs) {
+    throw fail('RELAY_REQUEST_STALE', 401, 'signed_at is missing or outside the accepted freshness window');
+  }
+
+  // 3c. Nonce format: 16 random bytes, base64url, 22 chars. Consumption happens
+  //     in the HTTP handler, not here.
+  if (typeof parsedBody.nonce !== 'string' || !NONCE_RE.test(parsedBody.nonce)) {
+    throw fail('INVALID_FEDERATION_REQUEST', 400, 'nonce must be 22 base64url characters');
+  }
+
   // 4. Return. Each handler asserts its own body/row consistency against originDomain.
-  return { ok: true, originDomain: peerRecord.domain, peerRecord, parsedBody };
+  return { ok: true, originDomain: peerRecord.domain, peerRecord, parsedBody, nonce: parsedBody.nonce, signedAtMs };
 }
