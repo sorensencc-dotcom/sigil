@@ -50,6 +50,7 @@ Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemente
 
 ## Session update: 2026-09-09 Task 8
 - Added rollout handoff covering migration order, one-way `relay_jobs` transition, flag rollback, mixed-fleet NULL behavior, recovery operations, metrics, and approval blockers.
+- Docker PostgreSQL container `sigil_postgres` is healthy on host port 55432, and `sigil_test` accepts connections. With `SIGIL_TEST_DATABASE_URL=postgres://sigil:sigil_password@127.0.0.1:55432/sigil_test`, `npm run test:live` exceeded the 60-second bound without completing and terminated with runner `EPIPE`; final live counts remain unconfirmed.
 
 ## Completed work
 - Packaged CLI and verified local npm binary mapping (`sigil --help`).
