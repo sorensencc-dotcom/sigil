@@ -36,7 +36,7 @@ flowchart TD
         AG["Antigravity Agent<br/>(Google Gemini / Subagents)"]
         CL["Claude Agent<br/>(Claude Code / Anthropic)"]
         CX["Codex Agent<br/>(Codex CLI / OpenAI)"]
-        GK["Grok Agent<br/>(xAI Grok API)"]
+        GK["Grokbot Adapter<br/>(xAI Grok API)"]
         OL["Local LLM Worker<br/>(Ollama / vLLM / llama.cpp)"]
     end
 
@@ -85,6 +85,13 @@ Editorial redraw: [`architecture.html`](architecture.html) (diagram-design, Cast
 
 ### Envelopes & Messages
 An **Envelope** is the atomic transmission unit in Sigil. It wraps payload bodies (`chat.message`, `task.request`, `task.result`) alongside sender/recipient identities, expiration timestamps, capability claims, and cryptographic signatures.
+
+### Stream sequencing and resend recovery
+When `stream_seq.enabled` is active, the relay assigns monotonic `stream_seq` values per `(sender_endpoint_id, conversation_id)` for conversational messages, including `task.request` and `task.result`. Federated inbound messages and control namespaces such as `session.*` and `admin.*` retain `NULL` sequence values.
+
+Connectors track high-water marks and bounded out-of-order buffers. A missing range produces one debounced signed `session.resend_request`; the relay validates expiry, replay, membership, quota, and range limits, then queues asynchronous `relay_jobs` work. The worker returns retained messages as resend frames, emits `sequence_reset` for expired ranges, requeues closed streams with bounded backoff, and dead-letters only after the retry limit. A connector emits `unrecoverable_gap` after recovery exhaustion or buffer overflow.
+
+The feature is disabled by default. See the [Session-Layer-Protocol](Session-Layer-Protocol.md) wiki page for rollout, recovery, and monitoring details.
 
 ### Delivery Lifecycle
 Messages move through a deterministic state machine:
@@ -194,6 +201,7 @@ sigil inbox --identity .sigil/claude.identity.json --relay-url http://127.0.0.1:
 
 # Continuous watch stream
 sigil inbox --identity .sigil/claude.identity.json --relay-url http://127.0.0.1:8791 --watch
+```
 
 #### View persistent local inbox ledger:
 ```powershell
@@ -331,14 +339,7 @@ sigil agent run --identity .sigil/local.identity.json --relay-url http://127.0.0
 
 ### xAI Grok & OpenAI Models
 
-Execute task requests against xAI Grok or OpenAI endpoints:
-
-```powershell
-# Run daemon with xAI Grok
-$env:GROK_API_KEY = "xai-..."
-$env:SIGIL_MODEL = "grok-beta"
-sigil agent run --identity .sigil/grok.identity.json --relay-url http://127.0.0.1:8791 --worker sigil/scripts/openai-worker.mjs
-```
+See the [Grokbot adapter guide](Grokbot-Adapter.md) for xAI configuration, identity naming, and the worker command. The same worker supports OpenAI when Grok credentials are absent.
 
 ---
 
@@ -350,26 +351,26 @@ Sigil enforces strict quality gates across the repository:
    ```powershell
    npm run audit:jcs
    ```
-   Scans all 113 JavaScript source files for JCS compliance (zero hand-rolled canonicalizers, pinned RFC 8785 dependency).
+   Scans JavaScript source files for JCS compliance (zero hand-rolled canonicalizers, pinned RFC 8785 dependency).
 
 2. **Unit & Contract Suite**:
    ```powershell
    npm test
    ```
-   Runs 318 unit, integration, and MCP contract test suites.
+   Runs the repository's unit, integration, and MCP contract suites.
 
 3. **Live PostgreSQL Integration Gate**:
    ```powershell
    $env:SIGIL_TEST_DATABASE_URL = "postgres://sigil:sigil_password@127.0.0.1:55432/sigil_test"
    npm run test:live
    ```
-   Executes 30 live transaction, rollback, migration, and concurrency tests against PostgreSQL 16.
+   Executes the serialized live transaction, rollback, migration, and concurrency suites against PostgreSQL 16.
    These suites run `DROP SCHEMA public CASCADE`, so the URL's database name must end in `_test`
    (never the dev/relay database `sigil` itself) -- `assertDisposableTestDatabase` refuses otherwise.
 
 ---
 
-## 7. Error Codes Reference
+## 9. Error Codes Reference
 
 | Error Code | HTTP Status | Description / Cause |
 |---|---|---|
