@@ -23,15 +23,13 @@ async function seedStream(pool) {
     recipientOwnerId: `usr_recipient_${suffix}`,
     senderEndpointId: `ep_sender_${suffix}`,
     recipientEndpointId: `ep_recipient_${suffix}`,
+    keyId: `key_test_${suffix}`,
     conversationId: `conv_${suffix}`,
   };
-  await pool.query(
-    `INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', now()), ($2, 'active', now());
-     INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-     VALUES ($3, $1, 'test', $3, 'sender', 'active', now()), ($4, $2, 'test', $4, 'recipient', 'active', now());
-     INSERT INTO conversations (conversation_id, kind, created_by, created_at) VALUES ($5, 'direct', $1, now());`,
-    [ids.senderOwnerId, ids.recipientOwnerId, ids.senderEndpointId, ids.recipientEndpointId, ids.conversationId],
-  );
+  await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', now()), ($2, 'active', now())`, [ids.senderOwnerId, ids.recipientOwnerId]);
+  await pool.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at) VALUES ($3, $1, 'test', $3, 'sender', 'active', now()), ($4, $2, 'test', $4, 'recipient', 'active', now())`, [ids.senderOwnerId, ids.recipientOwnerId, ids.senderEndpointId, ids.recipientEndpointId]);
+  await pool.query(`INSERT INTO conversations (conversation_id, kind, created_by, created_at) VALUES ($2, 'direct', $1, now())`, [ids.senderOwnerId, ids.conversationId]);
+  await pool.query(`INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from) VALUES ($2, $1, 'Ed25519', 'fixture-public-key', 'active', now())`, [ids.senderEndpointId, ids.keyId]);
   return ids;
 }
 
@@ -40,7 +38,7 @@ function acceptedRow(ids, { messageId, streamSeq = null }) {
   return {
     streamSeq,
     envelope: {
-      protocol: 'sigil/1.0',
+      protocol: 'sigil/1',
       message_id: messageId,
       conversation_id: ids.conversationId,
       message_type: 'message',
@@ -53,8 +51,9 @@ function acceptedRow(ids, { messageId, streamSeq = null }) {
       idempotency_key: `idem_${messageId}`,
       created_at: now,
       expires_at: new Date(Date.now() + 60_000).toISOString(),
-      signature: { algorithm: 'Ed25519', key_id: 'key_test', value: 'signature' },
+      signature: { algorithm: 'Ed25519', key_id: ids.keyId, value: 'signature' },
     },
+    canonical_bytes: Buffer.from(`canonical_${messageId}`),
     canonical_hash: `hash_${messageId}`,
   };
 }
