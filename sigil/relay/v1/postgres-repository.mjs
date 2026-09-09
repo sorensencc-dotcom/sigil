@@ -1189,13 +1189,22 @@ export class PostgresRepository {
     const ts = row.now == null
       ? new Date().toISOString()
       : (row.now instanceof Date ? row.now.toISOString() : new Date(row.now).toISOString());
-    const kind = jobType === 'federation' ? (row.kind ?? 'envelope') : (row.kind ?? null);
+    const federationJob = jobType === 'federation';
+    if (!federationJob && (typeof row.idempotencyKey !== 'string' || row.idempotencyKey.trim() === '')) {
+      throw Object.assign(new Error('Non-federation relay jobs require a non-empty idempotencyKey'), {
+        code: 'RELAY_JOB_IDEMPOTENCY_KEY_REQUIRED',
+      });
+    }
+    const kind = federationJob ? (row.kind ?? 'envelope') : (row.kind ?? null);
+    const conflictTarget = federationJob
+      ? 'ON CONFLICT (job_type, message_id, idempotency_key) DO NOTHING'
+      : "ON CONFLICT (job_type, idempotency_key) WHERE job_type <> 'federation' DO NOTHING";
     const inserted = await client.query(
       `INSERT INTO relay_jobs
          (job_type, message_id, idempotency_key, recipient_domain, origin_domain, kind,
           envelope, sender_key, sender_owner_id, directory_payload, payload, next_attempt_at, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12, $12)
-       ON CONFLICT (job_type, message_id, idempotency_key) DO NOTHING
+       ${conflictTarget}
        RETURNING *`,
       [jobType, row.messageId, row.idempotencyKey, row.recipientDomain, row.originDomain, kind,
         row.envelope == null ? null : JSON.stringify(row.envelope),
@@ -1207,8 +1216,12 @@ export class PostgresRepository {
     );
     if (inserted.rows[0]) return { row: rowToRelayJobRecord(inserted.rows[0]), inserted: true };
     const existing = await client.query(
-      'SELECT * FROM relay_jobs WHERE job_type = $1 AND message_id = $2 AND idempotency_key = $3',
-      [jobType, row.messageId, row.idempotencyKey]
+      federationJob
+        ? 'SELECT * FROM relay_jobs WHERE job_type = $1 AND message_id = $2 AND idempotency_key = $3'
+        : 'SELECT * FROM relay_jobs WHERE job_type = $1 AND idempotency_key = $2',
+      federationJob
+        ? [jobType, row.messageId, row.idempotencyKey]
+        : [jobType, row.idempotencyKey]
     );
     return { row: rowToRelayJobRecord(existing.rows[0]), inserted: false };
   }

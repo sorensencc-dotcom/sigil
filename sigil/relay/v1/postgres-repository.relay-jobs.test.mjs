@@ -25,13 +25,18 @@ test('a non-federation relay job stores only generic payload through its full li
   const { pool, repository } = await bootstrap(t);
   const now = new Date('2026-09-09T01:00:00Z');
   const payload = { delivery: 'webhook', target: 'https://example.test/hooks/42' };
+  const idempotencyKey = 'webhook-42';
 
-  const enqueued = await repository.enqueueRelayJob('future_job', { payload, now });
+  const enqueued = await repository.enqueueRelayJob('future_job', { payload, idempotencyKey, now });
   assert.equal(enqueued.inserted, true);
   assert.equal(enqueued.row.jobType, 'future_job');
   assert.equal(enqueued.row.messageId, null);
   assert.equal(enqueued.row.recipientDomain, null);
   assert.deepEqual(enqueued.row.payload, payload);
+
+  const duplicate = await repository.enqueueRelayJob('future_job', { payload, idempotencyKey, now });
+  assert.equal(duplicate.inserted, false);
+  assert.equal(duplicate.row.id, enqueued.row.id);
 
   const [claimed] = await repository.claimDueRelayJobs('future_job', now, 1, 30);
   assert.equal(claimed.id, enqueued.row.id);
