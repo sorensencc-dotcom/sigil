@@ -66,7 +66,7 @@ export function createStreamGapTracker({
     state.buffer.clear();
     onEvent({ type: 'unrecoverable_gap', conversation_id: state.conversationId, sender_endpoint_id: state.senderEndpointId, missing_seq_from: from, missing_seq_to: to });
     for (const [, envelope] of buffered) release(state, envelope);
-    state.lastContiguousSeq = buffered.length ? buffered[buffered.length - 1][0] : to;
+    state.lastContiguousSeq = Math.max(to, buffered.length ? buffered[buffered.length - 1][0] : 0);
     state.outstanding = null;
     await persist(state);
   }

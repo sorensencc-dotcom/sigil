@@ -56,6 +56,11 @@ function orderedRows(rows) {
 
 export async function runResendWorkerPass({ repository, stream, now = new Date(), limit = 10, leaseSeconds = 30, metrics, logger } = {}) {
   const result = counts();
+  if (metrics && repository.relayJobHealth) {
+    const health = await repository.relayJobHealth('resend', now);
+    metrics.set('sigil_relay_jobs_depth', health.depth, { job_type: 'resend' });
+    metrics.set('sigil_relay_jobs_oldest_age_seconds', health.oldestAgeSeconds, { job_type: 'resend' });
+  }
   const claimed = await repository.claimDueRelayJobs('resend', now, limit, leaseSeconds);
   result.claimed = claimed.length;
 

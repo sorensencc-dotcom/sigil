@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { validateEnvelope, reject, signedBytes, checkRecipientLocality } from './validate-envelope.mjs';
 import { resolveRateLimits, resolveStreamSequence, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
 import { writeRejectionAudit } from './rejection-audit.mjs';
@@ -259,6 +260,13 @@ async function acceptWithRepository(envelope, options) {
     const capabilityGrants = await repository.lookupActiveCapabilityGrants(envelope.sender.endpoint_id, now, client);
     if (envelope.message_type === 'session.resend_request') {
       const result = validateEnvelope(envelope, { ...options, idempotency: new Map(), capabilityGrants });
+      if (Date.parse(envelope.expires_at) <= now.getTime()) throw reject('MESSAGE_EXPIRED', 'Message has expired');
+      const canonicalHash = result.canonical_hash;
+      const prior = repository.lookupIdempotency
+        ? await repository.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key, client)
+        : null;
+      if (prior && prior.canonical_hash !== canonicalHash) throw reject('DUPLICATE_MESSAGE', 'Idempotency key conflicts with an existing body');
+      if (prior) return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: prior.message_id, duplicate: true } };
       return acceptResendRequest(envelope, options, client);
     }
     // Rate-limit reservation (design §8, §18 #23): independent of envelope
@@ -325,7 +333,7 @@ async function acceptWithRepository(envelope, options) {
       if (!visible) throw reject('INVALID_ENVELOPE', 'task.result references a task_id with no visible task.request', { field: 'task_id', reason: 'no visible task.request' });
     }
     const streamSequence = resolveStreamSequence(options.stream_seq);
-    const streamSeq = streamSequence.enabled && envelope.message_type === 'chat.message'
+    const streamSeq = streamSequence.enabled && !envelope.message_type.startsWith('session.') && !envelope.message_type.startsWith('admin.')
       ? await repository.assignStreamSequence(client, envelope.sender.endpoint_id, envelope.conversation_id)
       : null;
     // canonical_bytes/action_hash mirror what http-server.mjs's now-removed

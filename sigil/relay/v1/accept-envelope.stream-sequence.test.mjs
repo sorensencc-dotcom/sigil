@@ -78,6 +78,27 @@ test('enabled local conversational messages persist their transaction-assigned s
   assert.equal(repository.persisted[0].streamSeq, 41n);
 });
 
+test('enabled task requests persist a transaction-assigned sequence', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const repository = localRepository(43n);
+  const result = await acceptEnvelopeAsync(makeLocalEnvelope(keys.privateKey, {
+    message_type: 'task.request', body: { task_id: 'task_stream_1', instruction: 'stream this task' },
+  }), localOptions(keys, repository, true));
+  assert.equal(result.status, 202);
+  assert.equal(repository.persisted[0].streamSeq, 43n);
+});
+
+test('enabled task results persist a transaction-assigned sequence', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const repository = localRepository(44n);
+  repository.lookupTaskRequest = async () => ({ message_id: 'task_stream_1' });
+  const result = await acceptEnvelopeAsync(makeLocalEnvelope(keys.privateKey, {
+    message_type: 'task.result', body: { task_id: 'task_stream_1', status: 'completed', summary: 'done' },
+  }), localOptions(keys, repository, true));
+  assert.equal(result.status, 202);
+  assert.equal(repository.persisted[0].streamSeq, 44n);
+});
+
 test('enabled local broadcast messages persist their transaction-assigned sequence', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
   const repository = localRepository(42n);

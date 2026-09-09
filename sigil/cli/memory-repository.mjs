@@ -123,6 +123,12 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
           return { ...job };
         });
     },
+    async relayJobHealth(jobType = 'resend', now = new Date()) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).getTime();
+      const active = [...relayJobs.values()].filter((job) => job.jobType === jobType && ['pending', 'processing'].includes(job.state));
+      const oldest = active.length ? Math.min(...active.map((job) => Date.parse(job.nextAttemptAt))) : timestamp;
+      return { depth: active.length, oldestAgeSeconds: Math.max(0, (timestamp - oldest) / 1000) };
+    },
     async finalizeRelayJob(jobType, id, claimToken, state, { attemptCount = null, nextAttemptAt = null, reasonCode = null } = {}) {
       const job = relayJobs.get(id);
       if (!job || job.jobType !== jobType || job.claimToken !== claimToken) return { updated: false };

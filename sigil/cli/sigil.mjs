@@ -62,7 +62,7 @@ Commands:
   peer remove <domain> [--database-url url]                Unpin a peer relay
   peer rotate <domain> --confirm [--database-url url]      Force-overwrite a pinned peer's key set, bypassing the TOFU mismatch check
   federation outbox list [--database-url url]              List queue-mode federation forward jobs: state counts, then one row per job (no envelope bodies)
-  federation outbox show <id> [--database-url url]         Show one federation_outbox row's metadata (no envelope body)
+  federation outbox show <id> [--database-url url]         Show one relay_jobs federation row's metadata (no envelope body)
   federation outbox retry <id> [--database-url url]        Re-queue a forward_rejected / dead_letter row for another forward attempt
   federation invite create --peer <domain> --endpoint <fid> --identity <path> [--ttl 24h] [--database-url url]
                                                             Mint a redemption code for a peer domain; prints the code once, then the bare link_ref
@@ -875,7 +875,7 @@ async function cmdFederationOutbox(action, rest) {
     await withRepository(args, requireMsg, async (repository) => {
       const record = await repository.getFederationOutboxRow(id);
       if (!record) {
-        console.error(`No federation_outbox row for "${id}".`);
+        console.error(`No relay_jobs federation row for "${id}".`);
         process.exitCode = 1;
         return;
       }
