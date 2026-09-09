@@ -31,6 +31,7 @@ import { appendInboxLedger, readInboxLedger } from './ledger.mjs';
 import { signContract, verifyContract } from './contract-signing.mjs';
 import { checkRelayConnectivity } from './doctor.mjs';
 import { resolveRateLimits } from '../relay/v1/relay-config.mjs';
+import { createRelayMetrics } from '../relay/v1/metrics.mjs';
 
 const DEFAULT_CLI_CONFIG = path.join('.sigil', 'config.json');
 
@@ -259,6 +260,7 @@ async function cmdRelayUp(argv) {
     warn: (entry) => console.warn(JSON.stringify(entry)),
     error: (entry) => console.error(JSON.stringify(entry)),
   });
+  const relayMetrics = createRelayMetrics();
   await new Promise((resolve) => streamHttpServer.listen(streamPort, '127.0.0.1', resolve));
   const streamAddress = streamHttpServer.address();
 
@@ -272,7 +274,7 @@ async function cmdRelayUp(argv) {
     const addr = server?.address();
     return addr ? `http://127.0.0.1:${addr.port}` : `http://127.0.0.1:${port}`;
   };
-  server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity, relayRequestFreshnessMs, stream_seq: { enabled: streamSequenceEnabled }, logger: relayLogger });
+  server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity, relayRequestFreshnessMs, stream_seq: { enabled: streamSequenceEnabled }, logger: relayLogger, resendMetrics: relayMetrics });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();
   let federationReaperTimer;
@@ -282,7 +284,7 @@ async function cmdRelayUp(argv) {
     console.log('Federation outbox reaper running (60s interval).');
   }
   const { startResendWorker } = await import('../relay/v1/resend-worker.mjs');
-  const resendWorkerTimer = startResendWorker({ repository, stream, logger: relayLogger });
+  const resendWorkerTimer = startResendWorker({ repository, stream, logger: relayLogger, metrics: relayMetrics });
   if (resendWorkerTimer) console.log('Session resend worker running (60s interval).');
   if (enableMockOidc) console.log('WARNING: mock-OIDC login is enabled (--enable-mock-oidc). This is for local development and CI only -- never expose this relay to untrusted networks.');
   console.log(`Sigil relay listening on http://127.0.0.1:${address.port}`);
