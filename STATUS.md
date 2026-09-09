@@ -36,6 +36,9 @@ Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemente
 - Added `sigil inbox --local --gaps` output for known stream holes and updated CLI help.
 - Validation: CLI syntax check, help output, and `git diff --check` pass.
 
+## Session update: 2026-09-09 Task 6 verification
+- Existing CLI regression suites covering configuration, ledger, receipt transport, relay startup, and stream sequences pass 14/14.
+
 ## Completed work
 - Packaged CLI and verified local npm binary mapping (`sigil --help`).
 - Applied PostgreSQL schema migrations 001 through 019 against the live container on port 55432.
