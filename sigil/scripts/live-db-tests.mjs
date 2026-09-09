@@ -21,6 +21,7 @@ export const sigilRoot = path.resolve(here, '..');
 const LIVE_SUITE_MARKER = 'process.env.SIGIL_TEST_DATABASE_URL';
 const DEFAULT_READINESS_TIMEOUT_MS = 30_000;
 const DEFAULT_READINESS_POLL_MS = 500;
+const DEFAULT_SUITE_TIMEOUT_MS = 120_000;
 
 const EMPTY_SUMMARY = { tests: 0, suites: 0, pass: 0, fail: 0, cancelled: 0, skipped: 0, todo: 0 };
 
@@ -81,17 +82,22 @@ export function parseSummary(output) {
   return summary;
 }
 
-export function defaultRunSuite(file, env) {
+export function defaultRunSuite(file, env, { timeoutMs = Number(env.SIGIL_LIVE_SUITE_TIMEOUT_MS ?? DEFAULT_SUITE_TIMEOUT_MS) } = {}) {
   return new Promise((resolve, reject) => {
     let stdout = '';
     const child = spawn(process.execPath, ['--test', file], { env, cwd: sigilRoot });
     child.stdout.on('data', (chunk) => {
       stdout += chunk;
-      process.stdout.write(chunk);
+      try { process.stdout.write(chunk); } catch (error) { if (error.code !== 'EPIPE') throw error; }
     });
-    child.stderr.on('data', (chunk) => process.stderr.write(chunk));
+    child.stderr.on('data', (chunk) => { try { process.stderr.write(chunk); } catch (error) { if (error.code !== 'EPIPE') throw error; } });
+    const timer = setTimeout(() => {
+      child.kill();
+      resolve({ file, code: 124, summary: parseSummary(stdout), timeout: true });
+    }, timeoutMs);
+    timer.unref();
     child.on('error', reject);
-    child.on('close', (code) => resolve({ file, code, summary: parseSummary(stdout) }));
+    child.on('close', (code) => { clearTimeout(timer); resolve({ file, code, summary: parseSummary(stdout) }); });
   });
 }
 
@@ -148,7 +154,7 @@ export async function main() {
     console.log('--- Live PostgreSQL test gate summary ---');
     for (const [key, value] of Object.entries(totals)) console.log(`${key}: ${value}`);
     console.log(`files: ${results.length}`);
-    console.log(`failed files: ${failedFiles.length}${failedFiles.length ? ' (' + failedFiles.map((r) => path.relative(sigilRoot, r.file)).join(', ') + ')' : ''}`);
+    console.log(`failed files: ${failedFiles.length}${failedFiles.length ? ' (' + failedFiles.map((r) => path.relative(sigilRoot, r.file) + (r.timeout ? ' [timeout]' : '')).join(', ') + ')' : ''}`);
 
     process.exitCode = (failedFiles.length > 0 || totals.fail > 0) ? 1 : 0;
   } finally {

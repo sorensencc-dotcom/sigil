@@ -52,6 +52,7 @@ Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemente
 - Added rollout handoff covering migration order, one-way `relay_jobs` transition, flag rollback, mixed-fleet NULL behavior, recovery operations, metrics, and approval blockers.
 - Docker PostgreSQL container `sigil_postgres` is healthy on host port 55432, and `sigil_test` accepts connections. The first discovered live suite exits successfully in 19.6 seconds; the aggregate runner discovers 28 schema-resetting suites, each reapplying 23 migrations, so the prior 60-second host command bound killed an in-progress aggregate and produced runner `EPIPE`. The database is available; aggregate live counts remain unconfirmed under the 60-second bound.
 - Added `sigil/scripts/run-live-db-tests.ps1` with the explicit disposable-container URL as a Windows shortcut; it validates the `_test` suffix and clears the process environment afterward.
+- Hardened the live runner with per-suite timeout attribution and broken-pipe handling; the Windows launcher accepts `-SuiteTimeoutSeconds` (default 120).
 
 ## Completed work
 - Packaged CLI and verified local npm binary mapping (`sigil --help`).
