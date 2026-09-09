@@ -167,28 +167,28 @@ test('POST /v1/sessions/:sessionId/revoke revokes an owned session and audits it
 test('POST /v1/endpoint-tokens returns the plaintext token once and never logs it in the audit payload', async () => {
   const audits = [];
   const repository = {
-    async issueEndpointToken({ endpointId }) { return { token_id: 'tok_1', endpoint_id: endpointId, status: 'active', expires_at: '2030-01-01T00:00:00Z', token: 'super-secret-plaintext' }; },
+    async issueEndpointToken({ endpointId }) { return { token_id: 'tok_1', endpoint_id: endpointId, status: 'active', expires_at: '2030-01-01T00:00:00Z', token: 'token_a' }; },
     async recordAuditEvent(event) { audits.push(event); }
   };
   await withServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_codex' }) }, async (port) => {
     const result = await request(port, { method: 'POST', path: '/v1/endpoint-tokens' });
     assert.equal(result.status, 201);
-    assert.equal(result.body.token, 'super-secret-plaintext');
+    assert.equal(result.body.token, 'token_a');
     assert.equal(audits.length, 1);
-    assert.equal(JSON.stringify(audits[0]).includes('super-secret-plaintext'), false);
+    assert.equal(JSON.stringify(audits[0]).includes('token_a'), false);
   });
 });
 
 test('POST /v1/endpoint-tokens/:tokenId/rotate returns a new token and does not double-emit an audit event', async () => {
   const audits = [];
   const repository = {
-    async rotateEndpointToken({ oldTokenId, newTokenId, endpointId }) { return { token_id: newTokenId, endpoint_id: endpointId, status: 'active', expires_at: '2030-01-01T00:00:00Z', token: 'rotated-secret' }; },
+    async rotateEndpointToken({ oldTokenId, newTokenId, endpointId }) { return { token_id: newTokenId, endpoint_id: endpointId, status: 'active', expires_at: '2030-01-01T00:00:00Z', token: 'token_b' }; },
     async recordAuditEvent(event) { audits.push(event); }
   };
   await withServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_codex' }) }, async (port) => {
     const result = await request(port, { method: 'POST', path: '/v1/endpoint-tokens/tok_old/rotate' });
     assert.equal(result.status, 200);
-    assert.equal(result.body.token, 'rotated-secret');
+    assert.equal(result.body.token, 'token_b');
     // rotateEndpointToken is documented to write its own audit_events row;
     // the route must not call recordAuditEvent again for the same rotation.
     assert.equal(audits.length, 0);
@@ -233,11 +233,20 @@ test('POST /v1/capability-grants self-requests a grant for the calling endpoint 
     async recordAuditEvent(event) { audits.push(event); }
   };
   await withServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_codex', human_id: 'usr_1' }) }, async (port) => {
-    const result = await request(port, { method: 'POST', path: '/v1/capability-grants', body: { capability: 'sigil.task/submit', scope: 'sigil.task/submit', expires_at: '2030-01-01T00:00:00Z' } });
+    const result = await request(port, { method: 'POST', path: '/v1/capability-grants', body: { capability: 'sigil.task/submit', scope: 'sigil.task/submit', expires_at: new Date(Date.now() + 60_000).toISOString() } });
     assert.equal(result.status, 201);
     assert.equal(result.body.grant.granted_to, 'ep_codex');
     assert.equal(result.body.grant.granted_by, 'usr_1');
     assert.equal(audits[0].eventType, 'capability_grant.created');
+  });
+});
+
+test('POST /v1/capability-grants rejects expiry beyond the 24-hour policy boundary', async () => {
+  let created = false;
+  const repository = { async createCapabilityGrant() { created = true; } };
+  await withServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_codex', human_id: 'usr_1' }) }, async (port) => {
+    const result = await request(port, { method: 'POST', path: '/v1/capability-grants', body: { capability: 'sigil.task/submit', scope: 'sigil.task/submit', expires_at: new Date(Date.now() + 25 * 60 * 60 * 1000).toISOString() } });
+    assert.equal(result.status, 409); assert.equal(result.body.code, 'GRANT_LIFETIME_INVALID'); assert.equal(created, false);
   });
 });
 

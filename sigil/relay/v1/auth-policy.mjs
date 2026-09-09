@@ -1,4 +1,5 @@
 export const TOKEN_MAX_LIFETIME_MS = 24 * 60 * 60 * 1000;
+export const CAPABILITY_GRANT_MAX_LIFETIME_MS = 24 * 60 * 60 * 1000;
 export const ACCOUNT_LINK_TTL_MS = 10 * 60 * 1000;
 export const ASSURANCE_LEVELS = Object.freeze({ low: 'low', standard: 'standard', high: 'high' });
 
@@ -12,6 +13,15 @@ export function boundedTokenExpiry({ now = new Date(), expiresAt } = {}) {
   const issued = now instanceof Date ? now : new Date(now);
   const expiry = expiresAt ? new Date(expiresAt) : new Date(issued.getTime() + TOKEN_MAX_LIFETIME_MS);
   if (Number.isNaN(expiry.getTime()) || expiry <= issued || expiry.getTime() - issued.getTime() > TOKEN_MAX_LIFETIME_MS) throw Object.assign(new Error('Endpoint token lifetime must be positive and no more than 24 hours'), { code: 'TOKEN_LIFETIME_INVALID' });
+  return expiry;
+}
+
+export function boundedCapabilityGrantExpiry({ now = new Date(), expiresAt } = {}) {
+  const issued = now instanceof Date ? now : new Date(now);
+  const expiry = expiresAt instanceof Date ? expiresAt : new Date(expiresAt);
+  if (Number.isNaN(expiry.getTime()) || expiry <= issued || expiry.getTime() - issued.getTime() > CAPABILITY_GRANT_MAX_LIFETIME_MS) {
+    throw Object.assign(new Error('Capability grant lifetime must be positive and no more than 24 hours'), { code: 'GRANT_LIFETIME_INVALID' });
+  }
   return expiry;
 }
 

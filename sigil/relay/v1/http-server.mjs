@@ -10,7 +10,7 @@ import { createApprovalChallenge, coseKeyToPublicKey, parseAttestationObject, ve
 import { renderApprovalPage } from './approval-ui.mjs';
 import { computeActionHash } from './action-hash.mjs';
 import { normalizeIssuer } from './issuer-normalization.mjs';
-import { assertAccountLinkCeremony, assertAllowedIssuer, boundedDirectoryExpiry, boundedTokenExpiry } from './auth-policy.mjs';
+import { assertAccountLinkCeremony, assertAllowedIssuer, boundedCapabilityGrantExpiry, boundedDirectoryExpiry, boundedTokenExpiry } from './auth-policy.mjs';
 import { verifyMockIdToken } from './mock-oidc.mjs';
 import { verifyRealIdToken, createJwksCache, createDiscoveryCache, CLOCK_SKEW_SECONDS } from './oidc-client.mjs';
 import { attemptDirectoryMatchOnOidcLogin } from './directory-trust.mjs';
@@ -601,7 +601,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       if (!repository?.createCapabilityGrant && !repository?.createCapabilityGrantWithAudit) return response.writeHead(503).end();
       try {
         const grantId = `grant_${crypto.randomUUID()}`;
-        const grantFields = { grantId, capability: body.capability, scope: body.scope, purpose: body.purpose ?? null, provenance: body.provenance ?? null, issuer: body.issuer ?? null, grantedTo: principal.endpoint_id, grantedBy: principal.human_id ?? principal.endpoint_id, expiresAt: body.expires_at, now };
+        const grantFields = { grantId, capability: body.capability, scope: body.scope, purpose: body.purpose ?? null, provenance: body.provenance ?? null, issuer: body.issuer ?? null, grantedTo: principal.endpoint_id, grantedBy: principal.human_id ?? principal.endpoint_id, expiresAt: boundedCapabilityGrantExpiry({ now, expiresAt: body.expires_at }), now };
         const grant = repository.createCapabilityGrantWithAudit
           ? await repository.createCapabilityGrantWithAudit({ ...grantFields, actorHumanId: principal.human_id ?? null, endpointId: principal.endpoint_id })
           : await (async () => {

@@ -27,7 +27,7 @@ Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemente
 
 ## Blockers
 - `d078c64` is local only and must be handed off/pushed.
-- PostgreSQL startup no longer grants capabilities implicitly. Endpoints require explicit, bounded grants through the capability-grant control plane; production still requires policy review.
+- PostgreSQL startup no longer grants capabilities implicitly. The HTTP capability-grant control plane now enforces a maximum 24-hour lifetime; explicit audited renewal remains a follow-up.
 - Tier 1, privacy/compliance-owner, and counsel approval remain required before production rollout.
 
 ## Resolved
@@ -55,7 +55,7 @@ Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemente
 ## Next action
 1. Hand off/push `d078c64` after this status correction and hook validation.
 2. Capture a clean final local `npm test` summary in an environment where child-process execution completes.
-3. Define and approve capability profiles, short expiry defaults, and renewal authorization for deployment tooling.
+3. Define and approve capability profiles and explicit audited renewal authorization for deployment tooling.
 4. Track doc debt in the `C:\dev` repo, not here: tick the inter-relay plan checkboxes and add I4 `MAX_ATTEMPTS=4` notes.
 5. Obtain required Tier 1, privacy/compliance-owner, and counsel approvals before production rollout.
 
