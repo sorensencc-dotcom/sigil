@@ -11,7 +11,7 @@ import { PostgresRepository } from './postgres-repository.mjs';
 import { assertDisposableTestDatabase } from '../../scripts/assert-disposable-test-db.mjs';
 
 // Task 14: origin relay in `queue` federation mode enqueues a foreign-domain
-// envelope to federation_outbox instead of forwarding synchronously.
+// envelope to a federation relay job instead of forwarding synchronously.
 
 const connectionString = process.env.SIGIL_TEST_DATABASE_URL;
 
@@ -75,10 +75,10 @@ test('queue mode with live database', { skip: !connectionString }, async (t) => 
     trustMode: 'static'
   });
 
-  // Test: first accept -> 202 queued:true, exactly one federation_outbox row
+  // Test: first accept -> 202 queued:true, exactly one federation relay job
   await t.test('first accept enqueues -> 202 queued:true, one row', async () => {
-      // Clean federation_outbox for hermetic subtest
-      await pool.query('DELETE FROM federation_outbox');
+      // Clean relay_jobs for hermetic subtest
+      await pool.query('DELETE FROM relay_jobs');
 
       const envelope = makeEnvelope();
       const result = await acceptEnvelopeAsync(envelope, {
@@ -92,7 +92,7 @@ test('queue mode with live database', { skip: !connectionString }, async (t) => 
       assert.equal(result.body.duplicate, false);
       assert.equal(result.body.request_id, 'req_fwd_1');
 
-      // Verify exactly one federation_outbox row
+      // Verify exactly one federation relay job
       const listResult = await repository.listFederationOutbox({ states: ['pending'] });
       assert.equal(listResult.counts.pending, 1, 'should have exactly one pending row');
       const row = listResult.rows[0];
@@ -117,8 +117,8 @@ test('queue mode with live database', { skip: !connectionString }, async (t) => 
 
     // Test: duplicate accept -> 202 queued:true, duplicate:true, still exactly one row (idempotent)
     await t.test('duplicate accept -> 202 queued:true, duplicate:true, still one row', async () => {
-      // Clean federation_outbox for hermetic subtest
-      await pool.query('DELETE FROM federation_outbox');
+      // Clean relay_jobs for hermetic subtest
+      await pool.query('DELETE FROM relay_jobs');
 
       const envelope = makeEnvelope({
         senderEndpointId: 'ep_codex@a.example',
@@ -158,7 +158,7 @@ test('queue mode with live database', { skip: !connectionString }, async (t) => 
     // Guard for Blocker 1 (I1 review): confirms enqueueForward receives a real
     // txn client (not null), and that a post-enqueue failure rolls the INSERT back.
     await t.test('rollback-on-failure: outbox INSERT is atomic, rolled back on post-enqueue error', async () => {
-      await pool.query('DELETE FROM federation_outbox');
+      await pool.query('DELETE FROM relay_jobs');
 
       // Wrap repository to spy on enqueueFederationForward and capture its client arg,
       // then throw after the INSERT to force the transaction to roll back.
@@ -189,8 +189,8 @@ test('queue mode with live database', { skip: !connectionString }, async (t) => 
       assert.ok(capturedClient !== pool, 'enqueueFederationForward must receive a txn client, not the pool directly');
       assert.ok(typeof capturedClient.query === 'function', 'client must have a .query method');
 
-      // The INSERT was rolled back: federation_outbox must still be empty.
-      const { rows } = await pool.query('SELECT COUNT(*)::int AS cnt FROM federation_outbox');
+      // The INSERT was rolled back: relay_jobs must still be empty.
+      const { rows } = await pool.query('SELECT COUNT(*)::int AS cnt FROM relay_jobs');
       assert.equal(rows[0].cnt, 0, 'outbox INSERT must be rolled back on post-enqueue failure');
 
       // Restore

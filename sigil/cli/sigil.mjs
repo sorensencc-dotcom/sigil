@@ -31,6 +31,7 @@ import { appendInboxLedger, readInboxLedger } from './ledger.mjs';
 import { signContract, verifyContract } from './contract-signing.mjs';
 import { checkRelayConnectivity } from './doctor.mjs';
 import { resolveRateLimits } from '../relay/v1/relay-config.mjs';
+import { createRelayMetrics } from '../relay/v1/metrics.mjs';
 
 const DEFAULT_CLI_CONFIG = path.join('.sigil', 'config.json');
 
@@ -43,7 +44,7 @@ Commands:
   init <name> [--owner <owner_id> | --federation-owner <federated_id>] [--registry path] [--domain domain]      Create a local identity and register it (domain defaults to "local"; --federation-owner allows an owner id whose domain differs from --domain)
   sign-contract --contract path --identity path [--output path]          Sign a TorqueQuery agent dispatch contract
   verify-contract --contract path --registry path                        Verify a signed TorqueQuery agent dispatch contract
-  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] [--relay-request-freshness-ms N] Run a local relay (blocks; Ctrl+C to stop)
+  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] [--relay-request-freshness-ms N] Run a local relay (blocks; Ctrl+C to stop; set SIGIL_STREAM_SEQ_ENABLED=1 to stamp stream sequences)
   relay well-known generate --identity path --domain domain --endpoint url [--ws-endpoint url] [--output path]
                                                             Emit this relay's .well-known/sigil discovery document from a designated endpoint identity
   oidc-issuer add <issuer> --client-id id [--label text] [--assurance level] [--database-url url]
@@ -61,7 +62,7 @@ Commands:
   peer remove <domain> [--database-url url]                Unpin a peer relay
   peer rotate <domain> --confirm [--database-url url]      Force-overwrite a pinned peer's key set, bypassing the TOFU mismatch check
   federation outbox list [--database-url url]              List queue-mode federation forward jobs: state counts, then one row per job (no envelope bodies)
-  federation outbox show <id> [--database-url url]         Show one federation_outbox row's metadata (no envelope body)
+  federation outbox show <id> [--database-url url]         Show one relay_jobs federation row's metadata (no envelope body)
   federation outbox retry <id> [--database-url url]        Re-queue a forward_rejected / dead_letter row for another forward attempt
   federation invite create --peer <domain> --endpoint <fid> --identity <path> [--ttl 24h] [--database-url url]
                                                             Mint a redemption code for a peer domain; prints the code once, then the bare link_ref
@@ -78,7 +79,8 @@ Commands:
   route test <recipient_federated_id> --identity path [--database-url url] [--registry path]
                                                             Read-only federation routing check: parse recipient, peer-directory pin lookup, /v1/health reachability, advisory same-owner line -- sends no envelope
   send [--identity path] [--relay-url url] [--stream-url url] [--wait-for-receipt] --to endpoint_id --to-owner owner_id --message "text" [--conversation id]
-  inbox [--identity path] [--relay-url url] [--watch|--wait] [--loop] [--stream-url url] [--interval ms] [--timeout ms] [--local] [--ledger path]
+  inbox [--identity path] [--relay-url url] [--watch|--wait] [--loop] [--gaps] [--stream-url url] [--interval ms] [--timeout ms] [--local] [--ledger path]
+  resend --identity path --relay-url url --conversation C --from N --to M --sender ep_X
   doctor [--identity path] [--relay-url url]               Conformance check: JCS/dependency audits, plus a keypair check (if --identity)
                                                             and a relay connectivity/latency check (if --relay-url)
 
@@ -171,6 +173,7 @@ async function cmdRelayUp(argv) {
   const streamPort = Number(opt(args, ['stream-port']) ?? (port ? port + 1 : 0));
   const databaseUrl = opt(args, ['database-url']) ?? process.env.SIGIL_DATABASE_URL;
   const enableMockOidc = Boolean(args.values['enable-mock-oidc']) || process.env.SIGIL_ENABLE_MOCK_OIDC === '1';
+  const streamSequenceEnabled = process.env.SIGIL_STREAM_SEQ_ENABLED === '1';
   const oidcIssuerRefreshIntervalMsRaw = opt(args, ['oidc-issuer-refresh-interval-ms']);
   const oidcIssuerRefreshIntervalMs = oidcIssuerRefreshIntervalMsRaw === undefined ? 30_000 : Number(oidcIssuerRefreshIntervalMsRaw);
   if (!Number.isInteger(oidcIssuerRefreshIntervalMs) || oidcIssuerRefreshIntervalMs <= 0) {
@@ -251,6 +254,13 @@ async function cmdRelayUp(argv) {
   // run on a second port, separate from the main relay HTTP port.
   const streamHttpServer = http.createServer();
   const stream = createStreamServer({ server: streamHttpServer, tokenHashes });
+  const relayLogger = Object.freeze({
+    debug: (entry) => console.debug(JSON.stringify(entry)),
+    info: (entry) => console.info(JSON.stringify(entry)),
+    warn: (entry) => console.warn(JSON.stringify(entry)),
+    error: (entry) => console.error(JSON.stringify(entry)),
+  });
+  const relayMetrics = createRelayMetrics();
   await new Promise((resolve) => streamHttpServer.listen(streamPort, '127.0.0.1', resolve));
   const streamAddress = streamHttpServer.address();
 
@@ -264,7 +274,7 @@ async function cmdRelayUp(argv) {
     const addr = server?.address();
     return addr ? `http://127.0.0.1:${addr.port}` : `http://127.0.0.1:${port}`;
   };
-  server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity, relayRequestFreshnessMs });
+  server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity, relayRequestFreshnessMs, stream_seq: { enabled: streamSequenceEnabled }, logger: relayLogger, resendMetrics: relayMetrics });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();
   let federationReaperTimer;
@@ -273,6 +283,9 @@ async function cmdRelayUp(argv) {
     federationReaperTimer = startFederationReaper({ repository, identity: federationIdentity, originDomain: relayDomain });
     console.log('Federation outbox reaper running (60s interval).');
   }
+  const { startResendWorker } = await import('../relay/v1/resend-worker.mjs');
+  const resendWorkerTimer = startResendWorker({ repository, stream, logger: relayLogger, metrics: relayMetrics });
+  if (resendWorkerTimer) console.log('Session resend worker running (60s interval).');
   if (enableMockOidc) console.log('WARNING: mock-OIDC login is enabled (--enable-mock-oidc). This is for local development and CI only -- never expose this relay to untrusted networks.');
   console.log(`Sigil relay listening on http://127.0.0.1:${address.port}`);
   console.log(`Sigil stream (push notify) on ws://127.0.0.1:${streamAddress.port}/v1/stream`);
@@ -388,8 +401,32 @@ async function cmdSend(argv) {
   });
 }
 
+async function cmdResend(argv) {
+  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, conversation: { type: 'string' }, from: { type: 'string' }, to: { type: 'string' }, sender: { type: 'string' }, config: { type: 'string' } } });
+  const config = loadConfigFile(opt(args, ['config']) ?? DEFAULT_CLI_CONFIG);
+  const resolved = resolveConfig({ flags: { relayUrl: opt(args, ['relay-url']), identity: opt(args, ['identity']) }, config });
+  const conversation = opt(args, ['conversation']);
+  const sender = opt(args, ['sender']);
+  const begin = Number(opt(args, ['from']));
+  const end = Number(opt(args, ['to']));
+  if (!resolved.identityPath || !resolved.relayUrl || !conversation || !sender || !Number.isSafeInteger(begin) || begin < 1 || !Number.isSafeInteger(end) || end < 0 || (end !== 0 && end < begin)) {
+    throw new Error('usage: sigil resend --identity path --relay-url url --conversation C --from N --to M --sender ep_X');
+  }
+  const identity = loadIdentity(resolved.identityPath);
+  const outbox = new LocalOutbox({ privateKey: identityKeys(identity).privateKey, endpoint: { owner_id: identity.owner_id, endpoint_id: identity.endpoint_id, key_id: identity.key_id, kind: identity.kind } });
+  const now = new Date();
+  const queued = outbox.queue({
+    protocol: 'sigil/1', message_id: `msg_${crypto.randomUUID()}`, conversation_id: conversation, message_type: 'session.resend_request',
+    sender: { owner_id: identity.owner_id, endpoint_id: identity.endpoint_id, kind: identity.kind }, recipient: { owner_id: identity.owner_id, endpoint_id: identity.endpoint_id, kind: identity.kind },
+    body: { target_sender_endpoint_id: sender, conversation_id: conversation, begin_seq: begin, end_seq: end }, context_refs: [], capabilities: [], correlation_id: null,
+    idempotency_key: `resend_${crypto.randomUUID()}`, created_at: now.toISOString(), expires_at: new Date(now.getTime() + 24 * 3600_000).toISOString(), signature: { algorithm: 'Ed25519', key_id: identity.key_id, value: '' },
+  });
+  const result = await new RelayClient({ baseUrl: resolved.relayUrl, token: identity.relay_token }).sendEnvelope(queued.envelope);
+  console.log(JSON.stringify(result));
+}
+
 async function cmdInbox(argv) {
-  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, watch: { type: 'boolean' }, wait: { type: 'boolean' }, loop: { type: 'boolean' }, local: { type: 'boolean' }, ledger: { type: 'string' }, interval: { type: 'string' }, timeout: { type: 'string' }, config: { type: 'string' } } });
+  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, watch: { type: 'boolean' }, wait: { type: 'boolean' }, loop: { type: 'boolean' }, gaps: { type: 'boolean' }, local: { type: 'boolean' }, ledger: { type: 'string' }, interval: { type: 'string' }, timeout: { type: 'string' }, config: { type: 'string' } } });
   const config = loadConfigFile(opt(args, ['config']) ?? DEFAULT_CLI_CONFIG);
   const resolved = resolveConfig({ flags: { relayUrl: opt(args, ['relay-url']), streamUrl: opt(args, ['stream-url']), identity: opt(args, ['identity']) }, config });
   if (!resolved.identityPath) throw new Error('usage: sigil inbox --identity path --relay-url url [--watch] (or set SIGIL_IDENTITY / default_identity in .sigil/config.json)');
@@ -398,6 +435,12 @@ async function cmdInbox(argv) {
 
   if (Boolean(args.values.local)) {
     const records = await readInboxLedger(ledgerPath);
+    if (Boolean(args.values.gaps)) {
+      const grouped = new Map();
+      for (const record of records) { const envelope = record.envelope ?? record; const seq = envelope.stream_seq ?? envelope.streamSeq; if (Number.isSafeInteger(seq)) { const key = `${envelope.conversation_id}:${envelope.sender?.endpoint_id}`; const list = grouped.get(key) ?? []; list.push(seq); grouped.set(key, list); } }
+      for (const [key, values] of grouped) { values.sort((a, b) => a - b); const gaps = []; for (let i = 1; i < values.length; i += 1) if (values[i] > values[i - 1] + 1) gaps.push(`${values[i - 1] + 1}-${values[i] - 1}`); console.log(`${key}: ${gaps.length ? gaps.join(', ') : '(no gaps)'}`); }
+      return;
+    }
     if (!records.length) {
       console.log('(local inbox empty)');
     } else {
@@ -832,7 +875,7 @@ async function cmdFederationOutbox(action, rest) {
     await withRepository(args, requireMsg, async (repository) => {
       const record = await repository.getFederationOutboxRow(id);
       if (!record) {
-        console.error(`No federation_outbox row for "${id}".`);
+        console.error(`No relay_jobs federation row for "${id}".`);
         process.exitCode = 1;
         return;
       }
@@ -1509,6 +1552,7 @@ export async function main() {
     else if (command === 'agent' && sub === 'run') await cmdAgentRun(rest);
     else if (command === 'doctor') await cmdDoctor(process.argv.slice(3));
     else if (command === 'send') await cmdSend(process.argv.slice(3));
+    else if (command === 'resend') await cmdResend(process.argv.slice(3));
     else if (command === 'inbox') await cmdInbox(process.argv.slice(3));
     else if (command === 'federation') await cmdFederation(process.argv.slice(3));
     else if (command === 'route') await cmdRoute(process.argv.slice(3));

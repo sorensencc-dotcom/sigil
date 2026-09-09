@@ -61,12 +61,86 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
   const consumedLoginJtis = new Map();
   const oidcIssuerAllowlist = new Map();
   const peerRelays = new Map();
+  const streamSequences = new Map();
+  const relayJobs = new Map();
   const auditEvents = [];
   return {
     // Single-process, no real client/connection -- the transaction wrapper
     // exists so acceptEnvelopeAsync's repository-aware path works unchanged
     // against this repository too (design §12 dual-repository equivalence).
     async withTransaction(fn) { return fn(null); },
+    async assignStreamSequence(_client, senderEndpointId, conversationId) {
+      const key = JSON.stringify([senderEndpointId, conversationId]);
+      const assigned = streamSequences.get(key) ?? 1n;
+      streamSequences.set(key, assigned + 1n);
+      return assigned;
+    },
+    async lookupStreamHighWater(senderEndpointId, conversationId) {
+      const next = streamSequences.get(JSON.stringify([senderEndpointId, conversationId]));
+      return next == null ? 0n : next - 1n;
+    },
+    async listResendEnvelopes(senderEndpointId, conversationId, beginSeq, endSeq, now = new Date()) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).getTime();
+      return [...envelopes.values()]
+        .filter((row) => row.envelope.sender.endpoint_id === senderEndpointId
+          && row.envelope.conversation_id === conversationId
+          && row.streamSeq != null
+          && row.streamSeq >= BigInt(beginSeq)
+          && row.streamSeq <= BigInt(endSeq)
+          && Date.parse(row.envelope.expires_at) > timestamp)
+        .sort((a, b) => (a.streamSeq < b.streamSeq ? -1 : a.streamSeq > b.streamSeq ? 1 : 0))
+        .map((row) => ({ streamSeq: row.streamSeq, envelope: row.envelope }));
+    },
+    async isConversationMember(endpointId, conversationId) {
+      return [...envelopes.values()].some((row) => row.envelope.conversation_id === conversationId
+        && (row.envelope.sender.endpoint_id === endpointId || row.envelope.recipient?.endpoint_id === endpointId));
+    },
+    async enqueueRelayJob(jobType, row) {
+      const existing = [...relayJobs.values()].find((job) => job.jobType === jobType && job.idempotencyKey === row.idempotencyKey);
+      if (existing) return { row: existing, inserted: false };
+      const timestamp = (row.now instanceof Date ? row.now : row.now ? new Date(row.now) : new Date()).toISOString();
+      const job = {
+        id: `job_${crypto.randomUUID()}`, jobType, idempotencyKey: row.idempotencyKey,
+        payload: row.payload ?? null, state: 'pending', attemptCount: 0, nextAttemptAt: timestamp,
+        claimedAt: null, claimToken: null, lastReasonCode: null, createdAt: timestamp, updatedAt: timestamp,
+      };
+      relayJobs.set(job.id, job);
+      return { row: job, inserted: true };
+    },
+    async claimDueRelayJobs(jobType, now = new Date(), limit = 10, leaseSeconds = 30) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).getTime();
+      return [...relayJobs.values()]
+        .filter((job) => job.jobType === jobType
+          && ((job.state === 'pending' && Date.parse(job.nextAttemptAt) <= timestamp)
+            || (job.state === 'processing' && Date.parse(job.claimedAt) < timestamp - leaseSeconds * 1000)))
+        .sort((a, b) => Date.parse(a.nextAttemptAt) - Date.parse(b.nextAttemptAt))
+        .slice(0, limit)
+        .map((job) => {
+          job.state = 'processing';
+          job.claimedAt = new Date(timestamp).toISOString();
+          job.claimToken = crypto.randomUUID();
+          job.updatedAt = job.claimedAt;
+          return { ...job };
+        });
+    },
+    async relayJobHealth(jobType = 'resend', now = new Date()) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).getTime();
+      const active = [...relayJobs.values()].filter((job) => job.jobType === jobType && ['pending', 'processing'].includes(job.state));
+      const oldest = active.length ? Math.min(...active.map((job) => Date.parse(job.createdAt))) : timestamp;
+      return { depth: active.length, oldestAgeSeconds: Math.max(0, (timestamp - oldest) / 1000) };
+    },
+    async finalizeRelayJob(jobType, id, claimToken, state, { attemptCount = null, nextAttemptAt = null, reasonCode = null } = {}) {
+      const job = relayJobs.get(id);
+      if (!job || job.jobType !== jobType || job.claimToken !== claimToken) return { updated: false };
+      job.state = state;
+      job.claimToken = null;
+      job.claimedAt = null;
+      if (attemptCount != null) job.attemptCount = attemptCount;
+      if (nextAttemptAt != null) job.nextAttemptAt = (nextAttemptAt instanceof Date ? nextAttemptAt : new Date(nextAttemptAt)).toISOString();
+      job.lastReasonCode = reasonCode;
+      job.updatedAt = new Date().toISOString();
+      return { updated: true };
+    },
     async reserveRateLimit(scopeKind, scopeId, windowStart, limit) {
       const key = `${scopeKind}:${scopeId}:${windowStart}`;
       const count = (rateWindows.get(key) ?? 0) + 1;
@@ -112,7 +186,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     },
     async persistAcceptedEnvelope(row) {
       const federationHop = row.federation_hop === true;
-      envelopes.set(row.message_id, { ...row, federation_hop: federationHop });
+      envelopes.set(row.message_id, { ...row, streamSeq: row.streamSeq ?? null, federation_hop: federationHop });
       idempotency.set(`${row.envelope.sender.endpoint_id}:${row.envelope.idempotency_key}`, { message_id: row.message_id, canonical_hash: row.canonical_hash });
       if (row.envelope.recipient?.endpoint_id) {
         const deliveryId = `del_${row.message_id}`;
@@ -131,7 +205,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     async listInbox(endpointId, since = '', viewerOwnerId = null) {
       return [...deliveries.values()]
         .filter((d) => d.recipient_endpoint_id === endpointId && d.state === 'delivered' && d.queued_at > since)
-        .map((d) => { const envelope = envelopes.get(d.message_id).envelope; return { delivery_id: d.delivery_id, message_id: d.message_id, envelope, queued_at: d.queued_at, sender_unverified: !viewerOwnerId || !acknowledgements.has(`${viewerOwnerId}:${envelope.sender.endpoint_id}`) }; });
+        .map((d) => { const row = envelopes.get(d.message_id); const envelope = row.envelope; return { delivery_id: d.delivery_id, message_id: d.message_id, envelope, queued_at: d.queued_at, streamSeq: row.streamSeq == null ? null : String(row.streamSeq), sender_unverified: !viewerOwnerId || !acknowledgements.has(`${viewerOwnerId}:${envelope.sender.endpoint_id}`) }; });
     },
     async acknowledgeEndpoint({ viewerOwnerId, acknowledgedEndpointId, now = new Date() }) {
       const record = { viewer_owner_id: viewerOwnerId, acknowledged_endpoint_id: acknowledgedEndpointId, acknowledged_at: (now instanceof Date ? now : new Date(now)).toISOString() };
@@ -288,6 +362,9 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       const row = envelopes.get(messageId);
       return row ? { endpoint_id: row.envelope.sender.endpoint_id } : null;
     },
+    async lookupEnvelopeStreamSequence(messageId) {
+      return envelopes.get(messageId)?.streamSeq ?? null;
+    },
     // No real row locking possible/needed in a single-process in-memory
     // store -- withTransaction is already a no-op here (see above).
     async lookupActiveCapabilityGrants(endpointId, now) {
@@ -374,9 +451,9 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     // Mirrors postgres-repository.mjs's recordAuditEvent row shape (minus
     // the actual persistence -- single process, nothing to query it back
     // out of besides this array).
-    async recordAuditEvent({ eventId = `audit_${crypto.randomUUID()}`, eventType, subjectId, actorId = null, actorHumanId = null, endpointId = null, objectType = null, objectId = null, actionHash = null, outcome = null, reason = null, payload = {}, metadataRedacted = null, now = new Date() } = {}) {
+    async recordAuditEvent({ eventId = `audit_${crypto.randomUUID()}`, eventType, subjectId, actorId = null, actorHumanId = null, endpointId = null, conversationId = null, objectType = null, objectId = null, actionHash = null, outcome = null, reason = null, payload = {}, metadataRedacted = null, now = new Date() } = {}) {
       const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
-      const event = { event_id: eventId, event_type: eventType, subject_id: subjectId, actor_id: actorId, actor_human_id: actorHumanId, endpoint_id: endpointId, object_type: objectType, object_id: objectId, action_hash: actionHash, outcome, reason, payload, metadata_redacted: metadataRedacted, created_at: timestamp };
+      const event = { event_id: eventId, event_type: eventType, subject_id: subjectId, actor_id: actorId, actor_human_id: actorHumanId, endpoint_id: endpointId, conversation_id: conversationId, object_type: objectType, object_id: objectId, action_hash: actionHash, outcome, reason, payload, metadata_redacted: metadataRedacted, created_at: timestamp };
       auditEvents.push(event);
       return event;
     },

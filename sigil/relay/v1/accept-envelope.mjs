@@ -1,5 +1,6 @@
+import crypto from 'node:crypto';
 import { validateEnvelope, reject, signedBytes, checkRecipientLocality } from './validate-envelope.mjs';
-import { resolveRateLimits, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
+import { resolveRateLimits, resolveStreamSequence, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
 import { writeRejectionAudit } from './rejection-audit.mjs';
 import { decideRoute, buildForwardRequest, signForwardRequest, postForward } from './federation-router.mjs';
 
@@ -33,6 +34,77 @@ const statusByCode = Object.freeze({
   FORWARD_REJECTED: 502,
   FORWARD_UNAVAILABLE: 504
 });
+
+const DEFAULT_RESEND_RANGE_LIMIT = 500;
+
+function resendRangeLimit(options) {
+  const value = options.resend?.maxRange ?? DEFAULT_RESEND_RANGE_LIMIT;
+  return Number.isSafeInteger(value) && value > 0 ? value : DEFAULT_RESEND_RANGE_LIMIT;
+}
+
+async function acceptResendRequest(envelope, options, client) {
+  const { repository, now = new Date() } = options;
+  const body = envelope.body;
+  if (body.conversation_id !== envelope.conversation_id) {
+    throw reject('INVALID_ENVELOPE', 'Resend body conversation_id must match the envelope conversation_id', {
+      field: 'conversation_id', reason: 'must match envelope conversation_id',
+    });
+  }
+  if (!await repository.isConversationMember(envelope.sender.endpoint_id, body.conversation_id, client)) {
+    throw reject('CAPABILITY_DENIED', 'Requester is not an active member of this conversation');
+  }
+
+  const limits = resolveRateLimits(options.rateLimits);
+  const windowStart = new Date(Math.floor(now.getTime() / 60_000) * 60_000).toISOString();
+  for (const [scopeKind, scopeId] of [
+    ['endpoint', envelope.sender.endpoint_id],
+    ['owner', envelope.sender.owner_id],
+    ['conversation', body.conversation_id],
+  ]) {
+    const reservation = await repository.reserveRateLimit(scopeKind, scopeId, windowStart, limits[scopeKind], client);
+    if (!reservation.allowed) throw reject('RATE_LIMITED', `${scopeKind} rate limit exceeded`, { scope_kind: scopeKind, scope_id: scopeId, limit: limits[scopeKind] });
+  }
+
+  const highWater = await repository.lookupStreamHighWater(body.target_sender_endpoint_id, body.conversation_id, client);
+  const effectiveEnd = body.end_seq === 0 ? Number(highWater ?? 0) : body.end_seq;
+  if (!Number.isSafeInteger(effectiveEnd) || effectiveEnd < body.begin_seq) {
+    throw reject('INVALID_ENVELOPE', 'Invalid resend range', { field: 'end_seq', reason: 'must resolve to a sequence at or after begin_seq' });
+  }
+  if (effectiveEnd - body.begin_seq + 1 > resendRangeLimit(options)) {
+    throw reject('INVALID_ENVELOPE', 'Resend range too wide', { field: 'end_seq', reason: 'range too wide' });
+  }
+
+  const payload = {
+    requester_endpoint_id: envelope.sender.endpoint_id,
+    target_sender_endpoint_id: body.target_sender_endpoint_id,
+    conversation_id: body.conversation_id,
+    begin_seq: body.begin_seq,
+    end_seq: effectiveEnd,
+  };
+  const queued = await repository.enqueueRelayJob('resend', {
+    payload,
+    idempotencyKey: `resend:${envelope.sender.endpoint_id}:${envelope.idempotency_key}`,
+    now,
+  }, client);
+  if (queued.inserted && repository.recordAuditEvent) {
+    await repository.recordAuditEvent({
+      eventType: 'session.resend_request', subjectId: envelope.message_id,
+      actorId: envelope.sender.endpoint_id, endpointId: envelope.sender.endpoint_id,
+      conversationId: body.conversation_id, outcome: 'accepted', payload, now, client,
+    });
+  }
+  options.resendMetrics?.increment?.('sigil_resend_request_total', 1, { conversation_kind: 'direct' });
+  options.logger?.info?.({ event: 'session.resend_request', ...payload, job_type: 'resend' });
+  return {
+    status: 202,
+    body: {
+      request_id: options.request_id ?? null,
+      code: 'ACCEPTED',
+      message_id: envelope.message_id,
+      duplicate: !queued.inserted,
+    },
+  };
+}
 
 function toResponse(options, error) {
   return { status: statusByCode[error.code] ?? 400, body: { request_id: options.request_id ?? null, code: error.code ?? 'INVALID_ENVELOPE', message: error.message, details: error.details ?? {} } };
@@ -88,6 +160,9 @@ async function acceptWithRepository(envelope, options) {
     // silently with a null client.
     if (route.action === 'reject' || (route.action === 'forward' && options.federationMode === 'sync')) {
       if (route.action === 'reject') throw reject(route.code, `${route.code}`, route.details ?? {});
+      if (envelope.message_type === 'session.resend_request') {
+        throw reject('ROUTE_NOT_AUTHORIZED', 'Session resend requests are local-only');
+      }
 
       // Replay check on the sync forward path: preserves pre-refactor behavior
       // where a forwarded envelope from a local sender that reused a message_id
@@ -153,6 +228,9 @@ async function acceptWithRepository(envelope, options) {
 
     // Queue-forward: enqueueForward's INSERT + audit are atomic inside this txn.
     if (route.action === 'forward') {
+      if (envelope.message_type === 'session.resend_request') {
+        throw reject('ROUTE_NOT_AUTHORIZED', 'Session resend requests are local-only');
+      }
       return forwardEnvelope(envelope, route, options, client);
     }
 
@@ -180,6 +258,17 @@ async function acceptWithRepository(envelope, options) {
       if (!registered_) throw reject('CAPABILITY_DENIED', `Capability is not registered: ${capability}`, { capability });
     }
     const capabilityGrants = await repository.lookupActiveCapabilityGrants(envelope.sender.endpoint_id, now, client);
+    if (envelope.message_type === 'session.resend_request') {
+      const result = validateEnvelope(envelope, { ...options, idempotency: new Map(), capabilityGrants });
+      if (Date.parse(envelope.expires_at) <= now.getTime()) throw reject('MESSAGE_EXPIRED', 'Message has expired');
+      const canonicalHash = result.canonical_hash;
+      const prior = repository.lookupIdempotency
+        ? await repository.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key, client)
+        : null;
+      if (prior && prior.canonical_hash !== canonicalHash) throw reject('DUPLICATE_MESSAGE', 'Idempotency key conflicts with an existing body');
+      if (prior) return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: prior.message_id, duplicate: true } };
+      return acceptResendRequest(envelope, options, client);
+    }
     // Rate-limit reservation (design §8, §18 #23): independent of envelope
     // content validity -- a flooding sender should be capped even if
     // individual envelopes are otherwise well-formed -- so this runs before
@@ -243,12 +332,17 @@ async function acceptWithRepository(envelope, options) {
       const visible = await repository.lookupTaskRequest(envelope.body.task_id, envelope.conversation_id, client);
       if (!visible) throw reject('INVALID_ENVELOPE', 'task.result references a task_id with no visible task.request', { field: 'task_id', reason: 'no visible task.request' });
     }
+    const streamSequence = resolveStreamSequence(options.stream_seq);
+    const streamSeq = streamSequence.enabled && !envelope.message_type.startsWith('session.') && !envelope.message_type.startsWith('admin.')
+      ? await repository.assignStreamSequence(client, envelope.sender.endpoint_id, envelope.conversation_id)
+      : null;
     // canonical_bytes/action_hash mirror what http-server.mjs's now-removed
     // persistAccepted wrapper used to attach before calling the repository
     // directly -- kept here so repository-backed callers (postgres, memory)
     // still see the same row shape regardless of transport.
-    const persisted = await repository.persistAcceptedEnvelope({ envelope, ...result, canonical_bytes: signedBytes(envelope), action_hash: result.canonical_hash }, client);
-    if (options.onPersisted) await options.onPersisted({ envelope, persisted });
+    const persisted = await repository.persistAcceptedEnvelope({ envelope, ...result, canonical_bytes: signedBytes(envelope), action_hash: result.canonical_hash, streamSeq }, client);
+    const persistedWithStreamSeq = { ...persisted, streamSeq };
+    if (options.onPersisted) await options.onPersisted({ envelope, persisted: persistedWithStreamSeq });
     return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: persisted?.message_id ?? result.message_id, duplicate: persisted?.duplicate ?? false } };
   }).catch(async (error) => {
     const response = toResponse(options, error);
@@ -317,7 +411,7 @@ async function forwardEnvelope(envelope, route, options, client) {
   return { status: 502, body: { request_id: options.request_id ?? null, code: 'FORWARD_REJECTED', message: 'Peer relay rejected the forward', details: { peerStatus: outcome.status, peerCode: outcome.peerCode ?? null } } };
 }
 
-// Queue-mode federation forward: enqueue to federation_outbox for asynchronous
+// Queue-mode federation forward: enqueue a federation-typed relay job for asynchronous
 // delivery by a reaper process instead of forwarding synchronously (Task 14).
 async function enqueueForward(envelope, route, options, client, { senderKey, senderOwnerId }) {
   const { repository } = options;

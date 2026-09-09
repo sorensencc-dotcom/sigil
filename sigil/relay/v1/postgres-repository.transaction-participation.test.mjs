@@ -15,7 +15,8 @@ async function freshDb(t) {
   t.after(() => pool.end());
   assertDisposableTestDatabase(connectionString);
   const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
-  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  await pool.query('DROP SCHEMA public CASCADE');
+  await pool.query('CREATE SCHEMA public');
   for (const file of (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort()) {
     await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
   }

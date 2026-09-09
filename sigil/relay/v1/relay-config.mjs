@@ -13,6 +13,7 @@ export const DEFAULT_RATE_LIMITS = Object.freeze({
 });
 export const DEFAULT_INBOX_DEPTH_LIMIT = 500;
 export const DEFAULT_HEARTBEAT = Object.freeze({ intervalMs: 15_000, missedBeforeTimeout: 3 });
+export const DEFAULT_STREAM_SEQUENCE = Object.freeze({ enabled: false });
 
 // Dedicated directory abuse-surface scopes (spec §6) -- distinct from
 // DEFAULT_RATE_LIMITS above, which only covers ordinary envelope delivery.
@@ -33,6 +34,10 @@ export function resolveRateLimits(overrides = {}) {
 
 export function resolveHeartbeat(overrides = {}) {
   return { ...DEFAULT_HEARTBEAT, ...overrides };
+}
+
+export function resolveStreamSequence(overrides = {}) {
+  return { ...DEFAULT_STREAM_SEQUENCE, ...overrides };
 }
 
 // Relay-to-relay request freshness window (design Section 3). Bounds how long a

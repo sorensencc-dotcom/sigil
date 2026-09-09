@@ -1,0 +1,9 @@
+graph LR
+  A[Incoming envelope] -->|NULL stream_seq| B[Queued-order fallback]
+  A -->|next sequence| C[Advance high-water]
+  A -->|future sequence| D[Buffer bounded gap]
+  D -->|debounced| E[One resend request]
+  E --> F{Recovery result}
+  F -->|frames arrive| C
+  F -->|sequence_reset| G[Release through reset]
+  D -->|retry or buffer bound| H[unrecoverable_gap]

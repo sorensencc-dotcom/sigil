@@ -211,6 +211,31 @@ test('a RATE_LIMITED rejection never consumes its own reservation (rollback-on-r
   assert.equal(fourthOverLimit.status, 429);
 });
 
+test('FIX resend recovers one dropped message from a five-message stream', async () => {
+  const { createMemoryRepository } = await import('../cli/memory-repository.mjs');
+  const { runResendWorkerPass } = await import('../relay/v1/resend-worker.mjs');
+  const { createStreamGapTracker } = await import('../connectors/v1/stream-gap-tracker.mjs');
+  const repository = createMemoryRepository();
+  const sender = { endpoint_id: 'ep_fix_sender', owner_id: 'usr_fix_sender' };
+  const conversationId = 'conv_fix_vertical';
+  for (let seq = 1; seq <= 5; seq += 1) {
+    await repository.persistAcceptedEnvelope({ message_id: `msg_fix_${seq}`, envelope: { message_id: `msg_fix_${seq}`, conversation_id: conversationId, message_type: 'chat.message', sender, recipient: { endpoint_id: 'ep_fix_receiver' }, body: { seq }, expires_at: '2099-01-01T00:00:00Z' }, streamSeq: BigInt(seq) });
+  }
+  const requests = [];
+  const delivered = [];
+  const tracker = createStreamGapTracker({ sendResendRequest: (request) => { requests.push(request); }, onEnvelope: (envelope) => delivered.push(envelope.body.seq) });
+  await tracker.receive({ conversation_id: conversationId, sender, body: { seq: 1 }, stream_seq: 1 });
+  await tracker.receive({ conversation_id: conversationId, sender, body: { seq: 2 }, stream_seq: 2 });
+  await tracker.receive({ conversation_id: conversationId, sender, body: { seq: 4 }, stream_seq: 4 });
+  await tracker.receive({ conversation_id: conversationId, sender, body: { seq: 5 }, stream_seq: 5 });
+  assert.deepEqual(requests, [{ target_sender_endpoint_id: sender.endpoint_id, conversation_id: conversationId, begin_seq: 3, end_seq: 3 }]);
+  const frames = [];
+  await repository.enqueueRelayJob('resend', { idempotencyKey: 'vertical-resend', payload: { requester_endpoint_id: 'ep_fix_receiver', target_sender_endpoint_id: sender.endpoint_id, conversation_id: conversationId, begin_seq: 3, end_seq: 3 }, now: new Date('2026-09-09T11:59:00Z') });
+  await runResendWorkerPass({ repository, stream: { notifyResend: (_endpoint, payload) => { frames.push(payload); return true; }, notifySequenceReset: () => true }, now: new Date('2026-09-09T12:00:00Z') });
+  for (const frame of frames) await tracker.receive(frame.envelope, { stream_seq: Number(frame.streamSeq) });
+  assert.deepEqual(delivered, [1, 2, 3, 4, 5]);
+});
+
 test('directory trust: invite issued, redeemed, confirmed, then direct delivery succeeds; revocation blocks it again', { skip: !connectionString }, async (t) => {
   const { baseUrl, server, ids, tokenFor, senderPrivateKey, senderKeyId } = await bootstrapLiveRelay(t);
   t.after(() => server.close());

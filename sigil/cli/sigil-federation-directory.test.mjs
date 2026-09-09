@@ -369,10 +369,10 @@ test('Q4: a redemption transport failure writes no outbox row and exits non-zero
   );
 
   // assert: non-zero exit, the re-run hint on stderr, and NO durable
-  // federation_outbox row (the old code enqueued one carrying the invite code).
+  // federation relay job (the old code enqueued one carrying the invite code).
   assert.equal(redeem.exitCode, 1);
   assert.match(redeem.stderr, /re-run 'sigil federation invite redeem/);
-  const outbox = await pool.query("SELECT count(*) FROM federation_outbox WHERE kind = 'directory_redemption'");
+  const outbox = await pool.query("SELECT count(*) FROM relay_jobs WHERE kind = 'directory_redemption'");
   assert.equal(Number(outbox.rows[0].count), 0, 'a transport failure must not enqueue a durable retry row');
 });
 
@@ -470,7 +470,7 @@ test('sigil federation link list/show/confirm/revoke', { skip: !connectionString
   const afterConfirm = await pool.query('SELECT status FROM federation_directory_links WHERE link_ref = $1', [issuerLinkRef]);
   assert.equal(afterConfirm.rows[0].status, 'active');
   const confirmOutbox = await pool.query(
-    "SELECT kind, idempotency_key FROM federation_outbox WHERE message_id = $1 AND kind = 'directory_confirmation'",
+    "SELECT kind, idempotency_key FROM relay_jobs WHERE message_id = $1 AND kind = 'directory_confirmation'",
     [issuerLinkRef],
   );
   assert.equal(confirmOutbox.rows.length, 1);
@@ -486,7 +486,7 @@ test('sigil federation link list/show/confirm/revoke', { skip: !connectionString
   const afterRevoke = await pool.query('SELECT status FROM federation_directory_links WHERE link_ref = $1', [issuerLinkRef]);
   assert.equal(afterRevoke.rows[0].status, 'revoked');
   const revokeOutbox = await pool.query(
-    "SELECT kind, idempotency_key FROM federation_outbox WHERE message_id = $1 AND kind = 'directory_revocation'",
+    "SELECT kind, idempotency_key FROM relay_jobs WHERE message_id = $1 AND kind = 'directory_revocation'",
     [issuerLinkRef],
   );
   assert.equal(revokeOutbox.rows.length, 1);

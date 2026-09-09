@@ -27,7 +27,7 @@ async function run(args) {
   }
 }
 
-test('sigil federation outbox list|show|retry against a seeded federation_outbox', { skip: !connectionString }, async (t) => {
+test('sigil federation outbox list|show|retry against seeded federation relay jobs', { skip: !connectionString }, async (t) => {
   const pool = new pg.Pool({ connectionString });
   t.after(() => pool.end());
   assertDisposableTestDatabase(connectionString);
@@ -46,10 +46,10 @@ test('sigil federation outbox list|show|retry against a seeded federation_outbox
   const liveEnvelope = { message_id: `msg_live_${suffix}`, body: { text: 'SECRET-BODY' }, expires_at: '2999-01-01T00:00:00.000Z' };
   const expiredEnvelope = { message_id: `msg_exp_${suffix}`, body: { text: 'SECRET-BODY' }, expires_at: '2000-01-01T00:00:00.000Z' };
 
-  const insert = `INSERT INTO federation_outbox
+  const insert = `INSERT INTO relay_jobs
     (id, message_id, idempotency_key, recipient_domain, origin_domain, envelope, sender_key, sender_owner_id, state, last_reason_code)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`;
-  await pool.query(insert, [rejectedId, liveEnvelope.message_id, `idem_r_${suffix}`, 'b.example', 'a.example', liveEnvelope, senderKey, `usr_${suffix}@a.example`, 'forward_rejected', 'PEER_4XX']);
+  await pool.query(insert, [rejectedId, liveEnvelope.message_id, `idem_r_${suffix}`, 'b.example', 'a.example', liveEnvelope, senderKey, `usr_${suffix}@a.example`, 'rejected', 'PEER_4XX']);
   await pool.query(insert, [expiredId, expiredEnvelope.message_id, `idem_e_${suffix}`, 'b.example', 'a.example', expiredEnvelope, senderKey, `usr_${suffix}@a.example`, 'dead_letter', 'MAX_ATTEMPTS']);
 
   // list: counts line + the row id, no envelope body
@@ -76,7 +76,7 @@ test('sigil federation outbox list|show|retry against a seeded federation_outbox
   const retry = await run(['federation', 'outbox', 'retry', rejectedId, '--database-url', connectionString]);
   assert.equal(retry.exitCode, 0, retry.stderr);
   assert.match(retry.stdout, new RegExp(`Re-queued ${rejectedId}`));
-  const after = await pool.query('SELECT state FROM federation_outbox WHERE id = $1', [rejectedId]);
+  const after = await pool.query('SELECT state FROM relay_jobs WHERE id = $1', [rejectedId]);
   assert.equal(after.rows[0].state, 'pending');
 
   // retry: an expired dead_letter row is refused with the resend message, non-zero exit
@@ -106,14 +106,14 @@ test('Q4: outbox show strips directoryPayload (no invite code leak)', { skip: !c
   assertDisposableTestDatabase(connectionString);
   await applyMigrations(connectionString, { reset: true });
 
-  // arrange: a directory_redemption federation_outbox row whose directory_payload
+  // arrange: a directory_redemption federation relay job whose directory_payload
   // still carries a stale plaintext invite code (the worst case a pre-019 build
   // would have written before migration 019's scrub).
   const id = crypto.randomUUID();
   const linkRef = crypto.randomUUID();
   const staleCode = `sigil-fed-invite:issuer.example:${linkRef}:SECRETSEGMENT`;
   await pool.query(
-    `INSERT INTO federation_outbox
+    `INSERT INTO relay_jobs
        (id, kind, message_id, idempotency_key, recipient_domain, origin_domain, directory_payload, state, attempt_count, next_attempt_at, created_at, updated_at)
      VALUES ($1, 'directory_redemption', $2, $2, 'issuer.example', 'redeemer.example', $3::jsonb, 'pending', 0, now(), now(), now())`,
     [id, linkRef, JSON.stringify({ link_ref: linkRef, code: staleCode })],

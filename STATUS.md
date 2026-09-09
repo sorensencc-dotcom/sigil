@@ -3,6 +3,73 @@
 ## Current goal
 Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemented. Runtime handoff is locally validated; production rollout remains blocked pending security and governance approval.
 
+## Session update: 2026-09-09 protocol diagrams
+- Added custom-standard standalone HTML+SVG diagrams, rendered PNG assets, Mermaid sources, and editable Excalidraw placeholders for the FIX session resend flow and connector gap recovery.
+- Embedded both PNG diagrams in the session-layer rollout handoff and linked them from the resend observability dashboard document.
+- Validation: both PNGs rendered through the local browser renderer; visual inspection passed; `git diff --check` passed.
+
+## Session update: 2026-09-09 final review fixes
+- Added resend-specific regression coverage for expired requests and message-id replays; the implementation rejects both before membership or enqueue side effects.
+- Fixed relay queue oldest-age gauges to measure `created_at`/`createdAt`, including jobs delayed by retry backoff.
+- Validation: focused suites pass 18/18 executed, 3 PostgreSQL tests skipped without `SIGIL_TEST_DATABASE_URL`; `git diff --check` passed.
+- Serialized live PostgreSQL gate passes against Docker `sigil_postgres` / `sigil_test`: 28 files, 134 tests, 134 passed, 0 failed, 0 skipped, 129 seconds.
+
+## Session update: 2026-09-09 Task 3
+- Completed the FIX session-layer Task 3 refactor: migrated durable federation outbox rows to typed `relay_jobs`, with compatibility adapters preserving federation-visible states and CLI behavior.
+- Added migration and shared job-type-scoped claim, finalize, retry, and terminal-state handling; federation reaper claims only `job_type = 'federation'`.
+- Validation: 22/22 federation-focused test files passed against the disposable PostgreSQL database; `git diff --check` and changed-module syntax checks passed.
+- Detailed handoff: `.superpowers/sdd/2026-09-09-sigil-fix-session-layer/task-3-report.md`.
+
+## Session update: 2026-09-09 Task 3 fix round 1
+- Added migration 022 to make `relay_jobs` genuinely generic: generic JSONB payload, nullable federation-only columns, job-type-scoped federation constraints, and type-leading claim indexes.
+- Added a non-federation enqueue/claim/finalize/retry lifecycle test; restored federation gate remains 32/32 green.
+
+## Session update: 2026-09-09 Task 3 fix round 2
+- Defined generic relay-job idempotency: non-federation enqueue requires a nonblank `idempotencyKey`; migration 023 derives stable legacy keys and enforces a job-type-scoped unique identity.
+- Added repeated generic enqueue regression coverage; generic lifecycle passes and the critical federation gate remains 32/32 green.
+
+## Session update: 2026-09-09 Task 3 fix round 3
+- Added direct generic key rejection coverage for omitted, empty, and whitespace-only keys.
+- Added migration-023 invariant coverage for legacy backfill, check constraint, and partial unique index; focused tests pass 3/3 and federation gate remains 32/32 green.
+
+## Session update: 2026-09-09 Task 4
+- Implemented signed `session.resend_request` validation, membership and range authorization, quota reservation, typed `resend` job enqueue, audit, and 202 response without delivery or fan-out.
+- Added retention-bounded resend lookup, stream `resend` and `sequence_reset` frames, asynchronous claim/push/reset/requeue/dead-letter worker, metrics, and relay startup wiring.
+- Validation: Task 4 focused suites pass 14/14; federation regression set passes 53/53 executed, with 15 database-dependent tests skipped; syntax checks and `git diff --check` pass.
+
+## Session update: 2026-09-09 Task 5 progress
+- Added the connector stream-gap tracker with per-stream high-water persistence, bounded out-of-order buffering, debounced resend requests, reset handling, retry exhaustion release, and NULL-sequence fallback.
+- Wired the tracker into optional `inbox-wait` polling and stream handling; default inbox behavior remains unchanged.
+- Validation: tracker and inbox-wait tests pass 22/22; syntax checks and `git diff --check` pass.
+
+## Session update: 2026-09-09 Task 6 progress
+- Added `sigil resend --conversation --from --to --sender` with local signing and existing relay error mapping.
+- Added `sigil inbox --local --gaps` output for known stream holes and updated CLI help.
+- Validation: CLI syntax check, help output, and `git diff --check` pass.
+
+## Session update: 2026-09-09 Task 6 verification
+- Existing CLI regression suites covering configuration, ledger, receipt transport, relay startup, and stream sequences pass 14/14.
+
+## Session update: 2026-09-09 Task 7 progress
+- Added a dependency-free relay metrics registry and wired resend request, fulfillment, reset, latency, and dead-letter instrumentation into relay startup.
+- Validation: focused observability, resend, worker, and relay-startup tests pass 11/11; syntax checks and `git diff --check` pass.
+- Added session resend dashboard panels and alert thresholds under `docs/observability/`.
+
+## Session update: 2026-09-09 Task 7 verification / Task 8 start
+- Existing vertical slice passes 4/4 executable tests; one directory-trust case is skipped without PostgreSQL.
+- `npm run test:live` is blocked because `SIGIL_TEST_DATABASE_URL` is not set; no live database evidence was claimed.
+
+## Session update: 2026-09-09 Task 8
+- Added rollout handoff covering migration order, one-way `relay_jobs` transition, flag rollback, mixed-fleet NULL behavior, recovery operations, metrics, and approval blockers.
+- Docker PostgreSQL container `sigil_postgres` is healthy on host port 55432, and `sigil_test` accepts connections. The serialized live gate completed in 142 seconds: 28 files, 134 tests, 134 passed, 0 failed, 0 skipped.
+- Added `sigil/scripts/run-live-db-tests.ps1` with the explicit disposable-container URL as a Windows shortcut; it validates the `_test` suffix and clears the process environment afterward.
+- Hardened the live runner with per-suite timeout attribution and broken-pipe handling; the Windows launcher accepts `-SuiteTimeoutSeconds` (default 120).
+- Fixed PostgreSQL stream-sequence fixtures to avoid prepared multi-statement SQL and to seed valid canonical bytes, protocol, and unique endpoint keys; the live stream-sequence suite now passes 4/4 individually.
+- Added the missing vertical FIX recovery scenario: five sequenced messages, dropped message 3, one request for `[3,3]`, worker replay, and ordered connector delivery; vertical slice passes 5/5 executable tests.
+- Final serialized live PostgreSQL gate completed against `sigil_test`: 28 files, 134 tests, 134 passed, 0 failed, 0 skipped, 142 seconds.
+- Review fix round: sequence assignment now covers normal task request/result types, resend expiry and replay checks are enforced, tracker overflow advances past the requested gap, queue-health gauges emit from worker passes, and stale federation CLI wording is corrected. Critical focused suites pass 18/18.
+- Post-review full serialized live gate passes against `sigil_test`: 28 files, 134 tests, 134 passed, 0 failed, 0 skipped, approximately 125 seconds.
+
 ## Completed work
 - Packaged CLI and verified local npm binary mapping (`sigil --help`).
 - Applied PostgreSQL schema migrations 001 through 019 against the live container on port 55432.

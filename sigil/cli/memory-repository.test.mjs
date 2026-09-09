@@ -14,6 +14,13 @@ test('memory relay does not redeliver acknowledged messages and replays acknowle
   assert.equal((await repository.acknowledgeDelivery({ deliveryId: first[0].delivery_id, endpointId: 'ep_claude' })).duplicate, true);
 });
 
+test('memory relay assigns monotonic stream sequences per sender conversation', async () => {
+  const repository = createMemoryRepository();
+  assert.equal(await repository.assignStreamSequence(null, 'ep_codex', 'conv_1'), 1n);
+  assert.equal(await repository.assignStreamSequence(null, 'ep_codex', 'conv_1'), 2n);
+  assert.equal(await repository.assignStreamSequence(null, 'ep_codex', 'conv_2'), 1n);
+});
+
 test('memory relay withTransaction runs the callback with a null client and returns its result', async () => {
   const repository = createMemoryRepository();
   const result = await repository.withTransaction(async (client) => { assert.equal(client, null); return 'ok'; });

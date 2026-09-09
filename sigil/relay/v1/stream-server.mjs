@@ -1,6 +1,15 @@
 import { WebSocketServer } from 'ws';
 import { createBearerAuthenticator } from './transport-auth.mjs';
 
+function streamSequenceValue(value) {
+  return value == null ? null : String(value);
+}
+
+function sequenceFrame(type, payload = {}) {
+  const { streamSeq, stream_seq, ...frame } = payload;
+  return { type, ...frame, stream_seq: streamSequenceValue(streamSeq ?? stream_seq) };
+}
+
 export function createStreamServer({ server, authenticate, tokenHashes } = {}) {
   const authenticateRequest = authenticate ?? (tokenHashes ? createBearerAuthenticator(tokenHashes) : () => null);
   const wss = new WebSocketServer({ server, path: '/v1/stream' });
@@ -17,16 +26,28 @@ export function createStreamServer({ server, authenticate, tokenHashes } = {}) {
     socket.on('close', () => { if (clients.get(endpointId) === socket) clients.delete(endpointId); });
   });
   return {
-    notify(endpointId, deliveryId) {
+    notify(endpointId, deliveryId, streamSeq = null) {
       const socket = clients.get(endpointId);
       if (!socket || socket.readyState !== 1) return false;
-      socket.send(JSON.stringify({ type: 'delivered', delivery_id: deliveryId }));
+      socket.send(JSON.stringify(sequenceFrame('delivered', { delivery_id: deliveryId, streamSeq })));
       return true;
     },
     notifyReceipt(endpointId, receipt) {
       const socket = clients.get(endpointId);
       if (!socket || socket.readyState !== 1) return false;
-      socket.send(JSON.stringify({ type: 'delivery.receipt', ...receipt }));
+      socket.send(JSON.stringify(sequenceFrame('delivery.receipt', receipt)));
+      return true;
+    },
+    notifyResend(endpointId, payload) {
+      const socket = clients.get(endpointId);
+      if (!socket || socket.readyState !== 1) return false;
+      socket.send(JSON.stringify(sequenceFrame('resend', payload)));
+      return true;
+    },
+    notifySequenceReset(endpointId, payload) {
+      const socket = clients.get(endpointId);
+      if (!socket || socket.readyState !== 1) return false;
+      socket.send(JSON.stringify(sequenceFrame('sequence_reset', payload)));
       return true;
     },
     close() { return new Promise((resolve) => wss.close(resolve)); }

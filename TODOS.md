@@ -45,3 +45,53 @@
 **Context:** Surfaced during `/plan-ceo-review` (SELECTIVE EXPANSION cherry-pick) of `docs/superpowers/plans/2026-08-25-sigil-inter-relay-trust-discovery.md`. Deferred, not cut — the value is real once there's more than 0-1 pinned peers to check.
 
 **Depends on:** The 2026-08-25 plan landing first (needs `listPeers()`).
+
+---
+
+## Federated `stream_seq` + signed per-stream checkpoint
+
+**What:** Design a relay-signed, monotonic per-`(sender_endpoint_id, conversation_id)` checkpoint that a receiving relay can cryptographically verify (Ed25519 over `{conversation_id, sender_endpoint_id, seq, prev_hash, count}` or similar), then extend FIX-style gap detection and `session.resend_request` fulfilment across the federation hop.
+
+**Why:** The FIX session layer (Plan 1) assigns `stream_seq` for **local conversations only**. Federated envelopes get no `stream_seq`, so a receiver behind a different relay has no gap detection or resend recovery for cross-relay conversations. The reason it is deferred: a relay-assigned sequence number sits outside the sender's envelope signature, so a receiving relay currently has no way to verify that the assigning relay's numbering is gap-free and monotonic. A buggy or hostile relay could induce spurious `session.resend_request` traffic, or silently drop a message and paper over it with a `sequence_reset` frame the receiver cannot authenticate. `sigil/migrations/016`–`017` and the `relay/v1/` module list confirm no such signed per-stream manifest exists today (federation is `peer_relays` trust pins + `federation_outbox` queue jobs + `federation-reaper`).
+
+**Pros:** Closes the one real integrity gap in the FIX session layer; makes reliable ordered agent messaging work across relays, not just within one.
+
+**Cons:** New signing surface that needs its own security review; the verification path and key management add real complexity. Only matters once federation is actually carrying conversation traffic in production.
+
+**Context:** Surfaced as finding A1 during `/plan-eng-review` of the FIX session layer design (Approach A). The user chose "scope Plan 1 to single-relay" over building the checkpoint inside Plan 1. Prior learning `tofu-rotation-grace-public-key-not-proof` (2026-08-25) applies: relay-assigned data a receiver cannot verify is a trust gap, not a detail.
+
+**Depends on:** Plan 1 (local `stream_seq` + async resend) shipped; federation carrying real conversation traffic.
+
+---
+
+## `business.reject` NAK envelope (FIX session layer, Plan 2)
+
+**What:** New `business.reject` (a.k.a. `session.reject`) envelope type carrying `ref_message_id`, `ref_message_type`, `ref_stream_seq`, a fixed `reason_code` enum (`UNSUPPORTED_MSG_TYPE`, `UNKNOWN_REF`, `INVALID_BODY`, `PRECONDITION_FAILED`, `NOT_AUTHORIZED`, `OTHER`), and free-text `reason_text`. Relay validates the rejecter actually received `ref_message_id` (repository-backed cross-reference, same pattern as the `task.result` check in `accept-envelope.mjs`), delivers it into the conversation addressed to the original sender, drives the referenced delivery to `delivery_rejected` (state already exists, migration 001), and pushes a `delivery.receipt` carrying the `reason_code`.
+
+**Why:** Completes the FIX session layer. Today a recipient that deterministically refuses a message has no structured way to say so — `processing_failed` means "tried and crashed, retryable"; `business.reject` means "refused deterministically, fix the message, do not retry." Split out of Plan 1 (decision D1) because it shares nothing with the sequence-recovery machinery except the audit-event pattern, and bolting it on doubled the new-message-type surface of Plan 1.
+
+**Pros:** ~3 files, additive, low risk. Gives senders a clear deterministic-refusal signal distinct from transient failure. Mirrors FIX `BusinessMessageReject`.
+
+**Cons:** Another spec + plan + review cycle instead of one.
+
+**Context:** §4 of the FIX session layer design (Approach A). Full design text drafted in the 2026-09-08 brainstorming session. Deferred to Plan 2 during `/plan-eng-review` (D1: split seq-recovery from NAK).
+
+**Depends on:** Plan 1 — needs the receipt-channel `stream_seq` plumbing and the generalized `relay_jobs` queue in place first.
+
+---
+
+## `sigil session-status <conversation>` operator CLI
+
+**What:** A read-only CLI command that reports, for one conversation: each sender's `stream_seq` high-water mark, any known unrecovered gaps, outstanding `session.resend_request` entries, and `relay_jobs` rows scoped to that conversation.
+
+**Why:** Plan 1 adds per-`(sender, conversation)` sequencing, gap detection, and an async resend queue. When a specific conversation misbehaves, an operator currently has to hand-write SQL against `envelopes`, `stream_sequences`, and `relay_jobs` to see its session state. A single command makes the session layer inspectable.
+
+**Pros:** Turns per-conversation debugging from a SQL exercise into one command; complements the fleet-level observability metrics (which answer "is it working overall" but not "what is wrong with conversation X").
+
+**Cons:** One more CLI subcommand and repository query to maintain; not needed to ship Plan 1, and low value until the session layer is in real use.
+
+**Context:** Surfaced as a SELECTIVE EXPANSION cherry-pick candidate during `/plan-ceo-review` of the FIX session layer design. Deferred (option B) — the fleet-level observability surface was accepted into Plan 1 scope and covers the "is it working" question; this is the per-conversation drill-down, wanted once real traffic makes that a recurring need.
+
+**Effort:** S (human ~half day / CC ~20min). **Priority:** P3.
+
+**Depends on:** Plan 1 shipped (needs `stream_sequences`, `relay_jobs`, and the resend-request records to query).
