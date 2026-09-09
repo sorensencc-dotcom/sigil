@@ -1,7 +1,7 @@
 # Status
 
 ## Current goal
-Path 3 (Package & Serviceize the Sigil Relay / CLI) — completed Step 1 (CLI Distribution & Scoped Binary Mapping) and Step 2 (PostgreSQL durable relay wiring & supervisor persistence). Full test suite and end-to-end persistence dispatch verification passing.
+Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemented. Runtime handoff is locally validated; production rollout remains blocked pending security and governance approval.
 
 ## Completed work
 - Packaged CLI and verified local npm binary mapping (`sigil --help`).
@@ -12,10 +12,12 @@ Path 3 (Package & Serviceize the Sigil Relay / CLI) — completed Step 1 (CLI Di
 - Verified persistent dispatch round-trip from `ep_grokbot` to `ep_claude` (`conv_persistence_test`), verified database records in `envelopes` and `deliveries`, interrupted and restarted daemon, and retrieved delivery from recipient mailbox using `sigil inbox`.
 - Executed all 17 tasks of `docs/superpowers/plans/2026-09-03-sigil-cross-federation-directory.md` (subagent-driven-development) against spec `docs/superpowers/specs/2026-09-02-sigil-cross-federation-directory-design.md`.
 
-## Tests
-- Full test suite: `npm test` — 336 pass, 0 fail (unit/contract/audit suite) and 841 pass, 0 fail across live worker suites.
-- Verified end-to-end task persistence across daemon cycle: `sigil inbox` confirmed delivery retention.
-- Preflight verified via `pwsh -NoProfile -File C:\dev\scripts\verify-repo-context.ps1 -Path C:\dev\sigil-repo`.
+## Validation evidence
+- Local audits: `node sigil-dep-audit.mjs` passed; `node sigil-jcs-audit.mjs` passed.
+- Local `npm test`: bounded wrapper exited 1 without child output; a direct rerun produced extensive passing output but no final summary before the host timeout. Final local total remains unconfirmed.
+- Live PostgreSQL gate: `npm run test:live` passed against isolated database `sigil_codex_test` on PostgreSQL 16 — 124 passed, 0 failed, 0 skipped, 26 suites, exit 0. Migrations 001–019 applied.
+- Existing end-to-end persistence evidence: daemon restart retained delivery and `sigil inbox` retrieved it; this was not rerun during this review.
+- CI evidence: prior green CI run `33610373355` for commit `0829eb5`; not evidence for unpublished `d078c64`.
 
 ## Decisions
 - Compound primary key scoping `(profile_id, endpoint_id, key_id)` to isolate connector profiles.
@@ -24,7 +26,9 @@ Path 3 (Package & Serviceize the Sigil Relay / CLI) — completed Step 1 (CLI Di
 - Two-tier fail-closed rejection audit logging with append-only fallback to `path.join(dataDir, 'logs', 'security-failures.log')`.
 
 ## Blockers
-- None. The CI live-DB gate is green as of `0829eb5`.
+- `d078c64` is local only and must be handed off/pushed.
+- Default PostgreSQL startup grants 12 capabilities per registered endpoint for 10 years. This is broad, non-expiring operational access and is not least-privilege production posture; require explicit review or narrower provisioning before rollout.
+- Tier 1, privacy/compliance-owner, and counsel approval remain required before production rollout.
 
 ## Resolved
 - **CI live-DB gate red (2 broken new test suites)** — fixed in `0829eb5`
@@ -44,14 +48,16 @@ Path 3 (Package & Serviceize the Sigil Relay / CLI) — completed Step 1 (CLI Di
      `t.after(() => repository.close())`, `try/finally` removed.
 
 ## Known limitations
-- None.
+- Local full-suite final count is not independently confirmed in this review.
+- Live DB proof uses disposable local PostgreSQL only; no staging, remote, rollback, or production proof.
+- Cross-repository inter-relay documentation debt remains in `C:\dev`, outside this checkout.
 
 ## Next action
-- Doc debt (in the `C:\dev` repo, not sigil-repo): tick the plan checkboxes in
-  `docs/superpowers/plans/2026-08-30-sigil-inter-relay-routing.md`; add
-  I4 `MAX_ATTEMPTS=4` notes to
-  `docs/superpowers/specs/2026-08-30-sigil-inter-relay-routing-design.md`.
-- Sub-project #4 (cross-federation directory/presence).
+1. Hand off/push `d078c64` after this status correction and hook validation.
+2. Capture a clean final local `npm test` summary in an environment where child-process execution completes.
+3. Decide whether default grants are removed, narrowed, or made short-lived with explicit renewal.
+4. Track doc debt in the `C:\dev` repo, not here: tick the inter-relay plan checkboxes and add I4 `MAX_ATTEMPTS=4` notes.
+5. Obtain required Tier 1, privacy/compliance-owner, and counsel approvals before production rollout.
 
 
 
