@@ -57,6 +57,7 @@ Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemente
 - Added the missing vertical FIX recovery scenario: five sequenced messages, dropped message 3, one request for `[3,3]`, worker replay, and ordered connector delivery; vertical slice passes 5/5 executable tests.
 - Final serialized live PostgreSQL gate completed against `sigil_test`: 28 files, 134 tests, 134 passed, 0 failed, 0 skipped, 142 seconds.
 - Review fix round: sequence assignment now covers normal task request/result types, resend expiry and replay checks are enforced, tracker overflow advances past the requested gap, queue-health gauges emit from worker passes, and stale federation CLI wording is corrected. Critical focused suites pass 18/18.
+- Post-review full serialized live gate passes against `sigil_test`: 28 files, 134 tests, 134 passed, 0 failed, 0 skipped, approximately 125 seconds.
 
 ## Completed work
 - Packaged CLI and verified local npm binary mapping (`sigil --help`).
