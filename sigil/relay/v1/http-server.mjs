@@ -14,7 +14,7 @@ import { assertAccountLinkCeremony, assertAllowedIssuer, boundedCapabilityGrantE
 import { verifyMockIdToken } from './mock-oidc.mjs';
 import { verifyRealIdToken, createJwksCache, createDiscoveryCache, CLOCK_SKEW_SECONDS } from './oidc-client.mjs';
 import { attemptDirectoryMatchOnOidcLogin } from './directory-trust.mjs';
-import { resolveDirectoryRateLimits, resolveRelayRequestFreshnessMs } from './relay-config.mjs';
+import { resolveDirectoryRateLimits, resolveRelayRequestFreshnessMs, resolveStreamSequence } from './relay-config.mjs';
 
 function normalizeIssuerOrRespond(rawIssuer, response, requestId) {
   try {
@@ -45,11 +45,12 @@ async function readBody(request, maxBytes = 1024 * 1024) {
   return raw;
 }
 
-export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain, federationMode, federationIdentity, fetchImpl, relayRequestFreshnessMs } = {}) {
+export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain, federationMode, federationIdentity, fetchImpl, relayRequestFreshnessMs, stream_seq } = {}) {
   // B3: one clamped relay-request freshness window for this server. It bounds
   // how long a captured signed peer request stays replayable and doubles as the
   // nonce row's expiry horizon (expiresAt = signed_at + freshnessMs).
   const freshnessMs = resolveRelayRequestFreshnessMs(relayRequestFreshnessMs);
+  const streamSequence = resolveStreamSequence(stream_seq);
   logRelayRequestFreshnessOnce(freshnessMs, federationMode);
   const jwksCache = createJwksCache({ fetchImpl: oidcFetchImpl });
   const discoveryCache = createDiscoveryCache({ fetchImpl: oidcFetchImpl });
@@ -327,7 +328,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       let envelope; try { envelope = JSON.parse(raw); } catch { response.writeHead(400, { 'content-type': 'application/json' }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'Invalid JSON', details: {} })); }
       const result = await acceptEnvelopeAsync(envelope, {
         registered: registry, request_id: requestId, now, repository, relayDomain, persist,
-        federationMode, federationIdentity, fetchImpl,
+        federationMode, federationIdentity, fetchImpl, stream_seq: streamSequence,
         onPersisted: async ({ envelope: accepted, persisted }) => {
           if (!stream || persisted?.duplicate) return;
           if (accepted.recipient?.endpoint_id) stream.notify(accepted.recipient.endpoint_id, persisted.message_id, persisted.streamSeq);
@@ -378,7 +379,12 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
           if (stream && repository.lookupMessageSender) {
             const messageId = acked.delivery?.message_id ?? acked.message_id;
             const sender = await repository.lookupMessageSender(messageId);
-            if (sender) stream.notifyReceipt(sender.endpoint_id, { message_id: messageId, delivery_id: deliveryId, state: 'acknowledged', at: now.toISOString() });
+            if (sender) {
+              const streamSeq = typeof repository.lookupEnvelopeStreamSequence === 'function'
+                ? await repository.lookupEnvelopeStreamSequence(messageId)
+                : null;
+              stream.notifyReceipt(sender.endpoint_id, { message_id: messageId, delivery_id: deliveryId, state: 'acknowledged', at: now.toISOString(), streamSeq });
+            }
           }
           response.writeHead(204, { 'x-sigil-request-id': requestId });
           return response.end();
@@ -394,7 +400,12 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         await repository.transitionDelivery(deliveryId, principal.endpoint_id, target, { next });
         if (stream && repository.lookupMessageSender) {
           const sender = await repository.lookupMessageSender(current.message_id);
-          if (sender) stream.notifyReceipt(sender.endpoint_id, { message_id: current.message_id, delivery_id: deliveryId, state: next.state, at: next.updated_at });
+          if (sender) {
+            const streamSeq = typeof repository.lookupEnvelopeStreamSequence === 'function'
+              ? await repository.lookupEnvelopeStreamSequence(current.message_id)
+              : null;
+            stream.notifyReceipt(sender.endpoint_id, { message_id: current.message_id, delivery_id: deliveryId, state: next.state, at: next.updated_at, streamSeq });
+          }
         }
         response.writeHead(204, { 'x-sigil-request-id': requestId });
         return response.end();

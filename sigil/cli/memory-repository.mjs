@@ -61,12 +61,19 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
   const consumedLoginJtis = new Map();
   const oidcIssuerAllowlist = new Map();
   const peerRelays = new Map();
+  const streamSequences = new Map();
   const auditEvents = [];
   return {
     // Single-process, no real client/connection -- the transaction wrapper
     // exists so acceptEnvelopeAsync's repository-aware path works unchanged
     // against this repository too (design §12 dual-repository equivalence).
     async withTransaction(fn) { return fn(null); },
+    async assignStreamSequence(_client, senderEndpointId, conversationId) {
+      const key = JSON.stringify([senderEndpointId, conversationId]);
+      const assigned = streamSequences.get(key) ?? 1n;
+      streamSequences.set(key, assigned + 1n);
+      return assigned;
+    },
     async reserveRateLimit(scopeKind, scopeId, windowStart, limit) {
       const key = `${scopeKind}:${scopeId}:${windowStart}`;
       const count = (rateWindows.get(key) ?? 0) + 1;
@@ -112,7 +119,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     },
     async persistAcceptedEnvelope(row) {
       const federationHop = row.federation_hop === true;
-      envelopes.set(row.message_id, { ...row, federation_hop: federationHop });
+      envelopes.set(row.message_id, { ...row, streamSeq: row.streamSeq ?? null, federation_hop: federationHop });
       idempotency.set(`${row.envelope.sender.endpoint_id}:${row.envelope.idempotency_key}`, { message_id: row.message_id, canonical_hash: row.canonical_hash });
       if (row.envelope.recipient?.endpoint_id) {
         const deliveryId = `del_${row.message_id}`;
@@ -131,7 +138,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     async listInbox(endpointId, since = '', viewerOwnerId = null) {
       return [...deliveries.values()]
         .filter((d) => d.recipient_endpoint_id === endpointId && d.state === 'delivered' && d.queued_at > since)
-        .map((d) => { const envelope = envelopes.get(d.message_id).envelope; return { delivery_id: d.delivery_id, message_id: d.message_id, envelope, queued_at: d.queued_at, sender_unverified: !viewerOwnerId || !acknowledgements.has(`${viewerOwnerId}:${envelope.sender.endpoint_id}`) }; });
+        .map((d) => { const row = envelopes.get(d.message_id); const envelope = row.envelope; return { delivery_id: d.delivery_id, message_id: d.message_id, envelope, queued_at: d.queued_at, streamSeq: row.streamSeq == null ? null : String(row.streamSeq), sender_unverified: !viewerOwnerId || !acknowledgements.has(`${viewerOwnerId}:${envelope.sender.endpoint_id}`) }; });
     },
     async acknowledgeEndpoint({ viewerOwnerId, acknowledgedEndpointId, now = new Date() }) {
       const record = { viewer_owner_id: viewerOwnerId, acknowledged_endpoint_id: acknowledgedEndpointId, acknowledged_at: (now instanceof Date ? now : new Date(now)).toISOString() };
@@ -287,6 +294,9 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     async lookupMessageSender(messageId) {
       const row = envelopes.get(messageId);
       return row ? { endpoint_id: row.envelope.sender.endpoint_id } : null;
+    },
+    async lookupEnvelopeStreamSequence(messageId) {
+      return envelopes.get(messageId)?.streamSeq ?? null;
     },
     // No real row locking possible/needed in a single-process in-memory
     // store -- withTransaction is already a no-op here (see above).

@@ -114,6 +114,39 @@ test('HTTP relay defaults to repository persistence with canonical acceptance da
   assert.equal(persisted[0].action_hash, persisted[0].canonical_hash);
 });
 
+test('HTTP relay propagates stream_seq.enabled into local acceptance', async () => {
+  for (const [enabled, expected] of [[false, null], [true, 17n]]) {
+    const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+    const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
+    envelope.message_id = `msg_http_stream_${enabled}`;
+    envelope.idempotency_key = `send_http_stream_${enabled}`;
+    envelope.message_type = 'chat.message';
+    envelope.body = { text: 'stream config propagation' };
+    envelope.created_at = '2026-08-13T12:00:00.000Z'; envelope.expires_at = '2026-08-14T00:00:00.000Z';
+    envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
+    const persisted = [];
+    const assignments = [];
+    const repository = {
+      async withTransaction(fn) { return fn({ id: 'http-stream-client' }); },
+      async lookupIdempotency() { return null; }, async lookupAcceptedMessageId() { return null; },
+      async lookupCapabilityRegistration(capability) { return { capability }; }, async lookupActiveCapabilityGrants() { return []; },
+      async reserveRateLimit() { return { count: 1, allowed: true }; }, async countOpenDeliveries() { return 0; },
+      async assignStreamSequence(client, senderEndpointId, conversationId) { assignments.push({ client, senderEndpointId, conversationId }); return 17n; },
+      async persistAcceptedEnvelope(row) { persisted.push(row); return { message_id: row.envelope.message_id, duplicate: false }; },
+    };
+    const server = createRelayServer({
+      registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+      repository, stream_seq: { enabled }, now: new Date('2026-08-13T12:01:00Z'),
+    });
+    await new Promise((resolve) => server.listen(0, resolve));
+    const result = await request(server.address().port, { method: 'POST', path: '/v1/envelopes', body: envelope });
+    await new Promise((resolve) => server.close(resolve));
+    assert.equal(result.status, 202);
+    assert.equal(persisted[0].streamSeq, expected);
+    assert.equal(assignments.length, enabled ? 1 : 0);
+  }
+});
+
 test('a relay with --domain configured rejects a foreign-domain recipient with RECIPIENT_NOT_LOCAL via the repository-backed accept path, before the directory-link gate', async () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
@@ -392,6 +425,7 @@ test('ack route pushes an acknowledged receipt to the sender via stream.notifyRe
   const repository = {
     async acknowledgeDelivery({ deliveryId }) { return { delivery_id: deliveryId, message_id: 'msg_1' }; },
     async lookupMessageSender(messageId) { return messageId === 'msg_1' ? { endpoint_id: 'ep_codex' } : null; },
+    async lookupEnvelopeStreamSequence(messageId) { return messageId === 'msg_1' ? 31n : null; },
   };
   const stream = { notifyReceipt: (endpointId, receipt) => { receipts.push({ endpointId, receipt }); return true; } };
   const server = createRelayServer({ repository, stream, authenticate: async () => ({ endpoint_id: 'ep_claude' }), now: new Date('2026-08-16T00:00:00.000Z') });
@@ -403,6 +437,7 @@ test('ack route pushes an acknowledged receipt to the sender via stream.notifyRe
   assert.equal(receipts[0].endpointId, 'ep_codex');
   assert.equal(receipts[0].receipt.state, 'acknowledged');
   assert.equal(receipts[0].receipt.delivery_id, 'del_1');
+  assert.equal(receipts[0].receipt.streamSeq, 31n);
 });
 
 test('authenticated delivery route rejects invalid processing state', async () => {
@@ -426,7 +461,8 @@ test('authenticated delivery route transitions acknowledged delivery to processi
     },
     async lookupMessageSender(messageId) {
       return messageId === 'msg_ack_fail' ? { endpoint_id: 'ep_codex' } : null;
-    }
+    },
+    async lookupEnvelopeStreamSequence(messageId) { return messageId === 'msg_ack_fail' ? 32n : null; },
   };
   const stream = { notifyReceipt: (endpointId, receipt) => { receipts.push({ endpointId, receipt }); return true; } };
   const server = createRelayServer({ repository, stream, authenticate: async () => ({ endpoint_id: 'ep_claude' }), now: new Date('2026-08-16T00:00:00.000Z') });
@@ -444,6 +480,7 @@ test('authenticated delivery route transitions acknowledged delivery to processi
   assert.equal(receipts.length, 1);
   assert.equal(receipts[0].endpointId, 'ep_codex');
   assert.equal(receipts[0].receipt.state, 'processing_failed');
+  assert.equal(receipts[0].receipt.streamSeq, 32n);
 });
 
 test('authenticated approval challenge route returns public metadata only', async () => {

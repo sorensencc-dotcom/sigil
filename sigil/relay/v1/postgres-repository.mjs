@@ -137,6 +137,10 @@ export class PostgresRepository {
     const result = await client.query('SELECT sender_endpoint_id FROM envelopes WHERE message_id = $1', [messageId]);
     return result.rows[0] ? { endpoint_id: result.rows[0].sender_endpoint_id } : null;
   }
+  async lookupEnvelopeStreamSequence(messageId, client = this.pool) {
+    const result = await client.query('SELECT stream_seq AS "streamSeq" FROM envelopes WHERE message_id = $1', [messageId]);
+    return result.rows[0]?.streamSeq ?? null;
+  }
   async lookupRecipientEndpoint(endpointId, client) {
     if (!client) throw new Error('Recipient lookup requires a transaction client');
     const result = await client.query(

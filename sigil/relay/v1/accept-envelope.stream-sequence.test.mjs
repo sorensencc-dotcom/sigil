@@ -94,6 +94,24 @@ test('enabled local broadcast messages persist their transaction-assigned sequen
   assert.equal(repository.persisted[0].streamSeq, 42n);
 });
 
+test('enabled in-memory relay accepts messages and projects a JSON-safe inbox streamSeq', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const envelope = makeLocalEnvelope(keys.privateKey, {
+    recipient: { endpoint_id: 'ep_recipient', owner_id: 'usr_sender' },
+  });
+  const registered = new Map([
+    ['ep_sender', { owner_id: 'usr_sender', status: 'active', key_id: 'key_sender', public_key: keys.publicKey }],
+    ['ep_recipient', { owner_id: 'usr_sender', status: 'active', key_id: 'key_recipient', public_key: keys.publicKey }],
+  ]);
+  const repository = createMemoryRepository({ registry: registered });
+  const result = await acceptEnvelopeAsync(envelope, {
+    repository, registered, now: new Date('2026-09-09T12:01:00.000Z'), stream_seq: { enabled: true },
+  });
+  assert.equal(result.status, 202);
+  const [inbox] = await repository.listInbox('ep_recipient');
+  assert.equal(inbox.streamSeq, '1');
+});
+
 function federatedWorld() {
   const origin = 'origin.example';
   const relay = 'receiver.example';
