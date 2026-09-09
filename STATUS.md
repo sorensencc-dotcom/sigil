@@ -54,6 +54,7 @@ Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemente
 - Added `sigil/scripts/run-live-db-tests.ps1` with the explicit disposable-container URL as a Windows shortcut; it validates the `_test` suffix and clears the process environment afterward.
 - Hardened the live runner with per-suite timeout attribution and broken-pipe handling; the Windows launcher accepts `-SuiteTimeoutSeconds` (default 120).
 - Fixed PostgreSQL stream-sequence fixtures to avoid prepared multi-statement SQL and to seed valid canonical bytes, protocol, and unique endpoint keys; the live stream-sequence suite now passes 4/4 individually.
+- Added the missing vertical FIX recovery scenario: five sequenced messages, dropped message 3, one request for `[3,3]`, worker replay, and ordered connector delivery; vertical slice passes 5/5 executable tests.
 
 ## Completed work
 - Packaged CLI and verified local npm binary mapping (`sigil --help`).
