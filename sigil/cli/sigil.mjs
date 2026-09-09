@@ -43,7 +43,7 @@ Commands:
   init <name> [--owner <owner_id> | --federation-owner <federated_id>] [--registry path] [--domain domain]      Create a local identity and register it (domain defaults to "local"; --federation-owner allows an owner id whose domain differs from --domain)
   sign-contract --contract path --identity path [--output path]          Sign a TorqueQuery agent dispatch contract
   verify-contract --contract path --registry path                        Verify a signed TorqueQuery agent dispatch contract
-  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] [--relay-request-freshness-ms N] Run a local relay (blocks; Ctrl+C to stop)
+  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] [--relay-request-freshness-ms N] Run a local relay (blocks; Ctrl+C to stop; set SIGIL_STREAM_SEQ_ENABLED=1 to stamp stream sequences)
   relay well-known generate --identity path --domain domain --endpoint url [--ws-endpoint url] [--output path]
                                                             Emit this relay's .well-known/sigil discovery document from a designated endpoint identity
   oidc-issuer add <issuer> --client-id id [--label text] [--assurance level] [--database-url url]
@@ -171,6 +171,7 @@ async function cmdRelayUp(argv) {
   const streamPort = Number(opt(args, ['stream-port']) ?? (port ? port + 1 : 0));
   const databaseUrl = opt(args, ['database-url']) ?? process.env.SIGIL_DATABASE_URL;
   const enableMockOidc = Boolean(args.values['enable-mock-oidc']) || process.env.SIGIL_ENABLE_MOCK_OIDC === '1';
+  const streamSequenceEnabled = process.env.SIGIL_STREAM_SEQ_ENABLED === '1';
   const oidcIssuerRefreshIntervalMsRaw = opt(args, ['oidc-issuer-refresh-interval-ms']);
   const oidcIssuerRefreshIntervalMs = oidcIssuerRefreshIntervalMsRaw === undefined ? 30_000 : Number(oidcIssuerRefreshIntervalMsRaw);
   if (!Number.isInteger(oidcIssuerRefreshIntervalMs) || oidcIssuerRefreshIntervalMs <= 0) {
@@ -264,7 +265,7 @@ async function cmdRelayUp(argv) {
     const addr = server?.address();
     return addr ? `http://127.0.0.1:${addr.port}` : `http://127.0.0.1:${port}`;
   };
-  server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity, relayRequestFreshnessMs });
+  server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity, relayRequestFreshnessMs, stream_seq: { enabled: streamSequenceEnabled } });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();
   let federationReaperTimer;
