@@ -40,6 +40,9 @@ jobs:
       - name: Verify wiki diagram exports are current
         run: node sigil/scripts/verify-wiki-diagrams.mjs
 
+      - name: Audit wiki links and source pages
+        run: node sigil/scripts/audit-wiki.mjs
+
       - name: Configure Git identity
         run: |
           git config --global user.name "github-actions[bot]"
@@ -49,7 +52,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git clone "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.wiki.git" wiki-repo
+          git clone "https://x-access-token${{ ':' }}${GITHUB_TOKEN}@github.com/${{ github.repository }}.wiki.git" wiki-repo
 
       - name: Synchronize documentation and push
         env:

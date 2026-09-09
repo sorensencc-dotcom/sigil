@@ -43,6 +43,7 @@
     "pack:check": "npm pack --dry-run",
     "release:check": "npm run audit:deps && npm run audit:jcs && npm test && npm pack --dry-run",
     "wiki:sync": "node sigil/scripts/sync-wiki.mjs",
+    "wiki:audit": "node sigil/scripts/audit-wiki.mjs",
     "wiki:verify-diagrams": "node sigil/scripts/verify-wiki-diagrams.mjs",
     "wiki:record-diagrams": "node sigil/scripts/verify-wiki-diagrams.mjs --write"
   },
