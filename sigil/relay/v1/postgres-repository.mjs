@@ -94,6 +94,17 @@ function rowToFederationOutboxRecord(row) {
 export class PostgresRepository {
   constructor({ pool = new pg.Pool(), schema = 'public' } = {}) { this.pool = pool; this.schema = schema; }
   async query(text, values = []) { return this.pool.query(text, values); }
+  async assignStreamSequence(client, senderEndpointId, conversationId) {
+    const result = await client.query(
+      `INSERT INTO stream_sequences (sender_endpoint_id, conversation_id, next_seq, updated_at)
+       VALUES ($1, $2, 2, now())
+       ON CONFLICT (sender_endpoint_id, conversation_id)
+       DO UPDATE SET next_seq = stream_sequences.next_seq + 1, updated_at = now()
+       RETURNING next_seq - 1 AS assigned_seq`,
+      [senderEndpointId, conversationId],
+    );
+    return BigInt(result.rows[0].assigned_seq);
+  }
   async lookupIdempotency(endpointId, idempotencyKey, client = this.pool) {
     const result = await client.query(
       'SELECT message_id, canonical_hash FROM idempotency_keys WHERE endpoint_id = $1 AND idempotency_key = $2 AND expires_at > NOW()',
@@ -229,7 +240,7 @@ export class PostgresRepository {
               e.protocol, e.message_type, e.body, e.context_refs, e.capabilities, e.correlation_id,
               e.sender_endpoint_id, e.sender_owner_id, e.recipient_endpoint_id AS env_recipient,
               e.conversation_id, e.idempotency_key, e.signature_algorithm, e.signature_key_id,
-              e.signature_value, e.expires_at, e.created_at,
+              e.signature_value, e.expires_at, e.created_at, e.stream_seq AS "streamSeq",
               (ea.acknowledged_endpoint_id IS NULL) AS sender_unverified
        FROM candidate c
        JOIN envelopes e ON e.message_id = c.message_id
@@ -240,6 +251,7 @@ export class PostgresRepository {
       delivery_id: row.delivery_id,
       message_id: row.message_id,
       queued_at: row.queued_at instanceof Date ? row.queued_at.toISOString() : row.queued_at,
+      streamSeq: row.streamSeq,
       sender_unverified: row.sender_unverified,
       envelope: {
         protocol: row.protocol,
@@ -651,9 +663,9 @@ export class PostgresRepository {
       );
     }
     const result = await client.query(
-      `INSERT INTO envelopes (message_id, conversation_id, protocol, message_type, sender_endpoint_id, sender_owner_id, recipient_endpoint_id, broadcast_scope, body, context_refs, capabilities, correlation_id, idempotency_key, expires_at, created_at, signature_algorithm, signature_key_id, signature_value, canonical_bytes, action_hash, federation_hop, envelope_status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,'accepted') RETURNING message_id`,
-      [row.envelope.message_id, row.envelope.conversation_id, row.envelope.protocol, row.envelope.message_type, row.envelope.sender.endpoint_id, row.envelope.sender.owner_id, row.envelope.recipient?.endpoint_id ?? null, row.envelope.broadcast_scope ? JSON.stringify(row.envelope.broadcast_scope) : null, JSON.stringify(row.envelope.body), JSON.stringify(row.envelope.context_refs ?? []), row.envelope.capabilities, row.envelope.correlation_id, row.envelope.idempotency_key, row.envelope.expires_at, row.envelope.created_at, row.envelope.signature.algorithm, row.envelope.signature.key_id, row.envelope.signature.value, row.canonical_bytes ?? null, row.action_hash ?? null, row.federation_hop === true]
+      `INSERT INTO envelopes (message_id, conversation_id, protocol, message_type, sender_endpoint_id, sender_owner_id, recipient_endpoint_id, broadcast_scope, body, context_refs, capabilities, correlation_id, idempotency_key, expires_at, created_at, signature_algorithm, signature_key_id, signature_value, canonical_bytes, action_hash, federation_hop, stream_seq, envelope_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,'accepted') RETURNING message_id`,
+      [row.envelope.message_id, row.envelope.conversation_id, row.envelope.protocol, row.envelope.message_type, row.envelope.sender.endpoint_id, row.envelope.sender.owner_id, row.envelope.recipient?.endpoint_id ?? null, row.envelope.broadcast_scope ? JSON.stringify(row.envelope.broadcast_scope) : null, JSON.stringify(row.envelope.body), JSON.stringify(row.envelope.context_refs ?? []), row.envelope.capabilities, row.envelope.correlation_id, row.envelope.idempotency_key, row.envelope.expires_at, row.envelope.created_at, row.envelope.signature.algorithm, row.envelope.signature.key_id, row.envelope.signature.value, row.canonical_bytes ?? null, row.action_hash ?? null, row.federation_hop === true, row.streamSeq ?? null]
     );
     const deliveryId = row.delivery_id ?? `del_${crypto.randomUUID()}`;
     if (row.envelope.recipient?.endpoint_id) {
