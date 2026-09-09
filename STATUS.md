@@ -42,6 +42,7 @@ Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemente
 ## Session update: 2026-09-09 Task 7 progress
 - Added a dependency-free relay metrics registry and wired resend request, fulfillment, reset, latency, and dead-letter instrumentation into relay startup.
 - Validation: focused observability, resend, worker, and relay-startup tests pass 11/11; syntax checks and `git diff --check` pass.
+- Added session resend dashboard panels and alert thresholds under `docs/observability/`.
 
 ## Completed work
 - Packaged CLI and verified local npm binary mapping (`sigil --help`).
