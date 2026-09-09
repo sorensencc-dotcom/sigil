@@ -31,6 +31,11 @@ Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemente
 - Wired the tracker into optional `inbox-wait` polling and stream handling; default inbox behavior remains unchanged.
 - Validation: tracker and inbox-wait tests pass 22/22; syntax checks and `git diff --check` pass.
 
+## Session update: 2026-09-09 Task 6 progress
+- Added `sigil resend --conversation --from --to --sender` with local signing and existing relay error mapping.
+- Added `sigil inbox --local --gaps` output for known stream holes and updated CLI help.
+- Validation: CLI syntax check, help output, and `git diff --check` pass.
+
 ## Completed work
 - Packaged CLI and verified local npm binary mapping (`sigil --help`).
 - Applied PostgreSQL schema migrations 001 through 019 against the live container on port 55432.

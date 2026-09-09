@@ -78,7 +78,8 @@ Commands:
   route test <recipient_federated_id> --identity path [--database-url url] [--registry path]
                                                             Read-only federation routing check: parse recipient, peer-directory pin lookup, /v1/health reachability, advisory same-owner line -- sends no envelope
   send [--identity path] [--relay-url url] [--stream-url url] [--wait-for-receipt] --to endpoint_id --to-owner owner_id --message "text" [--conversation id]
-  inbox [--identity path] [--relay-url url] [--watch|--wait] [--loop] [--stream-url url] [--interval ms] [--timeout ms] [--local] [--ledger path]
+  inbox [--identity path] [--relay-url url] [--watch|--wait] [--loop] [--gaps] [--stream-url url] [--interval ms] [--timeout ms] [--local] [--ledger path]
+  resend --identity path --relay-url url --conversation C --from N --to M --sender ep_X
   doctor [--identity path] [--relay-url url]               Conformance check: JCS/dependency audits, plus a keypair check (if --identity)
                                                             and a relay connectivity/latency check (if --relay-url)
 
@@ -398,8 +399,32 @@ async function cmdSend(argv) {
   });
 }
 
+async function cmdResend(argv) {
+  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, conversation: { type: 'string' }, from: { type: 'string' }, to: { type: 'string' }, sender: { type: 'string' }, config: { type: 'string' } } });
+  const config = loadConfigFile(opt(args, ['config']) ?? DEFAULT_CLI_CONFIG);
+  const resolved = resolveConfig({ flags: { relayUrl: opt(args, ['relay-url']), identity: opt(args, ['identity']) }, config });
+  const conversation = opt(args, ['conversation']);
+  const sender = opt(args, ['sender']);
+  const begin = Number(opt(args, ['from']));
+  const end = Number(opt(args, ['to']));
+  if (!resolved.identityPath || !resolved.relayUrl || !conversation || !sender || !Number.isSafeInteger(begin) || begin < 1 || !Number.isSafeInteger(end) || end < 0 || (end !== 0 && end < begin)) {
+    throw new Error('usage: sigil resend --identity path --relay-url url --conversation C --from N --to M --sender ep_X');
+  }
+  const identity = loadIdentity(resolved.identityPath);
+  const outbox = new LocalOutbox({ privateKey: identityKeys(identity).privateKey, endpoint: { owner_id: identity.owner_id, endpoint_id: identity.endpoint_id, key_id: identity.key_id, kind: identity.kind } });
+  const now = new Date();
+  const queued = outbox.queue({
+    protocol: 'sigil/1', message_id: `msg_${crypto.randomUUID()}`, conversation_id: conversation, message_type: 'session.resend_request',
+    sender: { owner_id: identity.owner_id, endpoint_id: identity.endpoint_id, kind: identity.kind }, recipient: { owner_id: identity.owner_id, endpoint_id: identity.endpoint_id, kind: identity.kind },
+    body: { target_sender_endpoint_id: sender, conversation_id: conversation, begin_seq: begin, end_seq: end }, context_refs: [], capabilities: [], correlation_id: null,
+    idempotency_key: `resend_${crypto.randomUUID()}`, created_at: now.toISOString(), expires_at: new Date(now.getTime() + 24 * 3600_000).toISOString(), signature: { algorithm: 'Ed25519', key_id: identity.key_id, value: '' },
+  });
+  const result = await new RelayClient({ baseUrl: resolved.relayUrl, token: identity.relay_token }).sendEnvelope(queued.envelope);
+  console.log(JSON.stringify(result));
+}
+
 async function cmdInbox(argv) {
-  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, watch: { type: 'boolean' }, wait: { type: 'boolean' }, loop: { type: 'boolean' }, local: { type: 'boolean' }, ledger: { type: 'string' }, interval: { type: 'string' }, timeout: { type: 'string' }, config: { type: 'string' } } });
+  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, watch: { type: 'boolean' }, wait: { type: 'boolean' }, loop: { type: 'boolean' }, gaps: { type: 'boolean' }, local: { type: 'boolean' }, ledger: { type: 'string' }, interval: { type: 'string' }, timeout: { type: 'string' }, config: { type: 'string' } } });
   const config = loadConfigFile(opt(args, ['config']) ?? DEFAULT_CLI_CONFIG);
   const resolved = resolveConfig({ flags: { relayUrl: opt(args, ['relay-url']), streamUrl: opt(args, ['stream-url']), identity: opt(args, ['identity']) }, config });
   if (!resolved.identityPath) throw new Error('usage: sigil inbox --identity path --relay-url url [--watch] (or set SIGIL_IDENTITY / default_identity in .sigil/config.json)');
@@ -408,6 +433,12 @@ async function cmdInbox(argv) {
 
   if (Boolean(args.values.local)) {
     const records = await readInboxLedger(ledgerPath);
+    if (Boolean(args.values.gaps)) {
+      const grouped = new Map();
+      for (const record of records) { const envelope = record.envelope ?? record; const seq = envelope.stream_seq ?? envelope.streamSeq; if (Number.isSafeInteger(seq)) { const key = `${envelope.conversation_id}:${envelope.sender?.endpoint_id}`; const list = grouped.get(key) ?? []; list.push(seq); grouped.set(key, list); } }
+      for (const [key, values] of grouped) { values.sort((a, b) => a - b); const gaps = []; for (let i = 1; i < values.length; i += 1) if (values[i] > values[i - 1] + 1) gaps.push(`${values[i - 1] + 1}-${values[i] - 1}`); console.log(`${key}: ${gaps.length ? gaps.join(', ') : '(no gaps)'}`); }
+      return;
+    }
     if (!records.length) {
       console.log('(local inbox empty)');
     } else {
@@ -1519,6 +1550,7 @@ export async function main() {
     else if (command === 'agent' && sub === 'run') await cmdAgentRun(rest);
     else if (command === 'doctor') await cmdDoctor(process.argv.slice(3));
     else if (command === 'send') await cmdSend(process.argv.slice(3));
+    else if (command === 'resend') await cmdResend(process.argv.slice(3));
     else if (command === 'inbox') await cmdInbox(process.argv.slice(3));
     else if (command === 'federation') await cmdFederation(process.argv.slice(3));
     else if (command === 'route') await cmdRoute(process.argv.slice(3));
