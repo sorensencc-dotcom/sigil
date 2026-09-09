@@ -3,6 +3,17 @@
 ## Current goal
 Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemented. Runtime handoff is locally validated; production rollout remains blocked pending security and governance approval.
 
+## Session update: 2026-09-09 protocol diagrams
+- Added custom-standard standalone HTML+SVG diagrams, rendered PNG assets, Mermaid sources, and editable Excalidraw placeholders for the FIX session resend flow and connector gap recovery.
+- Embedded both PNG diagrams in the session-layer rollout handoff and linked them from the resend observability dashboard document.
+- Validation: both PNGs rendered through the local browser renderer; visual inspection passed; `git diff --check` passed.
+
+## Session update: 2026-09-09 final review fixes
+- Added resend-specific regression coverage for expired requests and message-id replays; the implementation rejects both before membership or enqueue side effects.
+- Fixed relay queue oldest-age gauges to measure `created_at`/`createdAt`, including jobs delayed by retry backoff.
+- Validation: focused suites pass 18/18 executed, 3 PostgreSQL tests skipped without `SIGIL_TEST_DATABASE_URL`; `git diff --check` passed.
+- Serialized live PostgreSQL gate passes against Docker `sigil_postgres` / `sigil_test`: 28 files, 134 tests, 134 passed, 0 failed, 0 skipped, 129 seconds.
+
 ## Session update: 2026-09-09 Task 3
 - Completed the FIX session-layer Task 3 refactor: migrated durable federation outbox rows to typed `relay_jobs`, with compatibility adapters preserving federation-visible states and CLI behavior.
 - Added migration and shared job-type-scoped claim, finalize, retry, and terminal-state handling; federation reaper claims only `job_type = 'federation'`.

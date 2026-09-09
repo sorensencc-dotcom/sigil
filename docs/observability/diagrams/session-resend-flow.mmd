@@ -1,0 +1,10 @@
+graph LR
+  A[Signed resend request] -->|validate expiry and replay| B[Membership and range auth]
+  B -->|reserve quota| C[Enqueue relay_jobs]
+  C -->|202 accepted| D[Resend worker claims job]
+  D -->|retained rows| E[Push resend frames]
+  D -->|missing or expired| F[Push sequence_reset]
+  E --> G[Connector tracker]
+  F --> G
+  D -->|closed stream| H[Requeue with backoff]
+  D -->|retry limit| I[Dead letter and measure]

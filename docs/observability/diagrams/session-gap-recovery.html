@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Session gap recovery</title><style>
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;700&family=Playfair+Display:wght@600&display=swap');body{margin:0;background:#f2ece2;color:#2c2420;font-family:'Barlow Condensed',Arial,sans-serif}main{padding:42px 48px;width:1200px}h1{font:600 38px 'Playfair Display',Georgia,serif;margin:0 0 8px}p{color:#5c5349;font-size:19px;margin:0 0 28px}.flow{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.node{border:3px solid #2c2420;border-radius:12px;padding:18px 16px;width:150px;min-height:68px;display:flex;align-items:center;justify-content:center;text-align:center;font-size:20px;font-weight:700;background:#fffaf2}.accent{background:#c4501a;color:#f2ece2;border-color:#c4501a}.muted{background:#ded5c8}.arrow{font:700 28px Arial;color:#c4501a}.badge{font:14px 'Geist Mono',Consolas,monospace;color:#5c5349;letter-spacing:.08em;text-transform:uppercase}</style></head><body><main><div class="badge">SIGIL / CONNECTOR RECOVERY</div><h1>Detect, request, and release a stream gap</h1><p>Each stream tracks high-water state independently. Unknown sequence values preserve the existing queued-order behavior.</p><section class="flow"><div class="node">Incoming<br>envelope</div><div class="arrow">→</div><div class="node muted">NULL sequence<br>queued order</div><div class="node">Next sequence<br>advance high-water</div><div class="node accent">Future sequence<br>buffer gap</div><div class="arrow">→</div><div class="node accent">Debounced resend<br>request</div><div class="arrow">→</div><div class="node">Frames restore<br>high-water</div><div class="node muted">Reset releases<br>through gap</div><div class="node muted">Exhaustion emits<br>unrecoverable_gap</div></section><details><summary>Mermaid source...</summary><pre>graph LR
+  A[Incoming envelope] -->|NULL stream_seq| B[Queued-order fallback]
+  A -->|next sequence| C[Advance high-water]
+  A -->|future sequence| D[Buffer bounded gap]
+  D -->|debounced| E[One resend request]
+  E --> F{Recovery result}
+  F -->|frames arrive| C
+  F -->|sequence_reset| G[Release through reset]
+  D -->|retry or buffer bound| H[unrecoverable_gap]</pre></details></main></body></html>

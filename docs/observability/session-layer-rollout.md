@@ -1,5 +1,9 @@
 # Session layer rollout handoff
 
+![Session resend flow](diagrams/session-resend-flow.png)
+
+![Session gap recovery](diagrams/session-gap-recovery.png)
+
 ## Order
 
 1. Apply migrations 020–023 to each relay database in order. Confirm the

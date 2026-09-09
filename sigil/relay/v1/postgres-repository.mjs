@@ -1284,7 +1284,7 @@ export class PostgresRepository {
   async relayJobHealth(jobType = 'resend', now = new Date(), client = this.pool) {
     const result = await client.query(
       `SELECT count(*)::int AS depth,
-              COALESCE(EXTRACT(EPOCH FROM ($2::timestamptz - min(next_attempt_at))), 0) AS oldest_age
+              COALESCE(EXTRACT(EPOCH FROM ($2::timestamptz - min(created_at))), 0) AS oldest_age
          FROM relay_jobs WHERE job_type = $1 AND state IN ('pending', 'processing')`,
       [jobType, now instanceof Date ? now.toISOString() : new Date(now).toISOString()],
     );

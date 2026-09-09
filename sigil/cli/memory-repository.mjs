@@ -126,7 +126,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     async relayJobHealth(jobType = 'resend', now = new Date()) {
       const timestamp = (now instanceof Date ? now : new Date(now)).getTime();
       const active = [...relayJobs.values()].filter((job) => job.jobType === jobType && ['pending', 'processing'].includes(job.state));
-      const oldest = active.length ? Math.min(...active.map((job) => Date.parse(job.nextAttemptAt))) : timestamp;
+      const oldest = active.length ? Math.min(...active.map((job) => Date.parse(job.createdAt))) : timestamp;
       return { depth: active.length, oldestAgeSeconds: Math.max(0, (timestamp - oldest) / 1000) };
     },
     async finalizeRelayJob(jobType, id, claimToken, state, { attemptCount = null, nextAttemptAt = null, reasonCode = null } = {}) {

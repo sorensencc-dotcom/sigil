@@ -31,12 +31,12 @@ function makeEnvelope(privateKey, body = {}) {
   return envelope;
 }
 
-function resendRepository({ member = true, highWater = 7n } = {}) {
+function resendRepository({ member = true, highWater = 7n, priorMessage = null } = {}) {
   const calls = { audit: [], enqueue: [], rate: [], persisted: 0, membership: 0 };
   return {
     calls,
     async withTransaction(fn) { return fn({ id: 'resend-client' }); },
-    async lookupAcceptedMessageId() { return null; },
+    async lookupAcceptedMessageId() { return priorMessage; },
     async lookupRecipientEndpoint() { return { status: 'active', owner_id: 'usr_requester' }; },
     async lookupActiveCapabilityGrants() { return []; },
     async lookupCapabilityRegistration() { return null; },
@@ -119,6 +119,32 @@ test('rejects an invalid resend signature before membership or queue side effect
   const result = await acceptEnvelopeAsync(envelope, options(keys, repository));
   assert.equal(result.status, 401);
   assert.equal(result.body.code, 'INVALID_SIGNATURE');
+  assert.equal(repository.calls.membership, 0);
+  assert.equal(repository.calls.enqueue.length, 0);
+});
+
+test('rejects an expired resend request before membership or queue side effects', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const repository = resendRepository();
+  const envelope = makeEnvelope(keys.privateKey);
+  envelope.expires_at = '2026-09-09T12:00:30.000Z';
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), keys.privateKey).toString('base64url');
+
+  const result = await acceptEnvelopeAsync(envelope, options(keys, repository));
+
+  assert.equal(result.status, 422);
+  assert.equal(result.body.code, 'MESSAGE_EXPIRED');
+  assert.equal(repository.calls.membership, 0);
+  assert.equal(repository.calls.enqueue.length, 0);
+});
+
+test('rejects a resend request reusing a message id under a different idempotency key', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const repository = resendRepository({ priorMessage: { idempotency_key: 'resend_original' } });
+  const result = await acceptEnvelopeAsync(makeEnvelope(keys.privateKey), options(keys, repository));
+
+  assert.equal(result.status, 409);
+  assert.equal(result.body.code, 'REPLAY_DETECTED');
   assert.equal(repository.calls.membership, 0);
   assert.equal(repository.calls.enqueue.length, 0);
 });

@@ -4,6 +4,10 @@ Dashboard panels for the FIX session layer should group by `job_type`,
 `conversation_kind`, and bounded `reason` labels. Never include envelope bodies,
 signatures, tokens, or private keys.
 
+The protocol path and connector recovery state are shown in the [session resend
+flow](diagrams/session-resend-flow.png) and [session gap recovery](diagrams/session-gap-recovery.png)
+diagrams.
+
 ## Panels
 
 | Panel | Metric | Purpose |
