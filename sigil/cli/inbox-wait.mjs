@@ -34,7 +34,7 @@ export function formatInboxItem(item) {
   return `[${envelope.created_at}] ${envelope.sender.endpoint_id} -> ${envelope.recipient?.endpoint_id ?? '(broadcast)'} (${envelope.message_type}): ${JSON.stringify(envelope.body)}`;
 }
 
-export async function waitForOneInboxMessage({ relay, identity, streamUrl, timeoutMs = 300_000, WebSocketImpl = DefaultWebSocket, print = console.log, signalSource = process, ledgerPath, heartbeat: heartbeatOverrides } = {}) {
+export async function waitForOneInboxMessage({ relay, identity, streamUrl, timeoutMs = 300_000, WebSocketImpl = DefaultWebSocket, print = console.log, signalSource = process, ledgerPath, heartbeat: heartbeatOverrides, tracker } = {}) {
   const heartbeat = resolveHeartbeat(heartbeatOverrides);
   if (!relay || !identity?.relay_token || !streamUrl) throw new Error('relay, identity, and streamUrl are required');
   let socket; let stopped = false; let reconnectTimer; let fallbackTimer; let timeoutTimer; let heartbeatTimer; let missedHeartbeats = 0; let reconnectDelay = 250; let polling = false;
@@ -71,6 +71,14 @@ export async function waitForOneInboxMessage({ relay, identity, streamUrl, timeo
       if (stopped) return false;
       const item = page.items?.[0];
       if (!item) return false;
+      if (tracker) {
+        const tracked = await tracker.receive(item.envelope ?? item);
+        if (tracked.status === 'buffered') return false;
+        if (tracked.status === 'duplicate') {
+          if (!stopped && item.delivery_id) await relay.acknowledge(item.delivery_id);
+          return false;
+        }
+      }
       const output = formatInboxItem(item);
       if (ledgerPath) {
         await appendInboxLedger(ledgerPath, {
@@ -102,7 +110,13 @@ export async function waitForOneInboxMessage({ relay, identity, streamUrl, timeo
       let opened = false;
       socket.once('open', () => { opened = true; reconnectDelay = 250; missedHeartbeats = 0; clearInterval(heartbeatTimer); heartbeatTimer = setInterval(() => { missedHeartbeats += 1; if (missedHeartbeats >= heartbeat.missedBeforeTimeout) return fail(new InboxWaitError('Relay unreachable: no heartbeat reply', INBOX_WAIT_EXIT_CODES.RELAY_UNREACHABLE)); try { socket.send(JSON.stringify({ type: 'ping', timestamp: new Date().toISOString() })); } catch {} }, heartbeat.intervalMs); });
       socket.on('message', (raw) => {
-        try { const event = JSON.parse(raw); if (event.type === 'delivered') poll(); if (event.type === 'pong') missedHeartbeats = 0; }
+        try {
+          const event = JSON.parse(raw);
+          if (event.type === 'resend' && tracker) tracker.receive(event.envelope, event);
+          if (event.type === 'sequence_reset' && tracker) tracker.receiveReset(event);
+          if (event.type === 'delivered') poll();
+          if (event.type === 'pong') missedHeartbeats = 0;
+        }
         catch (error) { fail(new InboxWaitError(`Malformed stream event: ${error.message}`, INBOX_WAIT_EXIT_CODES.MALFORMED, { cause: error })); }
       });
       socket.once('unexpected-response', (_request, response) => {
