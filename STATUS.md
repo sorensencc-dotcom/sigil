@@ -44,6 +44,10 @@ Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemente
 - Validation: focused observability, resend, worker, and relay-startup tests pass 11/11; syntax checks and `git diff --check` pass.
 - Added session resend dashboard panels and alert thresholds under `docs/observability/`.
 
+## Session update: 2026-09-09 Task 7 verification / Task 8 start
+- Existing vertical slice passes 4/4 executable tests; one directory-trust case is skipped without PostgreSQL.
+- `npm run test:live` is blocked because `SIGIL_TEST_DATABASE_URL` is not set; no live database evidence was claimed.
+
 ## Completed work
 - Packaged CLI and verified local npm binary mapping (`sigil --help`).
 - Applied PostgreSQL schema migrations 001 through 019 against the live container on port 55432.
