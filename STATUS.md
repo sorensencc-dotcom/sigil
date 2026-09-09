@@ -3,6 +3,12 @@
 ## Current goal
 Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemented. Runtime handoff is locally validated; production rollout remains blocked pending security and governance approval.
 
+## Session update: 2026-09-09 Task 3
+- Completed the FIX session-layer Task 3 refactor: migrated durable federation outbox rows to typed `relay_jobs`, with compatibility adapters preserving federation-visible states and CLI behavior.
+- Added migration and shared job-type-scoped claim, finalize, retry, and terminal-state handling; federation reaper claims only `job_type = 'federation'`.
+- Validation: 22/22 federation-focused test files passed against the disposable PostgreSQL database; `git diff --check` and changed-module syntax checks passed.
+- Detailed handoff: `.superpowers/sdd/2026-09-09-sigil-fix-session-layer/task-3-report.md`.
+
 ## Completed work
 - Packaged CLI and verified local npm binary mapping (`sigil --help`).
 - Applied PostgreSQL schema migrations 001 through 019 against the live container on port 55432.

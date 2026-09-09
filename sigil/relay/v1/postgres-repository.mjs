@@ -67,10 +67,21 @@ function rowToFederationDirectoryLink(row) {
   };
 }
 
-function rowToFederationOutboxRecord(row) {
+const federationStateToJobState = {
+  forwarded: 'done',
+  forward_rejected: 'rejected',
+};
+
+const jobStateToFederationState = {
+  done: 'forwarded',
+  rejected: 'forward_rejected',
+};
+
+function rowToRelayJobRecord(row) {
   const iso = (v) => (v instanceof Date ? v.toISOString() : v);
   return {
     id: row.id,
+    jobType: row.job_type,
     messageId: row.message_id,
     idempotencyKey: row.idempotency_key,
     recipientDomain: row.recipient_domain,
@@ -89,6 +100,16 @@ function rowToFederationOutboxRecord(row) {
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
   };
+}
+
+function rowToFederationOutboxRecord(row) {
+  const { jobType: _jobType, state, ...record } = rowToRelayJobRecord(row);
+  return { ...record, state: jobStateToFederationState[state] ?? state };
+}
+
+function relayJobToFederationOutboxRecord(row) {
+  const { jobType: _jobType, state, ...record } = row;
+  return { ...record, state: jobStateToFederationState[state] ?? state };
 }
 
 export class PostgresRepository {
@@ -1157,91 +1178,122 @@ export class PostgresRepository {
     );
     return result.rows;
   }
-  // --- federation_outbox (queue-mode forward jobs, migration 017) ---------
-  // All six methods live on PostgresRepository only: `queue` mode is rejected
+  // --- relay_jobs (typed durable work, migration 021) ----------------------
+  // Queue-mode federation work remains a compatibility wrapper over the typed
+  // lifecycle methods below. `queue` mode is rejected
   // at relay startup before an in-memory repo could reach them. Methods that
   // take an optional `client` run on it when passed (so they can join a
   // caller's transaction), else on `this.pool` / a fresh `this.withTransaction`.
-  async enqueueFederationForward(row, client = this.pool) {
+  async enqueueRelayJob(jobType, row, client = this.pool) {
     const ts = row.now == null
       ? new Date().toISOString()
       : (row.now instanceof Date ? row.now.toISOString() : new Date(row.now).toISOString());
     const kind = row.kind ?? 'envelope';
     const inserted = await client.query(
-      `INSERT INTO federation_outbox
-         (message_id, idempotency_key, recipient_domain, origin_domain, kind,
+      `INSERT INTO relay_jobs
+         (job_type, message_id, idempotency_key, recipient_domain, origin_domain, kind,
           envelope, sender_key, sender_owner_id, directory_payload, next_attempt_at, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $10)
-       ON CONFLICT (message_id, idempotency_key) DO NOTHING
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11, $11)
+       ON CONFLICT (job_type, message_id, idempotency_key) DO NOTHING
        RETURNING *`,
-      [row.messageId, row.idempotencyKey, row.recipientDomain, row.originDomain, kind,
+      [jobType, row.messageId, row.idempotencyKey, row.recipientDomain, row.originDomain, kind,
         row.envelope == null ? null : JSON.stringify(row.envelope),
         row.senderKey == null ? null : JSON.stringify(row.senderKey),
         row.senderOwnerId ?? null,
         row.directoryPayload == null ? null : JSON.stringify(row.directoryPayload),
         ts]
     );
-    if (inserted.rows[0]) return { row: rowToFederationOutboxRecord(inserted.rows[0]), inserted: true };
+    if (inserted.rows[0]) return { row: rowToRelayJobRecord(inserted.rows[0]), inserted: true };
     const existing = await client.query(
-      'SELECT * FROM federation_outbox WHERE message_id = $1 AND idempotency_key = $2',
-      [row.messageId, row.idempotencyKey]
+      'SELECT * FROM relay_jobs WHERE job_type = $1 AND message_id = $2 AND idempotency_key = $3',
+      [jobType, row.messageId, row.idempotencyKey]
     );
-    return { row: rowToFederationOutboxRecord(existing.rows[0]), inserted: false };
+    return { row: rowToRelayJobRecord(existing.rows[0]), inserted: false };
   }
-  async claimDueFederationForwards(now = new Date(), limit = 10, leaseSeconds = 30, client) {
+  async claimDueRelayJobs(jobType, now = new Date(), limit = 10, leaseSeconds = 30, client) {
     const ts = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     const run = (c) => c.query(
-      `UPDATE federation_outbox SET
+      `UPDATE relay_jobs SET
          state = 'processing',
          claimed_at = now(),
          claim_token = gen_random_uuid(),
          attempt_count = attempt_count + CASE WHEN state = 'processing' THEN 1 ELSE 0 END
        WHERE id IN (
-         SELECT id FROM federation_outbox
-         WHERE (state = 'pending' AND next_attempt_at <= $1::timestamptz)
-            OR (state = 'processing' AND claimed_at < $1::timestamptz - make_interval(secs => $2::double precision))
+         SELECT id FROM relay_jobs
+         WHERE job_type = $1
+           AND ((state = 'pending' AND next_attempt_at <= $2::timestamptz)
+            OR (state = 'processing' AND claimed_at < $2::timestamptz - make_interval(secs => $3::double precision)))
          ORDER BY next_attempt_at
-         LIMIT $3
+         LIMIT $4
          FOR UPDATE SKIP LOCKED
        )
        RETURNING *`,
-      [ts, leaseSeconds, limit]
+      [jobType, ts, leaseSeconds, limit]
     );
     const result = client ? await run(client) : await this.withTransaction(run);
-    return result.rows.map(rowToFederationOutboxRecord);
+    return result.rows.map(rowToRelayJobRecord);
   }
-  async finalizeFederationForward(id, claimToken, state, { attemptCount = null, nextAttemptAt = null, reasonCode = null } = {}, client = this.pool) {
+  async finalizeRelayJob(jobType, id, claimToken, state, { attemptCount = null, nextAttemptAt = null, reasonCode = null } = {}, client = this.pool) {
     const nextTs = nextAttemptAt == null
       ? null
       : (nextAttemptAt instanceof Date ? nextAttemptAt.toISOString() : new Date(nextAttemptAt).toISOString());
     const result = await client.query(
-      `UPDATE federation_outbox SET
-         state = $3,
+      `UPDATE relay_jobs SET
+         state = $4,
          claim_token = NULL,
          claimed_at = NULL,
-         attempt_count = COALESCE($4, attempt_count),
-         next_attempt_at = COALESCE($5, next_attempt_at),
-         last_reason_code = $6,
+         attempt_count = COALESCE($5, attempt_count),
+         next_attempt_at = COALESCE($6, next_attempt_at),
+         last_reason_code = $7,
+         completed_at = CASE WHEN $4 IN ('done', 'rejected', 'dead_letter') THEN now() ELSE NULL END,
          updated_at = now()
-       WHERE id = $1 AND claim_token = $2`,
-      [id, claimToken, state, attemptCount, nextTs, reasonCode]
+       WHERE id = $2 AND job_type = $1 AND claim_token = $3`,
+      [jobType, id, claimToken, state, attemptCount, nextTs, reasonCode]
     );
     return { updated: result.rowCount > 0 };
   }
+  async retryRelayJob(jobType, id, now = new Date(), { terminalStates } = {}, client) {
+    const ts = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const allowed = terminalStates ?? ['dead_letter'];
+    const run = async (c) => {
+      const current = await c.query('SELECT state FROM relay_jobs WHERE id = $1 AND job_type = $2 FOR UPDATE', [id, jobType]);
+      if (!current.rows[0] || !allowed.includes(current.rows[0].state)) return { retried: false };
+      const updated = await c.query(
+        `UPDATE relay_jobs SET
+           state = 'pending', attempt_count = 0, claim_token = NULL, claimed_at = NULL,
+           next_attempt_at = $3, last_reason_code = NULL, completed_at = NULL, updated_at = now()
+         WHERE id = $1 AND job_type = $2 AND state = ANY($4::text[])`,
+        [id, jobType, ts, allowed]
+      );
+      return { retried: updated.rowCount > 0 };
+    };
+    return client ? run(client) : this.withTransaction(run);
+  }
+  async enqueueFederationForward(row, client = this.pool) {
+    const result = await this.enqueueRelayJob('federation', row, client);
+    return { ...result, row: relayJobToFederationOutboxRecord(result.row) };
+  }
+  async claimDueFederationForwards(now = new Date(), limit = 10, leaseSeconds = 30, client) {
+    const rows = await this.claimDueRelayJobs('federation', now, limit, leaseSeconds, client);
+    return rows.map(relayJobToFederationOutboxRecord);
+  }
+  async finalizeFederationForward(id, claimToken, state, patch = {}, client = this.pool) {
+    return this.finalizeRelayJob('federation', id, claimToken, federationStateToJobState[state] ?? state, patch, client);
+  }
   async listFederationOutbox({ states } = {}) {
     const counts = { pending: 0, processing: 0, forwarded: 0, forward_rejected: 0, dead_letter: 0 };
-    const countResult = await this.pool.query('SELECT state, count(*)::int AS n FROM federation_outbox GROUP BY state');
-    for (const r of countResult.rows) counts[r.state] = r.n;
-    const params = [];
-    let where = '';
+    const countResult = await this.pool.query('SELECT state, count(*)::int AS n FROM relay_jobs WHERE job_type = $1 GROUP BY state', ['federation']);
+    for (const r of countResult.rows) counts[jobStateToFederationState[r.state] ?? r.state] = r.n;
+    const params = ['federation'];
+    let where = 'WHERE job_type = $1';
     if (Array.isArray(states) && states.length > 0) {
-      params.push(states);
-      where = 'WHERE state = ANY($1::text[])';
+      params.push(states.map((state) => federationStateToJobState[state] ?? state));
+      where += ' AND state = ANY($2::text[])';
     }
     const rowResult = await this.pool.query(
       `SELECT id, message_id, idempotency_key, recipient_domain, origin_domain, kind, sender_owner_id,
               state, attempt_count, next_attempt_at, claimed_at, claim_token, last_reason_code, created_at, updated_at
-       FROM federation_outbox ${where} ORDER BY created_at, id`,
+       FROM relay_jobs ${where} ORDER BY created_at, id`,
       params
     );
     const rows = rowResult.rows.map((r) => {
@@ -1251,32 +1303,21 @@ export class PostgresRepository {
     return { counts, rows };
   }
   async getFederationOutboxRow(id) {
-    const result = await this.pool.query('SELECT * FROM federation_outbox WHERE id = $1', [id]);
+    const result = await this.pool.query('SELECT * FROM relay_jobs WHERE id = $1 AND job_type = $2', [id, 'federation']);
     return result.rows[0] ? rowToFederationOutboxRecord(result.rows[0]) : null;
   }
   async retryFederationForward(id, now = new Date(), client) {
     const ts = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     const run = async (c) => {
-      const current = await c.query('SELECT state, envelope FROM federation_outbox WHERE id = $1 FOR UPDATE', [id]);
+      const current = await c.query('SELECT state, envelope FROM relay_jobs WHERE id = $1 AND job_type = $2 FOR UPDATE', [id, 'federation']);
       const row = current.rows[0];
       if (!row) return { retried: false };
-      if (row.state !== 'forward_rejected' && row.state !== 'dead_letter') return { retried: false };
+      if (row.state !== 'rejected' && row.state !== 'dead_letter') return { retried: false };
       const expiresAt = row.envelope ? row.envelope.expires_at : null;
       if (expiresAt != null && Date.parse(expiresAt) <= Date.parse(ts)) {
         return { retried: false, reason: 'MESSAGE_EXPIRED' };
       }
-      const updated = await c.query(
-        `UPDATE federation_outbox SET
-           state = 'pending',
-           attempt_count = 0,
-           claim_token = NULL,
-           claimed_at = NULL,
-           next_attempt_at = $2,
-           last_reason_code = NULL
-         WHERE id = $1 AND state IN ('forward_rejected', 'dead_letter')`,
-        [id, ts]
-      );
-      return { retried: updated.rowCount > 0 };
+      return this.retryRelayJob('federation', id, now, { terminalStates: ['rejected', 'dead_letter'] }, c);
     };
     return client ? run(client) : this.withTransaction(run);
   }

@@ -11,17 +11,86 @@ import { assertDisposableTestDatabase } from '../../scripts/assert-disposable-te
 
 const connectionString = process.env.SIGIL_TEST_DATABASE_URL;
 
-async function bootstrap(t) {
+async function bootstrap(t, { through = null } = {}) {
   const pool = new pg.Pool({ connectionString });
   t.after(() => pool.end());
   assertDisposableTestDatabase(connectionString);
   const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
   await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
-  for (const file of (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort()) {
+  const migrationFiles = (await fs.readdir(migrationsDir))
+    .filter((f) => f.endsWith('.sql'))
+    .sort()
+    .filter((file) => through == null || file <= through);
+  for (const file of migrationFiles) {
     await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
   }
   return { pool, repository: new PostgresRepository({ pool }) };
 }
+
+test('migration 021 moves existing federation rows into typed relay_jobs without losing payload data', { skip: !connectionString }, async (t) => {
+  const { pool } = await bootstrap(t, { through: '020_stream_sequence.sql' });
+  const messageId = `migration-${crypto.randomUUID()}`;
+  const envelope = { message_id: messageId, expires_at: '2999-01-01T00:00:00Z' };
+  const senderKey = { kid: 'migration-key', alg: 'Ed25519', publicKey: 'migration-public-key' };
+  await pool.query(
+    `INSERT INTO federation_outbox
+       (message_id, idempotency_key, recipient_domain, origin_domain, envelope, sender_key, sender_owner_id, state)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'forwarded')`,
+    [messageId, `idem-${messageId}`, 'remote.example.com', 'local.example.com', envelope, senderKey, 'owner-migration'],
+  );
+
+  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  await pool.query(await fs.readFile(path.join(migrationsDir, '021_relay_jobs.sql'), 'utf8'));
+
+  const migrated = await pool.query(
+    `SELECT job_type, state, envelope, sender_key, created_at, updated_at
+       FROM relay_jobs WHERE message_id = $1`,
+    [messageId],
+  );
+  assert.equal(migrated.rowCount, 1);
+  assert.equal(migrated.rows[0].job_type, 'federation');
+  assert.equal(migrated.rows[0].state, 'done');
+  assert.deepEqual(migrated.rows[0].envelope, envelope);
+  assert.deepEqual(migrated.rows[0].sender_key, senderKey);
+  assert.ok(migrated.rows[0].created_at);
+  assert.ok(migrated.rows[0].updated_at);
+
+  const states = await pool.query(
+    `SELECT pg_get_constraintdef(oid) AS definition
+       FROM pg_constraint WHERE conrelid = 'relay_jobs'::regclass AND conname = 'relay_jobs_state_check'`,
+  );
+  assert.match(states.rows[0].definition, /'done'/);
+  assert.match(states.rows[0].definition, /'rejected'/);
+  const oldTable = await pool.query(`SELECT to_regclass('public.federation_outbox') AS relation`);
+  assert.equal(oldTable.rows[0].relation, null);
+});
+
+test('shared relay-job lifecycle is scoped by jobType and supports terminal retry', { skip: !connectionString }, async (t) => {
+  const { pool, repository } = await bootstrap(t);
+  const now = new Date('2026-09-09T00:00:00Z');
+  const federationId = crypto.randomUUID();
+  const otherId = crypto.randomUUID();
+  for (const [id, jobType] of [[federationId, 'federation'], [otherId, 'future_job']]) {
+    await pool.query(
+      `INSERT INTO relay_jobs
+         (id, job_type, message_id, idempotency_key, recipient_domain, origin_domain, envelope, sender_key, sender_owner_id, state, next_attempt_at, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, $10, $10)`,
+      [id, jobType, `msg-${id}`, `idem-${id}`, 'remote.example.com', 'local.example.com',
+        { message_id: `msg-${id}`, expires_at: '2999-01-01T00:00:00Z' },
+        { kid: 'job-key', alg: 'Ed25519', publicKey: 'job-public-key' }, 'owner-job', now],
+    );
+  }
+
+  const [claimed] = await repository.claimDueRelayJobs('federation', now, 10, 30);
+  assert.equal(claimed.id, federationId);
+  const terminal = await repository.finalizeRelayJob('federation', claimed.id, claimed.claimToken, 'rejected', { reasonCode: 'PEER_4XX' });
+  assert.deepEqual(terminal, { updated: true });
+  const retried = await repository.retryRelayJob('federation', claimed.id, now, { terminalStates: ['rejected', 'dead_letter'] });
+  assert.deepEqual(retried, { retried: true });
+
+  const untouched = await pool.query('SELECT state FROM relay_jobs WHERE id = $1', [otherId]);
+  assert.equal(untouched.rows[0].state, 'pending');
+});
 
 function makeRow(overrides = {}) {
   const suffix = crypto.randomUUID();

@@ -322,7 +322,7 @@ async function forwardEnvelope(envelope, route, options, client) {
   return { status: 502, body: { request_id: options.request_id ?? null, code: 'FORWARD_REJECTED', message: 'Peer relay rejected the forward', details: { peerStatus: outcome.status, peerCode: outcome.peerCode ?? null } } };
 }
 
-// Queue-mode federation forward: enqueue to federation_outbox for asynchronous
+// Queue-mode federation forward: enqueue a federation-typed relay job for asynchronous
 // delivery by a reaper process instead of forwarding synchronously (Task 14).
 async function enqueueForward(envelope, route, options, client, { senderKey, senderOwnerId }) {
   const { repository } = options;

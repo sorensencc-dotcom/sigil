@@ -7,7 +7,7 @@ import { PostgresRepository } from './postgres-repository.mjs';
 
 const connectionString = process.env.SIGIL_TEST_DATABASE_URL;
 
-test('018 applies clean and creates the directory tables + outbox kind column', { skip: !connectionString }, async (t) => {
+test('018 compatibility survives the relay-jobs migration', { skip: !connectionString }, async (t) => {
   const pool = new pg.Pool({ connectionString });
   t.after(() => pool.end());
   await applyMigrations(connectionString, { reset: true });
@@ -21,11 +21,11 @@ test('018 applies clean and creates the directory tables + outbox kind column', 
   assert.ok(links.rows.some((r) => r.column_name === 'local_confirmed_at'));
   assert.ok(links.rows.some((r) => r.column_name === 'remote_confirmed_at'));
 
-  const outboxKind = await pool.query(`SELECT column_default, is_nullable FROM information_schema.columns WHERE table_name = 'federation_outbox' AND column_name = 'kind'`);
+  const outboxKind = await pool.query(`SELECT column_default, is_nullable FROM information_schema.columns WHERE table_name = 'relay_jobs' AND column_name = 'kind'`);
   assert.equal(outboxKind.rows[0].is_nullable, 'NO');
   assert.match(outboxKind.rows[0].column_default, /'envelope'/);
 
-  const envNullable = await pool.query(`SELECT is_nullable FROM information_schema.columns WHERE table_name = 'federation_outbox' AND column_name = 'envelope'`);
+  const envNullable = await pool.query(`SELECT is_nullable FROM information_schema.columns WHERE table_name = 'relay_jobs' AND column_name = 'envelope'`);
   assert.equal(envNullable.rows[0].is_nullable, 'YES');
 
   await pool.query(`INSERT INTO federation_directory_links
@@ -274,7 +274,7 @@ test('concurrent redemption posts for one invite -> exactly one 202+link, one 20
   await pool.query('DELETE FROM federation_directory_invites WHERE link_ref = $1', [linkRef]);
 });
 
-test('federation_outbox.kind is back-compatible: legacy envelope rows read and drain unchanged', { skip: !connectionString }, async (t) => {
+test('federation relay-job kind is back-compatible: legacy envelope rows read and drain unchanged', { skip: !connectionString }, async (t) => {
   const pool = new pg.Pool({ connectionString });
   t.after(() => pool.end());
   await applyMigrations(connectionString);
@@ -302,7 +302,7 @@ test('federation_outbox.kind is back-compatible: legacy envelope rows read and d
 
   // Insert a legacy row with kind defaulted (omitted in INSERT)
   await pool.query(
-    `INSERT INTO federation_outbox
+    `INSERT INTO relay_jobs
        (message_id, idempotency_key, recipient_domain, origin_domain,
         envelope, sender_key, sender_owner_id, next_attempt_at, created_at, updated_at)
      VALUES ($1, $2, 'b.example', 'a.example', $3, $4, 'usr_a@a.example', now(), now(), now())`,
@@ -338,11 +338,11 @@ test('federation_outbox.kind is back-compatible: legacy envelope rows read and d
   assert.equal(posted, true);
   assert.equal(counts.forwarded, 1);
 
-  const row = await repo.getFederationOutboxRow((await pool.query('SELECT id FROM federation_outbox WHERE message_id = $1', [messageId])).rows[0].id);
+  const row = await repo.getFederationOutboxRow((await pool.query('SELECT id FROM relay_jobs WHERE message_id = $1', [messageId])).rows[0].id);
   assert.equal(row.state, 'forwarded');
   assert.equal(row.kind, 'envelope');
 
-  await pool.query('DELETE FROM federation_outbox WHERE message_id = $1', [messageId]);
+  await pool.query('DELETE FROM relay_jobs WHERE message_id = $1', [messageId]);
   await pool.query("DELETE FROM peer_relays WHERE domain = 'b.example'");
 });
 
@@ -431,7 +431,7 @@ test('a directory row with null directory_payload is rejected by 018 CHECK const
 
   await assert.rejects(
     pool.query(
-      `INSERT INTO federation_outbox
+      `INSERT INTO relay_jobs
          (message_id, idempotency_key, recipient_domain, origin_domain, kind, directory_payload, next_attempt_at, created_at, updated_at)
        VALUES ($1, $2, 'b.example', 'a.example', 'directory_redemption', NULL, now(), now(), now())`,
       [`msg_${crypto.randomUUID()}`, `idem_${crypto.randomUUID()}`],
@@ -454,4 +454,3 @@ test('createFederationDirectoryLink writes a self_pair row with equal owners', {
   });
   assert.equal(row.local_owner_id, row.remote_owner_id);
 });
-

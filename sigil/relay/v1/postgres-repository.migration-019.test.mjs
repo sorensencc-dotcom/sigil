@@ -1,9 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { applyMigrations } from '../../scripts/apply-migrations.mjs';
 
 const connectionString = process.env.SIGIL_TEST_DATABASE_URL;
+
+async function applyMigrationsThrough(pool, lastMigration) {
+  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  const files = (await fs.readdir(migrationsDir))
+    .filter((file) => file.endsWith('.sql') && file <= lastMigration)
+    .sort();
+  for (const file of files) await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
+}
 
 test('019 applies clean, is a no-op on re-run, and creates federation_relay_nonces', { skip: !connectionString }, async (t) => {
   const pool = new pg.Pool({ connectionString });
@@ -51,11 +62,8 @@ test('019 relaxes distinct_owners to permit a self_pair row and still rejects an
 test('019 scrubs the plaintext code from a pre-019 directory_redemption outbox row', { skip: !connectionString }, async (t) => {
   const pool = new pg.Pool({ connectionString });
   t.after(() => pool.end());
-  await applyMigrations(connectionString, { reset: true });
-  // Rewind 019 so the scrub UPDATE re-runs against a row seeded as a pre-019
-  // build would have written it. applyMigrations has no target-version knob and
-  // `reset` always applies every file, so drop 019's ledger row to replay it.
-  await pool.query(`DELETE FROM _sigil_schema_migrations WHERE version = '019_federation_directory_security.sql'`);
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  await applyMigrationsThrough(pool, '018_federation_directory.sql');
   // Seed a redemption row carrying the secret, as an earlier build would have.
   const ref = (await pool.query(`SELECT gen_random_uuid() AS u`)).rows[0].u;
   await pool.query(
@@ -64,7 +72,8 @@ test('019 scrubs the plaintext code from a pre-019 directory_redemption outbox r
              $2::jsonb, 'pending', 0, now(), now(), now())`,
     [ref, JSON.stringify({ link_ref: ref, code: 'sigil-fed-invite:a.example:' + ref + ':SECRETSEG', redeemer: { owner_id: 'usr_b@b.example', endpoint_id: 'ep_c@b.example' } })],
   );
-  await applyMigrations(connectionString); // 019 runs its scrub UPDATE
+  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  await pool.query(await fs.readFile(path.join(migrationsDir, '019_federation_directory_security.sql'), 'utf8'));
   const row = await pool.query(`SELECT directory_payload FROM federation_outbox WHERE message_id = $1`, [ref]);
   assert.equal(row.rows[0].directory_payload.code, undefined, 'the code key must be gone');
   assert.equal(row.rows[0].directory_payload.link_ref, ref, 'the rest of the payload is untouched');

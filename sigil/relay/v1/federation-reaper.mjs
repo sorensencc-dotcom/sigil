@@ -1,12 +1,12 @@
 // sigil/relay/v1/federation-reaper.mjs
 //
-// Drains `federation_outbox` for a `--federation-mode queue` relay. Each pass
+// Drains federation-typed `relay_jobs` for a `--federation-mode queue` relay. Each pass
 // claims a batch of due rows in one committed transaction, then -- outside that
 // transaction -- forwards every claimed row to its pinned peer relay and
 // finalizes it with an ownership-guarded write (retry/backoff/dead-letter).
 //
 // The claim commits BEFORE any HTTP so a slow or hung peer never holds a
-// database transaction open. Every `finalizeFederationForward` is guarded by
+// database transaction open. Every `finalizeRelayJob` is guarded by
 // the row's claim token: `{ updated: false }` means another reaper stole the
 // lease, so the result is discarded silently (no audit, no counter bump).
 //
@@ -42,7 +42,7 @@ const PATH_BY_KIND = {
 
 function finalize(repository, row, state, patch) {
   return repository.withTransaction((client) =>
-    repository.finalizeFederationForward(row.id, row.claimToken, state, patch, client));
+    repository.finalizeRelayJob('federation', row.id, row.claimToken, state, patch, client));
 }
 
 // Shared transport-failure / 2xx / 4xx tail for both the `envelope` and the
@@ -92,7 +92,7 @@ async function settleForward({ repository, row, auditBase, counts, nowMs, outcom
   }
 
   if (outcome.ok) {
-    const { updated } = await finalize(repository, row, 'forwarded', {
+    const { updated } = await finalize(repository, row, 'done', {
       attemptCount: row.attemptCount,
       reasonCode: null,
     });
@@ -111,7 +111,7 @@ async function settleForward({ repository, row, auditBase, counts, nowMs, outcom
 
   // 4xx from the peer: terminal rejection.
   const peerCode = outcome.peerCode ?? null;
-  const { updated } = await finalize(repository, row, 'forward_rejected', {
+  const { updated } = await finalize(repository, row, 'rejected', {
     attemptCount: row.attemptCount,
     reasonCode: peerCode,
   });
@@ -210,7 +210,7 @@ export async function runFederationReaperPass({
 } = {}) {
   // Step 1: claim + commit. Nothing below runs inside this transaction.
   const rows = await repository.withTransaction((client) =>
-    repository.claimDueFederationForwards(now, limit, leaseSeconds, client));
+    repository.claimDueRelayJobs('federation', now, limit, leaseSeconds, client));
 
   const counts = { claimed: rows.length, forwarded: 0, rejected: 0, failed: 0, deadLettered: 0 };
   const doPost = postForwardImpl ?? postForward;

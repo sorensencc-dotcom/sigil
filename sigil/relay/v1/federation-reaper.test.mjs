@@ -78,7 +78,8 @@ function makeRepo({ rows = [], peers = {}, finalizeOverride, directoryLinks = []
     async withTransaction(fn) {
       return fn(null);
     },
-    async claimDueFederationForwards(now, limit, leaseSeconds, _client) {
+    async claimDueRelayJobs(jobType, now, limit, leaseSeconds, _client) {
+      if (jobType !== 'federation') throw new Error(`unexpected job type ${jobType}`);
       const claimed = [];
       for (const r of store.values()) {
         if (claimed.length >= limit) break;
@@ -92,7 +93,8 @@ function makeRepo({ rows = [], peers = {}, finalizeOverride, directoryLinks = []
       }
       return claimed;
     },
-    async finalizeFederationForward(id, claimToken, state, patch, _client) {
+    async finalizeRelayJob(jobType, id, claimToken, state, patch, _client) {
+      if (jobType !== 'federation') throw new Error(`unexpected job type ${jobType}`);
       finalizeCalls.push({ id, claimToken, state, patch });
       if (typeof finalizeOverride === 'function') {
         const res = finalizeOverride({ id, claimToken, state, patch });
@@ -100,7 +102,7 @@ function makeRepo({ rows = [], peers = {}, finalizeOverride, directoryLinks = []
       }
       const r = store.get(id);
       if (!r || r.claimToken !== claimToken) return { updated: false };
-      r.state = state;
+      r.state = state === 'done' ? 'forwarded' : (state === 'rejected' ? 'forward_rejected' : state);
       if (patch.attemptCount != null) r.attemptCount = patch.attemptCount;
       r.nextAttemptAt = patch.nextAttemptAt != null
         ? (patch.nextAttemptAt instanceof Date ? patch.nextAttemptAt.toISOString() : patch.nextAttemptAt)
@@ -621,4 +623,3 @@ test('a directory_revocation transport failure walks full 1m -> 5m -> 30m -> dea
   assert.equal(stored.state, 'dead_letter');
   assert.equal(stored.attemptCount, 4);
 });
-
