@@ -6,7 +6,7 @@ Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemente
 ## Completed work
 - Packaged CLI and verified local npm binary mapping (`sigil --help`).
 - Applied PostgreSQL schema migrations 001 through 019 against the live container on port 55432.
-- Updated `sigil/cli/sigil.mjs` to auto-seed default capability grants for registered endpoints when persisting to PostgreSQL.
+- Updated `sigil/cli/sigil.mjs` to register PostgreSQL endpoints without implicitly granting capabilities.
 - Updated `sigil/relay/v1/postgres-repository.mjs` to include `status` in `lookupRecipientEndpoint` queries and JSON-stringify payload structures (`body`, `context_refs`, `broadcast_scope`) for `jsonb` column binding.
 - Updated supervisor script `C:\dev\scripts\run-sigil-daemon.ps1` to configure `$env:SIGIL_DATABASE_URL` and pass `--database-url` to persistent relay child processes.
 - Verified persistent dispatch round-trip from `ep_grokbot` to `ep_claude` (`conv_persistence_test`), verified database records in `envelopes` and `deliveries`, interrupted and restarted daemon, and retrieved delivery from recipient mailbox using `sigil inbox`.
@@ -27,7 +27,7 @@ Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemente
 
 ## Blockers
 - `d078c64` is local only and must be handed off/pushed.
-- Default PostgreSQL startup grants 12 capabilities per registered endpoint for 10 years. This is broad, non-expiring operational access and is not least-privilege production posture; require explicit review or narrower provisioning before rollout.
+- PostgreSQL startup no longer grants capabilities implicitly. Endpoints require explicit, bounded grants through the capability-grant control plane; production still requires policy review.
 - Tier 1, privacy/compliance-owner, and counsel approval remain required before production rollout.
 
 ## Resolved
@@ -55,7 +55,7 @@ Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemente
 ## Next action
 1. Hand off/push `d078c64` after this status correction and hook validation.
 2. Capture a clean final local `npm test` summary in an environment where child-process execution completes.
-3. Decide whether default grants are removed, narrowed, or made short-lived with explicit renewal.
+3. Define and approve capability profiles, short expiry defaults, and renewal authorization for deployment tooling.
 4. Track doc debt in the `C:\dev` repo, not here: tick the inter-relay plan checkboxes and add I4 `MAX_ATTEMPTS=4` notes.
 5. Obtain required Tier 1, privacy/compliance-owner, and counsel approvals before production rollout.
 

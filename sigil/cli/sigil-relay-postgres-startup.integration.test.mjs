@@ -99,6 +99,9 @@ test('sigil relay up auto-migrates fresh database and registers endpoints', { sk
   assert.equal(keysResult.rows.length, 2);
   assert.equal(keysResult.rows[0].algorithm, 'Ed25519');
   assert.equal(keysResult.rows[0].status, 'active');
+
+  const grantsResult = await pool.query('SELECT count(*)::int AS count FROM capability_grants');
+  assert.equal(grantsResult.rows[0].count, 0, 'Endpoint registration must not implicitly grant capabilities');
 });
 
 test('startOidcIssuerAllowlistPolling picks up an issuer added after startup on the next tick', { skip: !connectionString }, async (t) => {
