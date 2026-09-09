@@ -127,6 +127,39 @@ export class PostgresRepository {
     );
     return BigInt(result.rows[0].assigned_seq);
   }
+  async lookupStreamHighWater(senderEndpointId, conversationId, client = this.pool) {
+    const result = await client.query(
+      `SELECT next_seq - 1 AS high_water
+         FROM stream_sequences
+        WHERE sender_endpoint_id = $1 AND conversation_id = $2`,
+      [senderEndpointId, conversationId],
+    );
+    return result.rows[0] ? BigInt(result.rows[0].high_water) : 0n;
+  }
+  async listResendEnvelopes(senderEndpointId, conversationId, beginSeq, endSeq, now = new Date(), client = this.pool) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const result = await client.query(
+      `SELECT stream_seq AS "streamSeq", canonical_bytes, signature_algorithm, signature_key_id, signature_value
+         FROM envelopes
+        WHERE sender_endpoint_id = $1
+          AND conversation_id = $2
+          AND stream_seq BETWEEN $3 AND $4
+          AND expires_at > $5::timestamptz
+          AND envelope_status = 'accepted'
+          AND canonical_bytes IS NOT NULL
+        ORDER BY stream_seq`,
+      [senderEndpointId, conversationId, beginSeq, endSeq, timestamp],
+    );
+    return result.rows.map((row) => {
+      const envelope = JSON.parse(Buffer.from(row.canonical_bytes).toString('utf8'));
+      envelope.signature = {
+        algorithm: row.signature_algorithm,
+        key_id: row.signature_key_id,
+        value: row.signature_value,
+      };
+      return { streamSeq: BigInt(row.streamSeq), envelope };
+    });
+  }
   async lookupIdempotency(endpointId, idempotencyKey, client = this.pool) {
     const result = await client.query(
       'SELECT message_id, canonical_hash FROM idempotency_keys WHERE endpoint_id = $1 AND idempotency_key = $2 AND expires_at > NOW()',
@@ -1045,13 +1078,13 @@ export class PostgresRepository {
       return { ...updated.rows[0], duplicate: false };
     });
   }
-  async recordAuditEvent({ eventId = `audit_${crypto.randomUUID()}`, eventType, subjectId, actorId = null, actorHumanId = null, endpointId = null, objectType = null, objectId = null, actionHash = null, outcome = null, reason = null, payload = {}, metadataRedacted = null, now = new Date(), client = this.pool } = {}) {
+  async recordAuditEvent({ eventId = `audit_${crypto.randomUUID()}`, eventType, subjectId, actorId = null, actorHumanId = null, endpointId = null, conversationId = null, objectType = null, objectId = null, actionHash = null, outcome = null, reason = null, payload = {}, metadataRedacted = null, now = new Date(), client = this.pool } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     const result = await client.query(
-      `INSERT INTO audit_events (event_id, event_type, subject_id, actor_id, actor_human_id, endpoint_id, object_type, object_id, action_hash, outcome, reason, payload, metadata_redacted, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-       RETURNING event_id, event_type, subject_id, actor_id, actor_human_id, endpoint_id, object_type, object_id, action_hash, outcome, reason, created_at`,
-      [eventId, eventType, subjectId, actorId, actorHumanId, endpointId, objectType, objectId, actionHash, outcome, reason, JSON.stringify(payload), metadataRedacted ? JSON.stringify(metadataRedacted) : null, timestamp]
+      `INSERT INTO audit_events (event_id, event_type, subject_id, actor_id, actor_human_id, endpoint_id, conversation_id, object_type, object_id, action_hash, outcome, reason, payload, metadata_redacted, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       RETURNING event_id, event_type, subject_id, actor_id, actor_human_id, endpoint_id, conversation_id, object_type, object_id, action_hash, outcome, reason, created_at`,
+      [eventId, eventType, subjectId, actorId, actorHumanId, endpointId, conversationId, objectType, objectId, actionHash, outcome, reason, JSON.stringify(payload), metadataRedacted ? JSON.stringify(metadataRedacted) : null, timestamp]
     );
     return result.rows[0];
   }

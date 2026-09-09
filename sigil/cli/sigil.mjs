@@ -252,6 +252,12 @@ async function cmdRelayUp(argv) {
   // run on a second port, separate from the main relay HTTP port.
   const streamHttpServer = http.createServer();
   const stream = createStreamServer({ server: streamHttpServer, tokenHashes });
+  const relayLogger = Object.freeze({
+    debug: (entry) => console.debug(JSON.stringify(entry)),
+    info: (entry) => console.info(JSON.stringify(entry)),
+    warn: (entry) => console.warn(JSON.stringify(entry)),
+    error: (entry) => console.error(JSON.stringify(entry)),
+  });
   await new Promise((resolve) => streamHttpServer.listen(streamPort, '127.0.0.1', resolve));
   const streamAddress = streamHttpServer.address();
 
@@ -265,7 +271,7 @@ async function cmdRelayUp(argv) {
     const addr = server?.address();
     return addr ? `http://127.0.0.1:${addr.port}` : `http://127.0.0.1:${port}`;
   };
-  server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity, relayRequestFreshnessMs, stream_seq: { enabled: streamSequenceEnabled } });
+  server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity, relayRequestFreshnessMs, stream_seq: { enabled: streamSequenceEnabled }, logger: relayLogger });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();
   let federationReaperTimer;
@@ -274,6 +280,9 @@ async function cmdRelayUp(argv) {
     federationReaperTimer = startFederationReaper({ repository, identity: federationIdentity, originDomain: relayDomain });
     console.log('Federation outbox reaper running (60s interval).');
   }
+  const { startResendWorker } = await import('../relay/v1/resend-worker.mjs');
+  const resendWorkerTimer = startResendWorker({ repository, stream, logger: relayLogger });
+  if (resendWorkerTimer) console.log('Session resend worker running (60s interval).');
   if (enableMockOidc) console.log('WARNING: mock-OIDC login is enabled (--enable-mock-oidc). This is for local development and CI only -- never expose this relay to untrusted networks.');
   console.log(`Sigil relay listening on http://127.0.0.1:${address.port}`);
   console.log(`Sigil stream (push notify) on ws://127.0.0.1:${streamAddress.port}/v1/stream`);

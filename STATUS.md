@@ -21,6 +21,11 @@ Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemente
 - Added direct generic key rejection coverage for omitted, empty, and whitespace-only keys.
 - Added migration-023 invariant coverage for legacy backfill, check constraint, and partial unique index; focused tests pass 3/3 and federation gate remains 32/32 green.
 
+## Session update: 2026-09-09 Task 4
+- Implemented signed `session.resend_request` validation, membership and range authorization, quota reservation, typed `resend` job enqueue, audit, and 202 response without delivery or fan-out.
+- Added retention-bounded resend lookup, stream `resend` and `sequence_reset` frames, asynchronous claim/push/reset/requeue/dead-letter worker, metrics, and relay startup wiring.
+- Validation: Task 4 focused suites pass 14/14; federation regression set passes 53/53 executed, with 15 database-dependent tests skipped; syntax checks and `git diff --check` pass.
+
 ## Completed work
 - Packaged CLI and verified local npm binary mapping (`sigil --help`).
 - Applied PostgreSQL schema migrations 001 through 019 against the live container on port 55432.

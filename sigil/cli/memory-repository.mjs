@@ -62,6 +62,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
   const oidcIssuerAllowlist = new Map();
   const peerRelays = new Map();
   const streamSequences = new Map();
+  const relayJobs = new Map();
   const auditEvents = [];
   return {
     // Single-process, no real client/connection -- the transaction wrapper
@@ -73,6 +74,66 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       const assigned = streamSequences.get(key) ?? 1n;
       streamSequences.set(key, assigned + 1n);
       return assigned;
+    },
+    async lookupStreamHighWater(senderEndpointId, conversationId) {
+      const next = streamSequences.get(JSON.stringify([senderEndpointId, conversationId]));
+      return next == null ? 0n : next - 1n;
+    },
+    async listResendEnvelopes(senderEndpointId, conversationId, beginSeq, endSeq, now = new Date()) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).getTime();
+      return [...envelopes.values()]
+        .filter((row) => row.envelope.sender.endpoint_id === senderEndpointId
+          && row.envelope.conversation_id === conversationId
+          && row.streamSeq != null
+          && row.streamSeq >= BigInt(beginSeq)
+          && row.streamSeq <= BigInt(endSeq)
+          && Date.parse(row.envelope.expires_at) > timestamp)
+        .sort((a, b) => (a.streamSeq < b.streamSeq ? -1 : a.streamSeq > b.streamSeq ? 1 : 0))
+        .map((row) => ({ streamSeq: row.streamSeq, envelope: row.envelope }));
+    },
+    async isConversationMember(endpointId, conversationId) {
+      return [...envelopes.values()].some((row) => row.envelope.conversation_id === conversationId
+        && (row.envelope.sender.endpoint_id === endpointId || row.envelope.recipient?.endpoint_id === endpointId));
+    },
+    async enqueueRelayJob(jobType, row) {
+      const existing = [...relayJobs.values()].find((job) => job.jobType === jobType && job.idempotencyKey === row.idempotencyKey);
+      if (existing) return { row: existing, inserted: false };
+      const timestamp = (row.now instanceof Date ? row.now : row.now ? new Date(row.now) : new Date()).toISOString();
+      const job = {
+        id: `job_${crypto.randomUUID()}`, jobType, idempotencyKey: row.idempotencyKey,
+        payload: row.payload ?? null, state: 'pending', attemptCount: 0, nextAttemptAt: timestamp,
+        claimedAt: null, claimToken: null, lastReasonCode: null, createdAt: timestamp, updatedAt: timestamp,
+      };
+      relayJobs.set(job.id, job);
+      return { row: job, inserted: true };
+    },
+    async claimDueRelayJobs(jobType, now = new Date(), limit = 10, leaseSeconds = 30) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).getTime();
+      return [...relayJobs.values()]
+        .filter((job) => job.jobType === jobType
+          && ((job.state === 'pending' && Date.parse(job.nextAttemptAt) <= timestamp)
+            || (job.state === 'processing' && Date.parse(job.claimedAt) < timestamp - leaseSeconds * 1000)))
+        .sort((a, b) => Date.parse(a.nextAttemptAt) - Date.parse(b.nextAttemptAt))
+        .slice(0, limit)
+        .map((job) => {
+          job.state = 'processing';
+          job.claimedAt = new Date(timestamp).toISOString();
+          job.claimToken = crypto.randomUUID();
+          job.updatedAt = job.claimedAt;
+          return { ...job };
+        });
+    },
+    async finalizeRelayJob(jobType, id, claimToken, state, { attemptCount = null, nextAttemptAt = null, reasonCode = null } = {}) {
+      const job = relayJobs.get(id);
+      if (!job || job.jobType !== jobType || job.claimToken !== claimToken) return { updated: false };
+      job.state = state;
+      job.claimToken = null;
+      job.claimedAt = null;
+      if (attemptCount != null) job.attemptCount = attemptCount;
+      if (nextAttemptAt != null) job.nextAttemptAt = (nextAttemptAt instanceof Date ? nextAttemptAt : new Date(nextAttemptAt)).toISOString();
+      job.lastReasonCode = reasonCode;
+      job.updatedAt = new Date().toISOString();
+      return { updated: true };
     },
     async reserveRateLimit(scopeKind, scopeId, windowStart, limit) {
       const key = `${scopeKind}:${scopeId}:${windowStart}`;
@@ -384,9 +445,9 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     // Mirrors postgres-repository.mjs's recordAuditEvent row shape (minus
     // the actual persistence -- single process, nothing to query it back
     // out of besides this array).
-    async recordAuditEvent({ eventId = `audit_${crypto.randomUUID()}`, eventType, subjectId, actorId = null, actorHumanId = null, endpointId = null, objectType = null, objectId = null, actionHash = null, outcome = null, reason = null, payload = {}, metadataRedacted = null, now = new Date() } = {}) {
+    async recordAuditEvent({ eventId = `audit_${crypto.randomUUID()}`, eventType, subjectId, actorId = null, actorHumanId = null, endpointId = null, conversationId = null, objectType = null, objectId = null, actionHash = null, outcome = null, reason = null, payload = {}, metadataRedacted = null, now = new Date() } = {}) {
       const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
-      const event = { event_id: eventId, event_type: eventType, subject_id: subjectId, actor_id: actorId, actor_human_id: actorHumanId, endpoint_id: endpointId, object_type: objectType, object_id: objectId, action_hash: actionHash, outcome, reason, payload, metadata_redacted: metadataRedacted, created_at: timestamp };
+      const event = { event_id: eventId, event_type: eventType, subject_id: subjectId, actor_id: actorId, actor_human_id: actorHumanId, endpoint_id: endpointId, conversation_id: conversationId, object_type: objectType, object_id: objectId, action_hash: actionHash, outcome, reason, payload, metadata_redacted: metadataRedacted, created_at: timestamp };
       auditEvents.push(event);
       return event;
     },

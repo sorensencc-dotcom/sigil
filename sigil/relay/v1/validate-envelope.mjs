@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { canonicalJsonBytes } from './jcs.mjs';
 import { validateTaskRequestBody } from '../../contracts/v1/task-request-schema.mjs';
 import { validateTaskResultBody } from '../../contracts/v1/task-result-schema.mjs';
+import { validateSessionResendRequestBody } from '../../contracts/v1/session-resend-request-schema.mjs';
 import { isAncestorScope } from './scope.mjs';
 import { parseFederatedId, isLocalDomain } from './federated-id.mjs';
 
@@ -114,6 +115,7 @@ export function validateEnvelope(envelope, { now = new Date(), registered = new 
   if (!Array.isArray(envelope.context_refs) || !Array.isArray(envelope.capabilities)) throw reject('INVALID_ENVELOPE', 'context_refs and capabilities must be arrays');
   if (envelope.message_type === 'task.request') validateTaskRequestBody(envelope.body);
   if (envelope.message_type === 'task.result') validateTaskResultBody(envelope.body);
+  if (envelope.message_type === 'session.resend_request') validateSessionResendRequestBody(envelope.body);
   const capabilityGrants = Array.isArray(capabilityGrants_) ? capabilityGrants_ : [];
   for (const capability of envelope.capabilities) {
     if (!capabilityIsCovered(capability, envelope, capabilityGrants)) throw reject('CAPABILITY_DENIED', `No active grant covers capability: ${capability}`, { capability });
