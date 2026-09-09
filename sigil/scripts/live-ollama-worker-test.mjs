@@ -17,6 +17,15 @@ import { RelayClient } from '../connectors/v1/relay-client.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ollamaWorkerScript = path.resolve(here, 'ollama-worker.mjs');
 
+// This file matches node:test automatic discovery because of its filename,
+// but it is an intentionally manual live-model workflow. Keep normal unit
+// and contract runs deterministic; invoke this file with
+// SIGIL_RUN_LIVE_OLLAMA=1 when live Ollama proof is intended.
+if (process.env.SIGIL_RUN_LIVE_OLLAMA !== '1') {
+  console.log('[SKIP] Live Ollama workflow is opt-in; set SIGIL_RUN_LIVE_OLLAMA=1 to run it.');
+  process.exit(0);
+}
+
 async function checkOllamaAvailability(host = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434') {
   try {
     const res = await fetch(`${host}/api/tags`);
