@@ -91,6 +91,7 @@ function rowToRelayJobRecord(row) {
     senderKey: row.sender_key,
     senderOwnerId: row.sender_owner_id,
     directoryPayload: row.directory_payload ?? null,
+    payload: row.payload ?? null,
     state: row.state,
     attemptCount: row.attempt_count,
     nextAttemptAt: iso(row.next_attempt_at),
@@ -103,12 +104,12 @@ function rowToRelayJobRecord(row) {
 }
 
 function rowToFederationOutboxRecord(row) {
-  const { jobType: _jobType, state, ...record } = rowToRelayJobRecord(row);
+  const { jobType: _jobType, state, payload: _payload, ...record } = rowToRelayJobRecord(row);
   return { ...record, state: jobStateToFederationState[state] ?? state };
 }
 
 function relayJobToFederationOutboxRecord(row) {
-  const { jobType: _jobType, state, ...record } = row;
+  const { jobType: _jobType, state, payload: _payload, ...record } = row;
   return { ...record, state: jobStateToFederationState[state] ?? state };
 }
 
@@ -1188,12 +1189,12 @@ export class PostgresRepository {
     const ts = row.now == null
       ? new Date().toISOString()
       : (row.now instanceof Date ? row.now.toISOString() : new Date(row.now).toISOString());
-    const kind = row.kind ?? 'envelope';
+    const kind = jobType === 'federation' ? (row.kind ?? 'envelope') : (row.kind ?? null);
     const inserted = await client.query(
       `INSERT INTO relay_jobs
          (job_type, message_id, idempotency_key, recipient_domain, origin_domain, kind,
-          envelope, sender_key, sender_owner_id, directory_payload, next_attempt_at, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11, $11)
+          envelope, sender_key, sender_owner_id, directory_payload, payload, next_attempt_at, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12, $12)
        ON CONFLICT (job_type, message_id, idempotency_key) DO NOTHING
        RETURNING *`,
       [jobType, row.messageId, row.idempotencyKey, row.recipientDomain, row.originDomain, kind,
@@ -1201,6 +1202,7 @@ export class PostgresRepository {
         row.senderKey == null ? null : JSON.stringify(row.senderKey),
         row.senderOwnerId ?? null,
         row.directoryPayload == null ? null : JSON.stringify(row.directoryPayload),
+        row.payload == null ? null : JSON.stringify(row.payload),
         ts]
     );
     if (inserted.rows[0]) return { row: rowToRelayJobRecord(inserted.rows[0]), inserted: true };

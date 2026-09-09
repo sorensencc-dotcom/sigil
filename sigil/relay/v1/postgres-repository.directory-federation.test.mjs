@@ -22,7 +22,7 @@ test('018 compatibility survives the relay-jobs migration', { skip: !connectionS
   assert.ok(links.rows.some((r) => r.column_name === 'remote_confirmed_at'));
 
   const outboxKind = await pool.query(`SELECT column_default, is_nullable FROM information_schema.columns WHERE table_name = 'relay_jobs' AND column_name = 'kind'`);
-  assert.equal(outboxKind.rows[0].is_nullable, 'NO');
+  assert.equal(outboxKind.rows[0].is_nullable, 'YES');
   assert.match(outboxKind.rows[0].column_default, /'envelope'/);
 
   const envNullable = await pool.query(`SELECT is_nullable FROM information_schema.columns WHERE table_name = 'relay_jobs' AND column_name = 'envelope'`);
@@ -436,7 +436,7 @@ test('a directory row with null directory_payload is rejected by 018 CHECK const
        VALUES ($1, $2, 'b.example', 'a.example', 'directory_redemption', NULL, now(), now(), now())`,
       [`msg_${crypto.randomUUID()}`, `idem_${crypto.randomUUID()}`],
     ),
-    /check constraint|federation_outbox_directory_payload_present_check/i,
+    /check constraint|relay_jobs_federation_directory_payload_present_check/i,
   );
 });
 

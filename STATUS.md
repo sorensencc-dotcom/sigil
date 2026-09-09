@@ -9,6 +9,10 @@ Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemente
 - Validation: 22/22 federation-focused test files passed against the disposable PostgreSQL database; `git diff --check` and changed-module syntax checks passed.
 - Detailed handoff: `.superpowers/sdd/2026-09-09-sigil-fix-session-layer/task-3-report.md`.
 
+## Session update: 2026-09-09 Task 3 fix round 1
+- Added migration 022 to make `relay_jobs` genuinely generic: generic JSONB payload, nullable federation-only columns, job-type-scoped federation constraints, and type-leading claim indexes.
+- Added a non-federation enqueue/claim/finalize/retry lifecycle test; restored federation gate remains 32/32 green.
+
 ## Completed work
 - Packaged CLI and verified local npm binary mapping (`sigil --help`).
 - Applied PostgreSQL schema migrations 001 through 019 against the live container on port 55432.
