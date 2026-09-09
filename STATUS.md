@@ -17,6 +17,10 @@ Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemente
 - Defined generic relay-job idempotency: non-federation enqueue requires a nonblank `idempotencyKey`; migration 023 derives stable legacy keys and enforces a job-type-scoped unique identity.
 - Added repeated generic enqueue regression coverage; generic lifecycle passes and the critical federation gate remains 32/32 green.
 
+## Session update: 2026-09-09 Task 3 fix round 3
+- Added direct generic key rejection coverage for omitted, empty, and whitespace-only keys.
+- Added migration-023 invariant coverage for legacy backfill, check constraint, and partial unique index; focused tests pass 3/3 and federation gate remains 32/32 green.
+
 ## Completed work
 - Packaged CLI and verified local npm binary mapping (`sigil --help`).
 - Applied PostgreSQL schema migrations 001 through 019 against the live container on port 55432.
