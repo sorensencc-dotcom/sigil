@@ -210,11 +210,11 @@ export async function acceptFederatedEnvelope(body, headers, options) {
       origin_domain: originDomain,
     }, client);
     // 10: persist + deliver through the existing local path, federation_hop = true.
-    const persisted = await repository.persistAcceptedEnvelope({ envelope, ...result, canonical_bytes: signedBytes(envelope), action_hash: result.canonical_hash, federation_hop: true }, client);
+    const persisted = await repository.persistAcceptedEnvelope({ envelope, ...result, canonical_bytes: signedBytes(envelope), action_hash: result.canonical_hash, federation_hop: true, streamSeq: null }, client);
     if (repository.recordAuditEvent) {
       await repository.recordAuditEvent({ eventType: 'federation.inbound_accepted', subjectId: persisted?.message_id ?? result.message_id, endpointId: recipientId, outcome: 'accepted', reason: null, payload: { origin_domain: originDomain, recipient_domain: relayDomain }, now });
     }
-    if (options.onPersisted) await options.onPersisted({ envelope, persisted });
+    if (options.onPersisted) await options.onPersisted({ envelope, persisted: { ...persisted, streamSeq: null } });
     return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: persisted?.message_id ?? result.message_id, duplicate: persisted?.duplicate ?? false } };
   }).catch(async (error) => {
     // Only codes we recognise pass through as the response `code`. A raw

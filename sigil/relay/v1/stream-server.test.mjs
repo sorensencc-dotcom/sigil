@@ -15,7 +15,7 @@ test('stream sends thin delivery notification to authenticated endpoint', async 
   const message = new Promise((resolve) => socket.once('message', (data) => resolve(JSON.parse(data))));
   await new Promise((resolve) => socket.once('open', resolve));
   assert.equal(stream.notify('ep_claude', 'del_1'), true);
-  assert.deepEqual(await message, { type: 'delivered', delivery_id: 'del_1' });
+  assert.deepEqual(await message, { type: 'delivered', delivery_id: 'del_1', stream_seq: null });
   socket.close(); await stream.close(); await new Promise((resolve) => httpServer.close(resolve));
 });
 
@@ -35,7 +35,7 @@ test('notifyReceipt pushes a small delivery.receipt payload to the SENDER, not t
   ]);
   const receipt = { message_id: 'msg_1', delivery_id: 'del_1', state: 'acknowledged', at: '2026-08-16T12:00:00Z' };
   assert.equal(stream.notifyReceipt('ep_codex', receipt), true);
-  assert.deepEqual(await senderMessage, { type: 'delivery.receipt', ...receipt });
+  assert.deepEqual(await senderMessage, { type: 'delivery.receipt', ...receipt, stream_seq: null });
   assert.equal(recipientReceivedMessage, false);
   senderSocket.close(); recipientSocket.close(); await stream.close(); await new Promise((resolve) => httpServer.close(resolve));
 });

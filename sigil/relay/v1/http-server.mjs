@@ -189,7 +189,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         relayRequestFreshnessMs: freshnessMs,
         onPersisted: async ({ envelope: accepted, persisted }) => {
           if (!stream || persisted?.duplicate) return;
-          if (accepted.recipient?.endpoint_id) stream.notify(accepted.recipient.endpoint_id, persisted.message_id);
+          if (accepted.recipient?.endpoint_id) stream.notify(accepted.recipient.endpoint_id, persisted.message_id, persisted.streamSeq);
         },
       });
       response.writeHead(result.status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
@@ -330,13 +330,14 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         federationMode, federationIdentity, fetchImpl,
         onPersisted: async ({ envelope: accepted, persisted }) => {
           if (!stream || persisted?.duplicate) return;
-          if (accepted.recipient?.endpoint_id) stream.notify(accepted.recipient.endpoint_id, persisted.message_id);
+          if (accepted.recipient?.endpoint_id) stream.notify(accepted.recipient.endpoint_id, persisted.message_id, persisted.streamSeq);
           if (accepted.sender?.endpoint_id && typeof stream.notifyReceipt === 'function') {
             stream.notifyReceipt(accepted.sender.endpoint_id, {
               message_id: persisted.message_id,
               delivery_id: persisted.delivery_id ?? `del_${persisted.message_id}`,
               state: 'delivered',
-              at: accepted.created_at
+              at: accepted.created_at,
+              streamSeq: persisted.streamSeq,
             });
           }
         }

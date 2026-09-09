@@ -1,5 +1,5 @@
 import { validateEnvelope, reject, signedBytes, checkRecipientLocality } from './validate-envelope.mjs';
-import { resolveRateLimits, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
+import { resolveRateLimits, resolveStreamSequence, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
 import { writeRejectionAudit } from './rejection-audit.mjs';
 import { decideRoute, buildForwardRequest, signForwardRequest, postForward } from './federation-router.mjs';
 
@@ -243,12 +243,17 @@ async function acceptWithRepository(envelope, options) {
       const visible = await repository.lookupTaskRequest(envelope.body.task_id, envelope.conversation_id, client);
       if (!visible) throw reject('INVALID_ENVELOPE', 'task.result references a task_id with no visible task.request', { field: 'task_id', reason: 'no visible task.request' });
     }
+    const streamSequence = resolveStreamSequence(options.stream_seq);
+    const streamSeq = streamSequence.enabled && envelope.message_type === 'chat.message'
+      ? await repository.assignStreamSequence(client, envelope.sender.endpoint_id, envelope.conversation_id)
+      : null;
     // canonical_bytes/action_hash mirror what http-server.mjs's now-removed
     // persistAccepted wrapper used to attach before calling the repository
     // directly -- kept here so repository-backed callers (postgres, memory)
     // still see the same row shape regardless of transport.
-    const persisted = await repository.persistAcceptedEnvelope({ envelope, ...result, canonical_bytes: signedBytes(envelope), action_hash: result.canonical_hash }, client);
-    if (options.onPersisted) await options.onPersisted({ envelope, persisted });
+    const persisted = await repository.persistAcceptedEnvelope({ envelope, ...result, canonical_bytes: signedBytes(envelope), action_hash: result.canonical_hash, streamSeq }, client);
+    const persistedWithStreamSeq = { ...persisted, streamSeq };
+    if (options.onPersisted) await options.onPersisted({ envelope, persisted: persistedWithStreamSeq });
     return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: persisted?.message_id ?? result.message_id, duplicate: persisted?.duplicate ?? false } };
   }).catch(async (error) => {
     const response = toResponse(options, error);
