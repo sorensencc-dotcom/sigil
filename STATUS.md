@@ -1,5 +1,13 @@
 # Status
 
+## Session update: 2026-09-14 AgentMail ingress implementation
+
+- Implemented the approved three-mailbox AgentMail ingress slice in commits `8e6dd9f`, `c63d687`, `24d8531`, `383b7af`, `7e95960`, and `08ef4cc`.
+- Added strict inbox configuration/provenance, signed `ep_ingress` task requests using existing JCS/Ed25519 helpers, bounded quarantine/classification/document normalization, pinned `agentmail@0.5.24` transport, deterministic webhook routing, durable ingress ledger migration 024, signed redacted receipts, explicit `ep_ingress` provisioning, and opt-in HTTP route registration.
+- Focused evidence: ingress config/provenance 7/7; envelope builder 5/5; quarantine/classification/normalization 10/10; adapter/transport 7/7; ledger/receipts/adapter integration/HTTP route 7/7; provisioning 2/2.
+- Pre-production blockers remain: live non-sensitive AgentMail canary, webhook secret rotation, retention deletion, operational alerting, privacy/compliance approval, and Tier 1 approval. Financial-sensitive handling remains default-deny; no production readiness is claimed.
+- Existing dirty work in `sigil/relay/v1/http-server.mjs` inbox error handling, `docs/contracts/sigil-helix-authority-contract-v1.md`, and `modules/` was preserved and not staged by this implementation.
+
 ## Current goal
 Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemented. Runtime handoff is locally validated; production rollout remains blocked pending security and governance approval.
 
