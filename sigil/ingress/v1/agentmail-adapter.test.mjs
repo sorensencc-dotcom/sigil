@@ -92,7 +92,10 @@ test('judgment mail is durably quarantined and financial mail stays local-only',
   const financial = makeInput({ event: { body: 'SYNTHETIC FINANCIAL DATA: account number 000000' } });
   const denied = await handleAgentMailWebhook(financial);
   assert.equal(denied.body.code, 'FINANCIAL_APPROVAL_REQUIRED');
-  const allowed = makeInput({ event: { body: 'SYNTHETIC FINANCIAL DATA: account number 000000' }, policy: { ...makeInput().policy, allowFinancialLocalOnly: true } });
+  const notLocal = makeInput({ event: { body: 'SYNTHETIC FINANCIAL DATA: account number 000000' }, policy: { ...makeInput().policy, allowFinancialLocalOnly: true } });
+  assert.equal((await handleAgentMailWebhook(notLocal)).body.code, 'FINANCIAL_LOCAL_ROUTE_REQUIRED');
+  assert.deepEqual(notLocal.transitions, [['evt_1', 'quarantined'], ['evt_1', 'rejected']]);
+  const allowed = makeInput({ event: { body: 'SYNTHETIC FINANCIAL DATA: account number 000000' }, policy: { ...makeInput().policy, allowFinancialLocalOnly: true, localOnlyEndpointIds: ['ep_triage'] } });
   const allowedResult = await handleAgentMailWebhook(allowed);
   assert.equal(allowedResult.status, 202);
   assert.equal(allowed.queued[0].body.provenance.classification, 'financial_sensitive');

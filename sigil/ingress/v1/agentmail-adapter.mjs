@@ -3,6 +3,8 @@ import { resolveInboxMapping } from './agentmail-config.mjs';
 import { buildIngressProvenance, deriveIngressIdempotencyKey } from './agentmail-provenance.mjs';
 import { buildTaskRequest } from './build-task-request.mjs';
 import { classifyInboundMessage } from './classify.mjs';
+import { createAgentMailLedger } from './agentmail-ledger.mjs';
+import { acceptEnvelopeAsync } from '../../relay/v1/accept-envelope.mjs';
 
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{22,128}$/;
 const STATUS_BY_CODE = Object.freeze({
@@ -15,6 +17,7 @@ const STATUS_BY_CODE = Object.freeze({
   TOKEN_MISMATCH: 403,
   IRON_EXTERNAL_MAIL_REJECTED: 403,
   FINANCIAL_APPROVAL_REQUIRED: 403,
+  FINANCIAL_LOCAL_ROUTE_REQUIRED: 403,
   QUEUE_SATURATED: 429,
   AGENTMAIL_PROVIDER_TIMEOUT: 504,
 });
@@ -39,6 +42,7 @@ function publicMessage(code) {
     TOKEN_MISMATCH: 'Forwarding token does not match workflow alias',
     IRON_EXTERNAL_MAIL_REJECTED: 'External mail is not accepted by the iron endpoint',
     FINANCIAL_APPROVAL_REQUIRED: 'Financial-sensitive handling requires explicit approval',
+    FINANCIAL_LOCAL_ROUTE_REQUIRED: 'Financial-sensitive handling requires an explicitly local recipient endpoint',
     QUEUE_SATURATED: 'Ingress queue is saturated',
     AGENTMAIL_PROVIDER_TIMEOUT: 'AgentMail provider timed out',
   })[code] ?? 'AgentMail message was rejected';
@@ -89,6 +93,8 @@ async function quarantineAttachments(event, quarantine) {
 
 export async function handleAgentMailWebhook({ rawBody, headers, inboxId, provider, registry, ingress, ledger, policy = {}, quarantine = async () => null, enqueue, clock = () => new Date() } = {}) {
   let event;
+  let providerEventId = null;
+  let deadLettered = false;
   try {
     event = await provider?.verifyWebhook?.({ rawBody, headers });
     if (!event || typeof event !== 'object') fail('WEBHOOK_SIGNATURE_INVALID', 'Webhook authenticity could not be verified');
@@ -100,16 +106,18 @@ export async function handleAgentMailWebhook({ rawBody, headers, inboxId, provid
     if (mapping.endpointId === 'ep_iron' && (event.external === true || event.sender?.internal !== true)) fail('IRON_EXTERNAL_MAIL_REJECTED', 'External mail is not accepted by the iron endpoint');
     const workflow = resolveWorkflow(event.alias ?? event.to, policy.forwardingTokens ?? {});
     if (!mapping.workflowPolicy.includes(workflow.workflow)) fail('TOKEN_MISMATCH', 'Workflow is not allowed for this inbox');
-    const providerEventId = String(event.eventId ?? event.id ?? '');
+    providerEventId = String(event.eventId ?? event.id ?? '');
     const providerMessageId = String(event.messageId ?? event.message_id ?? '');
     const derivedKey = deriveIngressIdempotencyKey({ providerEventId, providerMessageId, inboxId });
     const existing = await ledger?.recordIngressEvent?.({ eventId: providerEventId, providerEventId, providerMessageId, inboxId, idempotencyKey: derivedKey, state: 'received' });
     if (existing?.duplicate || (existing?.state && existing.state !== 'received')) return { status: 202, eventId: providerEventId, state: existing.state, duplicate: true };
-    const now = clock() instanceof Date ? clock() : new Date(clock());
+    const clockValue = clock();
+    const now = clockValue instanceof Date ? clockValue : new Date(clockValue);
     const attachmentResults = await quarantineAttachments(event, quarantine);
     await ledger?.transitionIngressState?.(providerEventId, 'quarantined');
     const classification = classifyInboundMessage({ sender: { email: sender, internal: event.sender?.internal === true }, workflow: workflow.workflow, body: String(event.body ?? ''), attachments: event.attachments ?? [] });
     if (classification.classification === 'financial_sensitive' && policy.allowFinancialLocalOnly !== true) fail('FINANCIAL_APPROVAL_REQUIRED', 'Financial-sensitive handling requires explicit approval');
+    if (classification.classification === 'financial_sensitive' && !(policy.localOnlyEndpointIds ?? []).includes(mapping.endpointId)) fail('FINANCIAL_LOCAL_ROUTE_REQUIRED', 'Financial-sensitive handling requires an explicitly local recipient endpoint');
     const provenance = buildIngressProvenance({
       providerEventId, providerMessageId, inboxId, verifiedSender: sender, workflow: workflow.workflow,
       classification: classification.classification,
@@ -144,12 +152,52 @@ export async function handleAgentMailWebhook({ rawBody, headers, inboxId, provid
     try {
       await enqueue(envelope, { localOnly: classification.policy.localOnly, workflow: workflow.workflow });
     } catch (error) {
+      deadLettered = true;
       await ledger?.transitionIngressState?.(providerEventId, 'dead_lettered');
       throw error;
     }
     await ledger?.transitionIngressState?.(providerEventId, 'dispatched');
     return { status: 202, eventId: providerEventId, state: 'dispatched', classification: classification.classification };
   } catch (error) {
+    if (providerEventId && !deadLettered) {
+      try {
+        await ledger?.transitionIngressState?.(providerEventId, 'rejected', { rejectionCode: error?.code ?? 'AGENTMAIL_INGRESS_REJECTED' });
+      } catch {
+        // Preserve the original redacted response when ledger cleanup cannot complete.
+      }
+    }
     return { ...safeResponse(error), eventId: event?.eventId ?? event?.id ?? null };
   }
+}
+
+export function createAgentMailIngress({ config, provider, ingress, repository, registry, quarantine, policy = {}, relayOptions = {} } = {}) {
+  if (!config?.inboxMappings || !provider || !ingress || !repository) fail('AGENTMAIL_INGRESS_UNAVAILABLE', 'AgentMail ingress requires config, provider, identity, and repository');
+  const ledger = createAgentMailLedger({ repository, maxQueueDepth: config.limits?.maxQueueDepth });
+  const effectivePolicy = {
+    ...policy,
+    senderAllowlist: policy.senderAllowlist ?? config.senderAllowlist,
+    forwardingTokens: policy.forwardingTokens ?? config.forwardingTokens,
+  };
+  return {
+    maxMessageBytes: config.limits?.maxMessageBytes,
+    async handleWebhook({ rawBody, headers, inboxId, clock = () => new Date(), now } = {}) {
+      return handleAgentMailWebhook({
+        rawBody,
+        headers,
+        inboxId,
+        provider,
+        registry: { inboxMappings: config.inboxMappings },
+        ingress,
+        ledger,
+        policy: effectivePolicy,
+        quarantine,
+        clock: now ? () => now : clock,
+        enqueue: async (envelope) => {
+          const result = await acceptEnvelopeAsync(envelope, { repository, registered: registry, ...relayOptions });
+          if (result.status >= 400) throw Object.assign(new Error(result.body?.message ?? 'Sigil relay rejected ingress envelope'), { code: result.body?.code ?? 'INGRESS_RELAY_REJECTED' });
+          return result;
+        },
+      });
+    },
+  };
 }
