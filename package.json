@@ -16,6 +16,7 @@
     "bin/",
     "sigil/connectors/v1/*.mjs",
     "sigil/connectors/v1/*.sql",
+    "sigil/ingress/v1/*.mjs",
     "sigil/relay/v1/*.mjs",
     "sigil/contracts/v1/*.json",
     "sigil/migrations/*.sql",

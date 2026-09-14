@@ -2,9 +2,9 @@
 
 ## Session update: 2026-09-14 AgentMail ingress implementation
 
-- Implemented the approved three-mailbox AgentMail ingress slice in commits `8e6dd9f`, `c63d687`, `24d8531`, `383b7af`, `7e95960`, `08ef4cc`, `d9ab07d`, and `97d17d9`.
-- Added strict inbox configuration/provenance, signed `ep_ingress` task requests using existing JCS/Ed25519 helpers, bounded quarantine/classification/document normalization, pinned `agentmail@0.5.24` transport, deterministic webhook routing, durable ingress ledger migration 024, signed redacted receipts, explicit `ep_ingress` provisioning, and opt-in HTTP route registration.
-- Focused evidence: 26/26 AgentMail ingress and HTTP tests; provisioning 2/2. Direct repository-wide Node test run: 1,049 tests, 926 passed, 0 failed, 123 skipped. Dependency audit, JCS audit, secret scan, and `git diff --check` pass.
+- Implemented the approved three-mailbox AgentMail ingress slice in commits `8e6dd9f`, `c63d687`, `24d8531`, `383b7af`, `7e95960`, `08ef4cc`, `d9ab07d`, and `97d17d9`; current quarantine hardening is staged for the next commit.
+- Added strict inbox configuration/provenance, signed `ep_ingress` task requests using existing JCS/Ed25519 helpers, bounded quarantine/classification/document normalization, pinned `agentmail@0.5.24` transport, deterministic webhook routing, durable ingress ledger migration 024, signed redacted receipts, explicit `ep_ingress` provisioning, opt-in HTTP route registration, and injected-key AES-256-GCM quarantine with legal-hold-aware audited purge.
+- Focused evidence: 12/12 quarantine and adapter tests; live PostgreSQL gate 28/28 files and 134/134 tests passed; direct repository-wide Node test run: 1,053 tests, 930 passed, 0 failed, 123 skipped. Dependency audit, JCS audit, secret scan, package dry-run, and `git diff --check` pass.
 - Pre-production blockers remain: live non-sensitive AgentMail canary, webhook secret rotation, retention deletion, operational alerting, privacy/compliance approval, and Tier 1 approval. Financial-sensitive handling remains default-deny; no production readiness is claimed.
 - Existing dirty work in `sigil/relay/v1/http-server.mjs` inbox error handling, `docs/contracts/sigil-helix-authority-contract-v1.md`, and `modules/` was preserved and not staged by this implementation.
 

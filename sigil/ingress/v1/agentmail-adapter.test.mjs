@@ -107,3 +107,17 @@ test('provider timeout returns redacted stable response', async () => {
   assert.equal(result.body.code, 'AGENTMAIL_PROVIDER_TIMEOUT');
   assert.equal(result.body.message.includes('provider secret'), false);
 });
+
+test('financial attachments receive short retention before approval or rejection', async () => {
+  const retention = [];
+  const input = makeInput({
+    event: { body: 'SYNTHETIC FINANCIAL DATA', attachments: [{ content: 'synthetic attachment', mediaType: 'text/plain' }] },
+    policy: { ...makeInput().policy },
+    quarantine: Object.assign(async () => ({ reference: 'quarantine://synthetic/financial', sha256: 'a'.repeat(64), mediaType: 'text/plain', byteLength: 19 }), {
+      async setRetention(reference, options) { retention.push({ reference, ...options }); },
+    }),
+  });
+  const result = await handleAgentMailWebhook(input);
+  assert.equal(result.body.code, 'FINANCIAL_APPROVAL_REQUIRED');
+  assert.deepEqual(retention, [{ reference: 'quarantine://synthetic/financial', retentionClass: 'short' }]);
+});

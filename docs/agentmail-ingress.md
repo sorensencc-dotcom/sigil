@@ -41,6 +41,8 @@ The webhook pipeline verifies provider authenticity, exact authenticated sender 
 
 Attachments stream to encrypted quarantine storage and receive SHA-256 references. Active HTML and DOCX macro markers are removed during normalization. Parser and OCR work is bounded by the configured timeout. Prompt-injection text remains untrusted reference material and cannot grant authorization.
 
+The local quarantine adapter uses an injected 32-byte key with AES-256-GCM and path-safe `quarantine://local/<uuid>` references. It stores ciphertext and authenticated metadata separately from relay envelopes. Retention purge requires an audit sink, skips legal holds, reports bounded counts only, and refuses to run without auditable deletion. Standard retention defaults to 30 days; short retention defaults to 24 hours and applies immediately to financial-sensitive attachments.
+
 Financial-sensitive content is classified fail-closed. The default adapter rejects it until explicit handling approval is configured. If an approved local-only policy is enabled, no cloud or frontier invocation, external webhook fan-out, or automatic cross-tier rerouting is allowed; retention must be short and deletion must be verified.
 
 Real financial documents and personal email exports are prohibited from source control, tests, logs, CI artifacts, and canaries.

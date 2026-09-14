@@ -20,7 +20,14 @@ export async function quarantineAttachment(stream, metadata = {}, storage) {
   if (!storage || typeof storage.createWriter !== 'function') fail('QUARANTINE_STORAGE_UNAVAILABLE', 'Encrypted quarantine storage is required');
   const maxBytes = metadata.maxBytes ?? DEFAULT_MAX_BYTES;
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) fail('INVALID_ATTACHMENT', 'Attachment byte limit is invalid');
-  const writer = await storage.createWriter({ mediaType: metadata.mediaType, filename: metadata.filename ?? null });
+  const writer = await storage.createWriter({
+    mediaType: metadata.mediaType,
+    filename: metadata.filename ?? null,
+    retentionClass: metadata.retentionClass,
+    expiresAt: metadata.expiresAt,
+    legalHold: metadata.legalHold,
+    createdAt: metadata.createdAt,
+  });
   if (!writer || typeof writer.write !== 'function' || typeof writer.finalize !== 'function') fail('QUARANTINE_STORAGE_UNAVAILABLE', 'Quarantine writer is invalid');
   const hash = crypto.createHash('sha256');
   let byteLength = 0;

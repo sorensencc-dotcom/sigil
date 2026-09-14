@@ -116,6 +116,9 @@ export async function handleAgentMailWebhook({ rawBody, headers, inboxId, provid
     const attachmentResults = await quarantineAttachments(event, quarantine);
     await ledger?.transitionIngressState?.(providerEventId, 'quarantined');
     const classification = classifyInboundMessage({ sender: { email: sender, internal: event.sender?.internal === true }, workflow: workflow.workflow, body: String(event.body ?? ''), attachments: event.attachments ?? [] });
+    if (classification.classification === 'financial_sensitive' && typeof quarantine.setRetention === 'function') {
+      for (const attachment of attachmentResults.filter(Boolean)) await quarantine.setRetention(attachment.reference, { retentionClass: 'short' });
+    }
     if (classification.classification === 'financial_sensitive' && policy.allowFinancialLocalOnly !== true) fail('FINANCIAL_APPROVAL_REQUIRED', 'Financial-sensitive handling requires explicit approval');
     if (classification.classification === 'financial_sensitive' && !(policy.localOnlyEndpointIds ?? []).includes(mapping.endpointId)) fail('FINANCIAL_LOCAL_ROUTE_REQUIRED', 'Financial-sensitive handling requires an explicitly local recipient endpoint');
     const provenance = buildIngressProvenance({
