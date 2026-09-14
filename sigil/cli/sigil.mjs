@@ -32,6 +32,7 @@ import { signContract, verifyContract } from './contract-signing.mjs';
 import { checkRelayConnectivity } from './doctor.mjs';
 import { resolveRateLimits } from '../relay/v1/relay-config.mjs';
 import { createRelayMetrics } from '../relay/v1/metrics.mjs';
+import { provisionIngressEndpoint } from './agentmail-provision.mjs';
 
 const DEFAULT_CLI_CONFIG = path.join('.sigil', 'config.json');
 
@@ -44,6 +45,8 @@ Commands:
   init <name> [--owner <owner_id> | --federation-owner <federated_id>] [--registry path] [--domain domain]      Create a local identity and register it (domain defaults to "local"; --federation-owner allows an owner id whose domain differs from --domain)
   sign-contract --contract path --identity path [--output path]          Sign a TorqueQuery agent dispatch contract
   verify-contract --contract path --registry path                        Verify a signed TorqueQuery agent dispatch contract
+  agentmail provision --identity path --installation-id id [--registry path] [--audit-output path]
+                                                            Explicitly provision non-mailbox ep_ingress; creates no grants or inbox mapping
   relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] [--relay-request-freshness-ms N] Run a local relay (blocks; Ctrl+C to stop; set SIGIL_STREAM_SEQ_ENABLED=1 to stamp stream sequences)
   relay well-known generate --identity path --domain domain --endpoint url [--ws-endpoint url] [--output path]
                                                             Emit this relay's .well-known/sigil discovery document from a designated endpoint identity
@@ -103,6 +106,15 @@ function flushPrint(line) {
       else resolve();
     });
   });
+}
+
+async function cmdAgentmailProvision(argv) {
+  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, registry: { type: 'string' }, 'audit-output': { type: 'string' }, 'installation-id': { type: 'string' }, runtime: { type: 'string' } } });
+  const identityPath = args.values.identity;
+  const installationId = args.values['installation-id'];
+  if (!identityPath || !installationId) throw new Error('usage: sigil agentmail provision --identity path --installation-id id [--registry path] [--audit-output path]');
+  const result = provisionIngressEndpoint({ identityPath, registryPath: args.values.registry ?? DEFAULT_REGISTRY, auditPath: args.values['audit-output'], installationId, runtime: args.values.runtime });
+  console.log(JSON.stringify({ code: 'PROVISIONED', endpoint_id: result.record.endpoint_id, installation_id: result.record.installation_id, grants_changed: result.audit.grants_changed, mailbox_mapping: result.audit.mailbox_mapping, audit_event_id: result.audit.event_id }));
 }
 
 const NAME_CHARSET = /^[a-z0-9_-]+$/;
@@ -1550,6 +1562,7 @@ export async function main() {
     else if (command === 'peer' && sub === 'rotate') await cmdPeerRotate(rest);
     else if (command === 'peer' && sub === 'validate-document') await cmdPeerValidateDocument(rest);
     else if (command === 'agent' && sub === 'run') await cmdAgentRun(rest);
+    else if (command === 'agentmail' && sub === 'provision') await cmdAgentmailProvision(rest);
     else if (command === 'doctor') await cmdDoctor(process.argv.slice(3));
     else if (command === 'send') await cmdSend(process.argv.slice(3));
     else if (command === 'resend') await cmdResend(process.argv.slice(3));
