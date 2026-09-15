@@ -1,0 +1,67 @@
+# Three-Tier Multi-Agent Policy capability grants
+# Schema-neutral draft: install through the authoritative Sigil registry tooling.
+# Default behavior: deny any scope not explicitly listed below.
+
+policy:
+  name: three-tier-multi-agent
+  default_decision: deny
+  identity_key: endpoint_id
+  require_context_refs_for_task_requests: true
+  require_sha256_for_staged_payloads: true
+
+capability_grants:
+  - endpoint_id: ep_triage
+    tier: 2
+    role: muscle
+    allow:
+      - ingest.read
+      - external.fetch
+      - reproduction.run
+      - staging.write
+      - task.submit
+    deny:
+      - code.write
+      - code.execute
+      - merge.promote
+      - capability.grant
+      - frontier.invoke
+
+  - endpoint_id: ep_judgment
+    tier: 1
+    role: judgment
+    allow:
+      - context.read
+      - task.plan
+      - patch.propose
+      - frontier.invoke
+    step_up_required:
+      - code.execute
+      - capability.grant
+      - merge.promote
+    deny:
+      - grant.implicit
+
+  - endpoint_id: ep_iron
+    tier: 3
+    role: iron
+    allow:
+      - test.execute
+      - lint.execute
+      - canonicalize.jcs
+      - merge.queue
+      - receipt.emit
+    deny:
+      - external.fetch
+      - arbitrary_code.write
+      - capability.grant
+      - frontier.invoke
+
+invariants:
+  - name: no-cross-agent-identity-collision
+    rule: endpoint_id_is_unique_and_immutable
+  - name: no-raw-trusted-ingest
+    rule: triage_submissions_contain_context_refs_and_sha256_hashes
+  - name: frontier-protection
+    rule: frontier_invocation_requires_explicit_judgment_grant
+  - name: promotion-gate
+    rule: promotion_requires_iron_test_lint_jcs_receipts
