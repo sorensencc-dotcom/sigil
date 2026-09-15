@@ -41,3 +41,14 @@ test('purge refuses to run without an audit sink', async () => {
   const storage = { async listExpired() { return []; }, async delete() {} };
   await assert.rejects(purgeExpiredQuarantine(storage), { code: 'QUARANTINE_AUDIT_UNAVAILABLE' });
 });
+
+test('legal hold cannot be cleared through retention updates or direct deletion', async () => {
+  const rootDir = await fixtureRoot();
+  const storage = createLocalQuarantineStorage({ rootDir, key: Buffer.alloc(32, 7), clock: () => new Date('2026-09-14T12:00:00Z') });
+  const writer = await storage.createWriter({ mediaType: 'text/plain', legalHold: true });
+  await writer.write('synthetic');
+  const reference = await writer.finalize();
+  await assert.rejects(storage.setRetention(reference, { legalHold: false }), { code: 'QUARANTINE_LEGAL_HOLD' });
+  await assert.rejects(storage.delete(reference), { code: 'QUARANTINE_LEGAL_HOLD' });
+  assert.equal((await storage.read(reference)).toString(), 'synthetic');
+});

@@ -20,6 +20,7 @@ function makeInput(overrides = {}) {
     senderAuthentication: 'spf-dkim-pass',
     alias: `triage+trm+${token}@agentmail.test`,
     body: 'Review this synthetic report.',
+    normalizedInstruction: 'Review this synthetic report.',
     attachments: [],
     ...overrides.event,
   };
@@ -71,6 +72,7 @@ test('valid webhook routes through ep_ingress and acknowledges after enqueue', a
   assert.equal(input.queued[0].recipient.endpoint_id, 'ep_triage');
   assert.equal(input.queued[0].body.provenance.workflow, 'trm');
   assert.equal(input.queued[0].body.instruction.includes(token), false);
+  assert.equal(result.receipt?.correlation_id, 'corr_evt_1');
   assert.deepEqual(input.transitions.map(([, state]) => state), ['quarantined', 'accepted', 'dispatched']);
 });
 
@@ -106,6 +108,31 @@ test('provider timeout returns redacted stable response', async () => {
   const result = await handleAgentMailWebhook(input);
   assert.equal(result.body.code, 'AGENTMAIL_PROVIDER_TIMEOUT');
   assert.equal(result.body.message.includes('provider secret'), false);
+});
+
+test('raw body is never used as a trusted task instruction', async () => {
+  const input = makeInput({ event: { normalizedInstruction: undefined, sanitizedInstruction: undefined, normalizedText: undefined } });
+  const result = await handleAgentMailWebhook(input);
+  assert.equal(result.body.code, 'INSTRUCTION_NORMALIZATION_REQUIRED');
+  assert.equal(input.queued.length, 0);
+});
+
+test('forwarding addresses require one configured domain', () => {
+  assert.throws(() => resolveWorkflow(`triage+trm+${token}@agentmail.test@attacker.test`, { 'triage+trm': token }), { code: 'INVALID_FORWARDING_TOKEN' });
+  assert.throws(() => resolveWorkflow(`triage+trm+${token}@attacker.test`, { 'triage+trm': token }, { domain: 'agentmail.test' }), { code: 'INVALID_FORWARDING_TOKEN' });
+});
+
+test('sender rate limits and inactive endpoint registry fail closed', async () => {
+  const limited = makeInput({ senderRateLimiter: async () => false });
+  assert.equal((await handleAgentMailWebhook(limited)).body.code, 'SENDER_RATE_LIMITED');
+  const inactive = makeInput({ registry: { ...makeInput().registry, endpoints: new Map([['ep_triage', { status: 'paused' }]]) } });
+  assert.equal((await handleAgentMailWebhook(inactive)).body.code, 'ENDPOINT_UNAVAILABLE');
+});
+
+test('provider verification is bounded by parser timeout', async () => {
+  const input = makeInput({ maxParserSeconds: 1, provider: { async verifyWebhook() { return new Promise(() => {}); } } });
+  const result = await handleAgentMailWebhook(input);
+  assert.equal(result.body.code, 'AGENTMAIL_PROVIDER_TIMEOUT');
 });
 
 test('financial attachments receive short retention before approval or rejection', async () => {

@@ -34,7 +34,7 @@
 - Modify: `sigil/cli/identity.mjs` only if needed to expose the existing endpoint-registration helper for `ep_ingress`
 
 **Interfaces:**
-- `loadAgentMailConfig(env)` returns `{ webhookSecrets, apiKeyRef, inboxMappings, senderAllowlist, forwardingTokens, limits }` and rejects missing required values.
+- `loadAgentMailConfig(env)` returns `{ webhookSecrets, apiKeyRef, forwardingDomain, inboxMappings, senderAllowlist, forwardingTokens, limits }` and rejects missing required values. Every inbox mapping names an existing per-registration webhook secret, and mappings must be exactly the canonical endpoint set `ep_triage`, `ep_judgment`, and `ep_iron`; `ep_ingress` is forbidden as a mailbox endpoint.
 - `resolveInboxMapping(inboxMappings, providerInboxId)` returns `{ endpointId, workflowPolicy }` or throws `UNKNOWN_INBOX` / `MULTIPLE_INBOX_MAPPING`.
 - `buildIngressProvenance(input)` returns a redacted, JSON-serializable object containing provider event ID, provider message ID, inbox ID, verified sender, workflow, classification, attachment hashes, and timestamps; it never returns raw credentials or message bodies.
 - `deriveIngressIdempotencyKey({ providerEventId, providerMessageId, inboxId })` returns a stable nonblank string used as the Sigil `idempotency_key`.

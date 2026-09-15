@@ -31,3 +31,11 @@ test('ledger bounds queue depth per workflow', async () => {
   await ledger.recordIngressEvent({ ...base, workflow: 'trm' });
   await assert.rejects(ledger.recordIngressEvent({ ...base, eventId: 'evt_3', providerEventId: 'evt_3', providerMessageId: 'msg_3', idempotencyKey: 'agentmail:key3', workflow: 'trm' }), { code: 'QUEUE_SATURATED' });
 });
+
+test('terminal states release memory queue depth', async () => {
+  const ledger = createAgentMailLedger({ maxQueueDepth: 1 });
+  await ledger.recordIngressEvent({ ...base, workflow: 'trm' });
+  await ledger.transitionIngressState('evt_1', 'rejected');
+  const next = await ledger.recordIngressEvent({ ...base, eventId: 'evt_4', providerEventId: 'evt_4', providerMessageId: 'msg_4', idempotencyKey: 'agentmail:key4', workflow: 'trm' });
+  assert.equal(next.duplicate, false);
+});

@@ -14,7 +14,7 @@ test('synthetic triage ingress produces one signed envelope and receipt', async 
     rawBody: Buffer.from('{"synthetic":true}'),
     headers: { 'x-synthetic-signature': 'valid' },
     inboxId: 'inbox_a',
-    provider: { async verifyWebhook() { return { eventId: 'evt_integration', messageId: 'msg_integration', from: 'operator@example.test', authenticatedSender: true, senderAuthentication: 'spf-dkim-pass', alias: `triage+trm+${'I'.repeat(22)}@agentmail.test`, body: 'Synthetic integration request', attachments: [] }; } },
+    provider: { async verifyWebhook() { return { eventId: 'evt_integration', messageId: 'msg_integration', from: 'operator@example.test', authenticatedSender: true, senderAuthentication: 'spf-dkim-pass', alias: `triage+trm+${'I'.repeat(22)}@agentmail.test`, body: 'Synthetic integration request', normalizedInstruction: 'Synthetic integration request', attachments: [] }; } },
     registry: { inboxMappings: [
       { providerInboxId: 'inbox_a', endpointId: 'ep_triage', workflowPolicy: ['trm'] },
       { providerInboxId: 'inbox_b', endpointId: 'ep_judgment', workflowPolicy: ['review'] },
@@ -29,6 +29,7 @@ test('synthetic triage ingress produces one signed envelope and receipt', async 
   const result = await handleAgentMailWebhook(input);
   assert.equal(result.status, 202);
   assert.equal(queued.length, 1);
+  assert.equal(result.receipt?.correlation_id, queued[0].correlation_id);
   const receipt = emitIngressReceipt({ event: { eventId: result.eventId, correlationId: queued[0].correlation_id }, outcome: { state: result.state }, signer: input.ingress.signer, createdAt: '2026-09-14T12:00:01Z' });
   assert.equal(receipt.correlation_id, queued[0].correlation_id);
   assert.equal(receipt.signature.algorithm, 'Ed25519');

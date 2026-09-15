@@ -162,6 +162,7 @@ export function createLocalQuarantineStorage({ rootDir, key, clock = () => new D
 
   async function setRetention(reference, { retentionClass = 'standard', expiresAt, legalHold } = {}) {
     const { id, record } = await readRecord(reference);
+    if (record.legalHold === true && legalHold === false) fail('QUARANTINE_LEGAL_HOLD', 'Legal hold cannot be cleared through retention updates');
     const updated = {
       ...record,
       retentionClass: retentionClass === 'short' ? 'short' : 'standard',
@@ -193,10 +194,20 @@ export function createLocalQuarantineStorage({ rootDir, key, clock = () => new D
 
   async function remove(reference) {
     const { id } = await readRecord(reference);
+    const metadata = metadataPath(id);
+    const deletingMetadata = `${metadata}.${crypto.randomUUID()}.deleting`;
     try {
+      await fs.rename(metadata, deletingMetadata);
+      const lockedRecord = JSON.parse(await fs.readFile(deletingMetadata, 'utf8'));
+      if (lockedRecord.legalHold === true) {
+        await fs.rename(deletingMetadata, metadata);
+        fail('QUARANTINE_LEGAL_HOLD', 'Quarantine object is protected by legal hold');
+      }
       await fs.unlink(dataPath(id));
-      await fs.unlink(metadataPath(id));
+      await fs.unlink(deletingMetadata);
     } catch (error) {
+      if (error.code !== 'QUARANTINE_LEGAL_HOLD') await fs.rename(deletingMetadata, metadata).catch(() => {});
+      if (error.code === 'QUARANTINE_LEGAL_HOLD') throw error;
       fail(isNotFound(error) ? 'QUARANTINE_OBJECT_NOT_FOUND' : 'QUARANTINE_DELETE_FAILED', 'Quarantine object could not be deleted');
     }
     return { reference, deleted: true };

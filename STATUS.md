@@ -1,5 +1,11 @@
 # Status
 
+## Session update: 2026-09-15 AgentMail review remediation
+
+- Scoped review findings were remediated in the disposable checkout `C:\dev\dev-sandbox\sigil-agentmail-review`: raw email body can no longer populate trusted task instructions; canonical mailbox endpoints and per-inbox webhook secret references are required; forwarding addresses enforce one domain; provider verification has a parser timeout; sender rate limits and attachment limits are wired; inactive endpoint mappings fail closed; signed receipts and envelope message IDs are linked; PostgreSQL ledger transitions and queue admission use transactional locking; memory queue depth recovers at terminal states; legal holds cannot be cleared or deleted through ordinary retention operations.
+- Focused AgentMail ingress evidence: 45/45 passed. Full direct Node discovery: 1,060 total, 937 passed, 0 failed, 123 skipped. Dependency audit and JCS audit passed. The repository has no `lint` script. No live PostgreSQL gate ran because `SIGIL_TEST_DATABASE_URL` is unset.
+- Production blockers remain: live non-sensitive canary, real secret rotation, retention deletion against the deployment storage, operational alerting, privacy/compliance approval, and Tier 1 approval. Financial-sensitive handling remains default-deny; no production readiness is claimed.
+
 ## Session update: 2026-09-14 AgentMail ingress implementation
 
 - Implemented the approved three-mailbox AgentMail ingress slice in commits `8e6dd9f`, `c63d687`, `24d8531`, `383b7af`, `7e95960`, `08ef4cc`, `d9ab07d`, `97d17d9`, and `418201d`.

@@ -32,7 +32,7 @@ function read(env, key) {
   return env?.[key];
 }
 
-function normalizeMappings(value) {
+function normalizeMappings(value, webhookSecrets) {
   const parsed = parseJson(value, 'SIGIL_AGENTMAIL_INBOX_MAPPINGS');
   const entries = Array.isArray(parsed)
     ? parsed
@@ -40,19 +40,23 @@ function normalizeMappings(value) {
   if (entries.length !== 3) fail('AGENTMAIL_CONFIG_INVALID', 'Exactly three AgentMail inbox mappings are required', { field: 'inboxMappings' });
   const seenProvider = new Set();
   const seenEndpoint = new Set();
+  const expectedEndpoints = new Set(['ep_triage', 'ep_judgment', 'ep_iron']);
   return entries.map((entry) => {
     const providerInboxId = requiredString(entry?.providerInboxId ?? entry?.provider_inbox_id, 'providerInboxId');
     const endpointId = requiredString(entry?.endpointId ?? entry?.endpoint_id, 'endpointId');
     if (seenProvider.has(providerInboxId) || seenEndpoint.has(endpointId)) {
       fail('MULTIPLE_INBOX_MAPPING', 'AgentMail inbox and endpoint mappings must be one-to-one', { providerInboxId, endpointId });
     }
+    if (!expectedEndpoints.has(endpointId)) fail('AGENTMAIL_CONFIG_INVALID', 'AgentMail inbox must map to a canonical endpoint', { endpointId });
+    const webhookSecretId = requiredString(entry?.webhookSecretId ?? entry?.webhook_secret_id, 'webhookSecretId');
+    if (!Object.hasOwn(webhookSecrets, webhookSecretId)) fail('AGENTMAIL_CONFIG_INVALID', 'AgentMail inbox webhook secret is not configured', { providerInboxId, webhookSecretId });
     seenProvider.add(providerInboxId);
     seenEndpoint.add(endpointId);
     const workflowPolicy = Array.isArray(entry.workflowPolicy)
       ? entry.workflowPolicy.map((workflow) => requiredString(workflow, 'workflowPolicy'))
       : ENDPOINT_POLICIES[endpointId];
     if (!workflowPolicy?.length) fail('AGENTMAIL_CONFIG_INVALID', `No workflow policy configured for ${endpointId}`, { endpointId });
-    return Object.freeze({ providerInboxId, endpointId, workflowPolicy: Object.freeze([...new Set(workflowPolicy)]) });
+    return Object.freeze({ providerInboxId, endpointId, webhookSecretId, workflowPolicy: Object.freeze([...new Set(workflowPolicy)]) });
   });
 }
 
@@ -88,7 +92,9 @@ export function loadAgentMailConfig(env = process.env) {
   }
   const apiKeyRef = requiredString(read(env, 'SIGIL_AGENTMAIL_API_KEY_REF'), 'SIGIL_AGENTMAIL_API_KEY_REF');
   if (!/^(secret|env):\/\//.test(apiKeyRef)) fail('AGENTMAIL_CONFIG_INVALID', 'AgentMail API key must be a secret reference', { field: 'apiKeyRef' });
-  const inboxMappings = normalizeMappings(read(env, 'SIGIL_AGENTMAIL_INBOX_MAPPINGS'));
+  const forwardingDomain = requiredString(read(env, 'SIGIL_AGENTMAIL_FORWARDING_DOMAIN'), 'SIGIL_AGENTMAIL_FORWARDING_DOMAIN').toLowerCase();
+  if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(forwardingDomain)) fail('AGENTMAIL_CONFIG_INVALID', 'Forwarding domain is invalid', { field: 'forwardingDomain' });
+  const inboxMappings = normalizeMappings(read(env, 'SIGIL_AGENTMAIL_INBOX_MAPPINGS'), webhookSecrets);
   const senderAllowlist = parseJson(read(env, 'SIGIL_AGENTMAIL_SENDER_ALLOWLIST'), 'SIGIL_AGENTMAIL_SENDER_ALLOWLIST');
   if (!Array.isArray(senderAllowlist) || senderAllowlist.length === 0 || senderAllowlist.some((sender) => typeof sender !== 'string' || sender.trim() === '')) {
     fail('AGENTMAIL_CONFIG_INVALID', 'Sender allowlist must be a non-empty string array', { field: 'senderAllowlist' });
@@ -104,6 +110,7 @@ export function loadAgentMailConfig(env = process.env) {
   return Object.freeze({
     webhookSecrets: Object.freeze({ ...webhookSecrets }),
     apiKeyRef,
+    forwardingDomain,
     inboxMappings: Object.freeze(inboxMappings),
     senderAllowlist: Object.freeze(senderAllowlist.map((sender) => sender.trim().toLowerCase())),
     forwardingTokens: Object.freeze({ ...forwardingTokens }),
