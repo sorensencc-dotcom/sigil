@@ -197,3 +197,23 @@ test('memory relay federation_directory_links: expired reaper path never resurre
   assert.equal(row.status, 'expired');
   assert.equal(row.last_reason_code, 'redemption_dead_letter');
 });
+
+test('memory relay consumeApprovalDecision: matches endpoint_id + action_hash, is single-use, and respects expiry', async () => {
+  const repository = createMemoryRepository();
+  await repository.recordApprovalDecision({ decisionId: 'decision_1', endpointId: 'ep_claude', actionHash: 'hash_a', expiresAt: '2026-08-17T00:00:00Z', now: new Date('2026-08-16T12:00:00Z') });
+
+  // Wrong endpoint or wrong hash: no match.
+  assert.equal(await repository.consumeApprovalDecision({ endpointId: 'ep_other', actionHash: 'hash_a', now: new Date('2026-08-16T12:01:00Z') }), null);
+  assert.equal(await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_b', now: new Date('2026-08-16T12:01:00Z') }), null);
+
+  // Expired: no match even with correct endpoint/hash.
+  assert.equal(await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_a', now: new Date('2026-08-17T00:00:01Z') }), null);
+
+  // Correct, unexpired: matches and is consumed.
+  const consumed = await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_a', now: new Date('2026-08-16T12:01:00Z') });
+  assert.equal(consumed.decision_id, 'decision_1');
+  assert.equal(consumed.status, 'consumed');
+
+  // Single-use: the same decision cannot be consumed twice.
+  assert.equal(await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_a', now: new Date('2026-08-16T12:02:00Z') }), null);
+});

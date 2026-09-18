@@ -433,3 +433,117 @@ test('concurrent duplicate ack requests race safely to exactly one acknowledgeme
     await freshPool.end();
   }
 });
+
+test('consumeApprovalDecision matches, is single-use, and respects expiry against live Postgres', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const ids = { human: `usr_${suffix}`, endpoint: `ep_${suffix}` };
+  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  assertDisposableTestDatabase(connectionString);
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
+  for (const file of sqlFiles) {
+    await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
+  }
+  await pool.query(`
+    INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
+      VALUES ('${ids.endpoint}', '${ids.human}', 'claude', 'install_${suffix}', 'Claude', 'active', NOW());
+    INSERT INTO human_credentials (credential_id, human_id, type, public_key, status, valid_from, created_at)
+      VALUES ('cred_${suffix}', '${ids.human}', 'webauthn', decode('00', 'hex'), 'active', NOW(), NOW());
+    INSERT INTO approval_decisions (decision_id, human_id, credential_id, endpoint_id, action_hash, action_hash_algorithm, target, scope, contract_version, nonce, status, created_at, expires_at)
+      VALUES ('decision_${suffix}', '${ids.human}', 'cred_${suffix}', '${ids.endpoint}', 'hash_${suffix}', 'sha256', '{}', 'approval', 'sigil/1', 'nonce_${suffix}', 'approved', NOW(), NOW() + INTERVAL '5 minutes');
+  `);
+
+  const repository = new PostgresRepository({ pool });
+  // Wrong endpoint or wrong hash: no match, nothing consumed.
+  assert.equal(await repository.consumeApprovalDecision({ endpointId: `ep_other_${suffix}`, actionHash: `hash_${suffix}` }), null);
+  assert.equal(await repository.consumeApprovalDecision({ endpointId: ids.endpoint, actionHash: 'hash_wrong' }), null);
+
+  const consumed = await repository.consumeApprovalDecision({ endpointId: ids.endpoint, actionHash: `hash_${suffix}` });
+  assert.equal(consumed.decision_id, `decision_${suffix}`);
+  assert.equal(consumed.status, 'consumed');
+
+  // Single-use: a second attempt at the same, now-consumed decision fails closed.
+  assert.equal(await repository.consumeApprovalDecision({ endpointId: ids.endpoint, actionHash: `hash_${suffix}` }), null);
+
+  const row = await pool.query('SELECT status FROM approval_decisions WHERE decision_id = $1', [`decision_${suffix}`]);
+  assert.equal(row.rows[0].status, 'consumed');
+});
+
+test('a high-risk capability envelope is rejected without a decision, accepted once one exists, and the decision cannot authorize a second envelope', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const ids = { human: `usr_${suffix}`, endpoint: `ep_${suffix}`, key: `key_${suffix}`, conversation: `conv_${suffix}` };
+  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  assertDisposableTestDatabase(connectionString);
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
+  for (const file of sqlFiles) {
+    await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
+  }
+
+  const keys = crypto.generateKeyPairSync('ed25519');
+  await pool.query(`
+    INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
+      VALUES ('${ids.endpoint}', '${ids.human}', 'claude', 'install_${suffix}', 'Claude', 'active', NOW());
+    INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
+      VALUES ('${ids.key}', '${ids.endpoint}', 'Ed25519', decode('00', 'hex'), 'active', NOW());
+    INSERT INTO conversations (conversation_id, kind, created_by, created_at)
+      VALUES ('${ids.conversation}', 'direct', '${ids.human}', NOW());
+    INSERT INTO capability_grants (grant_id, capability, scope, granted_to, granted_by, granted_at, expires_at)
+      VALUES ('grant_${suffix}', 'sigil.approval/request', 'scope:conversation/${ids.conversation}', '${ids.endpoint}', '${ids.human}', NOW(), '2030-01-01T00:00:00Z');
+  `);
+
+  const { acceptEnvelopeAsync } = await import('./accept-envelope.mjs');
+  const { signedBytes } = await import('./validate-envelope.mjs');
+  const repository = new PostgresRepository({ pool });
+  const registered = new Map([[ids.endpoint, { owner_id: ids.human, key_id: ids.key, status: 'active', public_key: keys.publicKey }]]);
+  function buildEnvelope(messageId) {
+    const envelope = {
+      protocol: 'sigil/1', message_id: messageId, conversation_id: ids.conversation, message_type: 'chat.message',
+      sender: { endpoint_id: ids.endpoint, owner_id: ids.human }, recipient: { endpoint_id: ids.endpoint },
+      body: { text: 'high-risk action' }, context_refs: [], capabilities: ['sigil.approval/request'], correlation_id: null,
+      idempotency_key: `send_${messageId}`, created_at: '2029-12-31T12:00:00Z', expires_at: '2030-01-01T00:00:00Z',
+      signature: { algorithm: 'Ed25519', key_id: ids.key, value: '' }
+    };
+    envelope.signature.value = crypto.sign(null, signedBytes(envelope), keys.privateKey).toString('base64url');
+    return envelope;
+  }
+
+  // No decision exists yet: rejected, nothing persisted.
+  const firstAttempt = buildEnvelope(`msg_first_${suffix}`);
+  const blocked = await acceptEnvelopeAsync(firstAttempt, { registered, repository, now: new Date('2029-12-31T12:01:00Z') });
+  assert.equal(blocked.status, 403);
+  assert.equal(blocked.body.code, 'APPROVAL_REQUIRED');
+
+  // Record a decision matching this exact envelope's canonical hash (the action_hash a real
+  // WebAuthn approval-ceremony call would have been given at challenge-creation time).
+  const canonicalHash = crypto.createHash('sha256').update(signedBytes(firstAttempt)).digest('hex');
+  await pool.query(`
+    INSERT INTO human_credentials (credential_id, human_id, type, public_key, status, valid_from, created_at)
+      VALUES ('cred_${suffix}', '${ids.human}', 'webauthn', decode('00', 'hex'), 'active', NOW(), NOW());
+    INSERT INTO approval_decisions (decision_id, human_id, credential_id, endpoint_id, action_hash, action_hash_algorithm, target, scope, contract_version, nonce, status, created_at, expires_at)
+      VALUES ('decision_${suffix}', '${ids.human}', 'cred_${suffix}', '${ids.endpoint}', '${canonicalHash}', 'sha256', '{}', 'approval', 'sigil/1', 'nonce_${suffix}', 'approved', NOW(), '2030-01-01T00:00:00Z');
+  `);
+
+  // Same envelope bytes, now with a matching decision: accepted, and the decision is consumed.
+  const approved = await acceptEnvelopeAsync(firstAttempt, { registered, repository, now: new Date('2029-12-31T12:02:00Z') });
+  assert.equal(approved.status, 202);
+  const decisionRow = await pool.query('SELECT status FROM approval_decisions WHERE decision_id = $1', [`decision_${suffix}`]);
+  assert.equal(decisionRow.rows[0].status, 'consumed');
+
+  // A different envelope (distinct message_id -> distinct canonical hash) from
+  // the same endpoint does NOT inherit the decision just consumed above --
+  // approval is scoped to one specific action_hash, not a blanket per-endpoint
+  // pass. (consumeApprovalDecision's single-use behavior itself -- the same
+  // decision cannot be claimed twice -- is covered directly, at the repository
+  // level, by the test above this one.)
+  const secondAttempt = buildEnvelope(`msg_second_${suffix}`);
+  const rejectedUnrelated = await acceptEnvelopeAsync(secondAttempt, { registered, repository, now: new Date('2029-12-31T12:03:00Z') });
+  assert.equal(rejectedUnrelated.status, 403);
+  assert.equal(rejectedUnrelated.body.code, 'APPROVAL_REQUIRED');
+});

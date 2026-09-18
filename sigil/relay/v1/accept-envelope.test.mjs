@@ -82,27 +82,31 @@ test('a race detected by the persistence layer itself overrides the optimistic r
   assert.equal(response.body.duplicate, true);
 });
 
-function fakeTransactionalRepository({ taskRequests = new Map(), envelopes = new Map() } = {}) {
+function fakeTransactionalRepository({ taskRequests = new Map(), envelopes = new Map(), riskTiers = new Map(), consumeApprovalDecisionImpl, grants = [] } = {}) {
   const calls = [];
-  return {
+  const repo = {
     calls,
     async withTransaction(fn) { calls.push('BEGIN'); const result = await fn({ id: 'client-1' }); calls.push('COMMIT'); return result; },
     async lookupTaskRequest(taskId, conversationId, client) { calls.push({ op: 'lookupTaskRequest', taskId, conversationId, client }); return taskRequests.get(`${conversationId}:${taskId}`) ?? null; },
     async lookupIdempotency() { return null; },
     async lookupAcceptedMessageId() { return null; },
-    async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
-    async lookupActiveCapabilityGrants() { return []; },
+    async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: riskTiers.get(capability) ?? 'standard' }; },
+    async lookupActiveCapabilityGrants() { return grants; },
     async reserveRateLimit() { return { count: 1, allowed: true }; },
     async countOpenDeliveries() { return 0; },
     async persistAcceptedEnvelope(row) { envelopes.set(row.envelope.message_id, row); return { message_id: row.envelope.message_id, duplicate: false }; },
   };
+  if (consumeApprovalDecisionImpl) {
+    repo.consumeApprovalDecision = async (args) => { calls.push({ op: 'consumeApprovalDecision', ...args }); return consumeApprovalDecisionImpl(args); };
+  }
+  return repo;
 }
 
-function makeEnvelope({ keys, messageType, body, conversationId = 'conv_1' }) {
+function makeEnvelope({ keys, messageType, body, conversationId = 'conv_1', capabilities = [] }) {
   const envelope = {
     protocol: 'sigil/1', message_id: `msg_${crypto.randomUUID()}`, conversation_id: conversationId,
     message_type: messageType, sender: { endpoint_id: 'ep_claude', owner_id: 'usr_claude' }, recipient: { endpoint_id: 'ep_codex', owner_id: 'usr_codex' },
-    body, context_refs: [], capabilities: [], correlation_id: null, idempotency_key: `send_${crypto.randomUUID()}`,
+    body, context_refs: [], capabilities, correlation_id: null, idempotency_key: `send_${crypto.randomUUID()}`,
     created_at: '2026-08-16T12:00:00Z', expires_at: '2026-08-16T13:00:00Z',
     signature: { algorithm: 'Ed25519', key_id: 'key_claude', value: '' }
   };
@@ -412,4 +416,63 @@ test('broadcast envelope (no recipient.endpoint_id) is never checked against dir
   const { acceptEnvelopeAsync } = await import('./accept-envelope.mjs');
   await acceptEnvelopeAsync(broadcastEnvelope, { ...options, repository, idempotency: undefined, broadcastAuthorizer: () => true });
   assert.equal(called, false);
+});
+
+test('an envelope carrying a high-risk capability with no matching decision is rejected with APPROVAL_REQUIRED', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'x' }, capabilities: ['sigil.approval/request'] });
+  const repository = fakeTransactionalRepository({
+    riskTiers: new Map([['sigil.approval/request', 'high']]),
+    grants: [{ capability: 'sigil.approval/request', scope: 'scope:conversation/conv_1' }],
+    consumeApprovalDecisionImpl: () => null,
+  });
+  const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
+  assert.equal(result.status, 403);
+  assert.equal(result.body.code, 'APPROVAL_REQUIRED');
+  assert.deepEqual(result.body.details.capabilities, ['sigil.approval/request']);
+  assert.equal(repository.calls.some((call) => call?.op === 'persistAcceptedEnvelope'), false);
+});
+
+test('an envelope carrying a high-risk capability with no consumeApprovalDecision support at all fails closed', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'x' }, capabilities: ['sigil.approval/request'] });
+  const repository = fakeTransactionalRepository({
+    riskTiers: new Map([['sigil.approval/request', 'high']]),
+    grants: [{ capability: 'sigil.approval/request', scope: 'scope:conversation/conv_1' }],
+  });
+  const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
+  assert.equal(result.status, 403);
+  assert.equal(result.body.code, 'APPROVAL_REQUIRED');
+});
+
+test('an envelope carrying a high-risk capability with a matching decision consumes it and is accepted', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'x' }, capabilities: ['sigil.approval/request'] });
+  const repository = fakeTransactionalRepository({
+    riskTiers: new Map([['sigil.approval/request', 'high']]),
+    grants: [{ capability: 'sigil.approval/request', scope: 'scope:conversation/conv_1' }],
+    consumeApprovalDecisionImpl: () => ({ decision_id: 'decision_1', status: 'consumed' }),
+  });
+  const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
+  assert.equal(result.status, 202);
+  const consumeCall = repository.calls.find((call) => call?.op === 'consumeApprovalDecision');
+  assert.ok(consumeCall);
+  assert.equal(consumeCall.endpointId, 'ep_claude');
+  assert.equal(typeof consumeCall.actionHash, 'string');
+});
+
+test('a low/standard-risk capability never triggers the approval gate', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'x' }, capabilities: ['sigil.task/read_inbox'] });
+  const repository = fakeTransactionalRepository({
+    riskTiers: new Map([['sigil.task/read_inbox', 'low']]),
+    grants: [{ capability: 'sigil.task/read_inbox', scope: 'scope:conversation/conv_1' }],
+  });
+  const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
+  assert.equal(result.status, 202);
+  assert.equal(repository.calls.some((call) => call?.op === 'consumeApprovalDecision'), false);
 });
