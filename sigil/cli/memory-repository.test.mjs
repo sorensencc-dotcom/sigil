@@ -31,10 +31,10 @@ test('memory relay lookupTaskRequest finds an accepted task.request by conversat
   const repository = createMemoryRepository();
   await repository.persistAcceptedEnvelope({
     message_id: 'msg_req_1', canonical_hash: 'sha256:abc',
-    envelope: { message_id: 'msg_req_1', sender: { endpoint_id: 'ep_claude' }, message_type: 'task.request', conversation_id: 'conv_1', body: { task_id: 'task_1' }, idempotency_key: 'send_1' }
+    envelope: { message_id: 'msg_req_1', sender: { endpoint_id: 'ep_claude' }, recipient: { endpoint_id: 'ep_codex' }, message_type: 'task.request', conversation_id: 'conv_1', body: { task_id: 'task_1' }, idempotency_key: 'send_1' }
   });
   const found = await repository.lookupTaskRequest('task_1', 'conv_1');
-  assert.deepEqual(found, { message_id: 'msg_req_1' });
+  assert.deepEqual(found, { message_id: 'msg_req_1', recipientEndpointId: 'ep_codex' });
   assert.equal(await repository.lookupTaskRequest('task_missing', 'conv_1'), null);
 });
 

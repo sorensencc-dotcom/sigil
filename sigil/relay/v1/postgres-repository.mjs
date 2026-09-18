@@ -169,7 +169,7 @@ export class PostgresRepository {
   }
   async lookupTaskRequest(taskId, conversationId, client = this.pool) {
     const result = await client.query(
-      `SELECT message_id FROM envelopes WHERE conversation_id = $1 AND message_type = 'task.request' AND body->>'task_id' = $2 AND envelope_status = 'accepted' LIMIT 1`,
+      `SELECT message_id, recipient_endpoint_id AS "recipientEndpointId" FROM envelopes WHERE conversation_id = $1 AND message_type = 'task.request' AND body->>'task_id' = $2 AND envelope_status = 'accepted' LIMIT 1`,
       [conversationId, taskId]
     );
     return result.rows[0] ?? null;

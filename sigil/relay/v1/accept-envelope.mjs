@@ -8,7 +8,7 @@ import { decideRoute, buildForwardRequest, signForwardRequest, postForward } fro
 // rejection worth auditing (design §9, round 3 blocker 5). A malformed-JSON
 // INVALID_ENVELOPE before signature verification has no meaningful
 // sender/conversation_id to audit against, so it's deliberately excluded.
-const AUDITED_REJECTION_CODES = new Set(['CAPABILITY_DENIED', 'REPLAY_DETECTED', 'RATE_LIMITED', 'QUOTA_EXCEEDED', 'DIRECTORY_LINK_REQUIRED']);
+const AUDITED_REJECTION_CODES = new Set(['CAPABILITY_DENIED', 'REPLAY_DETECTED', 'RATE_LIMITED', 'QUOTA_EXCEEDED', 'DIRECTORY_LINK_REQUIRED', 'TASK_ASSIGNEE_MISMATCH']);
 
 const statusByCode = Object.freeze({
   INVALID_ENVELOPE: 400,
@@ -19,6 +19,7 @@ const statusByCode = Object.freeze({
   ROUTE_NOT_AUTHORIZED: 403,
   CAPABILITY_DENIED: 403,
   APPROVAL_REQUIRED: 403,
+  TASK_ASSIGNEE_MISMATCH: 403,
   MESSAGE_EXPIRED: 422,
   DUPLICATE_MESSAGE: 409,
   REPLAY_DETECTED: 409,
@@ -331,6 +332,16 @@ async function acceptWithRepository(envelope, options) {
     if (envelope.message_type === 'task.result') {
       const visible = await repository.lookupTaskRequest(envelope.body.task_id, envelope.conversation_id, client);
       if (!visible) throw reject('INVALID_ENVELOPE', 'task.result references a task_id with no visible task.request', { field: 'task_id', reason: 'no visible task.request' });
+      // Binds task.result to the original task.request's assignee (round 3
+      // finding: nothing previously stopped an uninvolved conversation
+      // member from fabricating a result for another agent's task). A
+      // broadcast task.request (no single recipient) has no fixed assignee,
+      // so any conversation member may report a result for it.
+      if (visible.recipientEndpointId && visible.recipientEndpointId !== envelope.sender.endpoint_id) {
+        throw reject('TASK_ASSIGNEE_MISMATCH', 'task.result sender does not match the task.request recipient', {
+          task_id: envelope.body.task_id, expected_endpoint_id: visible.recipientEndpointId, actual_endpoint_id: envelope.sender.endpoint_id,
+        });
+      }
     }
     const streamSequence = resolveStreamSequence(options.stream_seq);
     const streamSeq = streamSequence.enabled && !envelope.message_type.startsWith('session.') && !envelope.message_type.startsWith('admin.')
