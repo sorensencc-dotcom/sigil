@@ -65,11 +65,32 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
   const relayJobs = new Map();
   const auditEvents = [];
   const approvalDecisions = new Map(); // decision_id -> row (in-memory stand-in for approval_decisions)
+  // Scoped rollback support for withTransaction (Devin review, PR #6): this
+  // repo has no real transaction to roll back, so a mutation performed mid-
+  // callback (e.g. consumeApprovalDecision) stayed committed even when the
+  // callback later threw and the envelope was ultimately rejected -- a
+  // human-approved, one-time decision was silently burned by an unrelated,
+  // retriable failure. Only consumeApprovalDecision registers an undo here;
+  // this is not a general transaction log.
+  let currentTransactionRollbacks = null;
   return {
     // Single-process, no real client/connection -- the transaction wrapper
     // exists so acceptEnvelopeAsync's repository-aware path works unchanged
     // against this repository too (design §12 dual-repository equivalence).
-    async withTransaction(fn) { return fn(null); },
+    async withTransaction(fn) {
+      const rollbacks = [];
+      const previous = currentTransactionRollbacks;
+      currentTransactionRollbacks = rollbacks;
+      try {
+        const result = await fn(null);
+        currentTransactionRollbacks = previous;
+        return result;
+      } catch (error) {
+        currentTransactionRollbacks = previous;
+        for (const undo of rollbacks) undo();
+        throw error;
+      }
+    },
     async assignStreamSequence(_client, senderEndpointId, conversationId) {
       const key = JSON.stringify([senderEndpointId, conversationId]);
       const assigned = streamSequences.get(key) ?? 1n;
@@ -397,12 +418,18 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     // (single-process, so trivially so) claims and marks 'consumed' the
     // first matching 'approved', unexpired decision -- see accept-envelope.mjs's
     // high-risk capability gate. Returns null on no match, same fail-closed
-    // contract as the Postgres version.
+    // contract as the Postgres version. `.find()` already claims at most one
+    // row even when duplicates exist (Devin review, PR #6). This repo has no
+    // humans/human_credentials of its own to check revocation against --
+    // Postgres is the real security boundary for that; a demo/test decision
+    // seeded here is trusted for the life of the process.
     async consumeApprovalDecision({ endpointId, actionHash, now = new Date() }) {
       const timestamp = (now instanceof Date ? now : new Date(now)).getTime();
-      const decision = [...approvalDecisions.values()].find((d) => d.endpoint_id === endpointId && d.action_hash === actionHash && d.status === 'approved' && new Date(d.expires_at).getTime() > timestamp);
+      const prefixedHash = `sha256:${actionHash}`;
+      const decision = [...approvalDecisions.values()].find((d) => d.endpoint_id === endpointId && (d.action_hash === actionHash || d.action_hash === prefixedHash) && d.status === 'approved' && new Date(d.expires_at).getTime() > timestamp);
       if (!decision) return null;
       decision.status = 'consumed';
+      currentTransactionRollbacks?.push(() => { decision.status = 'approved'; });
       return decision;
     },
     async createHumanSession({ sessionId, humanId, authenticationMethod, assurance, deviceContext = {}, issuedAt = new Date(), expiresAt, now = new Date() }) {

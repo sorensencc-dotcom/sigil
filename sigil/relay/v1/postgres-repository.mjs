@@ -290,14 +290,40 @@ export class PostgresRepository {
   // caller fails closed with APPROVAL_REQUIRED rather than distinguishing
   // "never approved" from "already consumed" -- both mean the same thing to
   // this specific delivery attempt.
+  // Devin review, PR #6: (endpoint_id, action_hash) is not unique -- separate
+  // completed ceremonies can leave multiple 'approved' rows matching the same
+  // envelope -- so a bare UPDATE...WHERE...RETURNING would mark every one of
+  // them 'consumed' for a single envelope instead of exactly one. The CTE
+  // picks one deterministic row (oldest first) with FOR UPDATE SKIP LOCKED --
+  // two concurrent callers racing the same candidate set each land on a
+  // different unlocked row instead of blocking or double-claiming one -- and
+  // the outer UPDATE touches only that row. The candidate set also excludes
+  // a decision whose approving human or credential has since been revoked,
+  // so a revocation takes effect immediately even against a not-yet-expired,
+  // still-'approved' decision.
   async consumeApprovalDecision({ endpointId, actionHash, now = new Date(), client = this.pool } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    // Accepts both representations validateEnvelope's own (unused-in-practice)
+    // requiresApproval/approvedActionHashes hook has always tolerated -- the
+    // bare hex digest and the 'sha256:'-prefixed form -- so a decision
+    // recorded either way still matches (Devin review, PR #6).
     const result = await client.query(
-      `UPDATE approval_decisions
+      `WITH candidate AS (
+         SELECT ad.decision_id
+           FROM approval_decisions ad
+           JOIN humans h ON h.human_id = ad.human_id
+           JOIN human_credentials hc ON hc.human_id = ad.human_id AND hc.credential_id = ad.credential_id
+          WHERE ad.endpoint_id = $1 AND ad.action_hash IN ($2, $3) AND ad.status = 'approved' AND ad.expires_at > $4
+            AND h.status = 'active' AND hc.status = 'active'
+          ORDER BY ad.created_at ASC, ad.decision_id ASC
+          LIMIT 1
+          FOR UPDATE OF ad SKIP LOCKED
+       )
+       UPDATE approval_decisions
           SET status = 'consumed'
-        WHERE endpoint_id = $1 AND action_hash = $2 AND status = 'approved' AND expires_at > $3
+        WHERE decision_id = (SELECT decision_id FROM candidate)
         RETURNING decision_id, action_hash, status`,
-      [endpointId, actionHash, timestamp]
+      [endpointId, actionHash, `sha256:${actionHash}`, timestamp]
     );
     return result.rows[0] ?? null;
   }
