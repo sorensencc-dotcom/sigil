@@ -220,6 +220,155 @@ test('the DB-level unique index rejects a second task.request reusing an in-use 
   assert.equal(rows.rows[0].message_id, `msg_first_${suffix}`);
 });
 
+test('migration 024 resolves pre-existing duplicate task_id rows instead of failing to apply', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const ids = {
+    human: `usr_${suffix}`, codex: `ep_codex_${suffix}`, claude: `ep_claude_${suffix}`,
+    key: `key_${suffix}`, conversation: `conv_${suffix}`, task: `task_dup_${suffix}`
+  };
+  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  assertDisposableTestDatabase(connectionString);
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+
+  // Apply every migration up to (but not including) 024, so the exploit
+  // this migration closes -- two accepted task.request rows sharing
+  // (conversation_id, task_id) -- can be seeded exactly as it could have
+  // existed on a database attacked before this fix shipped.
+  const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
+  const preMigration = sqlFiles.filter((f) => f < '024_task_request_id_uniqueness.sql');
+  const migration024 = sqlFiles.find((f) => f === '024_task_request_id_uniqueness.sql');
+  assert.ok(migration024, 'migration 024 must exist on disk for this test to be meaningful');
+  for (const file of preMigration) {
+    await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
+  }
+
+  await pool.query(`
+    INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
+      VALUES ('${ids.codex}', '${ids.human}', 'codex', 'install_codex_${suffix}', 'Codex', 'active', NOW()),
+             ('${ids.claude}', '${ids.human}', 'claude', 'install_claude_${suffix}', 'Claude', 'active', NOW());
+    INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
+      VALUES ('${ids.key}', '${ids.codex}', 'Ed25519', decode('00', 'hex'), 'active', NOW());
+    INSERT INTO conversations (conversation_id, kind, created_by, created_at)
+      VALUES ('${ids.conversation}', 'direct', '${ids.human}', NOW());
+    INSERT INTO envelopes (message_id, conversation_id, protocol, message_type, sender_endpoint_id, sender_owner_id,
+                           recipient_endpoint_id, body, context_refs, capabilities, idempotency_key, expires_at,
+                           created_at, signature_algorithm, signature_key_id, signature_value, canonical_bytes)
+      VALUES ('msg_legit_${suffix}', '${ids.conversation}', 'sigil/1', 'task.request', '${ids.codex}', '${ids.human}',
+              '${ids.claude}', '{"task_id":"${ids.task}"}', '[]', '{}', 'send_legit_${suffix}', '2030-01-01T00:00:00Z',
+              '2029-12-31T12:00:00Z', 'Ed25519', '${ids.key}', 'sig', decode('00', 'hex')),
+             ('msg_forged_${suffix}', '${ids.conversation}', 'sigil/1', 'task.request', '${ids.claude}', '${ids.human}',
+              '${ids.claude}', '{"task_id":"${ids.task}"}', '[]', '{}', 'send_forged_${suffix}', '2030-01-01T00:00:00Z',
+              '2029-12-31T12:05:00Z', 'Ed25519', '${ids.key}', 'sig', decode('00', 'hex'));
+  `);
+
+  // The migration this repairs must not abort on the pre-existing duplicate.
+  await pool.query(await fs.readFile(path.join(migrationsDir, migration024), 'utf8'));
+
+  const rows = await pool.query(
+    'SELECT message_id, envelope_status FROM envelopes WHERE conversation_id = $1 ORDER BY created_at',
+    [ids.conversation]
+  );
+  assert.deepEqual(rows.rows, [
+    { message_id: `msg_legit_${suffix}`, envelope_status: 'accepted' },
+    { message_id: `msg_forged_${suffix}`, envelope_status: 'superseded_duplicate_task_id' },
+  ]);
+
+  // Neither row was deleted -- dependent rows referencing them (none seeded
+  // here beyond the envelopes themselves) would remain intact -- and the
+  // unique index now exists and is enforced going forward.
+  const indexRow = await pool.query(`SELECT indexdef FROM pg_indexes WHERE indexname = 'envelopes_task_request_lookup_idx'`);
+  assert.equal(indexRow.rowCount, 1);
+  assert.match(indexRow.rows[0].indexdef, /CREATE UNIQUE INDEX/);
+
+  // Re-applying the migration (idempotent, matching applyMigrations' model) must be a no-op.
+  await pool.query(await fs.readFile(path.join(migrationsDir, migration024), 'utf8'));
+  const rowsAfterReapply = await pool.query(
+    'SELECT message_id, envelope_status FROM envelopes WHERE conversation_id = $1 ORDER BY created_at',
+    [ids.conversation]
+  );
+  assert.deepEqual(rowsAfterReapply.rows, rows.rows);
+});
+
+test('a genuine concurrent task_id race is translated to an audited DUPLICATE_TASK_ID, not a raw Postgres error', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const ids = {
+    human: `usr_${suffix}`, claude: `ep_claude_${suffix}`, reviewer: `ep_reviewer_${suffix}`,
+    key: `key_${suffix}`, keyReviewer: `key_reviewer_${suffix}`, conversation: `conv_${suffix}`, task: `task_race_${suffix}`
+  };
+  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  assertDisposableTestDatabase(connectionString);
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
+  for (const file of sqlFiles) {
+    await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
+  }
+
+  const claudeKeys = crypto.generateKeyPairSync('ed25519');
+  const reviewerKeys = crypto.generateKeyPairSync('ed25519');
+  await pool.query(`
+    INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
+      VALUES ('${ids.claude}', '${ids.human}', 'claude', 'install_claude_${suffix}', 'Claude', 'active', NOW()),
+             ('${ids.reviewer}', '${ids.human}', 'claude', 'install_reviewer_${suffix}', 'Reviewer', 'active', NOW());
+    INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
+      VALUES ('${ids.key}', '${ids.claude}', 'Ed25519', decode('00', 'hex'), 'active', NOW()),
+             ('${ids.keyReviewer}', '${ids.reviewer}', 'Ed25519', decode('00', 'hex'), 'active', NOW());
+    INSERT INTO conversations (conversation_id, kind, created_by, created_at)
+      VALUES ('${ids.conversation}', 'direct', '${ids.human}', NOW());
+  `);
+
+  const { acceptEnvelopeAsync } = await import('./accept-envelope.mjs');
+  const { signedBytes } = await import('./validate-envelope.mjs');
+  const repository = new PostgresRepository({ pool });
+  const registered = new Map([
+    [ids.claude, { owner_id: ids.human, key_id: ids.key, status: 'active', public_key: claudeKeys.publicKey }],
+    [ids.reviewer, { owner_id: ids.human, key_id: ids.keyReviewer, status: 'active', public_key: reviewerKeys.publicKey }],
+  ]);
+  function buildRequest({ sender, keys, keyId, messageId }) {
+    const envelope = {
+      protocol: 'sigil/1', message_id: messageId, conversation_id: ids.conversation, message_type: 'task.request',
+      sender: { endpoint_id: sender, owner_id: ids.human }, recipient: { endpoint_id: sender },
+      body: { task_id: ids.task, instruction: 'x' }, context_refs: [], capabilities: [], correlation_id: null,
+      idempotency_key: `send_${messageId}`, created_at: '2029-12-31T12:00:00Z', expires_at: '2030-01-01T00:00:00Z',
+      signature: { algorithm: 'Ed25519', key_id: keyId, value: '' }
+    };
+    envelope.signature.value = crypto.sign(null, signedBytes(envelope), keys.privateKey).toString('base64url');
+    return envelope;
+  }
+  // Two distinct endpoints racing to claim the same task_id with distinct
+  // message_ids/idempotency_keys -- neither the idempotency nor replay
+  // checks can catch this; only the DB unique index does, and only after
+  // both transactions' app-level lookupTaskRequest checks have already
+  // passed (real overlapping transactions, not a mock).
+  const racers = [
+    buildRequest({ sender: ids.claude, keys: claudeKeys, keyId: ids.key, messageId: `msg_race_a_${suffix}` }),
+    buildRequest({ sender: ids.reviewer, keys: reviewerKeys, keyId: ids.keyReviewer, messageId: `msg_race_b_${suffix}` }),
+  ];
+  const results = await Promise.all(racers.map((envelope) => acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2029-12-31T12:01:00Z') })));
+
+  const accepted = results.filter((r) => r.status === 202);
+  const rejected = results.filter((r) => r.status !== 202);
+  assert.equal(accepted.length, 1, JSON.stringify(results));
+  assert.equal(rejected.length, 1, JSON.stringify(results));
+  // The loser must see the clean, audited rejection -- never the raw SQLSTATE.
+  assert.equal(rejected[0].status, 409);
+  assert.equal(rejected[0].body.code, 'DUPLICATE_TASK_ID');
+
+  // writeRejectionAudit doesn't thread conversation_id through, so filter by
+  // subject_id (= the rejected envelope's message_id) instead. Exactly one
+  // of the two racers lost and must have its rejection audited.
+  const auditRows = await pool.query(
+    `SELECT subject_id FROM audit_events WHERE event_type = 'envelope.rejected.duplicate_task_id' AND subject_id = ANY($1)`,
+    [racers.map((r) => r.message_id)]
+  );
+  assert.equal(auditRows.rowCount, 1, JSON.stringify(auditRows.rows));
+});
+
 test('concurrent duplicate ack requests race safely to exactly one acknowledgement, and survive a fresh connection', { skip: !connectionString }, async (t) => {
   const pool = new pg.Pool({ connectionString });
   t.after(() => pool.end());

@@ -371,6 +371,18 @@ async function acceptWithRepository(envelope, options) {
     if (options.onPersisted) await options.onPersisted({ envelope, persisted: persistedWithStreamSeq });
     return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: persisted?.message_id ?? result.message_id, duplicate: persisted?.duplicate ?? false } };
   }).catch(async (error) => {
+    // Devin review, PR #5: the app-level DUPLICATE_TASK_ID check above reads
+    // via lookupTaskRequest inside this same transaction, so two concurrent
+    // task.request submissions can both pass it before either commits --
+    // neither sees the other's still-uncommitted row. The loser's INSERT
+    // then hits the unique index from 024_task_request_id_uniqueness.sql
+    // and raises a raw Postgres 23505 here. Translate only that specific
+    // index's violation to the same audited rejection the app-level check
+    // produces; every other unique-constraint error (idempotency_keys, etc.)
+    // is left as-is.
+    if (error.code === '23505' && error.constraint === 'envelopes_task_request_lookup_idx') {
+      error = reject('DUPLICATE_TASK_ID', 'task_id is already claimed by another task.request in this conversation', { task_id: envelope.body?.task_id });
+    }
     const response = toResponse(options, error);
     if (AUDITED_REJECTION_CODES.has(error.code) && repository.recordAuditEvent) {
       await writeRejectionAudit({

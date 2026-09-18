@@ -32,6 +32,11 @@ test('envelope acceptance is durable async acceptance', () => {
   assert.ok(route.errors.includes('ENDPOINT_REVOKED'));
 });
 
+test('envelope acceptance declares the duplicate-task_id conflict', () => {
+  const route = api.routes.find((item) => item.path === '/v1/envelopes');
+  assert.ok(route.errors.includes('DUPLICATE_TASK_ID'));
+});
+
 test('error responses have stable machine-readable shape', () => {
   assert.deepEqual(api.error_response.required, ['request_id', 'code', 'message']);
   assert.equal(api.error_response.details, 'object');
