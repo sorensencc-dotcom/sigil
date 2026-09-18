@@ -156,6 +156,29 @@ test('non-federated recipient is checked by exact endpoint id before persistence
   assert.equal(repository.calls.some((call) => call.op === 'persistAcceptedEnvelope'), false);
 });
 
+test('task.request reusing a task_id already claimed in the conversation is rejected with DUPLICATE_TASK_ID', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  // An attacker (or anyone) reusing an in-use task_id must not be able to plant a self-addressed
+  // task.request that a later lookupTaskRequest could resolve to instead of the legitimate one.
+  const envelope = makeEnvelope({ keys, messageType: 'task.request', body: { task_id: 'task_1', instruction: 'x' } });
+  const repository = fakeTransactionalRepository({ taskRequests: new Map([['conv_1:task_1', { message_id: 'msg_original', recipientEndpointId: 'ep_reviewer' }]]) });
+  const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
+  assert.equal(result.status, 409);
+  assert.equal(result.body.code, 'DUPLICATE_TASK_ID');
+  assert.equal(result.body.details.task_id, 'task_1');
+  assert.equal(repository.calls.some((call) => call?.op === 'persistAcceptedEnvelope'), false);
+});
+
+test('task.request with a fresh task_id in the conversation is accepted', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const envelope = makeEnvelope({ keys, messageType: 'task.request', body: { task_id: 'task_new', instruction: 'x' } });
+  const repository = fakeTransactionalRepository();
+  const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
+  assert.equal(result.status, 202);
+});
+
 test('task.result referencing an accepted task_id in the same conversation is accepted when sent by the assignee', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
   const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);

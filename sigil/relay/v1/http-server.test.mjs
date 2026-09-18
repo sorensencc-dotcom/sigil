@@ -20,7 +20,7 @@ test('relay clock function is evaluated for each request', async () => {
   envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
   const repository = {
     async withTransaction(fn) { return fn(null); }, async lookupIdempotency() { return null; },
-    async lookupAcceptedMessageId() { return null; }, async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
+    async lookupAcceptedMessageId() { return null; }, async lookupTaskRequest() { return null; }, async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
     async lookupActiveCapabilityGrants() { return []; }, async reserveRateLimit() { return { count: 1, allowed: true }; },
     async countOpenDeliveries() { return 0; }, async persistAcceptedEnvelope(row) { return { message_id: row.envelope.message_id }; },
   };
@@ -73,7 +73,7 @@ test('HTTP relay rejects an unknown recipient before persistence', async () => {
   envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
   let persisted = false;
   const repository = {
-    async withTransaction(fn) { return fn(null); }, async lookupIdempotency() { return null; }, async lookupAcceptedMessageId() { return null; },
+    async withTransaction(fn) { return fn(null); }, async lookupIdempotency() { return null; }, async lookupAcceptedMessageId() { return null; }, async lookupTaskRequest() { return null; },
     async lookupRecipientEndpoint() { return null; }, async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
     async lookupActiveCapabilityGrants() { return []; }, async reserveRateLimit() { return { count: 1, allowed: true }; }, async countOpenDeliveries() { return 0; },
     async persistAcceptedEnvelope() { persisted = true; return { message_id: envelope.message_id }; }
@@ -94,7 +94,7 @@ test('HTTP relay defaults to repository persistence with canonical acceptance da
   const repository = {
     async withTransaction(fn) { return fn(null); },
     async lookupIdempotency() { return null; },
-    async lookupAcceptedMessageId() { return null; },
+    async lookupAcceptedMessageId() { return null; }, async lookupTaskRequest() { return null; },
     async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
     async lookupActiveCapabilityGrants() { return []; },
     async reserveRateLimit() { return { count: 1, allowed: true }; },
@@ -128,7 +128,7 @@ test('HTTP relay propagates stream_seq.enabled into local acceptance', async () 
     const assignments = [];
     const repository = {
       async withTransaction(fn) { return fn({ id: 'http-stream-client' }); },
-      async lookupIdempotency() { return null; }, async lookupAcceptedMessageId() { return null; },
+      async lookupIdempotency() { return null; }, async lookupAcceptedMessageId() { return null; }, async lookupTaskRequest() { return null; },
       async lookupCapabilityRegistration(capability) { return { capability }; }, async lookupActiveCapabilityGrants() { return []; },
       async reserveRateLimit() { return { count: 1, allowed: true }; }, async countOpenDeliveries() { return 0; },
       async assignStreamSequence(client, senderEndpointId, conversationId) { assignments.push({ client, senderEndpointId, conversationId }); return 17n; },
@@ -156,7 +156,7 @@ test('a relay with --domain configured rejects a foreign-domain recipient with R
   const repository = {
     async withTransaction(fn) { return fn(null); },
     async lookupIdempotency() { return null; },
-    async lookupAcceptedMessageId() { return null; },
+    async lookupAcceptedMessageId() { return null; }, async lookupTaskRequest() { return null; },
     async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
     async lookupActiveCapabilityGrants() { return []; },
     async reserveRateLimit() { return { count: 1, allowed: true }; },
@@ -189,7 +189,7 @@ test('HTTP relay does not notify when durable persistence fails', async () => {
   const notifications = [];
   const server = createRelayServer({
     registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
-    repository: { async withTransaction(fn) { return fn(null); }, async lookupIdempotency() { return null; }, async lookupAcceptedMessageId() { return null; }, async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; }, async lookupActiveCapabilityGrants() { return []; }, async reserveRateLimit() { return { count: 1, allowed: true }; }, async countOpenDeliveries() { return 0; }, async persistAcceptedEnvelope() { throw new Error('database unavailable'); } },
+    repository: { async withTransaction(fn) { return fn(null); }, async lookupIdempotency() { return null; }, async lookupAcceptedMessageId() { return null; }, async lookupTaskRequest() { return null; }, async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; }, async lookupActiveCapabilityGrants() { return []; }, async reserveRateLimit() { return { count: 1, allowed: true }; }, async countOpenDeliveries() { return 0; }, async persistAcceptedEnvelope() { throw new Error('database unavailable'); } },
     stream: { notify(...args) { notifications.push(args); } }, now: new Date('2026-08-13T12:01:00Z')
   });
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
@@ -209,7 +209,7 @@ test('HTTP relay returns prior acceptance for duplicate idempotency retry', asyn
   const repository = {
     async withTransaction(fn) { return fn(null); },
     async lookupIdempotency() { return persisted.length ? { message_id: envelope.message_id, canonical_hash: canonicalHash } : null; },
-    async lookupAcceptedMessageId() { return null; },
+    async lookupAcceptedMessageId() { return null; }, async lookupTaskRequest() { return null; },
     async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
     async lookupActiveCapabilityGrants() { return []; },
     async reserveRateLimit() { return { count: 1, allowed: true }; },
@@ -239,7 +239,7 @@ test('HTTP relay rejects conflicting idempotency retry', async () => {
   const repository = {
     async withTransaction(fn) { return fn(null); },
     async lookupIdempotency() { return { message_id: envelope.message_id, canonical_hash: originalHash }; },
-    async lookupAcceptedMessageId() { return null; },
+    async lookupAcceptedMessageId() { return null; }, async lookupTaskRequest() { return null; },
     async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
     async lookupActiveCapabilityGrants() { return []; },
     async reserveRateLimit() { return { count: 1, allowed: true }; },
@@ -266,7 +266,7 @@ test('HTTP relay notifies recipient stream after acceptance', async () => {
   const repository = {
     async withTransaction(fn) { return fn(null); },
     async lookupIdempotency() { return null; },
-    async lookupAcceptedMessageId() { return null; },
+    async lookupAcceptedMessageId() { return null; }, async lookupTaskRequest() { return null; },
     async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
     async lookupActiveCapabilityGrants() { return []; },
     async reserveRateLimit() { return { count: 1, allowed: true }; },
@@ -289,7 +289,7 @@ test('HTTP relay pushes the sender a delivered receipt via stream.notifyReceipt 
   const repository = {
     async withTransaction(fn) { return fn(null); },
     async lookupIdempotency() { return null; },
-    async lookupAcceptedMessageId() { return null; },
+    async lookupAcceptedMessageId() { return null; }, async lookupTaskRequest() { return null; },
     async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
     async lookupActiveCapabilityGrants() { return []; },
     async reserveRateLimit() { return { count: 1, allowed: true }; },
@@ -317,7 +317,7 @@ test('HTTP relay suppresses duplicate notification when persistence detects a co
   const repository = {
     async withTransaction(fn) { return fn(null); },
     async lookupIdempotency() { return null; },
-    async lookupAcceptedMessageId() { return null; },
+    async lookupAcceptedMessageId() { return null; }, async lookupTaskRequest() { return null; },
     async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; },
     async lookupActiveCapabilityGrants() { return []; },
     async reserveRateLimit() { return { count: 1, allowed: true }; },
