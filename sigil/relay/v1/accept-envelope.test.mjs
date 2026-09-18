@@ -156,15 +156,40 @@ test('non-federated recipient is checked by exact endpoint id before persistence
   assert.equal(repository.calls.some((call) => call.op === 'persistAcceptedEnvelope'), false);
 });
 
-test('task.result referencing an accepted task_id in the same conversation is accepted', async () => {
+test('task.result referencing an accepted task_id in the same conversation is accepted when sent by the assignee', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
   const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  // makeEnvelope's task.result is sent by ep_claude, so the original task.request must have been addressed to ep_claude.
   const envelope = makeEnvelope({ keys, messageType: 'task.result', body: { task_id: 'task_1', status: 'completed', summary: 'x' } });
-  const repository = fakeTransactionalRepository({ taskRequests: new Map([['conv_1:task_1', { message_id: 'msg_original' }]]) });
+  const repository = fakeTransactionalRepository({ taskRequests: new Map([['conv_1:task_1', { message_id: 'msg_original', recipientEndpointId: 'ep_claude' }]]) });
   const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
   assert.equal(result.status, 202);
   assert.equal(repository.calls.some((call) => call === 'BEGIN'), true);
   assert.equal(repository.calls.some((call) => call === 'COMMIT'), true);
+});
+
+test('task.result referencing a task_id assigned to a different endpoint is rejected with TASK_ASSIGNEE_MISMATCH', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  // makeEnvelope's task.result is sent by ep_claude, but the task.request was assigned to a third endpoint (ep_reviewer) --
+  // ep_claude must not be able to fabricate a result for a task it was never given.
+  const envelope = makeEnvelope({ keys, messageType: 'task.result', body: { task_id: 'task_1', status: 'completed', summary: 'x' } });
+  const repository = fakeTransactionalRepository({ taskRequests: new Map([['conv_1:task_1', { message_id: 'msg_original', recipientEndpointId: 'ep_reviewer' }]]) });
+  const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
+  assert.equal(result.status, 403);
+  assert.equal(result.body.code, 'TASK_ASSIGNEE_MISMATCH');
+  assert.equal(result.body.details.expected_endpoint_id, 'ep_reviewer');
+  assert.equal(result.body.details.actual_endpoint_id, 'ep_claude');
+  assert.equal(repository.calls.some((call) => call?.op === 'persistAcceptedEnvelope'), false);
+});
+
+test('task.result for a broadcast task.request (no single assignee) is accepted from any conversation member', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const envelope = makeEnvelope({ keys, messageType: 'task.result', body: { task_id: 'task_1', status: 'completed', summary: 'x' } });
+  const repository = fakeTransactionalRepository({ taskRequests: new Map([['conv_1:task_1', { message_id: 'msg_original', recipientEndpointId: null }]]) });
+  const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
+  assert.equal(result.status, 202);
 });
 
 test('non-task envelopes skip the cross-reference lookup entirely', async () => {

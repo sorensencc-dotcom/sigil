@@ -196,10 +196,11 @@ test('lookupMessageSender returns null for an unknown message id', async () => {
 
 test('lookupTaskRequest returns the accepted task.request row for the conversation', async () => {
   const calls = [];
-  const pool = { async query(text, values) { calls.push({ text, values }); return { rows: [{ message_id: 'msg_original' }] }; } };
+  const pool = { async query(text, values) { calls.push({ text, values }); return { rows: [{ message_id: 'msg_original', recipientEndpointId: 'ep_claude' }] }; } };
   const result = await new PostgresRepository({ pool }).lookupTaskRequest('task_1', 'conv_1');
-  assert.deepEqual(result, { message_id: 'msg_original' });
+  assert.deepEqual(result, { message_id: 'msg_original', recipientEndpointId: 'ep_claude' });
   assert.match(calls[0].text, /message_type = 'task\.request'/);
+  assert.match(calls[0].text, /recipient_endpoint_id AS "recipientEndpointId"/);
   assert.deepEqual(calls[0].values, ['conv_1', 'task_1']);
 });
 

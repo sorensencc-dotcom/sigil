@@ -157,7 +157,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     async lookupTaskRequest(taskId, conversationId) {
       for (const row of envelopes.values()) {
         if (row.envelope.conversation_id === conversationId && row.envelope.message_type === 'task.request' && row.envelope.body?.task_id === taskId) {
-          return { message_id: row.envelope.message_id };
+          return { message_id: row.envelope.message_id, recipientEndpointId: row.envelope.recipient?.endpoint_id ?? null };
         }
       }
       return null;
