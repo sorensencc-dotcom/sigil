@@ -8,7 +8,7 @@ import { decideRoute, buildForwardRequest, signForwardRequest, postForward } fro
 // rejection worth auditing (design §9, round 3 blocker 5). A malformed-JSON
 // INVALID_ENVELOPE before signature verification has no meaningful
 // sender/conversation_id to audit against, so it's deliberately excluded.
-const AUDITED_REJECTION_CODES = new Set(['CAPABILITY_DENIED', 'REPLAY_DETECTED', 'RATE_LIMITED', 'QUOTA_EXCEEDED', 'DIRECTORY_LINK_REQUIRED', 'TASK_ASSIGNEE_MISMATCH']);
+const AUDITED_REJECTION_CODES = new Set(['CAPABILITY_DENIED', 'REPLAY_DETECTED', 'RATE_LIMITED', 'QUOTA_EXCEEDED', 'DIRECTORY_LINK_REQUIRED', 'TASK_ASSIGNEE_MISMATCH', 'DUPLICATE_TASK_ID']);
 
 const statusByCode = Object.freeze({
   INVALID_ENVELOPE: 400,
@@ -22,6 +22,7 @@ const statusByCode = Object.freeze({
   TASK_ASSIGNEE_MISMATCH: 403,
   MESSAGE_EXPIRED: 422,
   DUPLICATE_MESSAGE: 409,
+  DUPLICATE_TASK_ID: 409,
   REPLAY_DETECTED: 409,
   RATE_LIMITED: 429,
   QUOTA_EXCEEDED: 429,
@@ -329,6 +330,20 @@ async function acceptWithRepository(envelope, options) {
     const prior = await repository.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key, client);
     if (prior && prior.canonical_hash !== result.canonical_hash) throw reject('DUPLICATE_MESSAGE', 'Idempotency key conflicts with an existing body');
     if (prior) return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: prior.message_id, duplicate: true } };
+    if (envelope.message_type === 'task.request') {
+      // Closes a bypass of the assignee binding below (Devin review, PR #4):
+      // without this, an attacker could reuse an existing task_id in a
+      // self-addressed task.request, and lookupTaskRequest's unordered
+      // LIMIT 1 could resolve to that forged row instead of the legitimate
+      // one, letting the attacker's own task.result pass the assignee check.
+      // A DB-level unique index (024_task_request_id_uniqueness.sql) backs
+      // this up against races; this check exists for a clean, audited
+      // rejection instead of a raw constraint violation.
+      const duplicate = await repository.lookupTaskRequest(envelope.body.task_id, envelope.conversation_id, client);
+      if (duplicate) {
+        throw reject('DUPLICATE_TASK_ID', 'task_id is already claimed by another task.request in this conversation', { task_id: envelope.body.task_id });
+      }
+    }
     if (envelope.message_type === 'task.result') {
       const visible = await repository.lookupTaskRequest(envelope.body.task_id, envelope.conversation_id, client);
       if (!visible) throw reject('INVALID_ENVELOPE', 'task.result references a task_id with no visible task.request', { field: 'task_id', reason: 'no visible task.request' });

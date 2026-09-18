@@ -167,6 +167,59 @@ test('concurrent duplicate envelope submissions race safely to exactly one accep
   assert.equal(keyRows.rowCount, 1);
 });
 
+test('the DB-level unique index rejects a second task.request reusing an in-use task_id in the same conversation', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const ids = {
+    human: `usr_${suffix}`, codex: `ep_codex_${suffix}`, claude: `ep_claude_${suffix}`,
+    key: `key_${suffix}`, conversation: `conv_${suffix}`, task: `task_dup_${suffix}`
+  };
+  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  assertDisposableTestDatabase(connectionString);
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
+  for (const file of sqlFiles) {
+    await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
+  }
+  await pool.query(`
+    INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
+      VALUES ('${ids.codex}', '${ids.human}', 'codex', 'install_codex_${suffix}', 'Codex', 'active', NOW()),
+             ('${ids.claude}', '${ids.human}', 'claude', 'install_claude_${suffix}', 'Claude', 'active', NOW());
+    INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
+      VALUES ('${ids.key}', '${ids.codex}', 'Ed25519', decode('00', 'hex'), 'active', NOW());
+    INSERT INTO conversations (conversation_id, kind, created_by, created_at)
+      VALUES ('${ids.conversation}', 'direct', '${ids.human}', NOW());
+  `);
+
+  const repository = new PostgresRepository({ pool });
+  const baseEnvelope = {
+    conversation_id: ids.conversation, protocol: 'sigil/1', message_type: 'task.request',
+    sender: { endpoint_id: ids.codex, owner_id: ids.human }, recipient: { endpoint_id: ids.claude },
+    body: { task_id: ids.task }, context_refs: [], capabilities: [], correlation_id: null,
+    expires_at: '2030-01-01T00:00:00Z', created_at: '2029-12-31T12:00:00Z',
+    signature: { algorithm: 'Ed25519', key_id: ids.key, value: 'sig' }
+  };
+
+  const first = await repository.persistAcceptedEnvelope({
+    envelope: { ...baseEnvelope, message_id: `msg_first_${suffix}`, idempotency_key: `send_first_${suffix}` },
+    canonical_bytes: Buffer.from('{"n":1}'), action_hash: 'sha256:first'
+  });
+  assert.equal(first.duplicate, false);
+
+  // A distinct message_id + idempotency_key means this isn't caught by the
+  // idempotency/replay checks -- only the task_id unique index stops it.
+  await assert.rejects(() => repository.persistAcceptedEnvelope({
+    envelope: { ...baseEnvelope, message_id: `msg_second_${suffix}`, idempotency_key: `send_second_${suffix}` },
+    canonical_bytes: Buffer.from('{"n":2}'), action_hash: 'sha256:second'
+  }));
+
+  const rows = await pool.query('SELECT message_id FROM envelopes WHERE conversation_id = $1', [ids.conversation]);
+  assert.equal(rows.rowCount, 1);
+  assert.equal(rows.rows[0].message_id, `msg_first_${suffix}`);
+});
+
 test('concurrent duplicate ack requests race safely to exactly one acknowledgement, and survive a fresh connection', { skip: !connectionString }, async (t) => {
   const pool = new pg.Pool({ connectionString });
   t.after(() => pool.end());

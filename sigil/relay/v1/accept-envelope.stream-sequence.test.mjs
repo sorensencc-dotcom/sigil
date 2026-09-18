@@ -35,6 +35,7 @@ function localRepository(sequence = 41n) {
     async withTransaction(fn) { return fn({ id: 'stream-client' }); },
     async lookupAcceptedMessageId() { return null; },
     async lookupIdempotency() { return null; },
+    async lookupTaskRequest() { return null; },
     async lookupCapabilityRegistration(capability) { return { capability }; },
     async lookupActiveCapabilityGrants() { return []; },
     async reserveRateLimit() { return { count: 1, allowed: true }; },
