@@ -279,6 +279,28 @@ export class PostgresRepository {
       return decision.rows[0];
     });
   }
+  // Atomically claims a decision for use in the accept-envelope transaction
+  // (design §9): a 'high'-risk-capability envelope may be accepted only if
+  // an 'approved', unexpired decision exists for this exact
+  // (endpoint_id, action_hash) pair, and the UPDATE...RETURNING here both
+  // checks and consumes it in one statement -- single-use, matching the
+  // approval_decisions schema comment (003_plugin_connector_auth.sql) and
+  // closing the race two concurrent envelopes reusing the same decision
+  // would otherwise have. Returns null (never throws) on no match, so the
+  // caller fails closed with APPROVAL_REQUIRED rather than distinguishing
+  // "never approved" from "already consumed" -- both mean the same thing to
+  // this specific delivery attempt.
+  async consumeApprovalDecision({ endpointId, actionHash, now = new Date(), client = this.pool } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const result = await client.query(
+      `UPDATE approval_decisions
+          SET status = 'consumed'
+        WHERE endpoint_id = $1 AND action_hash = $2 AND status = 'approved' AND expires_at > $3
+        RETURNING decision_id, action_hash, status`,
+      [endpointId, actionHash, timestamp]
+    );
+    return result.rows[0] ?? null;
+  }
   async listInbox(endpointId, since = '', viewerOwnerId = null) {
     // The final SELECT deliberately never re-reads `deliveries` by id: a data-modifying
     // CTE in the same statement is not visible to sibling scans of the same table (they

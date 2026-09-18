@@ -64,6 +64,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
   const streamSequences = new Map();
   const relayJobs = new Map();
   const auditEvents = [];
+  const approvalDecisions = new Map(); // decision_id -> row (in-memory stand-in for approval_decisions)
   return {
     // Single-process, no real client/connection -- the transaction wrapper
     // exists so acceptEnvelopeAsync's repository-aware path works unchanged
@@ -382,6 +383,27 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       if (grant.revoked_at) return { ...grant, duplicate: true };
       grant.revoked_at = (now instanceof Date ? now : new Date(now)).toISOString();
       return { ...grant, duplicate: false };
+    },
+    // Test/demo seeding for the approval_decisions ceremony this repo has no
+    // real WebAuthn flow for -- shaped like postgres-repository.mjs's
+    // finalizeApprovalDecision output, minus the challenge/credential
+    // plumbing a real ceremony would have already verified.
+    async recordApprovalDecision({ decisionId = `decision_${crypto.randomUUID()}`, endpointId, actionHash, expiresAt, now = new Date() }) {
+      const decision = { decision_id: decisionId, endpoint_id: endpointId, action_hash: actionHash, status: 'approved', created_at: (now instanceof Date ? now : new Date(now)).toISOString(), expires_at: expiresAt };
+      approvalDecisions.set(decisionId, decision);
+      return decision;
+    },
+    // Mirrors postgres-repository.mjs's consumeApprovalDecision: atomically
+    // (single-process, so trivially so) claims and marks 'consumed' the
+    // first matching 'approved', unexpired decision -- see accept-envelope.mjs's
+    // high-risk capability gate. Returns null on no match, same fail-closed
+    // contract as the Postgres version.
+    async consumeApprovalDecision({ endpointId, actionHash, now = new Date() }) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).getTime();
+      const decision = [...approvalDecisions.values()].find((d) => d.endpoint_id === endpointId && d.action_hash === actionHash && d.status === 'approved' && new Date(d.expires_at).getTime() > timestamp);
+      if (!decision) return null;
+      decision.status = 'consumed';
+      return decision;
     },
     async createHumanSession({ sessionId, humanId, authenticationMethod, assurance, deviceContext = {}, issuedAt = new Date(), expiresAt, now = new Date() }) {
       const issued = (issuedAt instanceof Date ? issuedAt : new Date(issuedAt)).toISOString();

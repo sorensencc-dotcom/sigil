@@ -8,7 +8,7 @@ import { decideRoute, buildForwardRequest, signForwardRequest, postForward } fro
 // rejection worth auditing (design §9, round 3 blocker 5). A malformed-JSON
 // INVALID_ENVELOPE before signature verification has no meaningful
 // sender/conversation_id to audit against, so it's deliberately excluded.
-const AUDITED_REJECTION_CODES = new Set(['CAPABILITY_DENIED', 'REPLAY_DETECTED', 'RATE_LIMITED', 'QUOTA_EXCEEDED', 'DIRECTORY_LINK_REQUIRED', 'TASK_ASSIGNEE_MISMATCH', 'DUPLICATE_TASK_ID']);
+const AUDITED_REJECTION_CODES = new Set(['CAPABILITY_DENIED', 'REPLAY_DETECTED', 'RATE_LIMITED', 'QUOTA_EXCEEDED', 'DIRECTORY_LINK_REQUIRED', 'TASK_ASSIGNEE_MISMATCH', 'DUPLICATE_TASK_ID', 'APPROVAL_REQUIRED']);
 
 const statusByCode = Object.freeze({
   INVALID_ENVELOPE: 400,
@@ -255,9 +255,11 @@ async function acceptWithRepository(envelope, options) {
     // found in the registry is rejected outright here, before target-scope
     // matching even runs -- it does NOT fall through to the
     // conversation-scope default inside validateEnvelope.
+    const highRiskCapabilities = [];
     for (const capability of envelope.capabilities ?? []) {
       const registered_ = await repository.lookupCapabilityRegistration(capability, client);
       if (!registered_) throw reject('CAPABILITY_DENIED', `Capability is not registered: ${capability}`, { capability });
+      if (registered_.risk_tier === 'high') highRiskCapabilities.push(capability);
     }
     const capabilityGrants = await repository.lookupActiveCapabilityGrants(envelope.sender.endpoint_id, now, client);
     if (envelope.message_type === 'session.resend_request') {
@@ -330,6 +332,25 @@ async function acceptWithRepository(envelope, options) {
     const prior = await repository.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key, client);
     if (prior && prior.canonical_hash !== result.canonical_hash) throw reject('DUPLICATE_MESSAGE', 'Idempotency key conflicts with an existing body');
     if (prior) return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: prior.message_id, duplicate: true } };
+    // High-risk capability gate (design §7/§9: capability_registry.risk_tier
+    // was previously fetched and discarded -- a 'high'-tier capability grant
+    // was functionally identical to a 'standard' one). A 'high' capability
+    // now requires a matching, unconsumed human decision record (WebAuthn
+    // approval-ceremony, approval-ui.mjs) whose action_hash equals this
+    // envelope's own canonical hash. consumeApprovalDecision atomically
+    // marks the decision 'consumed' inside this same transaction so it can
+    // never authorize a second envelope -- if it returns nothing (no
+    // matching 'approved' row, or the repository doesn't support decisions
+    // at all), this fails closed with APPROVAL_REQUIRED rather than
+    // silently allowing the action through.
+    if (highRiskCapabilities.length) {
+      const consumed = repository.consumeApprovalDecision
+        ? await repository.consumeApprovalDecision({ endpointId: envelope.sender.endpoint_id, actionHash: result.canonical_hash, now, client })
+        : null;
+      if (!consumed) {
+        throw reject('APPROVAL_REQUIRED', 'A valid decision record is required before delivery for high-risk capabilities', { capabilities: highRiskCapabilities });
+      }
+    }
     if (envelope.message_type === 'task.request') {
       // Closes a bypass of the assignee binding below (Devin review, PR #4):
       // without this, an attacker could reuse an existing task_id in a
