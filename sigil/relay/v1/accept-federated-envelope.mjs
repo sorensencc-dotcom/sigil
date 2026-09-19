@@ -197,10 +197,16 @@ export async function acceptFederatedEnvelope(body, headers, options) {
     // 7 (task-assignee binding, ported from accept-envelope.mjs Finding #1 /
     // PR #4-#5): closes the same self-addressed-task_id-reuse bypass and
     // uninvolved-conversation-member forged-result bypass on the federated
-    // inbound path. A DB-level unique index
-    // (024_task_request_id_uniqueness.sql) backs the DUPLICATE_TASK_ID branch
-    // up against races; the 23505 translation in the .catch below mirrors
-    // accept-envelope.mjs's handling of the same constraint.
+    // inbound path. KNOWN RESIDUAL RACE (deferred, out of this plan's "no new
+    // schema/migration" scope): this checkout has no DB-level unique index
+    // backing this check — envelopes_task_request_lookup_idx
+    // (011_task_request_lookup_index.sql) is a plain, non-unique CREATE
+    // INDEX, and origin/main's 024_task_request_id_uniqueness.sql does not
+    // exist here. Two concurrent task.request submissions with the same
+    // task_id can both pass this read-then-insert check before either
+    // commits. The .catch block's 23505 translation below is a latent no-op
+    // until a unique-index migration lands; it is intentionally left in
+    // place so the branch is a straight port once one does.
     if (envelope.message_type === 'task.request') {
       const duplicate = await repository.lookupTaskRequest(envelope.body.task_id, envelope.conversation_id, client);
       if (duplicate) {
@@ -270,10 +276,13 @@ export async function acceptFederatedEnvelope(body, headers, options) {
     // Devin review, PR #5 (ported): the app-level DUPLICATE_TASK_ID check
     // above reads via lookupTaskRequest inside this same transaction, so two
     // concurrent task.request submissions can both pass it before either
-    // commits. The loser's INSERT then hits the unique index from
-    // 024_task_request_id_uniqueness.sql and raises a raw Postgres 23505
-    // here. Translate only that specific index's violation to the same
-    // audited rejection the app-level check produces.
+    // commits. On origin/main, the loser's INSERT then hits the unique index
+    // from 024_task_request_id_uniqueness.sql and raises a raw Postgres
+    // 23505 here. That migration does not exist in this checkout (see the
+    // comment above the DUPLICATE_TASK_ID check), so this translation is
+    // currently unreachable dead code / a latent no-op — kept for parity
+    // with accept-envelope.mjs and to activate automatically once the
+    // migration is ported.
     if (error.code === '23505' && error.constraint === 'envelopes_task_request_lookup_idx') {
       error = reject('DUPLICATE_TASK_ID', 'task_id is already claimed by another task.request in this conversation', { task_id: envelope.body?.task_id });
     }
