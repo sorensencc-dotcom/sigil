@@ -70,7 +70,7 @@ sigil init claude --owner usr_soren@local
 
 # Start a local relay instance (in-memory or PostgreSQL-backed)
 sigil relay up
-sigil relay up --port 8791 --stream-port 8793 --database-url postgres://sigil:password@127.0.0.1:55432/sigil
+sigil relay up --port 8791 --stream-port 8793 --database-url postgres://fixture:FIXTURE-ONLY-not-a-real-secret@127.0.0.1:55432/sigil
 
 # Start autonomous background worker daemon (listens for tasks and auto-replies)
 sigil agent run
@@ -110,7 +110,7 @@ npm test
 Run the live PostgreSQL gate against an active database:
 
 ```powershell
-$env:SIGIL_TEST_DATABASE_URL = "postgres://sigil:sigil_password@127.0.0.1:55432/sigil_test"
+$env:SIGIL_TEST_DATABASE_URL = "postgres://fixture:FIXTURE-ONLY-not-a-real-secret@127.0.0.1:55432/sigil_test"
 npm run test:live
 Remove-Item Env:SIGIL_TEST_DATABASE_URL
 ```
@@ -169,3 +169,6 @@ High-risk delivery requires an approved action hash. Endpoint identity is not hu
 - Treat the MCP bridge as a capability boundary, not as an authorization bypass.
 - Review migration and live-gate output before describing an environment as production-ready.
 
+## AgentMail ingress
+
+The opt-in AgentMail adapter maps three configured inboxes to `ep_triage`, `ep_judgment`, and `ep_iron`, while a separately provisioned non-mailbox `ep_ingress` signs ordinary Sigil `task.request` envelopes. See [docs/agentmail-ingress.md](docs/agentmail-ingress.md) for configuration, quarantine, routing, and pre-production safety boundaries. Local tests do not imply production activation.

@@ -197,3 +197,76 @@ test('queue mode with live database', { skip: !connectionString }, async (t) => 
       repository.enqueueFederationForward = realEnqueue;
     });
 });
+
+test('queue mode: an unregistered capability on a forwarded envelope is rejected with CAPABILITY_DENIED before it is enqueued', async () => {
+  const enqueueCalls = [];
+  const repository = {
+    async withTransaction(fn) { return fn({ id: 'client-1' }); },
+    async lookupAcceptedMessageId() { return null; },
+    async getPeerByDomain(domain) { return domain === 'b.example' ? { domain: 'b.example', relayUrl: 'https://relay.b.example', wsUrl: null, keys: [], trustMode: 'pinned' } : null; },
+    async lookupCapabilityRegistration() { return null; },
+    async enqueueFederationForward(args) { enqueueCalls.push(args); return { row: { id: 'job_1' }, inserted: true }; },
+    async recordAuditEvent() {},
+  };
+  const envelope = makeEnvelope();
+  envelope.capabilities = ['sigil.task/submit'];
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), senderKeys.privateKey).toString('base64url');
+  const result = await acceptEnvelopeAsync(envelope, {
+    ...baseOptions(),
+    repository,
+    registered: new Map([['ep_codex@a.example', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_codex', public_key: senderKeys.publicKey }]]),
+  });
+  assert.equal(result.status, 403);
+  assert.equal(result.body.code, 'CAPABILITY_DENIED');
+  assert.equal(enqueueCalls.length, 0, 'a rejected envelope must never be enqueued for federation forward');
+});
+
+test('queue mode: a high-risk capability on a forwarded envelope with no approval decision is rejected with APPROVAL_REQUIRED before it is enqueued', async () => {
+  const enqueueCalls = [];
+  const repository = {
+    async withTransaction(fn) { return fn({ id: 'client-1' }); },
+    async lookupAcceptedMessageId() { return null; },
+    async getPeerByDomain(domain) { return domain === 'b.example' ? { domain: 'b.example', relayUrl: 'https://relay.b.example', wsUrl: null, keys: [], trustMode: 'pinned' } : null; },
+    async lookupCapabilityRegistration(capability) { return { capability, risk_tier: 'high' }; },
+    async enqueueFederationForward(args) { enqueueCalls.push(args); return { row: { id: 'job_1' }, inserted: true }; },
+    async recordAuditEvent() {},
+  };
+  const envelope = makeEnvelope();
+  envelope.capabilities = ['sigil.approval/request'];
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), senderKeys.privateKey).toString('base64url');
+  const result = await acceptEnvelopeAsync(envelope, {
+    ...baseOptions(),
+    repository,
+    registered: new Map([['ep_codex@a.example', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_codex', public_key: senderKeys.publicKey }]]),
+  });
+  assert.equal(result.status, 403);
+  assert.equal(result.body.code, 'APPROVAL_REQUIRED');
+  assert.equal(enqueueCalls.length, 0);
+});
+
+test('queue mode: a high-risk capability WITH a matching approval decision, consumed on the transaction client, is enqueued', async () => {
+  const enqueueCalls = [];
+  const consumeCalls = [];
+  const repository = {
+    async withTransaction(fn) { return fn({ id: 'client-1' }); },
+    async lookupAcceptedMessageId() { return null; },
+    async getPeerByDomain(domain) { return domain === 'b.example' ? { domain: 'b.example', relayUrl: 'https://relay.b.example', wsUrl: null, keys: [], trustMode: 'pinned' } : null; },
+    async lookupCapabilityRegistration(capability) { return { capability, risk_tier: 'high' }; },
+    async consumeApprovalDecision(args) { consumeCalls.push(args); return { decision_id: 'dec_1' }; },
+    async enqueueFederationForward(args) { enqueueCalls.push(args); return { row: { id: 'job_1' }, inserted: true }; },
+    async recordAuditEvent() {},
+  };
+  const envelope = makeEnvelope();
+  envelope.capabilities = ['sigil.approval/request'];
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), senderKeys.privateKey).toString('base64url');
+  const result = await acceptEnvelopeAsync(envelope, {
+    ...baseOptions(),
+    repository,
+    registered: new Map([['ep_codex@a.example', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_codex', public_key: senderKeys.publicKey }]]),
+  });
+  assert.equal(result.status, 202);
+  assert.equal(result.body.queued, true);
+  assert.equal(enqueueCalls.length, 1);
+  assert.equal(consumeCalls.length, 1);
+  assert.deepEqual(consumeCalls[0].client, { id: 'client-1' }, 'the queue-forward path must consume the approval decision on the accept transaction client');
+});

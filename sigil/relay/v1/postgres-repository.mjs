@@ -327,6 +327,7 @@ export class PostgresRepository {
     );
     return result.rows[0] ?? null;
   }
+
   async listInbox(endpointId, since = '', viewerOwnerId = null) {
     // The final SELECT deliberately never re-reads `deliveries` by id: a data-modifying
     // CTE in the same statement is not visible to sibling scans of the same table (they

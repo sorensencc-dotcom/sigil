@@ -1,5 +1,19 @@
 # Status
 
+## Session update: 2026-09-15 AgentMail review remediation
+
+- Scoped review findings were remediated in the disposable checkout `C:\dev\dev-sandbox\sigil-agentmail-review`: raw email body can no longer populate trusted task instructions; canonical mailbox endpoints and per-inbox webhook secret references are required; forwarding addresses enforce one domain; provider verification has a parser timeout; sender rate limits and attachment limits are wired; inactive endpoint mappings fail closed; signed receipts and envelope message IDs are linked; PostgreSQL ledger transitions and queue admission use transactional locking; memory queue depth recovers at terminal states; legal holds cannot be cleared or deleted through ordinary retention operations.
+- Focused AgentMail ingress evidence: 45/45 passed. Full direct Node discovery: 1,060 total, 937 passed, 0 failed, 123 skipped. Dependency audit and JCS audit passed. The repository has no `lint` script. No live PostgreSQL gate ran because `SIGIL_TEST_DATABASE_URL` is unset.
+- Production blockers remain: live non-sensitive canary, real secret rotation, retention deletion against the deployment storage, operational alerting, privacy/compliance approval, and Tier 1 approval. Financial-sensitive handling remains default-deny; no production readiness is claimed.
+
+## Session update: 2026-09-14 AgentMail ingress implementation
+
+- Implemented the approved three-mailbox AgentMail ingress slice in commits `8e6dd9f`, `c63d687`, `24d8531`, `383b7af`, `7e95960`, `08ef4cc`, `d9ab07d`, `97d17d9`, and `418201d`.
+- Added strict inbox configuration/provenance, signed `ep_ingress` task requests using existing JCS/Ed25519 helpers, bounded quarantine/classification/document normalization, pinned `agentmail@0.5.24` transport, deterministic webhook routing, durable ingress ledger migration 024, signed redacted receipts, explicit `ep_ingress` provisioning, opt-in HTTP route registration, and injected-key AES-256-GCM quarantine with legal-hold-aware audited purge.
+- Focused evidence: 38/38 AgentMail ingress tests passed; direct repository-wide Node test run: 1,053 tests, 930 passed, 0 failed, 123 skipped. Dependency audit, JCS audit, and `git diff --check` pass. `SIGIL_TEST_DATABASE_URL` was unset, so no live PostgreSQL gate was run in this session.
+- Pre-production blockers remain: live non-sensitive AgentMail canary, webhook secret rotation, retention deletion, operational alerting, privacy/compliance approval, and Tier 1 approval. Financial-sensitive handling remains default-deny; no production readiness is claimed.
+- Existing dirty work in `sigil/relay/v1/http-server.mjs` inbox error handling, `docs/contracts/sigil-helix-authority-contract-v1.md`, and `modules/` was preserved and not staged by this implementation.
+
 ## Current goal
 Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemented. Runtime handoff is locally validated; production rollout remains blocked pending security and governance approval.
 

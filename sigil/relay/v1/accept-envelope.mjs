@@ -3,6 +3,7 @@ import { validateEnvelope, reject, signedBytes, checkRecipientLocality } from '.
 import { resolveRateLimits, resolveStreamSequence, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
 import { writeRejectionAudit } from './rejection-audit.mjs';
 import { decideRoute, buildForwardRequest, signForwardRequest, postForward } from './federation-router.mjs';
+import { enforceCapabilityRiskGate } from './capability-risk-gate.mjs';
 
 // Rejection codes that represent a real, attributable security-relevant
 // rejection worth auditing (design §9, round 3 blocker 5). A malformed-JSON
@@ -181,6 +182,14 @@ async function acceptWithRepository(envelope, options) {
         throw reject('REPLAY_DETECTED', 'message_id was already accepted under a different idempotency_key');
       }
 
+      // Capability/risk-tier + approval gate (closes Bypass #1: a sync-forwarded
+      // envelope previously skipped this check entirely, since it only ran on
+      // the route.action === 'local' branch below). Called with no `client`
+      // argument so lookupCapabilityRegistration/consumeApprovalDecision fall
+      // through to their own pool-default client -- this path must never open
+      // a transaction (I1: no held Postgres connection across postForward).
+      await enforceCapabilityRiskGate(envelope, repository, { now });
+
       // client = null: forwardEnvelope passes it only to lookupRecipientEndpoint
       // (L210) for the sender-key lookup, handled by the existing `?? null`
       // guard. buildForwardRequest / signForwardRequest / postForward never
@@ -228,6 +237,15 @@ async function acceptWithRepository(envelope, options) {
       throw reject('REPLAY_DETECTED', 'message_id was already accepted under a different idempotency_key');
     }
 
+    // Capability/risk-tier + approval gate (closes Bypass #1: a
+    // queue-forwarded envelope previously skipped this check entirely,
+    // since it only ran further down on the route.action === 'local'
+    // branch, after this function had already returned for a forward).
+    // Runs before the forward/local branch so BOTH routes are gated
+    // identically, on this transaction's client so approval consumption
+    // commits or rolls back atomically with the rest of the accept.
+    await enforceCapabilityRiskGate(envelope, repository, { client, now });
+
     // Queue-forward: enqueueForward's INSERT + audit are atomic inside this txn.
     if (route.action === 'forward') {
       if (envelope.message_type === 'session.resend_request') {
@@ -236,7 +254,7 @@ async function acceptWithRepository(envelope, options) {
       return forwardEnvelope(envelope, route, options, client);
     }
 
-    // route.action === 'local' -> fall through to recipient/capability/persist checks.
+    // route.action === 'local' -> fall through to recipient/persist checks.
     // Every direct recipient must exist in the relay's endpoint directory
     // before any delivery row can be written. Keep this lookup on the
     // acceptance transaction's client so a concurrent endpoint change cannot
@@ -251,16 +269,11 @@ async function acceptWithRepository(envelope, options) {
       }
     }
 
-    // Capability registry fail-closed check (design §7): a capability not
-    // found in the registry is rejected outright here, before target-scope
-    // matching even runs -- it does NOT fall through to the
-    // conversation-scope default inside validateEnvelope.
-    const highRiskCapabilities = [];
-    for (const capability of envelope.capabilities ?? []) {
-      const registered_ = await repository.lookupCapabilityRegistration(capability, client);
-      if (!registered_) throw reject('CAPABILITY_DENIED', `Capability is not registered: ${capability}`, { capability });
-      if (registered_.risk_tier === 'high') highRiskCapabilities.push(capability);
-    }
+    // Capability registry fail-closed check (design §7) and the high-risk
+    // capability + approval gate are handled once, up-front, by the
+    // enforceCapabilityRiskGate(envelope, repository, { client, now }) call
+    // above (Phase 2 entry) -- it already covers this local-delivery branch,
+    // so no separate inline check runs here.
     const capabilityGrants = await repository.lookupActiveCapabilityGrants(envelope.sender.endpoint_id, now, client);
     if (envelope.message_type === 'session.resend_request') {
       const result = validateEnvelope(envelope, { ...options, idempotency: new Map(), capabilityGrants });
@@ -332,25 +345,13 @@ async function acceptWithRepository(envelope, options) {
     const prior = await repository.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key, client);
     if (prior && prior.canonical_hash !== result.canonical_hash) throw reject('DUPLICATE_MESSAGE', 'Idempotency key conflicts with an existing body');
     if (prior) return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: prior.message_id, duplicate: true } };
-    // High-risk capability gate (design §7/§9: capability_registry.risk_tier
-    // was previously fetched and discarded -- a 'high'-tier capability grant
-    // was functionally identical to a 'standard' one). A 'high' capability
-    // now requires a matching, unconsumed human decision record (WebAuthn
-    // approval-ceremony, approval-ui.mjs) whose action_hash equals this
-    // envelope's own canonical hash. consumeApprovalDecision atomically
-    // marks the decision 'consumed' inside this same transaction so it can
-    // never authorize a second envelope -- if it returns nothing (no
-    // matching 'approved' row, or the repository doesn't support decisions
-    // at all), this fails closed with APPROVAL_REQUIRED rather than
-    // silently allowing the action through.
-    if (highRiskCapabilities.length) {
-      const consumed = repository.consumeApprovalDecision
-        ? await repository.consumeApprovalDecision({ endpointId: envelope.sender.endpoint_id, actionHash: result.canonical_hash, now, client })
-        : null;
-      if (!consumed) {
-        throw reject('APPROVAL_REQUIRED', 'A valid decision record is required before delivery for high-risk capabilities', { capabilities: highRiskCapabilities });
-      }
-    }
+    // High-risk capability + approval gate already ran once for this
+    // transaction via enforceCapabilityRiskGate above (line 247) -- it uses
+    // the same sha256(signedBytes(envelope)) hash as result.canonical_hash,
+    // so re-running consumeApprovalDecision here would look up an
+    // action_hash already marked 'consumed' and wrongly reject an
+    // already-approved envelope with APPROVAL_REQUIRED. No separate check
+    // belongs here.
     if (envelope.message_type === 'task.request') {
       // Closes a bypass of the assignee binding below (Devin review, PR #4):
       // without this, an attacker could reuse an existing task_id in a

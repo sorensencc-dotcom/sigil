@@ -3,6 +3,7 @@ import { parseFederatedId } from './federated-id.mjs';
 import { verifyInboundRelayRequest, relayRejectSkewPayload } from './federation-relay-auth.mjs';
 import { validateEnvelope, signedBytes, reject } from './validate-envelope.mjs';
 import { resolveRateLimits, resolveRelayRequestFreshnessMs, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
+import { enforceCapabilityRiskGate } from './capability-risk-gate.mjs';
 
 function respond(status, code, message, options, details = {}) {
   return { status, body: { request_id: options.request_id ?? null, code, message, details } };
@@ -151,11 +152,38 @@ export async function acceptFederatedEnvelope(body, headers, options) {
       key_id: envelope.signature.key_id, status: 'active',
       public_key: crypto.createPublicKey({ key: Buffer.from(senderKey.publicKey, 'base64url'), format: 'der', type: 'spki' }),
     }]]);
-    const result = validateEnvelope(envelope, { now, registered: syntheticRegistered, idempotency: new Map(), relayDomain, skipSenderRegistration: true });
+    // Deviation from task-3-brief.md (documented in task-3-report.md): the
+    // scope-based capability_grants check inside validateEnvelope is a
+    // local-only concept (an admin granting a LOCAL endpoint a scoped
+    // capability on THIS relay) that a foreign federated sender can never
+    // hold a row for, so leaving capabilityGrants at its [] default here
+    // (as this file did pre-Task-3) makes validateEnvelope reject ANY
+    // envelope with a non-empty capabilities array outright, before
+    // enforceCapabilityRiskGate below ever runs -- capability enforcement on
+    // this path is meant to be governed solely by the shared registry +
+    // risk-tier + approval gate, exactly as it already is on the
+    // queue-forward branch of accept-envelope.mjs (which never fetches or
+    // passes capabilityGrants either). Feeding validateEnvelope a synthetic
+    // grant per requested capability, scoped to this envelope's own
+    // conversation (the only scope validateEnvelope ever derives for a
+    // non-read_shared_context capability), makes that redundant check a
+    // structural no-op here without weakening it for local senders, whose
+    // real capabilityGrants are still fetched and enforced unchanged in
+    // accept-envelope.mjs.
+    const syntheticCapabilityGrants = (envelope.capabilities ?? []).map((capability) => ({ capability, scope: `scope:conversation/${envelope.conversation_id}` }));
+    const result = validateEnvelope(envelope, { now, registered: syntheticRegistered, idempotency: new Map(), relayDomain, skipSenderRegistration: true, capabilityGrants: syntheticCapabilityGrants });
     // 6 (owner-assertion consistency): sender's own claim must agree.
     if (envelope.sender.owner_id !== senderOwnerId) {
       throw reject('SENDER_OWNER_ASSERTION_MISMATCH', 'envelope.sender.owner_id does not equal the relay-asserted sender_owner_id');
     }
+    // 6 (capability/risk-tier + approval gate, closes Bypass #2): the
+    // federated inbound path previously never checked envelope.capabilities
+    // against the local capability_registry at all -- a high-risk capability
+    // arriving from a peer relay was delivered with no local approval-decision
+    // check. Runs on this transaction's client so approval consumption commits
+    // or rolls back atomically with the rest of the accept, mirroring the
+    // local and queue-forward paths in accept-envelope.mjs.
+    await enforceCapabilityRiskGate(envelope, repository, { client, now });
     // 7: recipient exists and is active in the receiver's registry.
     const recipientId = envelope.recipient.endpoint_id;
     const recipient = (await repository.lookupRecipientEndpoint(recipientId, client)) ?? registered?.get(recipientId);
@@ -165,6 +193,34 @@ export async function acceptFederatedEnvelope(body, headers, options) {
     // non-active status only, never on an absent one.
     if (!recipient || (recipient.status !== undefined && recipient.status !== 'active')) {
       throw reject('RECIPIENT_NOT_FOUND', 'The recipient endpoint does not exist in this relay\'s registry.', { recipient_id: recipientId });
+    }
+    // 7 (task-assignee binding, ported from accept-envelope.mjs Finding #1 /
+    // PR #4-#5): closes the same self-addressed-task_id-reuse bypass and
+    // uninvolved-conversation-member forged-result bypass on the federated
+    // inbound path. KNOWN RESIDUAL RACE (deferred, out of this plan's "no new
+    // schema/migration" scope): this checkout has no DB-level unique index
+    // backing this check — envelopes_task_request_lookup_idx
+    // (011_task_request_lookup_index.sql) is a plain, non-unique CREATE
+    // INDEX, and origin/main's 024_task_request_id_uniqueness.sql does not
+    // exist here. Two concurrent task.request submissions with the same
+    // task_id can both pass this read-then-insert check before either
+    // commits. The .catch block's 23505 translation below is a latent no-op
+    // until a unique-index migration lands; it is intentionally left in
+    // place so the branch is a straight port once one does.
+    if (envelope.message_type === 'task.request') {
+      const duplicate = await repository.lookupTaskRequest(envelope.body.task_id, envelope.conversation_id, client);
+      if (duplicate) {
+        throw reject('DUPLICATE_TASK_ID', 'task_id is already claimed by another task.request in this conversation', { task_id: envelope.body.task_id });
+      }
+    }
+    if (envelope.message_type === 'task.result') {
+      const visible = await repository.lookupTaskRequest(envelope.body.task_id, envelope.conversation_id, client);
+      if (!visible) throw reject('INVALID_ENVELOPE', 'task.result references a task_id with no visible task.request', { field: 'task_id', reason: 'no visible task.request' });
+      if (visible.recipientEndpointId && visible.recipientEndpointId !== envelope.sender.endpoint_id) {
+        throw reject('TASK_ASSIGNEE_MISMATCH', 'task.result sender does not match the task.request recipient', {
+          task_id: envelope.body.task_id, expected_endpoint_id: visible.recipientEndpointId, actual_endpoint_id: envelope.sender.endpoint_id,
+        });
+      }
     }
     // 8: directory gate (design Section 1 — the same-owner exemption is
     // removed; a self-pair link authorises same-owner cross-federation
@@ -217,11 +273,24 @@ export async function acceptFederatedEnvelope(body, headers, options) {
     if (options.onPersisted) await options.onPersisted({ envelope, persisted: { ...persisted, streamSeq: null } });
     return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: persisted?.message_id ?? result.message_id, duplicate: persisted?.duplicate ?? false } };
   }).catch(async (error) => {
+    // Devin review, PR #5 (ported): the app-level DUPLICATE_TASK_ID check
+    // above reads via lookupTaskRequest inside this same transaction, so two
+    // concurrent task.request submissions can both pass it before either
+    // commits. On origin/main, the loser's INSERT then hits the unique index
+    // from 024_task_request_id_uniqueness.sql and raises a raw Postgres
+    // 23505 here. That migration does not exist in this checkout (see the
+    // comment above the DUPLICATE_TASK_ID check), so this translation is
+    // currently unreachable dead code / a latent no-op — kept for parity
+    // with accept-envelope.mjs and to activate automatically once the
+    // migration is ported.
+    if (error.code === '23505' && error.constraint === 'envelopes_task_request_lookup_idx') {
+      error = reject('DUPLICATE_TASK_ID', 'task_id is already claimed by another task.request in this conversation', { task_id: envelope.body?.task_id });
+    }
     // Only codes we recognise pass through as the response `code`. A raw
     // driver error (23503 / 23514 / 23502, etc.) is not a protocol enum
     // value and must never be echoed to the peer -- collapse anything
     // unrecognised to INVALID_FEDERATION_REQUEST / 400.
-    const statusByCode = { RELAY_REPLAYED: 409, REPLAY_DETECTED: 409, MESSAGE_EXPIRED: 422, RECIPIENT_NOT_FOUND: 400, DIRECTORY_LINK_REQUIRED: 403, SENDER_OWNER_ASSERTION_MISMATCH: 403, RATE_LIMITED: 429, QUOTA_EXCEEDED: 429, INVALID_ENVELOPE: 400, INVALID_SIGNATURE: 401, VERSION_UNSUPPORTED: 400, CAPABILITY_DENIED: 403 };
+    const statusByCode = { RELAY_REPLAYED: 409, REPLAY_DETECTED: 409, MESSAGE_EXPIRED: 422, RECIPIENT_NOT_FOUND: 400, DIRECTORY_LINK_REQUIRED: 403, SENDER_OWNER_ASSERTION_MISMATCH: 403, RATE_LIMITED: 429, QUOTA_EXCEEDED: 429, INVALID_ENVELOPE: 400, INVALID_SIGNATURE: 401, VERSION_UNSUPPORTED: 400, CAPABILITY_DENIED: 403, APPROVAL_REQUIRED: 403, TASK_ASSIGNEE_MISMATCH: 403, DUPLICATE_TASK_ID: 409 };
     const known = Object.prototype.hasOwnProperty.call(statusByCode, error.code);
     const code = known ? error.code : 'INVALID_FEDERATION_REQUEST';
     const status = known ? statusByCode[error.code] : 400;

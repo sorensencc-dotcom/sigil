@@ -197,3 +197,60 @@ test('sync mode: reject route (PEER_NOT_PINNED) takes priority over replay check
   assert.equal(result.body.code, 'PEER_NOT_PINNED');
   assert.equal(repository.withTransactionCallCount, 0, 'reject route must not open a transaction');
 });
+
+test('sync mode: an unregistered capability on a forwarded envelope is rejected with CAPABILITY_DENIED, not forwarded', async () => {
+  const repository = fakeRepo();
+  repository.lookupCapabilityRegistration = async () => null;
+  let posted = false;
+  const envelope = makeEnvelope();
+  envelope.capabilities = ['sigil.task/submit'];
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), senderKeys.privateKey).toString('base64url');
+  const result = await acceptEnvelopeAsync(envelope, {
+    ...baseOptions(),
+    repository,
+    postForwardImpl: async () => { posted = true; return { ok: true, status: 202 }; },
+  });
+  assert.equal(result.status, 403);
+  assert.equal(result.body.code, 'CAPABILITY_DENIED');
+  assert.equal(posted, false);
+  assert.equal(repository.withTransactionCallCount, 0, 'the capability gate must not open a transaction on the sync forward path');
+  assert.equal(repository.audits.at(-1).eventType, 'envelope.rejected.capability_denied');
+});
+
+test('sync mode: a high-risk capability on a forwarded envelope with no approval decision is rejected with APPROVAL_REQUIRED, not forwarded', async () => {
+  const repository = fakeRepo();
+  repository.lookupCapabilityRegistration = async (capability) => ({ capability, risk_tier: 'high' });
+  let posted = false;
+  const envelope = makeEnvelope();
+  envelope.capabilities = ['sigil.approval/request'];
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), senderKeys.privateKey).toString('base64url');
+  const result = await acceptEnvelopeAsync(envelope, {
+    ...baseOptions(),
+    repository,
+    postForwardImpl: async () => { posted = true; return { ok: true, status: 202 }; },
+  });
+  assert.equal(result.status, 403);
+  assert.equal(result.body.code, 'APPROVAL_REQUIRED');
+  assert.equal(posted, false);
+  assert.equal(repository.withTransactionCallCount, 0, 'the approval gate must not open a transaction on the sync forward path');
+});
+
+test('sync mode: a high-risk capability on a forwarded envelope WITH a matching approval decision is forwarded', async () => {
+  const repository = fakeRepo();
+  repository.lookupCapabilityRegistration = async (capability) => ({ capability, risk_tier: 'high' });
+  const consumeCalls = [];
+  repository.consumeApprovalDecision = async (args) => { consumeCalls.push(args); return { decision_id: 'dec_1' }; };
+  const envelope = makeEnvelope();
+  envelope.capabilities = ['sigil.approval/request'];
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), senderKeys.privateKey).toString('base64url');
+  const result = await acceptEnvelopeAsync(envelope, {
+    ...baseOptions(),
+    repository,
+    postForwardImpl: async () => ({ ok: true, status: 202 }),
+  });
+  assert.equal(result.status, 202);
+  assert.equal(result.body.forwarded, true);
+  assert.equal(consumeCalls.length, 1);
+  assert.equal(consumeCalls[0].client, undefined, 'the sync forward path must consume the approval decision without an open transaction');
+  assert.equal(repository.withTransactionCallCount, 0);
+});

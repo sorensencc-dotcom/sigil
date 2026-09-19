@@ -45,7 +45,7 @@ async function readBody(request, maxBytes = 1024 * 1024) {
   return raw;
 }
 
-export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain, federationMode, federationIdentity, fetchImpl, relayRequestFreshnessMs, stream_seq, resendMetrics, logger } = {}) {
+export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain, federationMode, federationIdentity, fetchImpl, relayRequestFreshnessMs, stream_seq, resendMetrics, logger, agentmailIngress } = {}) {
   // B3: one clamped relay-request freshness window for this server. It bounds
   // how long a captured signed peer request stays replayable and doubles as the
   // nonce row's expiry horizon (expiresAt = signed_at + freshnessMs).
@@ -168,6 +168,27 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     if (request.method === 'GET' && parsedUrl.pathname === '/v1/health') {
       response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(JSON.stringify({ status: 'ok' }));
+    }
+
+    // AgentMail is an explicitly opted-in provider boundary. It authenticates
+    // the webhook itself and therefore must run before the bearer gate. The
+    // route is absent when no adapter was supplied, preserving the default
+    // 404 surface and preventing accidental unauthenticated ingress.
+    const agentmailMatch = parsedUrl.pathname.match(/^\/v1\/agentmail\/webhook\/([^/]+)$/);
+    if (request.method === 'POST' && agentmailIngress && agentmailMatch) {
+      let raw;
+      try { raw = await readBody(request, agentmailIngress.maxMessageBytes ?? 10 * 1024 * 1024); }
+      catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
+      const headers = {};
+      for (const [k, v] of Object.entries(request.headers)) headers[k.toLowerCase()] = Array.isArray(v) ? v[0] : v;
+      const handler = agentmailIngress.handleWebhook ?? agentmailIngress.handle;
+      if (typeof handler !== 'function') {
+        response.writeHead(503, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'AGENTMAIL_INGRESS_UNAVAILABLE', message: 'AgentMail ingress is not configured', details: {} }));
+      }
+      const result = await handler({ rawBody: Buffer.from(raw), headers, inboxId: decodeURIComponent(agentmailMatch[1]), requestId, now });
+      response.writeHead(result.status ?? 500, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+      return response.end(result.body ? JSON.stringify(result.body) : JSON.stringify(result));
     }
 
     // Unauthenticated at the transport layer: trust is the peer relay's
@@ -362,7 +383,14 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     if (request.method === 'GET' && request.url.startsWith('/v1/inbox')) {
       if (!repository?.listInbox) return response.writeHead(503).end();
       const since = new URL(request.url, 'http://sigil.local').searchParams.get('since') ?? '';
-      const items = await repository.listInbox(principal.endpoint_id, since, principal.owner_id ?? null);
+      let items;
+      try {
+        items = await repository.listInbox(principal.endpoint_id, since, principal.owner_id ?? null);
+      } catch (error) {
+        logger?.error?.('inbox read failed', error);
+        response.writeHead(503, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'DATABASE_UNAVAILABLE', message: 'Inbox temporarily unavailable', details: {} }));
+      }
       const nextSince = items.at(-1)?.queued_at ?? since;
       response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(JSON.stringify({ request_id: requestId, code: 'OK', items, next_since: nextSince }));

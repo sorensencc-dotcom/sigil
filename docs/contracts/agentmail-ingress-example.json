@@ -1,0 +1,29 @@
+{
+  "protocol": "sigil/1",
+  "message_id": "msg_synthetic_agentmail_01",
+  "conversation_id": "conv_synthetic_agentmail_01",
+  "message_type": "task.request",
+  "sender": {"owner_id": "usr_operator", "endpoint_id": "ep_ingress", "kind": "agent"},
+  "recipient": {"owner_id": "usr_operator", "endpoint_id": "ep_triage"},
+  "body": {
+    "task_id": "task_synthetic_agentmail_01",
+    "instruction": "Review the synthetic project report.",
+    "provenance": {
+      "provider_event_id": "evt_synthetic_01",
+      "provider_message_id": "mail_synthetic_01",
+      "inbox_id": "inbox_triage",
+      "verified_sender": "operator@example.test",
+      "workflow": "trm",
+      "classification": "internal",
+      "attachment_hashes": [],
+      "received_at": "2026-09-14T12:00:00Z"
+    }
+  },
+  "context_refs": [],
+  "capabilities": [],
+  "correlation_id": "corr_evt_synthetic_01",
+  "idempotency_key": "agentmail:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expires_at": "2026-09-14T12:10:00Z",
+  "created_at": "2026-09-14T12:00:00Z",
+  "signature": {"algorithm": "Ed25519", "key_id": "key_ep_ingress", "value": "synthetic_signature_value_replace_in_fixture"}
+}
