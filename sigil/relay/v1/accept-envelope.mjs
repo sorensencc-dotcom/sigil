@@ -3,12 +3,13 @@ import { validateEnvelope, reject, signedBytes, checkRecipientLocality } from '.
 import { resolveRateLimits, resolveStreamSequence, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
 import { writeRejectionAudit } from './rejection-audit.mjs';
 import { decideRoute, buildForwardRequest, signForwardRequest, postForward } from './federation-router.mjs';
+import { enforceCapabilityRiskGate } from './capability-risk-gate.mjs';
 
 // Rejection codes that represent a real, attributable security-relevant
 // rejection worth auditing (design §9, round 3 blocker 5). A malformed-JSON
 // INVALID_ENVELOPE before signature verification has no meaningful
 // sender/conversation_id to audit against, so it's deliberately excluded.
-const AUDITED_REJECTION_CODES = new Set(['CAPABILITY_DENIED', 'REPLAY_DETECTED', 'RATE_LIMITED', 'QUOTA_EXCEEDED', 'DIRECTORY_LINK_REQUIRED']);
+const AUDITED_REJECTION_CODES = new Set(['CAPABILITY_DENIED', 'REPLAY_DETECTED', 'RATE_LIMITED', 'QUOTA_EXCEEDED', 'DIRECTORY_LINK_REQUIRED', 'APPROVAL_REQUIRED']);
 
 const statusByCode = Object.freeze({
   INVALID_ENVELOPE: 400,
@@ -179,6 +180,14 @@ async function acceptWithRepository(envelope, options) {
         throw reject('REPLAY_DETECTED', 'message_id was already accepted under a different idempotency_key');
       }
 
+      // Capability/risk-tier + approval gate (closes Bypass #1: a sync-forwarded
+      // envelope previously skipped this check entirely, since it only ran on
+      // the route.action === 'local' branch below). Called with no `client`
+      // argument so lookupCapabilityRegistration/consumeApprovalDecision fall
+      // through to their own pool-default client -- this path must never open
+      // a transaction (I1: no held Postgres connection across postForward).
+      await enforceCapabilityRiskGate(envelope, repository, { now });
+
       // client = null: forwardEnvelope passes it only to lookupRecipientEndpoint
       // (L210) for the sender-key lookup, handled by the existing `?? null`
       // guard. buildForwardRequest / signForwardRequest / postForward never
@@ -226,6 +235,15 @@ async function acceptWithRepository(envelope, options) {
       throw reject('REPLAY_DETECTED', 'message_id was already accepted under a different idempotency_key');
     }
 
+    // Capability/risk-tier + approval gate (closes Bypass #1: a
+    // queue-forwarded envelope previously skipped this check entirely,
+    // since it only ran further down on the route.action === 'local'
+    // branch, after this function had already returned for a forward).
+    // Runs before the forward/local branch so BOTH routes are gated
+    // identically, on this transaction's client so approval consumption
+    // commits or rolls back atomically with the rest of the accept.
+    await enforceCapabilityRiskGate(envelope, repository, { client, now });
+
     // Queue-forward: enqueueForward's INSERT + audit are atomic inside this txn.
     if (route.action === 'forward') {
       if (envelope.message_type === 'session.resend_request') {
@@ -234,7 +252,7 @@ async function acceptWithRepository(envelope, options) {
       return forwardEnvelope(envelope, route, options, client);
     }
 
-    // route.action === 'local' -> fall through to recipient/capability/persist checks.
+    // route.action === 'local' -> fall through to recipient/persist checks.
     // Every direct recipient must exist in the relay's endpoint directory
     // before any delivery row can be written. Keep this lookup on the
     // acceptance transaction's client so a concurrent endpoint change cannot
@@ -249,14 +267,6 @@ async function acceptWithRepository(envelope, options) {
       }
     }
 
-    // Capability registry fail-closed check (design §7): a capability not
-    // found in the registry is rejected outright here, before target-scope
-    // matching even runs -- it does NOT fall through to the
-    // conversation-scope default inside validateEnvelope.
-    for (const capability of envelope.capabilities ?? []) {
-      const registered_ = await repository.lookupCapabilityRegistration(capability, client);
-      if (!registered_) throw reject('CAPABILITY_DENIED', `Capability is not registered: ${capability}`, { capability });
-    }
     const capabilityGrants = await repository.lookupActiveCapabilityGrants(envelope.sender.endpoint_id, now, client);
     if (envelope.message_type === 'session.resend_request') {
       const result = validateEnvelope(envelope, { ...options, idempotency: new Map(), capabilityGrants });
