@@ -395,3 +395,93 @@ test('step 8 / B1: same-owner with NO link row -> 403 (exemption removed); with 
   const delivered = await withLink.deliverForwardBody({ senderOwnerId: 'usr_shared@a.example', senderEndpoint: 'ep_codex@b.example' });
   assert.equal(delivered.status, 202);
 });
+
+// --- Task 3: capability/risk-tier + approval gate, and task-assignee binding,
+// on the federated-inbound accept path (Bypass #2) ---------------------------
+
+test('inbound federated envelope with an unregistered capability is rejected with CAPABILITY_DENIED', async () => {
+  const world = makeWorld();
+  world.repo.lookupCapabilityRegistration = async () => null;
+  const { body, headers } = forwardPayload(world, { capabilities: ['sigil.task/submit'] });
+  const r = await acceptFederatedEnvelope(body, headers, baseOpts(world.repo));
+  assert.equal(r.status, 403);
+  assert.equal(r.body.code, 'CAPABILITY_DENIED');
+});
+
+test('inbound federated envelope with a high-risk capability and no approval decision is rejected with APPROVAL_REQUIRED', async () => {
+  const world = makeWorld();
+  world.repo.lookupCapabilityRegistration = async (capability) => ({ capability, risk_tier: 'high' });
+  const { body, headers } = forwardPayload(world, { capabilities: ['sigil.approval/request'] });
+  const r = await acceptFederatedEnvelope(body, headers, baseOpts(world.repo));
+  assert.equal(r.status, 403);
+  assert.equal(r.body.code, 'APPROVAL_REQUIRED');
+});
+
+// Deviation from task-3-brief.md (documented in task-3-report.md): the brief's
+// literal Step 1 text reuses `makeWorld()`/`baseOpts()` (an empty registry,
+// no recipient row) for every new test in this section, including ones that
+// expect a 202 ACCEPTED outcome or a rejection code raised *after* the
+// recipient-existence check (7). `makeWorld()`'s recipient (`ep_claude@b.example`)
+// is never registered, so those cases hit `RECIPIENT_NOT_FOUND`/400 before
+// reaching the gate or task-assignee logic under test. `worldWithRecipient()` +
+// `opts9()` (already defined above for the pre-existing check-7-onward tests
+// in this file) register that recipient; a same-owner delivery additionally
+// needs `seedSelfPairLink()` per B1 (the same-owner directory-link exemption
+// was removed earlier in this file's history), so the two full-success cases
+// below seed one. The two capability-gate tests that reject *before* check 7
+// (CAPABILITY_DENIED, APPROVAL_REQUIRED) are unaffected and keep the brief's
+// original `makeWorld()`/`baseOpts()` form.
+
+test('inbound federated envelope with a high-risk capability and a matching approval decision is accepted', async () => {
+  const world = worldWithRecipient();
+  await seedSelfPairLink(world);
+  world.repo.lookupCapabilityRegistration = async (capability) => ({ capability, risk_tier: 'high' });
+  const consumeCalls = [];
+  world.repo.consumeApprovalDecision = async (args) => { consumeCalls.push(args); return { decision_id: 'dec_1' }; };
+  const { body, headers } = forwardPayload(world, { capabilities: ['sigil.approval/request'] });
+  const r = await acceptFederatedEnvelope(body, headers, opts9(world));
+  assert.equal(r.status, 202);
+  assert.equal(r.body.code, 'ACCEPTED');
+  assert.equal(consumeCalls.length, 1);
+  assert.notEqual(consumeCalls[0].client, undefined, 'the inbound accept path must consume the approval decision on its open transaction client');
+});
+
+test('inbound federated task.request reusing an existing task_id in this conversation is rejected with DUPLICATE_TASK_ID', async () => {
+  const world = worldWithRecipient();
+  world.repo.lookupTaskRequest = async () => ({ message_id: 'msg_existing', recipientEndpointId: `ep_claude@${RELAY}` });
+  const { body, headers } = forwardPayload(world, { message_type: 'task.request', body: { task_id: 'task_dup', instruction: 'do it' } });
+  const r = await acceptFederatedEnvelope(body, headers, opts9(world));
+  assert.equal(r.status, 409);
+  assert.equal(r.body.code, 'DUPLICATE_TASK_ID');
+  assert.equal(r.body.details.task_id, 'task_dup');
+});
+
+test('inbound federated task.result from an endpoint other than the task.request recipient is rejected with TASK_ASSIGNEE_MISMATCH', async () => {
+  const world = worldWithRecipient();
+  world.repo.lookupTaskRequest = async () => ({ message_id: 'msg_request_1', recipientEndpointId: `ep_someone_else@${RELAY}` });
+  const { body, headers } = forwardPayload(world, { message_type: 'task.result', body: { task_id: 'task_1', status: 'completed', summary: 'done' } });
+  const r = await acceptFederatedEnvelope(body, headers, opts9(world));
+  assert.equal(r.status, 403);
+  assert.equal(r.body.code, 'TASK_ASSIGNEE_MISMATCH');
+  assert.equal(r.body.details.expected_endpoint_id, `ep_someone_else@${RELAY}`);
+  assert.equal(r.body.details.actual_endpoint_id, `ep_codex@${ORIGIN}`);
+});
+
+test('inbound federated task.result from the correct task.request recipient is accepted', async () => {
+  const world = worldWithRecipient();
+  await seedSelfPairLink(world);
+  world.repo.lookupTaskRequest = async () => ({ message_id: 'msg_request_1', recipientEndpointId: `ep_codex@${ORIGIN}` });
+  const { body, headers } = forwardPayload(world, { message_type: 'task.result', body: { task_id: 'task_1', status: 'completed', summary: 'done' } });
+  const r = await acceptFederatedEnvelope(body, headers, opts9(world));
+  assert.equal(r.status, 202);
+  assert.equal(r.body.code, 'ACCEPTED');
+});
+
+test('inbound federated task.result referencing a task_id with no visible task.request is rejected with INVALID_ENVELOPE', async () => {
+  const world = worldWithRecipient();
+  world.repo.lookupTaskRequest = async () => null;
+  const { body, headers } = forwardPayload(world, { message_type: 'task.result', body: { task_id: 'task_never_sent', status: 'completed', summary: 'done' } });
+  const r = await acceptFederatedEnvelope(body, headers, opts9(world));
+  assert.equal(r.status, 400);
+  assert.equal(r.body.code, 'INVALID_ENVELOPE');
+});
