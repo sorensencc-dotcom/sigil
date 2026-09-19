@@ -10,6 +10,8 @@
 
 **Spec:** This plan implements Option A ("trust-the-sending-relay") from the federation approval-bypass scope-out discussed in this session (no design doc — the scope-out itself is the spec). Base commit for all file/line references below: `736f7386` (`origin/main`, `chore(release): v2.66.3`). If `git blame`/line numbers have since drifted, re-read the cited file before editing — the code shown in each step is the authoritative target, not the line numbers.
 
+**Amendment (SDD preflight ruling, recorded before Task 1 dispatch):** The execution branch (`spec/fix-session-layer`) forked from `origin/main` before the commit that added the risk-tier/approval gate and the task.request/task.result assignee-binding check to `accept-envelope.mjs`, and never merged it forward — confirmed via `git diff origin/main -- sigil/relay/v1/accept-envelope.mjs` returning a real diff. On this branch, `accept-envelope.mjs`'s Phase 2 capability check is a bare `CAPABILITY_DENIED`-only loop (no risk-tier tracking, no approval consumption anywhere), and there is no task-assignee-binding logic at all (only a bare `task.result` → `INVALID_ENVELOPE`-if-no-visible-request check). Task 2 below is corrected accordingly: it adds the gate without any "remove the old block" step (no such block exists to remove), and it intentionally does NOT restore the task-assignee-binding check in `accept-envelope.mjs` — that gap is a separate, third defect distinct from Bypass #1, out of this plan's authorized scope, and is called out to the human partner as a follow-up rather than silently fixed or silently ignored. `accept-federated-envelope.mjs` (Task 3) is confirmed byte-identical between this branch and `origin/main`, so Task 3 proceeds exactly as originally written.
+
 ## Global Constraints
 
 - No new database schema and no new migration. Reuse `capability_registry`, `capability_grants`, `approval_decisions` (via `consumeApprovalDecision`), and the existing `lookupCapabilityRegistration` / `consumeApprovalDecision` / `lookupTaskRequest` repository methods verbatim.
@@ -424,7 +426,7 @@ with:
       return await forwardEnvelope(envelope, route, options, null);
 ```
 
-In Phase 2, replace the transaction body's opening (originally):
+In Phase 2, the transaction body currently reads (verified against the actual checked-out file — this branch's Phase 2 has a bare capability-registry loop, no risk-tier tracking, and no approval-gate block anywhere to delete):
 
 ```js
   return repository.withTransaction(async (client) => {
@@ -465,16 +467,14 @@ In Phase 2, replace the transaction body's opening (originally):
     // found in the registry is rejected outright here, before target-scope
     // matching even runs -- it does NOT fall through to the
     // conversation-scope default inside validateEnvelope.
-    const highRiskCapabilities = [];
     for (const capability of envelope.capabilities ?? []) {
       const registered_ = await repository.lookupCapabilityRegistration(capability, client);
       if (!registered_) throw reject('CAPABILITY_DENIED', `Capability is not registered: ${capability}`, { capability });
-      if (registered_.risk_tier === 'high') highRiskCapabilities.push(capability);
     }
     const capabilityGrants = await repository.lookupActiveCapabilityGrants(envelope.sender.endpoint_id, now, client);
 ```
 
-with:
+Replace it with (moves the gate before the `route.action === 'forward'` branch so both forward and local paths are gated identically, and replaces the bare capability loop with the shared gate call — there is no separate approval-gate block later in this file to delete):
 
 ```js
   return repository.withTransaction(async (client) => {
@@ -488,13 +488,14 @@ with:
       throw reject('REPLAY_DETECTED', 'message_id was already accepted under a different idempotency_key');
     }
 
-    // Capability/risk-tier + approval gate (closes Bypass #1: a queue-forwarded
-    // envelope previously skipped this check entirely, since it used to run
-    // only after the route.action === 'forward' branch below had already
-    // returned). Runs before the forward/local branch so BOTH routes are
-    // gated identically. Consumed on this transaction's client so approval
-    // consumption commits or rolls back atomically with the rest of the accept.
-    const highRiskCapabilities = await enforceCapabilityRiskGate(envelope, repository, { client, now });
+    // Capability/risk-tier + approval gate (closes Bypass #1: a
+    // queue-forwarded envelope previously skipped this check entirely,
+    // since it only ran further down on the route.action === 'local'
+    // branch, after this function had already returned for a forward).
+    // Runs before the forward/local branch so BOTH routes are gated
+    // identically, on this transaction's client so approval consumption
+    // commits or rolls back atomically with the rest of the accept.
+    await enforceCapabilityRiskGate(envelope, repository, { client, now });
 
     // Queue-forward: enqueueForward's INSERT + audit are atomic inside this txn.
     if (route.action === 'forward') {
@@ -522,32 +523,15 @@ with:
     const capabilityGrants = await repository.lookupActiveCapabilityGrants(envelope.sender.endpoint_id, now, client);
 ```
 
-Note: `highRiskCapabilities` is now computed once, up front, and used later (unchanged) by the approval-gate block below it — which this step also removes, since `enforceCapabilityRiskGate` already performed the approval-consumption. Delete the now-redundant approval-gate block (originally, further down in the same transaction body, right after the `DUPLICATE_MESSAGE`/duplicate-idempotency check):
+The old bare `for (const capability of envelope.capabilities ?? []) { ... }` loop is gone — `enforceCapabilityRiskGate` performs the same registry lookups (plus risk-tier tracking and approval consumption) up front. `capabilityGrants` keeps its own separate `lookupActiveCapabilityGrants` call right after, unchanged — it's active grants, not registry entries, consumed later by `validateEnvelope`.
+
+Do **not** touch the `task.result` block further down (`if (envelope.message_type === 'task.result') { ... }`) or add any `DUPLICATE_TASK_ID`/`TASK_ASSIGNEE_MISMATCH` logic — per the SDD preflight ruling recorded in this plan's Amendment above, task-assignee-binding restoration in `accept-envelope.mjs` is a separate, third defect outside this plan's authorized scope (Bypass #1 only), and is reported to the human partner as a follow-up rather than fixed here.
+
+Also add `'APPROVAL_REQUIRED'` to the `AUDITED_REJECTION_CODES` set near the top of the file (currently `new Set(['CAPABILITY_DENIED', 'REPLAY_DETECTED', 'RATE_LIMITED', 'QUOTA_EXCEEDED', 'DIRECTORY_LINK_REQUIRED'])`) so a gate rejection gets the same audit-trail treatment as the other fail-closed rejection codes:
 
 ```js
-    // High-risk capability gate (design §7/§9: capability_registry.risk_tier
-    // was previously fetched and discarded -- a 'high'-tier capability grant
-    // was functionally identical to a 'standard' one). A 'high' capability
-    // now requires a matching, unconsumed human decision record (WebAuthn
-    // approval-ceremony, approval-ui.mjs) whose action_hash equals this
-    // envelope's own canonical hash. consumeApprovalDecision atomically
-    // marks the decision 'consumed' inside this same transaction so it can
-    // never authorize a second envelope -- if it returns nothing (no
-    // matching 'approved' row, or the repository doesn't support decisions
-    // at all), this fails closed with APPROVAL_REQUIRED rather than
-    // silently allowing the action through.
-    if (highRiskCapabilities.length) {
-      const consumed = repository.consumeApprovalDecision
-        ? await repository.consumeApprovalDecision({ endpointId: envelope.sender.endpoint_id, actionHash: result.canonical_hash, now, client })
-        : null;
-      if (!consumed) {
-        throw reject('APPROVAL_REQUIRED', 'A valid decision record is required before delivery for high-risk capabilities', { capabilities: highRiskCapabilities });
-      }
-    }
-    if (envelope.message_type === 'task.request') {
+const AUDITED_REJECTION_CODES = new Set(['CAPABILITY_DENIED', 'REPLAY_DETECTED', 'RATE_LIMITED', 'QUOTA_EXCEEDED', 'DIRECTORY_LINK_REQUIRED', 'APPROVAL_REQUIRED']);
 ```
-
-Delete just the `if (highRiskCapabilities.length) { ... }` block above (11 lines including its comment), leaving the surrounding `if (envelope.message_type === 'task.request') {` untouched — the approval consumption already happened earlier via `enforceCapabilityRiskGate`, using the envelope's canonical hash computed the same way (`crypto.createHash('sha256').update(signedBytes(envelope)).digest('hex')`, identical to `result.canonical_hash` from `validateEnvelope`) so behavior for the local path is unchanged, just relocated.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
