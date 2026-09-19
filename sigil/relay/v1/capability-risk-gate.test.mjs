@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { signedBytes } from './validate-envelope.mjs';
 import { enforceCapabilityRiskGate } from './capability-risk-gate.mjs';
+import { createMemoryRepository } from '../../cli/memory-repository.mjs';
 
 function makeEnvelope(capabilities = []) {
   const keys = crypto.generateKeyPairSync('ed25519');
@@ -93,4 +94,29 @@ test('no client argument: repository methods are called with undefined so their 
   const repository = fakeRepo({ registrations: new Map([['sigil.task/submit', { capability: 'sigil.task/submit', risk_tier: 'standard' }]]) });
   await enforceCapabilityRiskGate(makeEnvelope(['sigil.task/submit']), repository);
   assert.equal(repository.registrationCalls[0].client, undefined);
+});
+
+// Real-repository (createMemoryRepository) end-to-end coverage, not just the
+// fake-repo unit tests above: exercises the actual consumeApprovalDecision
+// implementation added alongside enforceCapabilityRiskGate's dependency on it.
+test('createMemoryRepository: seeded approval decision is consumed once, then a second call fails closed', async () => {
+  const repository = createMemoryRepository();
+  const envelope = makeEnvelope(['sigil.approval/request']);
+  const now = new Date('2026-08-30T12:00:30Z');
+  const actionHash = crypto.createHash('sha256').update(signedBytes(envelope)).digest('hex');
+  await repository.createApprovalDecision({
+    decisionId: 'dec_real_1',
+    endpointId: envelope.sender.endpoint_id,
+    actionHash,
+    expiresAt: '2026-08-30T13:00:00Z',
+    now,
+  });
+
+  const result = await enforceCapabilityRiskGate(envelope, repository, { now });
+  assert.deepEqual(result, ['sigil.approval/request']);
+
+  await assert.rejects(
+    () => enforceCapabilityRiskGate(envelope, repository, { now }),
+    { code: 'APPROVAL_REQUIRED' },
+  );
 });

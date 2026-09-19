@@ -279,6 +279,34 @@ export class PostgresRepository {
       return decision.rows[0];
     });
   }
+
+  async consumeApprovalDecision({ endpointId, actionHash, now = new Date(), client = this.pool } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    // Accepts both representations validateEnvelope's own (unused-in-practice)
+    // requiresApproval/approvedActionHashes hook has always tolerated -- the
+    // bare hex digest and the 'sha256:'-prefixed form -- so a decision
+    // recorded either way still matches (Devin review, PR #6).
+    const result = await client.query(
+      `WITH candidate AS (
+         SELECT ad.decision_id
+           FROM approval_decisions ad
+           JOIN humans h ON h.human_id = ad.human_id
+           JOIN human_credentials hc ON hc.human_id = ad.human_id AND hc.credential_id = ad.credential_id
+          WHERE ad.endpoint_id = $1 AND ad.action_hash IN ($2, $3) AND ad.status = 'approved' AND ad.expires_at > $4
+            AND h.status = 'active' AND hc.status = 'active'
+          ORDER BY ad.created_at ASC, ad.decision_id ASC
+          LIMIT 1
+          FOR UPDATE OF ad SKIP LOCKED
+       )
+       UPDATE approval_decisions
+          SET status = 'consumed'
+        WHERE decision_id = (SELECT decision_id FROM candidate)
+        RETURNING decision_id, action_hash, status`,
+      [endpointId, actionHash, `sha256:${actionHash}`, timestamp]
+    );
+    return result.rows[0] ?? null;
+  }
+
   async listInbox(endpointId, since = '', viewerOwnerId = null) {
     // The final SELECT deliberately never re-reads `deliveries` by id: a data-modifying
     // CTE in the same statement is not visible to sibling scans of the same table (they

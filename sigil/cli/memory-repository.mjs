@@ -49,6 +49,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
   const deliveries = new Map();
   const idempotency = new Map();
   const grants = [];
+  const approvalDecisions = [];
   const rateWindows = new Map();
   const acknowledgements = new Map();
   const directoryInvites = new Map(); // code -> invite row (memory repo has no separate hash step -- single process, nothing to hide from itself)
@@ -382,6 +383,22 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       if (grant.revoked_at) return { ...grant, duplicate: true };
       grant.revoked_at = (now instanceof Date ? now : new Date(now)).toISOString();
       return { ...grant, duplicate: false };
+    },
+    // Test-only seeding hook -- mirrors createCapabilityGrant's role for
+    // grants -- so specs can pre-populate an approved decision without a
+    // Postgres-backed challenge/finalize round trip (Postgres-only on this
+    // branch; see finalizeApprovalDecision in postgres-repository.mjs).
+    async createApprovalDecision({ decisionId, endpointId, actionHash, status = 'approved', expiresAt, now = new Date() }) {
+      const decision = { decision_id: decisionId, endpoint_id: endpointId, action_hash: actionHash, status, expires_at: expiresAt, created_at: (now instanceof Date ? now : new Date(now)).toISOString() };
+      approvalDecisions.push(decision);
+      return decision;
+    },
+    async consumeApprovalDecision({ endpointId, actionHash, now = new Date() } = {}) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).getTime();
+      const decision = approvalDecisions.find((d) => d.endpoint_id === endpointId && d.status === 'approved' && (d.action_hash === actionHash || d.action_hash === `sha256:${actionHash}`) && new Date(d.expires_at).getTime() > timestamp);
+      if (!decision) return null;
+      decision.status = 'consumed';
+      return decision;
     },
     async createHumanSession({ sessionId, humanId, authenticationMethod, assurance, deviceContext = {}, issuedAt = new Date(), expiresAt, now = new Date() }) {
       const issued = (issuedAt instanceof Date ? issuedAt : new Date(issuedAt)).toISOString();
