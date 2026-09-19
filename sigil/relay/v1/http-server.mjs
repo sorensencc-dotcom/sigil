@@ -274,6 +274,19 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       if (repository && (!repository.createApprovalChallenge || !repository.getApprovalChallenge || !repository.finalizeApprovalDecision)) return response.writeHead(503).end();
       let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       let body; try { body = JSON.parse(raw); } catch { body = null; }
+      // Contract for gating a specific envelope's delivery (accept-envelope.mjs's
+      // high-risk capability check, PR #6): the decision this challenge produces
+      // is matched by exact action_hash equality against
+      // sha256(signedBytes(envelope)) -- the envelope's own canonical hash, hex
+      // or 'sha256:'-prefixed. That is NOT what computeActionHash below produces
+      // (a distinct 'sha256:jcs-sigil-action-v1:...' digest over abstract action
+      // fields, unrelated to any one envelope's exact bytes) -- a challenge that
+      // falls through to the computeActionHash branch cannot later authorize a
+      // concrete envelope. A caller that wants to pre-approve one specific
+      // envelope MUST pass that envelope's own canonical hash as action_hash
+      // directly (Devin review found this contract was previously undocumented,
+      // and this endpoint's structured-action branch was never actually wired to
+      // any consumer -- accept-envelope.mjs's gate is the first one).
       let actionHash = body?.action_hash;
       if (body?.action) {
         try { actionHash = computeActionHash({ ...body.action, endpoint_id: principal?.endpoint_id }); }

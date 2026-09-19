@@ -472,6 +472,107 @@ test('consumeApprovalDecision matches, is single-use, and respects expiry agains
   assert.equal(row.rows[0].status, 'consumed');
 });
 
+test('consumeApprovalDecision claims exactly one decision when duplicates exist for the same (endpoint_id, action_hash)', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const ids = { human: `usr_${suffix}`, endpoint: `ep_${suffix}` };
+  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  assertDisposableTestDatabase(connectionString);
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
+  for (const file of sqlFiles) {
+    await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
+  }
+  await pool.query(`
+    INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
+      VALUES ('${ids.endpoint}', '${ids.human}', 'claude', 'install_${suffix}', 'Claude', 'active', NOW());
+    INSERT INTO human_credentials (credential_id, human_id, type, public_key, status, valid_from, created_at)
+      VALUES ('cred_${suffix}', '${ids.human}', 'webauthn', decode('00', 'hex'), 'active', NOW(), NOW());
+    INSERT INTO approval_decisions (decision_id, human_id, credential_id, endpoint_id, action_hash, action_hash_algorithm, target, scope, contract_version, nonce, status, created_at, expires_at)
+      VALUES ('decision_a_${suffix}', '${ids.human}', 'cred_${suffix}', '${ids.endpoint}', 'hash_${suffix}', 'sha256', '{}', 'approval', 'sigil/1', 'nonce_a_${suffix}', 'approved', NOW(), NOW() + INTERVAL '5 minutes'),
+             ('decision_b_${suffix}', '${ids.human}', 'cred_${suffix}', '${ids.endpoint}', 'hash_${suffix}', 'sha256', '{}', 'approval', 'sigil/1', 'nonce_b_${suffix}', 'approved', NOW() + INTERVAL '1 second', NOW() + INTERVAL '5 minutes');
+  `);
+
+  const repository = new PostgresRepository({ pool });
+  const consumed = await repository.consumeApprovalDecision({ endpointId: ids.endpoint, actionHash: `hash_${suffix}` });
+  assert.equal(consumed.decision_id, `decision_a_${suffix}`); // oldest (created_at) wins deterministically
+
+  const rows = await pool.query(
+    'SELECT decision_id, status FROM approval_decisions WHERE endpoint_id = $1 ORDER BY decision_id', [ids.endpoint]
+  );
+  assert.deepEqual(rows.rows, [
+    { decision_id: `decision_a_${suffix}`, status: 'consumed' },
+    { decision_id: `decision_b_${suffix}`, status: 'approved' }, // untouched -- still available to a later envelope
+  ]);
+});
+
+test('consumeApprovalDecision ignores a decision whose approving human or credential has since been revoked', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const ids = { human: `usr_${suffix}`, endpoint: `ep_${suffix}` };
+  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  assertDisposableTestDatabase(connectionString);
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
+  for (const file of sqlFiles) {
+    await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
+  }
+  await pool.query(`
+    INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'revoked', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
+      VALUES ('${ids.endpoint}', '${ids.human}', 'claude', 'install_${suffix}', 'Claude', 'active', NOW());
+    INSERT INTO human_credentials (credential_id, human_id, type, public_key, status, valid_from, created_at)
+      VALUES ('cred_${suffix}', '${ids.human}', 'webauthn', decode('00', 'hex'), 'active', NOW(), NOW());
+    INSERT INTO approval_decisions (decision_id, human_id, credential_id, endpoint_id, action_hash, action_hash_algorithm, target, scope, contract_version, nonce, status, created_at, expires_at)
+      VALUES ('decision_${suffix}', '${ids.human}', 'cred_${suffix}', '${ids.endpoint}', 'hash_${suffix}', 'sha256', '{}', 'approval', 'sigil/1', 'nonce_${suffix}', 'approved', NOW(), NOW() + INTERVAL '5 minutes');
+  `);
+
+  const repository = new PostgresRepository({ pool });
+  // The human who approved this was revoked after approving but before the envelope arrived: fails closed.
+  assert.equal(await repository.consumeApprovalDecision({ endpointId: ids.endpoint, actionHash: `hash_${suffix}` }), null);
+
+  // Same, for a revoked credential on an otherwise-active human.
+  await pool.query(`UPDATE humans SET status = 'active' WHERE human_id = '${ids.human}'`);
+  await pool.query(`UPDATE human_credentials SET status = 'revoked' WHERE credential_id = 'cred_${suffix}'`);
+  assert.equal(await repository.consumeApprovalDecision({ endpointId: ids.endpoint, actionHash: `hash_${suffix}` }), null);
+
+  const row = await pool.query('SELECT status FROM approval_decisions WHERE decision_id = $1', [`decision_${suffix}`]);
+  assert.equal(row.rows[0].status, 'approved'); // untouched -- never actually claimed
+});
+
+test('consumeApprovalDecision matches a decision stored with the documented sha256:-prefixed representation', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const ids = { human: `usr_${suffix}`, endpoint: `ep_${suffix}` };
+  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  assertDisposableTestDatabase(connectionString);
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
+  for (const file of sqlFiles) {
+    await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
+  }
+  await pool.query(`
+    INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
+      VALUES ('${ids.endpoint}', '${ids.human}', 'claude', 'install_${suffix}', 'Claude', 'active', NOW());
+    INSERT INTO human_credentials (credential_id, human_id, type, public_key, status, valid_from, created_at)
+      VALUES ('cred_${suffix}', '${ids.human}', 'webauthn', decode('00', 'hex'), 'active', NOW(), NOW());
+    INSERT INTO approval_decisions (decision_id, human_id, credential_id, endpoint_id, action_hash, action_hash_algorithm, target, scope, contract_version, nonce, status, created_at, expires_at)
+      VALUES ('decision_${suffix}', '${ids.human}', 'cred_${suffix}', '${ids.endpoint}', 'sha256:hash_${suffix}', 'sha256', '{}', 'approval', 'sigil/1', 'nonce_${suffix}', 'approved', NOW(), NOW() + INTERVAL '5 minutes');
+  `);
+
+  const repository = new PostgresRepository({ pool });
+  // Caller passes the bare digest (what accept-envelope.mjs's result.canonical_hash always is);
+  // the stored row uses the 'sha256:'-prefixed representation -- must still match.
+  const consumed = await repository.consumeApprovalDecision({ endpointId: ids.endpoint, actionHash: `hash_${suffix}` });
+  assert.equal(consumed.decision_id, `decision_${suffix}`);
+  assert.equal(consumed.status, 'consumed');
+});
+
 test('a high-risk capability envelope is rejected without a decision, accepted once one exists, and the decision cannot authorize a second envelope', { skip: !connectionString }, async (t) => {
   const pool = new pg.Pool({ connectionString });
   t.after(() => pool.end());

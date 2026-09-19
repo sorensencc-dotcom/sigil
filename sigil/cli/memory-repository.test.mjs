@@ -217,3 +217,42 @@ test('memory relay consumeApprovalDecision: matches endpoint_id + action_hash, i
   // Single-use: the same decision cannot be consumed twice.
   assert.equal(await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_a', now: new Date('2026-08-16T12:02:00Z') }), null);
 });
+
+test('memory relay consumeApprovalDecision matches a decision stored with the documented sha256:-prefixed representation', async () => {
+  const repository = createMemoryRepository();
+  await repository.recordApprovalDecision({ decisionId: 'decision_1', endpointId: 'ep_claude', actionHash: 'sha256:hash_a', expiresAt: '2026-08-17T00:00:00Z', now: new Date('2026-08-16T12:00:00Z') });
+  const consumed = await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_a', now: new Date('2026-08-16T12:01:00Z') });
+  assert.equal(consumed.decision_id, 'decision_1');
+});
+
+test('memory relay withTransaction rolls back a consumed approval decision when the callback later throws', async () => {
+  const repository = createMemoryRepository();
+  await repository.recordApprovalDecision({ decisionId: 'decision_1', endpointId: 'ep_claude', actionHash: 'hash_a', expiresAt: '2026-08-17T00:00:00Z', now: new Date('2026-08-16T12:00:00Z') });
+
+  await assert.rejects(() => repository.withTransaction(async () => {
+    const consumed = await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_a', now: new Date('2026-08-16T12:01:00Z') });
+    assert.equal(consumed.decision_id, 'decision_1');
+    throw Object.assign(new Error('a later check in this same accept-envelope transaction rejected the envelope'), { code: 'DUPLICATE_TASK_ID' });
+  }), { code: 'DUPLICATE_TASK_ID' });
+
+  // The decision must be restored to 'approved' -- a genuinely approved,
+  // retriable request must not permanently lose its human approval to an
+  // unrelated failure in the same transaction.
+  const retried = await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_a', now: new Date('2026-08-16T12:02:00Z') });
+  assert.equal(retried.decision_id, 'decision_1');
+  assert.equal(retried.status, 'consumed');
+});
+
+test('memory relay withTransaction commits a consumed approval decision when the callback succeeds', async () => {
+  const repository = createMemoryRepository();
+  await repository.recordApprovalDecision({ decisionId: 'decision_1', endpointId: 'ep_claude', actionHash: 'hash_a', expiresAt: '2026-08-17T00:00:00Z', now: new Date('2026-08-16T12:00:00Z') });
+
+  const result = await repository.withTransaction(async () => {
+    const consumed = await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_a', now: new Date('2026-08-16T12:01:00Z') });
+    return consumed.decision_id;
+  });
+  assert.equal(result, 'decision_1');
+
+  // Still consumed after a successful transaction -- no rollback fired.
+  assert.equal(await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_a', now: new Date('2026-08-16T12:02:00Z') }), null);
+});
