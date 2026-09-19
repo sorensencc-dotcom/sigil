@@ -370,7 +370,14 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     if (request.method === 'GET' && request.url.startsWith('/v1/inbox')) {
       if (!repository?.listInbox) return response.writeHead(503).end();
       const since = new URL(request.url, 'http://sigil.local').searchParams.get('since') ?? '';
-      const items = await repository.listInbox(principal.endpoint_id, since, principal.owner_id ?? null);
+      let items;
+      try {
+        items = await repository.listInbox(principal.endpoint_id, since, principal.owner_id ?? null);
+      } catch (error) {
+        logger?.error?.('inbox read failed', error);
+        response.writeHead(503, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'DATABASE_UNAVAILABLE', message: 'Inbox temporarily unavailable', details: {} }));
+      }
       const nextSince = items.at(-1)?.queued_at ?? since;
       response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(JSON.stringify({ request_id: requestId, code: 'OK', items, next_since: nextSince }));
