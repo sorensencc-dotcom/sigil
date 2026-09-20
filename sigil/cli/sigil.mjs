@@ -12,7 +12,7 @@ import { parseArgs } from 'node:util';
 import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import http from 'node:http';
 import { WebSocket } from 'ws';
@@ -33,6 +33,7 @@ import { checkRelayConnectivity } from './doctor.mjs';
 import { resolveRateLimits } from '../relay/v1/relay-config.mjs';
 import { createRelayMetrics } from '../relay/v1/metrics.mjs';
 import { provisionIngressEndpoint } from './agentmail-provision.mjs';
+import { createAgentMailDeployment } from '../ingress/v1/agentmail-bootstrap.mjs';
 
 const DEFAULT_CLI_CONFIG = path.join('.sigil', 'config.json');
 
@@ -261,6 +262,30 @@ async function cmdRelayUp(argv) {
     repository = createMemoryRepository({ registry });
   }
 
+  let agentmailDeployment = null;
+  if (process.env.SIGIL_AGENTMAIL_ENABLE === '1') {
+    const loadAdapterModule = async (key) => {
+      const modulePath = process.env[key];
+      if (!modulePath) return null;
+      const loaded = await import(pathToFileURL(path.resolve(modulePath)).href);
+      return loaded;
+    };
+    const providerModule = await loadAdapterModule('SIGIL_AGENTMAIL_PROVIDER_MODULE');
+    const secretModule = await loadAdapterModule('SIGIL_AGENTMAIL_SECRET_PROVIDER_MODULE');
+    const rotationModule = await loadAdapterModule('SIGIL_AGENTMAIL_PROVIDER_ROTATION_MODULE');
+    const ingressEndpoint = data.endpoints.find((endpoint) => endpoint.endpoint_id === 'ep_ingress');
+    agentmailDeployment = await createAgentMailDeployment({
+      env: process.env,
+      mode: databaseUrl ? 'production' : 'test',
+      registry,
+      repository,
+      ingress: ingressEndpoint ? { endpoint: ingressEndpoint, ownerId: ingressEndpoint.owner_id, signer: ingressEndpoint.signer } : null,
+      providerFactory: providerModule?.createAgentMailProvider,
+      secretProviders: secretModule?.secretProviders ?? secretModule?.providers ?? {},
+      providerRotation: rotationModule?.providerRotation,
+    });
+  }
+
   // Stream server needs its own http.Server (createRelayServer builds one
   // internally and doesn't accept an existing one), so push notifications
   // run on a second port, separate from the main relay HTTP port.
@@ -286,7 +311,7 @@ async function cmdRelayUp(argv) {
     const addr = server?.address();
     return addr ? `http://127.0.0.1:${addr.port}` : `http://127.0.0.1:${port}`;
   };
-  server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity, relayRequestFreshnessMs, stream_seq: { enabled: streamSequenceEnabled }, logger: relayLogger, resendMetrics: relayMetrics });
+  server = createRelayServer({ registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity, relayRequestFreshnessMs, stream_seq: { enabled: streamSequenceEnabled }, logger: relayLogger, resendMetrics: relayMetrics, agentmailIngress: agentmailDeployment?.agentmailIngress, agentmailControl: agentmailDeployment?.agentmailControl });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();
   let federationReaperTimer;
@@ -303,7 +328,16 @@ async function cmdRelayUp(argv) {
   console.log(`Sigil stream (push notify) on ws://127.0.0.1:${streamAddress.port}/v1/stream`);
   console.log(`Registered endpoints: ${[...registry.keys()].join(', ')}`);
   console.log(databaseUrl ? `Persisting to PostgreSQL database (${databaseUrl.replace(/:[^:@]+@/, ':***@')}). Ctrl+C to stop.` : 'In-memory only -- state is lost when this process exits. Ctrl+C to stop.');
-  await new Promise(() => {}); // keep the process alive
+  await new Promise((resolve) => {
+    const shutdown = async () => {
+      agentmailDeployment?.close();
+      await new Promise((done) => server.close(() => done()));
+      await new Promise((done) => streamHttpServer.close(() => done()));
+      resolve();
+    };
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
+  });
 }
 
 const RELAY_WELL_KNOWN_USAGE =

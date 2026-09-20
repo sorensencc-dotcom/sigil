@@ -45,7 +45,7 @@ async function readBody(request, maxBytes = 1024 * 1024) {
   return raw;
 }
 
-export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain, federationMode, federationIdentity, fetchImpl, relayRequestFreshnessMs, stream_seq, resendMetrics, logger, agentmailIngress } = {}) {
+export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain, federationMode, federationIdentity, fetchImpl, relayRequestFreshnessMs, stream_seq, resendMetrics, logger, agentmailIngress, agentmailControl } = {}) {
   // B3: one clamped relay-request freshness window for this server. It bounds
   // how long a captured signed peer request stays replayable and doubles as the
   // nonce row's expiry horizon (expiresAt = signed_at + freshnessMs).
@@ -290,6 +290,24 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     if (authenticateRequest && !principal) {
       response.writeHead(401, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(JSON.stringify({ request_id: requestId, code: 'UNAUTHENTICATED', message: 'Authentication required', details: {} }));
+    }
+
+    // Control operations are registered only behind an actual bearer/authentication
+    // function. A control object alone never creates an unauthenticated mutation path.
+    if (request.method === 'POST' && agentmailControl && authenticateRequest && parsedUrl.pathname === '/v1/agentmail/control') {
+      let body;
+      try { body = JSON.parse(await readBody(request, 64 * 1024)); } catch { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'CONTROL_REQUEST_INVALID', message: 'Invalid control request', details: {} })); }
+      try {
+        const handler = agentmailControl.handle ?? agentmailControl.handleRequest;
+        if (typeof handler !== 'function') throw Object.assign(new Error('AgentMail control is unavailable'), { code: 'AGENTMAIL_CONTROL_UNAVAILABLE' });
+        const result = await handler(body, principal);
+        response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', control: result }));
+      } catch (error) {
+        const status = ['CONTROL_AUTHORIZATION_REQUIRED', 'CONTROL_APPROVAL_REQUIRED'].includes(error.code) ? 403 : 409;
+        response.writeHead(status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'AGENTMAIL_CONTROL_REJECTED', message: error.code === 'CONTROL_AUTHORIZATION_REQUIRED' ? 'AgentMail control authorization was denied' : 'AgentMail control request was rejected', details: {} }));
+      }
     }
       if (request.method === 'POST' && request.url === '/v1/approval-challenges') {
       if (repository && (!repository.createApprovalChallenge || !repository.getApprovalChallenge || !repository.finalizeApprovalDecision)) return response.writeHead(503).end();
