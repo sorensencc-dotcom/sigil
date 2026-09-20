@@ -8,7 +8,7 @@
 - Focused evidence: Tasks 1–5 passed 15/15, 32/32, 22/22, 11/11, and 10/10 respectively. Task 6 real relay HTTP integration passed 1/1; PostgreSQL concurrency evidence skipped because `SIGIL_TEST_DATABASE_URL` is unset.
 - Bounded-suite evidence: `npm run test:bounded` exits 1 before child output because its nested worker spawn is denied on this host. Direct bounded-equivalent execution passed: 1097 tests, 973 passed, 0 failed, 124 skipped, 2 suites.
 - Audit evidence: `npm run audit:deps`, `npm run audit:jcs`, and `git diff --check` passed. Focused transport/bootstrap regression after the drain-wiring fix passed 7/7.
-- Live PostgreSQL evidence: not run; `SIGIL_TEST_DATABASE_URL` is unset. Live provider, staging, remote, and production evidence remain separate and absent.
+- Live PostgreSQL evidence: guarded disposable gate passed 29 files, 135 tests, 134 passed, 0 failed, 1 skipped. The AgentMail multi-worker control race remains skipped because deployment approval fixtures are required. Live provider, staging, remote, and production evidence remain separate and absent.
 - Production blockers: approved deployment secret-manager adapter, approved AgentMail provider verification/rotation adapter, non-sensitive canary, old-generation rejection check, retention deletion, alert exercise, privacy/compliance approval, and Tier 1 approval.
 
 ## Session update: 2026-09-15 AgentMail review remediation
