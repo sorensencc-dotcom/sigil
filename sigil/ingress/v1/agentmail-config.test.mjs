@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { loadAgentMailConfig, resolveInboxMapping } from './agentmail-config.mjs';
 
 const baseEnv = {
-  SIGIL_AGENTMAIL_WEBHOOK_SECRETS: JSON.stringify({ wh_triage: 'secret-triage', wh_judgment: 'secret-judgment', wh_iron: 'secret-iron' }),
+  SIGIL_AGENTMAIL_WEBHOOK_SECRET_REFS: JSON.stringify({ wh_triage: 'secret://sigil/agentmail/webhook/triage', wh_judgment: 'secret://sigil/agentmail/webhook/judgment', wh_iron: 'secret://sigil/agentmail/webhook/iron' }),
   SIGIL_AGENTMAIL_API_KEY_REF: 'secret://sigil/agentmail/api-key',
   SIGIL_AGENTMAIL_FORWARDING_DOMAIN: 'agentmail.test',
   SIGIL_AGENTMAIL_INBOX_MAPPINGS: JSON.stringify([
@@ -12,9 +12,9 @@ const baseEnv = {
     { providerInboxId: 'inbox_c', endpointId: 'ep_iron', webhookSecretId: 'wh_iron' },
   ]),
   SIGIL_AGENTMAIL_SENDER_ALLOWLIST: JSON.stringify(['operator@example.test']),
-  SIGIL_AGENTMAIL_FORWARDING_TOKENS: JSON.stringify({
-    'triage+trm': 'A'.repeat(22),
-    'judgment+review': 'B'.repeat(22),
+  SIGIL_AGENTMAIL_FORWARDING_TOKEN_REFS: JSON.stringify({
+    'triage+trm': 'secret://sigil/agentmail/forwarding/triage-trm',
+    'judgment+review': 'secret://sigil/agentmail/forwarding/judgment-review',
   }),
 };
 
@@ -24,7 +24,9 @@ test('loadAgentMailConfig rejects missing required configuration', () => {
 
 test('loadAgentMailConfig parses mappings and defaults limits', () => {
   const config = loadAgentMailConfig(baseEnv);
-  assert.equal(config.apiKeyRef, baseEnv.SIGIL_AGENTMAIL_API_KEY_REF);
+  assert.equal(config.apiKeyRef.display, baseEnv.SIGIL_AGENTMAIL_API_KEY_REF);
+  assert.equal(config.webhookSecretRefs.wh_triage.path, 'agentmail/webhook/triage');
+  assert.equal(config.forwardingTokenRefs['triage+trm'].scheme, 'secret');
   assert.equal(config.forwardingDomain, 'agentmail.test');
   assert.equal(config.inboxMappings[0].webhookSecretId, 'wh_triage');
   assert.equal(config.inboxMappings.length, 3);
@@ -49,6 +51,11 @@ test('non-canonical endpoints and missing webhook secret mappings fail closed', 
     { providerInboxId: 'inbox_c', endpointId: 'ep_iron', webhookSecretId: 'wh_iron' },
   ]) };
   assert.throws(() => loadAgentMailConfig(missingSecret), { code: 'AGENTMAIL_CONFIG_INVALID' });
+});
+
+test('production rejects raw credential variables and mixed reference/raw configuration', () => {
+  assert.throws(() => loadAgentMailConfig({ ...baseEnv, SIGIL_AGENTMAIL_WEBHOOK_SECRETS: '{}' }), { code: 'SECRET_POLICY_VIOLATION' });
+  assert.throws(() => loadAgentMailConfig({ ...baseEnv, SIGIL_AGENTMAIL_FORWARDING_TOKENS: '{}' }), { code: 'SECRET_POLICY_VIOLATION' });
 });
 
 test('duplicate provider inbox and endpoint mappings fail closed', () => {

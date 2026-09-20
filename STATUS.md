@@ -1,5 +1,16 @@
 # Status
 
+## Session update: 2026-09-20 AgentMail secret management
+
+- Implemented typed secret references and explicit resolver ports. Production rejects raw or mixed webhook/forwarding credential variables; local/test compatibility remains isolated in `agentmail-legacy-config.mjs`.
+- Added immutable composite generations shared by transport and webhook verification, bounded previous-generation overlap, generation-aware SDK clients, PostgreSQL-backed control migration 025 with leases/cache/fail-closed stale behavior, explicit control capabilities in migration 026, authorization, provider-rotation port, and rotation coordinator.
+- Wired opt-in deployment bootstrap and `sigil relay up` adapter-module loading. `SIGIL_AGENTMAIL_ENABLE` remains default-off. Authenticated control routing is absent unless an authenticator and control handler are both injected. No deployment secret-manager SDK or provider rotation behavior was fabricated.
+- Focused evidence: Tasks 1–5 passed 15/15, 32/32, 22/22, 11/11, and 10/10 respectively. Task 6 real relay HTTP integration passed 1/1; PostgreSQL concurrency evidence skipped because `SIGIL_TEST_DATABASE_URL` is unset.
+- Bounded-suite evidence: `npm run test:bounded` exits 1 before child output because its nested worker spawn is denied on this host. Direct bounded-equivalent execution passed: 1097 tests, 973 passed, 0 failed, 124 skipped, 2 suites.
+- Audit evidence: `npm run audit:deps`, `npm run audit:jcs`, and `git diff --check` passed. Focused transport/bootstrap regression after the drain-wiring fix passed 7/7.
+- Live PostgreSQL evidence: guarded disposable gate passed 29 files, 135 tests, 134 passed, 0 failed, 1 skipped. The AgentMail multi-worker control race remains skipped because deployment approval fixtures are required. Live provider, staging, remote, and production evidence remain separate and absent.
+- Production blockers: approved deployment secret-manager adapter, approved AgentMail provider verification/rotation adapter, non-sensitive canary, old-generation rejection check, retention deletion, alert exercise, privacy/compliance approval, and Tier 1 approval.
+
 ## Session update: 2026-09-15 AgentMail review remediation
 
 - Scoped review findings were remediated in the disposable checkout `C:\dev\dev-sandbox\sigil-agentmail-review`: raw email body can no longer populate trusted task instructions; canonical mailbox endpoints and per-inbox webhook secret references are required; forwarding addresses enforce one domain; provider verification has a parser timeout; sender rate limits and attachment limits are wired; inactive endpoint mappings fail closed; signed receipts and envelope message IDs are linked; PostgreSQL ledger transitions and queue admission use transactional locking; memory queue depth recovers at terminal states; legal holds cannot be cleared or deleted through ordinary retention operations.

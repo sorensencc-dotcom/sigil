@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createIdentity, identityKeys } from '../../cli/identity.mjs';
 import { handleAgentMailWebhook, resolveWorkflow } from './agentmail-adapter.mjs';
+import { createAgentMailLedger } from './agentmail-ledger.mjs';
 
 const token = 'T'.repeat(22);
 const identity = createIdentity({ ownerId: 'usr_operator', endpointId: 'ep_ingress', kind: 'agent' });
@@ -30,10 +31,14 @@ function makeInput(overrides = {}) {
     inboxId: 'inbox_a',
     provider: { async verifyWebhook() { return event; } },
     registry: { inboxMappings: [
-      { providerInboxId: 'inbox_a', endpointId: 'ep_triage', workflowPolicy: ['trm'] },
-      { providerInboxId: 'inbox_b', endpointId: 'ep_judgment', workflowPolicy: ['review'] },
-      { providerInboxId: 'inbox_c', endpointId: 'ep_iron', workflowPolicy: ['internal', 'test'] },
+      { providerInboxId: 'inbox_a', endpointId: 'ep_triage', webhookSecretId: 'wh_triage', workflowPolicy: ['trm'] },
+      { providerInboxId: 'inbox_b', endpointId: 'ep_judgment', webhookSecretId: 'wh_judgment', workflowPolicy: ['review'] },
+      { providerInboxId: 'inbox_c', endpointId: 'ep_iron', webhookSecretId: 'wh_iron', workflowPolicy: ['internal', 'test'] },
     ] },
+    secretStore: { current: () => ({
+      withWebhookSecret: (_id, callback) => callback({ withValue: (fn) => fn('synthetic-webhook-secret') }),
+      withForwardingToken: (_alias, callback) => callback({ withValue: (fn) => fn(token) }),
+    }) },
     ingress: { endpoint: { endpoint_id: 'ep_ingress', owner_id: 'usr_operator' }, ownerId: 'usr_operator', signer: { ...keys, keyId: identity.key_id } },
     ledger: {
       async recordIngressEvent(record) { records.set(record.eventId, { ...record, state: 'received' }); return records.get(record.eventId); },
@@ -91,6 +96,16 @@ test('judgment mail is durably quarantined and financial mail stays local-only',
   assert.equal(judgmentResult.state, 'quarantined');
   assert.equal(judgment.queued.length, 0);
 
+  const ledger = createAgentMailLedger();
+  const durableJudgment = makeInput({
+    inboxId: 'inbox_b',
+    event: { alias: `judgment+review+${token}@agentmail.test`, eventId: 'evt_durable_judgment', messageId: 'msg_durable_judgment' },
+    ledger,
+  });
+  const durableResult = await handleAgentMailWebhook(durableJudgment);
+  assert.equal(durableResult.state, 'quarantined');
+  assert.equal(durableResult.body?.code, undefined);
+
   const financial = makeInput({ event: { body: 'SYNTHETIC FINANCIAL DATA: account number 000000' } });
   const denied = await handleAgentMailWebhook(financial);
   assert.equal(denied.body.code, 'FINANCIAL_APPROVAL_REQUIRED');
@@ -133,6 +148,21 @@ test('provider verification is bounded by parser timeout', async () => {
   const input = makeInput({ maxParserSeconds: 1, provider: { async verifyWebhook() { return new Promise(() => {}); } } });
   const result = await handleAgentMailWebhook(input);
   assert.equal(result.body.code, 'AGENTMAIL_PROVIDER_TIMEOUT');
+});
+
+test('webhook and forwarding verification use one request-captured snapshot', async () => {
+  let active = 'old';
+  const snapshots = {
+    old: { withWebhookSecret: (_id, callback) => callback({ withValue: (fn) => fn('webhook-old') }), withForwardingToken: (_alias, callback) => callback({ withValue: (fn) => fn(token) }) },
+    new: { withWebhookSecret: (_id, callback) => callback({ withValue: (fn) => fn('webhook-new') }), withForwardingToken: (_alias, callback) => callback({ withValue: (fn) => fn('N'.repeat(22)) }) },
+  };
+  const input = makeInput({
+    secretStore: { current: () => snapshots[active] },
+    provider: { async verifyWebhook(args) { assert.equal(args.webhookSecret, 'webhook-old'); active = 'new'; return makeInput().provider.verifyWebhook(); } },
+  });
+  const result = await handleAgentMailWebhook(input);
+  assert.equal(result.status, 202);
+  assert.equal(input.queued.length, 1);
 });
 
 test('financial attachments receive short retention before approval or rejection', async () => {
