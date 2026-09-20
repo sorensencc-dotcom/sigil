@@ -1,5 +1,12 @@
 # Status
 
+## Session update: 2026-09-20 AgentMail provider adapter
+
+- Added the official `svix` dependency and a concrete AgentMail provider adapter. The adapter verifies raw Svix-signed webhook bodies, rejects unsupported or mismatched events, maps documented `message.received` fields, and retrieves oversized message bodies through the existing transport boundary.
+- Extended the AgentMail transport with SDK-backed attachment retrieval and atomic webhook-header update operations. No provider account, secret value, or production activation changed.
+- Focused evidence: AgentMail provider, transport, ingress, and bootstrap tests pass 21/21; dependency audit, JCS audit, and `git diff --check` pass.
+- Rotation remains intentionally uncommitted to a vendor-specific secret-manager write path. The existing rotation port still fails closed until a production secret manager and deployment credential policy are selected and approved.
+
 ## Session update: 2026-09-20 AgentMail secret management
 
 - Implemented typed secret references and explicit resolver ports. Production rejects raw or mixed webhook/forwarding credential variables; local/test compatibility remains isolated in `agentmail-legacy-config.mjs`.

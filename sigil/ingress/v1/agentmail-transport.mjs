@@ -44,6 +44,18 @@ export function createAgentMailTransport({ secretStore, clientFactory } = {}) {
     fetchMessage(inboxId, messageId) {
       return call((client) => client.inboxes.messages.get(inboxId, messageId));
     },
+    fetchAttachment(inboxId, messageId, attachmentId) {
+      return call((client) => {
+        if (typeof client.inboxes?.messages?.getAttachment !== 'function') throw Object.assign(new Error('AgentMail client does not expose attachment retrieval'), { code: 'AGENTMAIL_CLIENT_INVALID' });
+        return client.inboxes.messages.getAttachment(inboxId, messageId, attachmentId);
+      });
+    },
+    updateWebhookHeaders(inboxId, webhookId, request) {
+      return call((client) => {
+        if (typeof client.inboxes?.webhooks?.updateHeaders !== 'function') throw Object.assign(new Error('AgentMail client does not expose webhook header rotation'), { code: 'AGENTMAIL_CLIENT_INVALID' });
+        return client.inboxes.webhooks.updateHeaders(inboxId, webhookId, request);
+      });
+    },
     sendMessage(inboxId, request) {
       return call((client) => client.inboxes.messages.send(inboxId, request));
     },
