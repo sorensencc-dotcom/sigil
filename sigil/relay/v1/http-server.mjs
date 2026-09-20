@@ -45,6 +45,30 @@ async function readBody(request, maxBytes = 1024 * 1024) {
   return raw;
 }
 
+// Shared `acceptEnvelopeAsync` `onPersisted` closure: drives the push-notify
+// stream (`stream.notify` to the recipient, `stream.notifyReceipt` to the
+// sender) whenever an envelope is persisted. Every transport that calls
+// acceptEnvelopeAsync (HTTP here, and the libp2p data protocol in
+// transport-libp2p/p2p-data-protocol.mjs, wired via cmdRelayUp in
+// sigil/cli/sigil.mjs) must pass the SAME closure bound to the SAME `stream`
+// instance -- otherwise WS subscribers/delivery receipts only fire for
+// envelopes accepted over one transport and not the other.
+export function createOnPersisted(stream) {
+  return async ({ envelope: accepted, persisted }) => {
+    if (!stream || persisted?.duplicate) return;
+    if (accepted.recipient?.endpoint_id) stream.notify(accepted.recipient.endpoint_id, persisted.message_id, persisted.streamSeq);
+    if (accepted.sender?.endpoint_id && typeof stream.notifyReceipt === 'function') {
+      stream.notifyReceipt(accepted.sender.endpoint_id, {
+        message_id: persisted.message_id,
+        delivery_id: persisted.delivery_id ?? `del_${persisted.message_id}`,
+        state: 'delivered',
+        at: accepted.created_at,
+        streamSeq: persisted.streamSeq,
+      });
+    }
+  };
+}
+
 export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain, federationMode, federationIdentity, fetchImpl, relayRequestFreshnessMs, stream_seq, resendMetrics, logger, agentmailIngress, agentmailControl } = {}) {
   // B3: one clamped relay-request freshness window for this server. It bounds
   // how long a captured signed peer request stays replayable and doubles as the
@@ -381,19 +405,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       const result = await acceptEnvelopeAsync(envelope, {
         registered: registry, request_id: requestId, now, repository, relayDomain, persist,
         federationMode, federationIdentity, fetchImpl, stream_seq: streamSequence, resendMetrics, logger,
-        onPersisted: async ({ envelope: accepted, persisted }) => {
-          if (!stream || persisted?.duplicate) return;
-          if (accepted.recipient?.endpoint_id) stream.notify(accepted.recipient.endpoint_id, persisted.message_id, persisted.streamSeq);
-          if (accepted.sender?.endpoint_id && typeof stream.notifyReceipt === 'function') {
-            stream.notifyReceipt(accepted.sender.endpoint_id, {
-              message_id: persisted.message_id,
-              delivery_id: persisted.delivery_id ?? `del_${persisted.message_id}`,
-              state: 'delivered',
-              at: accepted.created_at,
-              streamSeq: persisted.streamSeq,
-            });
-          }
-        }
+        onPersisted: createOnPersisted(stream),
       });
       response.writeHead(result.status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(result.body ? JSON.stringify(result.body) : '');

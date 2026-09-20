@@ -68,11 +68,10 @@ export function wireDataProtocol(node, options) {
       // PeerId that was actually authenticated on this connection.
       const registered = options.registered ?? options.registry;
       const senderEntry = registered?.get(envelope?.sender?.endpoint_id);
-      if (senderEntry) {
-        const expectedPeerId = await peerIdFromPublicKey(senderEntry.public_key);
-        if (expectedPeerId.toString() !== connection.remotePeer.toString()) {
-          throw reject('PEER_IDENTITY_MISMATCH', 'Authenticated PeerId does not match the sender endpoint\'s registered key');
-        }
+      if (!senderEntry) throw reject('UNKNOWN_ENDPOINT', 'Sender endpoint is not registered on this relay');
+      const expectedPeerId = await peerIdFromPublicKey(senderEntry.public_key);
+      if (expectedPeerId.toString() !== connection.remotePeer.toString()) {
+        throw reject('PEER_IDENTITY_MISMATCH', 'Authenticated PeerId does not match the sender endpoint\'s registered key');
       }
       responseBody = await acceptEnvelopeAsync(envelope, options);
     } catch (error) {

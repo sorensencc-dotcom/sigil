@@ -21,7 +21,7 @@ import { createIdentity, loadIdentity, saveIdentity, identityKeys } from './iden
 import { loadRegistryFile, addEndpointToRegistry, toRegistryMap, toTokenHashes } from './registry-store.mjs';
 import { createMemoryRepository } from './memory-repository.mjs';
 import { sendWithOptionalReceiptWait } from './send-with-receipt.mjs';
-import { createRelayServer } from '../relay/v1/http-server.mjs';
+import { createRelayServer, createOnPersisted } from '../relay/v1/http-server.mjs';
 import { createStreamServer } from '../relay/v1/stream-server.mjs';
 import { RelayClient } from '../connectors/v1/relay-client.mjs';
 import { LocalOutbox } from '../connectors/v1/local-outbox.mjs';
@@ -48,7 +48,7 @@ Commands:
   verify-contract --contract path --registry path                        Verify a signed TorqueQuery agent dispatch contract
   agentmail provision --identity path --installation-id id [--registry path] [--audit-output path]
                                                             Explicitly provision non-mailbox ep_ingress; creates no grants or inbox mapping
-  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] [--relay-request-freshness-ms N] Run a local relay (blocks; Ctrl+C to stop; set SIGIL_STREAM_SEQ_ENABLED=1 to stamp stream sequences)
+  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] [--relay-request-freshness-ms N] [--p2p [--p2p-identity path] [--p2p-listen multiaddr]] Run a local relay (blocks; Ctrl+C to stop; set SIGIL_STREAM_SEQ_ENABLED=1 to stamp stream sequences)
   relay well-known generate --identity path --domain domain --endpoint url [--ws-endpoint url] [--output path]
                                                             Emit this relay's .well-known/sigil discovery document from a designated endpoint identity
   oidc-issuer add <issuer> --client-id id [--label text] [--assurance level] [--database-url url]
@@ -262,6 +262,45 @@ async function cmdRelayUp(argv) {
     repository = createMemoryRepository({ registry });
   }
 
+  let agentmailDeployment = null;
+  if (process.env.SIGIL_AGENTMAIL_ENABLE === '1') {
+    const loadAdapterModule = async (key) => {
+      const modulePath = process.env[key];
+      if (!modulePath) return null;
+      const loaded = await import(pathToFileURL(path.resolve(modulePath)).href);
+      return loaded;
+    };
+    const providerModule = await loadAdapterModule('SIGIL_AGENTMAIL_PROVIDER_MODULE');
+    const secretModule = await loadAdapterModule('SIGIL_AGENTMAIL_SECRET_PROVIDER_MODULE');
+    const rotationModule = await loadAdapterModule('SIGIL_AGENTMAIL_PROVIDER_ROTATION_MODULE');
+    const ingressEndpoint = data.endpoints.find((endpoint) => endpoint.endpoint_id === 'ep_ingress');
+    agentmailDeployment = await createAgentMailDeployment({
+      env: process.env,
+      mode: databaseUrl ? 'production' : 'test',
+      registry,
+      repository,
+      ingress: ingressEndpoint ? { endpoint: ingressEndpoint, ownerId: ingressEndpoint.owner_id, signer: ingressEndpoint.signer } : null,
+      providerFactory: providerModule?.createAgentMailProvider,
+      secretProviders: secretModule?.secretProviders ?? secretModule?.providers ?? {},
+      providerRotation: rotationModule?.providerRotation,
+    });
+  }
+
+  // Stream server needs its own http.Server (createRelayServer builds one
+  // internally and doesn't accept an existing one), so push notifications
+  // run on a second port, separate from the main relay HTTP port.
+  const streamHttpServer = http.createServer();
+  const stream = createStreamServer({ server: streamHttpServer, tokenHashes });
+  const relayLogger = Object.freeze({
+    debug: (entry) => console.debug(JSON.stringify(entry)),
+    info: (entry) => console.info(JSON.stringify(entry)),
+    warn: (entry) => console.warn(JSON.stringify(entry)),
+    error: (entry) => console.error(JSON.stringify(entry)),
+  });
+  const relayMetrics = createRelayMetrics();
+  await new Promise((resolve) => streamHttpServer.listen(streamPort, '127.0.0.1', resolve));
+  const streamAddress = streamHttpServer.address();
+
   // Optional libp2p transport (spec §8), started alongside the existing
   // HTTP/WS relay rather than replacing it. Off by default -- without
   // --p2p, cmdRelayUp's behavior is byte-for-byte unchanged from before this
@@ -275,6 +314,12 @@ async function cmdRelayUp(argv) {
   // private key material to derive a PeerId (see p2p-host.mjs), so it is
   // loaded the same way --federation-identity is: a separate identity file
   // (written by `sigil init`, containing private_key_pem) via loadIdentity.
+  //
+  // This block is placed after `stream`/`streamHttpServer` are created (final
+  // review M2) so that `wireDataProtocol` can be handed the exact same
+  // `onPersisted` closure (see http-server.mjs's `createOnPersisted`) that
+  // the HTTP transport uses -- otherwise p2p-accepted envelopes never notify
+  // WebSocket stream subscribers or emit delivery receipts.
   let p2pHost = null;
   if (args.values.p2p) {
     const p2pIdentityPath = opt(args, ['p2p-identity']);
@@ -315,48 +360,27 @@ async function cmdRelayUp(argv) {
     // accept-envelope.mjs). No `repository.saveDelivery`/`insertMessage`
     // method exists anywhere in this codebase -- verified by grep before
     // wiring this up, per this task's brief.
-    wireDataProtocol(p2pHost, { registered: registry, relayDomain, federationMode, repository });
+    //
+    // federationIdentity / onPersisted / stream_seq mirror http-server.mjs's
+    // acceptEnvelopeAsync call site (sigil/relay/v1/http-server.mjs:381-383)
+    // exactly, so a foreign-domain recipient arriving over
+    // /sigil/data/1.0.0 forwards correctly instead of throwing an
+    // unguarded TypeError (final review M1), envelopes accepted over p2p
+    // notify WS stream subscribers / emit delivery receipts identically to
+    // HTTP (M2), and SIGIL_STREAM_SEQ_ENABLED=1 applies uniformly across
+    // both transports instead of leaving unstamped holes in the
+    // session-layer sequence stream (M3).
+    wireDataProtocol(p2pHost, {
+      registered: registry,
+      relayDomain,
+      federationMode,
+      federationIdentity,
+      repository,
+      onPersisted: createOnPersisted(stream),
+      stream_seq: { enabled: streamSequenceEnabled },
+    });
     for (const addr of p2pHost.getMultiaddrs()) console.log(`sigil relay p2p listening on ${addr.toString()}`);
   }
-
-  let agentmailDeployment = null;
-  if (process.env.SIGIL_AGENTMAIL_ENABLE === '1') {
-    const loadAdapterModule = async (key) => {
-      const modulePath = process.env[key];
-      if (!modulePath) return null;
-      const loaded = await import(pathToFileURL(path.resolve(modulePath)).href);
-      return loaded;
-    };
-    const providerModule = await loadAdapterModule('SIGIL_AGENTMAIL_PROVIDER_MODULE');
-    const secretModule = await loadAdapterModule('SIGIL_AGENTMAIL_SECRET_PROVIDER_MODULE');
-    const rotationModule = await loadAdapterModule('SIGIL_AGENTMAIL_PROVIDER_ROTATION_MODULE');
-    const ingressEndpoint = data.endpoints.find((endpoint) => endpoint.endpoint_id === 'ep_ingress');
-    agentmailDeployment = await createAgentMailDeployment({
-      env: process.env,
-      mode: databaseUrl ? 'production' : 'test',
-      registry,
-      repository,
-      ingress: ingressEndpoint ? { endpoint: ingressEndpoint, ownerId: ingressEndpoint.owner_id, signer: ingressEndpoint.signer } : null,
-      providerFactory: providerModule?.createAgentMailProvider,
-      secretProviders: secretModule?.secretProviders ?? secretModule?.providers ?? {},
-      providerRotation: rotationModule?.providerRotation,
-    });
-  }
-
-  // Stream server needs its own http.Server (createRelayServer builds one
-  // internally and doesn't accept an existing one), so push notifications
-  // run on a second port, separate from the main relay HTTP port.
-  const streamHttpServer = http.createServer();
-  const stream = createStreamServer({ server: streamHttpServer, tokenHashes });
-  const relayLogger = Object.freeze({
-    debug: (entry) => console.debug(JSON.stringify(entry)),
-    info: (entry) => console.info(JSON.stringify(entry)),
-    warn: (entry) => console.warn(JSON.stringify(entry)),
-    error: (entry) => console.error(JSON.stringify(entry)),
-  });
-  const relayMetrics = createRelayMetrics();
-  await new Promise((resolve) => streamHttpServer.listen(streamPort, '127.0.0.1', resolve));
-  const streamAddress = streamHttpServer.address();
 
   const oidcIssuerAllowList = new Set((await repository.listOidcIssuerAllowlist()).map((entry) => entry.issuer));
   // Only meaningful when persisting to Postgres -- polling a single-process
