@@ -27,7 +27,9 @@ Set `SIGIL_AGENTMAIL_INBOX_MAPPINGS` to a JSON array containing exactly three im
 
 The adapter rejects duplicate provider IDs, duplicate endpoint IDs, non-canonical endpoint IDs, missing per-inbox webhook secrets, unknown inboxes, and placeholder active mappings. `ep_ingress` never receives an AgentMail inbox. Set `SIGIL_AGENTMAIL_FORWARDING_DOMAIN` to the exact domain accepted by forwarding aliases.
 
-Required configuration also includes a secret reference in `SIGIL_AGENTMAIL_API_KEY_REF`, webhook secret records, an exact sender allowlist, and forwarding tokens. Store values in the deployment secret manager; do not put them in source control, fixtures, logs, or CI artifacts.
+Required production configuration uses `SIGIL_AGENTMAIL_API_KEY_REF`, `SIGIL_AGENTMAIL_WEBHOOK_SECRET_REFS`, and `SIGIL_AGENTMAIL_FORWARDING_TOKEN_REFS`, plus an exact sender allowlist. Values remain in the deployment secret manager; configuration contains references only. `secret://backend/path` requires an explicitly supplied provider, and `env://NAME` requires an uppercase environment name. Raw `SIGIL_AGENTMAIL_WEBHOOK_SECRETS` and `SIGIL_AGENTMAIL_FORWARDING_TOKENS` are available only through the local/test compatibility shim; production rejects raw or mixed configuration.
+
+The resolver exposes values only through a callback. It emits versions, references, and SHA-256 fingerprints to runtime metadata; plaintext values never enter configuration, audit fields, errors, metrics, or logs. A complete API-key, webhook-secret, and forwarding-token set resolves into one immutable generation before startup or rotation.
 
 ## Forwarding aliases
 
@@ -51,6 +53,34 @@ Real financial documents and personal email exports are prohibited from source c
 
 Use the adapter ledger states `received`, `quarantined`, `accepted`, `dispatched`, `completed`, `rejected`, and `dead_lettered`. Only operator-approved replay may return a rejected or dead-lettered event to `quarantined`. Use existing Sigil `relay_jobs` leases, retries, terminal states, and job-type-scoped idempotency for durable work.
 
-Rotate webhook secrets and the provider API key through the secret manager. Register each webhook against its configured inbox and retain the provider registration receipt with the inbox mapping proof. Disable ingress with the adapter kill switch before secret rotation or quarantine maintenance. Ledger state transitions run inside one database transaction, and legal holds cannot be cleared through ordinary retention updates or deletion.
+Set `SIGIL_AGENTMAIL_ENABLE=1` to opt into the deployment. The relay leaves AgentMail absent when the variable is unset. Enabled production startup requires PostgreSQL, reference-based configuration, an approved provider adapter, an initial snapshot, and migration 025. Startup begins in `disabled` state; an authorized `resume` action is required before webhook acceptance.
+
+Migration 026 registers these capabilities without creating grants: `sigil.agentmail/control_drain`, `sigil.agentmail/control_disable`, `sigil.agentmail/control_resume`, `sigil.agentmail/control_rotate`, and `sigil.agentmail/control_emergency_stop`. Authenticated `POST /v1/agentmail/control` accepts only `action`, `target`, `expectedVersion`, `requestId`, and `reason`. The route rejects missing grants, high-risk actions without approval, stale versions, unknown actions, and secret-bearing fields. Control state is `enabled`, `draining`, or `disabled`; stale or unavailable cache state fails closed.
+
+Rotate webhook secrets and the provider API key in this order: authorize, acquire the control lease, drain, wait for in-flight work, resolve and probe the candidate snapshot, commit the provider cutover through the injected provider rotation port, swap the immutable snapshot, resume, and record a redacted receipt. Unsupported or uncommitted provider rotation leaves ingress disabled. Provider rollback remains inside the deployment adapter; the core does not invent SDK behavior.
+
+Synthetic control request and response:
+
+```json
+{"action":"disable","target":"all","expectedVersion":7,"requestId":"req_synthetic_01","reason":"maintenance"}
+```
+
+```json
+{"request_id":"req_synthetic_01","code":"OK","control":{"controlId":"agentmail","state":"disabled","version":8}}
+```
+
+Register each webhook against its configured inbox and retain the provider registration receipt with the inbox mapping proof. Ledger state transitions run inside one database transaction, and legal holds cannot be cleared through ordinary retention updates or deletion.
+
+## Gated canary checklist
+
+Run only after deployment-owner credentials, provider adapter approval, privacy/compliance approval, and Tier 1 approval exist. Use synthetic, non-sensitive content.
+
+1. Deliver one signed non-sensitive message to each mapped inbox.
+2. Verify one ledger event, one signed receipt, and one durable relay submission per message.
+3. Disable ingress through the authenticated control route and verify new delivery rejection.
+4. Rotate one webhook secret and the API key through the approved provider adapter.
+5. Verify the old generation is rejected after overlap expiry and the new generation is accepted.
+6. Exercise retention deletion and confirm legal holds remain intact.
+7. Trigger operational alerts for provider failure, stale control cache, queue depth, and rotation failure.
 
 This implementation has local focused-test evidence only. A live non-sensitive canary, secret rotation, retention deletion, operational alerting, privacy/compliance approval, and Tier 1 approval remain required before production activation.
