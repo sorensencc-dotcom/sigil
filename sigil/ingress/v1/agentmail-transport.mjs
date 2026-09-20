@@ -30,6 +30,13 @@ export function createAgentMailTransport({ secretStore, clientFactory } = {}) {
     try { return await operation(await getClient(snapshot)); } catch (error) { throw providerError(error); }
     finally { const count = (inFlight.get(generation) ?? 1) - 1; if (count) inFlight.set(generation, count); else inFlight.delete(generation); secretStore.retireExpired?.(); retire(); }
   };
+  const waitForIdle = async ({ timeoutMs = 30_000 } = {}) => {
+    const deadline = Date.now() + timeoutMs;
+    while (inFlight.size > 0) {
+      if (Date.now() >= deadline) throw Object.assign(new Error('AgentMail transport did not drain before the deadline'), { code: 'CONTROL_DRAIN_TIMEOUT' });
+      await new Promise((resolve) => setTimeout(resolve, Math.min(10, Math.max(1, deadline - Date.now()))));
+    }
+  };
   return {
     registerWebhook(inboxId, { url, eventTypes = ['message.received'] } = {}) {
       return call((client) => client.inboxes.webhooks.create(inboxId, { url, eventTypes }));
@@ -40,6 +47,7 @@ export function createAgentMailTransport({ secretStore, clientFactory } = {}) {
     sendMessage(inboxId, request) {
       return call((client) => client.inboxes.messages.send(inboxId, request));
     },
+    waitForIdle,
     close() { clients.clear(); },
   };
 }

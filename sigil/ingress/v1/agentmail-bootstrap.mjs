@@ -28,7 +28,8 @@ export async function createAgentMailDeployment({ env = process.env, mode = 'pro
   if (!provider || typeof provider.verifyWebhook !== 'function') fail('AGENTMAIL_PROVIDER_INVALID', 'AgentMail provider adapter does not expose webhook verification');
   const control = createAgentMailControl({ repository, notify: repository?.notify, clock });
   await control.cache.refresh();
-  const rotation = (request) => rotateAgentMailSecrets({ ...request, control, secretStore, resolver, providerRotation, config, actor: request.actor, clock, authorize: (args) => authorizeAgentMailControl({ ...args, repository }) });
+  const rotationControl = { ...control, waitForIdle: transport.waitForIdle };
+  const rotation = (request) => rotateAgentMailSecrets({ ...request, control: rotationControl, secretStore, resolver, providerRotation, config, actor: request.actor, clock, authorize: (args) => authorizeAgentMailControl({ ...args, repository }) });
   const agentmailControl = {
     ...control,
     compatibility,

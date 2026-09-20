@@ -45,3 +45,15 @@ test('transport creates one client per active generation and rejects raw-key con
   assert.deepEqual(created, [fixtureCredential]);
   assert.throws(() => createAgentMailTransport({ apiKey: fixtureCredential }), { code: 'AGENTMAIL_CONFIG_MISSING' });
 });
+
+test('transport exposes a bounded wait for in-flight provider calls', async () => {
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const client = { inboxes: { webhooks: { async create() {} }, messages: { async get() { await pending; return { ok: true }; }, async send() {} } } };
+  const transport = createAgentMailTransport({ secretStore: store(), clientFactory: () => client });
+  const request = transport.fetchMessage('inbox_a', 'msg_1');
+  await assert.rejects(transport.waitForIdle({ timeoutMs: 5 }), { code: 'CONTROL_DRAIN_TIMEOUT' });
+  release();
+  await request;
+  await transport.waitForIdle({ timeoutMs: 50 });
+});
