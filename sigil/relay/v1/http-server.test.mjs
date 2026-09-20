@@ -391,6 +391,21 @@ test('inbox route passes the principal owner_id through to listInbox for viewer-
   assert.equal(get.body.items[0].sender_unverified, true);
 });
 
+test('inbox route returns 503 DATABASE_UNAVAILABLE when repository.listInbox throws', async () => {
+  const logged = [];
+  const repository = { async listInbox() { throw new Error('connection terminated'); } };
+  const logger = { error: (...args) => logged.push(args) };
+  const server = createRelayServer({ repository, logger, authenticate: async () => ({ endpoint_id: 'ep_claude' }) });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const get = await request(port, { method: 'GET', path: '/v1/inbox' });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(get.status, 503);
+  assert.equal(get.body.code, 'DATABASE_UNAVAILABLE');
+  assert.equal(typeof get.body.request_id, 'string');
+  assert.equal(logged.length, 1);
+  assert.equal(logged[0][0], 'inbox read failed');
+});
+
 test('POST /v1/endpoint-acknowledgements records an acknowledgement scoped to the authenticated viewer', async () => {
   const calls = [];
   const repository = { async acknowledgeEndpoint({ viewerOwnerId, acknowledgedEndpointId }) { calls.push([viewerOwnerId, acknowledgedEndpointId]); return { viewer_owner_id: viewerOwnerId, acknowledged_endpoint_id: acknowledgedEndpointId, acknowledged_at: '2026-08-16T00:00:00.000Z' }; } };

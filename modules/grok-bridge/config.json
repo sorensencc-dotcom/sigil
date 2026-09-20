@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "kb-context-cache": {
+      "command": "node",
+      "args": [
+        "C:/dev/kb-sync/scripts/mcp-context-server.mjs"
+      ]
+    },
+    "ijfw-memory": {
+      "command": "node",
+      "args": [
+        "C:/Users/soren/.ijfw/mcp-server/src/server.js"
+      ]
+    }
+  }
+}
