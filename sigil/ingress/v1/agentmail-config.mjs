@@ -1,3 +1,5 @@
+import { parseSecretReference } from './agentmail-secret-reference.mjs';
+
 const ENDPOINT_POLICIES = Object.freeze({
   ep_triage: Object.freeze(['trm', 'roadmap', 'eval']),
   ep_judgment: Object.freeze(['review', 'approval']),
@@ -32,7 +34,7 @@ function read(env, key) {
   return env?.[key];
 }
 
-function normalizeMappings(value, webhookSecrets) {
+function normalizeMappings(value, webhookSecretRefs) {
   const parsed = parseJson(value, 'SIGIL_AGENTMAIL_INBOX_MAPPINGS');
   const entries = Array.isArray(parsed)
     ? parsed
@@ -49,7 +51,7 @@ function normalizeMappings(value, webhookSecrets) {
     }
     if (!expectedEndpoints.has(endpointId)) fail('AGENTMAIL_CONFIG_INVALID', 'AgentMail inbox must map to a canonical endpoint', { endpointId });
     const webhookSecretId = requiredString(entry?.webhookSecretId ?? entry?.webhook_secret_id, 'webhookSecretId');
-    if (!Object.hasOwn(webhookSecrets, webhookSecretId)) fail('AGENTMAIL_CONFIG_INVALID', 'AgentMail inbox webhook secret is not configured', { providerInboxId, webhookSecretId });
+    if (!Object.hasOwn(webhookSecretRefs, webhookSecretId)) fail('AGENTMAIL_CONFIG_INVALID', 'AgentMail inbox webhook secret is not configured', { providerInboxId, webhookSecretId });
     seenProvider.add(providerInboxId);
     seenEndpoint.add(endpointId);
     const workflowPolicy = Array.isArray(entry.workflowPolicy)
@@ -81,41 +83,40 @@ function normalizeLimits(env) {
   return Object.freeze(limits);
 }
 
-export function loadAgentMailConfig(env = process.env) {
-  const webhookSecrets = parseJson(read(env, 'SIGIL_AGENTMAIL_WEBHOOK_SECRETS'), 'SIGIL_AGENTMAIL_WEBHOOK_SECRETS');
-  if (!webhookSecrets || Array.isArray(webhookSecrets) || typeof webhookSecrets !== 'object' || Object.keys(webhookSecrets).length === 0) {
-    fail('AGENTMAIL_CONFIG_INVALID', 'SIGIL_AGENTMAIL_WEBHOOK_SECRETS must be a non-empty object', { field: 'webhookSecrets' });
-  }
-  for (const [key, value] of Object.entries(webhookSecrets)) {
-    requiredString(key, 'webhook secret id');
-    requiredString(value, 'webhook secret');
-  }
-  const apiKeyRef = requiredString(read(env, 'SIGIL_AGENTMAIL_API_KEY_REF'), 'SIGIL_AGENTMAIL_API_KEY_REF');
-  if (!/^(secret|env):\/\//.test(apiKeyRef)) fail('AGENTMAIL_CONFIG_INVALID', 'AgentMail API key must be a secret reference', { field: 'apiKeyRef' });
+export function loadAgentMailConfig(env = process.env, { mode = 'production' } = {}) {
+  const rawFields = ['SIGIL_AGENTMAIL_WEBHOOK_SECRETS', 'SIGIL_AGENTMAIL_FORWARDING_TOKENS'].filter((key) => read(env, key) !== undefined);
+  if (mode === 'production' && rawFields.length) fail('SECRET_POLICY_VIOLATION', 'Raw AgentMail credentials are not allowed in production', { fields: rawFields });
+  const webhookSecretRefs = parseReferenceMap(read(env, 'SIGIL_AGENTMAIL_WEBHOOK_SECRET_REFS'), 'SIGIL_AGENTMAIL_WEBHOOK_SECRET_REFS');
+  const apiKeyRef = parseSecretReference(requiredString(read(env, 'SIGIL_AGENTMAIL_API_KEY_REF'), 'SIGIL_AGENTMAIL_API_KEY_REF'));
   const forwardingDomain = requiredString(read(env, 'SIGIL_AGENTMAIL_FORWARDING_DOMAIN'), 'SIGIL_AGENTMAIL_FORWARDING_DOMAIN').toLowerCase();
   if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(forwardingDomain)) fail('AGENTMAIL_CONFIG_INVALID', 'Forwarding domain is invalid', { field: 'forwardingDomain' });
-  const inboxMappings = normalizeMappings(read(env, 'SIGIL_AGENTMAIL_INBOX_MAPPINGS'), webhookSecrets);
+  const inboxMappings = normalizeMappings(read(env, 'SIGIL_AGENTMAIL_INBOX_MAPPINGS'), webhookSecretRefs);
   const senderAllowlist = parseJson(read(env, 'SIGIL_AGENTMAIL_SENDER_ALLOWLIST'), 'SIGIL_AGENTMAIL_SENDER_ALLOWLIST');
   if (!Array.isArray(senderAllowlist) || senderAllowlist.length === 0 || senderAllowlist.some((sender) => typeof sender !== 'string' || sender.trim() === '')) {
     fail('AGENTMAIL_CONFIG_INVALID', 'Sender allowlist must be a non-empty string array', { field: 'senderAllowlist' });
   }
-  const forwardingTokens = parseJson(read(env, 'SIGIL_AGENTMAIL_FORWARDING_TOKENS'), 'SIGIL_AGENTMAIL_FORWARDING_TOKENS');
-  if (!forwardingTokens || Array.isArray(forwardingTokens) || typeof forwardingTokens !== 'object' || Object.keys(forwardingTokens).length === 0) {
-    fail('AGENTMAIL_CONFIG_INVALID', 'Forwarding tokens must be a non-empty object', { field: 'forwardingTokens' });
-  }
-  for (const [alias, token] of Object.entries(forwardingTokens)) {
-    requiredString(alias, 'forwarding token alias');
-    if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{22,128}$/.test(token)) fail('AGENTMAIL_CONFIG_INVALID', `Invalid forwarding token for ${alias}`, { field: 'forwardingTokens' });
-  }
+  const forwardingTokenRefs = parseReferenceMap(read(env, 'SIGIL_AGENTMAIL_FORWARDING_TOKEN_REFS'), 'SIGIL_AGENTMAIL_FORWARDING_TOKEN_REFS');
   return Object.freeze({
-    webhookSecrets: Object.freeze({ ...webhookSecrets }),
     apiKeyRef,
+    webhookSecretRefs,
     forwardingDomain,
     inboxMappings: Object.freeze(inboxMappings),
     senderAllowlist: Object.freeze(senderAllowlist.map((sender) => sender.trim().toLowerCase())),
-    forwardingTokens: Object.freeze({ ...forwardingTokens }),
+    forwardingTokenRefs,
     limits: normalizeLimits(env),
+    compatibility: Object.freeze({ rawConfigUsed: false }),
   });
+}
+
+function parseReferenceMap(value, field) {
+  const parsed = parseJson(value, field);
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object' || Object.keys(parsed).length === 0) fail('AGENTMAIL_CONFIG_INVALID', `${field} must be a non-empty object`, { field });
+  const result = {};
+  for (const [key, raw] of Object.entries(parsed)) {
+    requiredString(key, `${field} key`);
+    result[key] = parseSecretReference(raw);
+  }
+  return Object.freeze(result);
 }
 
 export function resolveInboxMapping(inboxMappings, providerInboxId) {
