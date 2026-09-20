@@ -95,3 +95,67 @@
 **Effort:** S (human ~half day / CC ~20min). **Priority:** P3.
 
 **Depends on:** Plan 1 shipped (needs `stream_sequences`, `relay_jobs`, and the resend-request records to query).
+
+---
+
+## Control-protocol peer-state and revocation gossip over `/sigil/control/1.0.0`
+
+**What:** Implement gossip messages for peer-state updates and revocation claims over the existing `/sigil/control/1.0.0` protocol alongside the heartbeat service already shipped in the libp2p transport driver.
+
+**Why:** The libp2p transport driver spec (§8) lists peer-state and revocation gossip alongside heartbeat as control-layer features. The 2026-09-20 plan only shipped heartbeat to meet the Phase-1 gates; peer-state and revocation gossip were deferred because they require a gossip topology design and a trust model for revocation claims not included in this plan.
+
+**Pros:** Completes the control-protocol surface when peer-relay federations need distributed state synchronization and certificate revocation signaling.
+
+**Cons:** Requires separate design work (gossip topology, revocation-trust model) before implementation. Not automatable in the `node --test` in-process suite — real testing requires multi-process/multi-host verification.
+
+**Context:** Found and deferred during Task 8 of the 2026-09-20 libp2p transport driver SDD plan. Heartbeat-only pathway is sufficient for Phase 1; gossip is Phase 2.
+
+**Depends on:** A separate gossip-topology and revocation-trust design document approved before implementation begins.
+
+---
+
+## Multi-host/multi-worktree verification of mDNS and Kademlia discovery, and adversarial Noise-mismatch rejection
+
+**What:** Test mDNS peer discovery across separate worktrees or machines, Kademlia DHT provider lookup across networks, Noise XX handshake rejection of a mismatched PeerID under adversarial conditions (not just application-level registry mismatch), and reconnect/retry behavior after a dropped stream.
+
+**Why:** The libp2p transport driver has unit and single-process integration tests for PeerId derivation, framing, authenticated dial, and data-protocol round trips. Multi-process and cross-machine discovery, and adversarial protocol-level rejections, are not automatable in the `node --test` in-process suite. These are spec §10 Phase-2 conformance gates.
+
+**Pros:** Closes the verification gap between in-process unit tests and real distributed deployment conditions.
+
+**Cons:** Requires a real multi-process or multi-host test environment outside the node --test harness. High setup cost; likely deferred until Phase 2 acceptance criteria are finalized.
+
+**Context:** Documented in STATUS.md "Not verified" section as a known limitation of the in-process test suite. Found during Task 8 of the 2026-09-20 plan.
+
+**Depends on:** Multi-process/multi-host test environment provisioning; Phase 2 gates acceptance.
+
+---
+
+## `p2p-host.mjs`'s `enableDht: true` path throws at startup
+
+**What:** Register the missing `@libp2p/ping` service that `@libp2p/kad-dht` requires, so that `createP2pHost({enableDht: true})` no longer throws at startup.
+
+**Why:** The libp2p transport driver CLI wiring currently forces `enableDht: false` unconditionally because `createP2pHost({enableDht: true})` throws: `` `@libp2p/kad-dht` requires an `@libp2p/ping` service not registered by `createP2pHost` ``. This means Kademlia DHT peer discovery is wired in the host configuration but not actually functional.
+
+**Pros:** Enables full Kademlia DHT support without CLI workarounds or forced configuration flags. Likely a simple service registration fix (one line or two).
+
+**Cons:** Requires understanding the `@libp2p/ping` service API and its registration pattern; may have knock-on initialization-order dependencies if `ping` depends on other services.
+
+**Context:** Found during Task 8 (CLI wiring) of the 2026-09-20 plan. Both the error and the forced-false workaround are documented in STATUS.md and the control-protocol heartbeat implementation comments.
+
+**Depends on:** None — can be fixed independently and immediately. Blocking further Kademlia testing but not Phase-1 shipping.
+
+---
+
+## `sigil relay up --p2p`'s default listen address is loopback-only
+
+**What:** Evaluate and consider changing or prominently documenting the default `--p2p-listen` address (`/ip4/127.0.0.1/tcp/0`, loopback-only) before the libp2p transport is shipped to production relay operators.
+
+**Why:** The default configuration is safe for local development and in-process testing (no unintended network exposure), but real cross-machine peer-to-peer federation requires an explicit `--p2p-listen /ip4/0.0.0.0/tcp/<port>` override or similar. Relay operators who deploy without reading the docs will find `--p2p` silently non-functional for cross-machine scenarios.
+
+**Pros:** Choosing a more permissive default (or documenting the loopback default prominently) avoids operator confusion and misconfiguration. Loopback-only is the safe choice if underutilization is preferred to unexpected exposure.
+
+**Cons:** More permissive defaults increase the attack surface if an operator misconfigures mDNS or Kademlia on a public network. Loopback-only is the conservative choice, but requires documentation or a non-obvious flag.
+
+**Context:** Identified during Task 8 (CLI wiring and default multiaddr selection) of the 2026-09-20 plan. Documented in the brief and STATUS.md as a known limitation of the current wiring.
+
+**Depends on:** Production deployment decision and documentation strategy — can defer until Phase 1 shipping, but should be resolved before wide operator adoption.
