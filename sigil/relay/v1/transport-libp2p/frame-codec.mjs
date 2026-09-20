@@ -13,10 +13,26 @@ export function encodeFrame(jsonValue) {
   return Buffer.concat([header, body]);
 }
 
+// Normalizes one inbound chunk to a Buffer. Plain Buffers/Uint8Arrays pass
+// through Buffer.from() correctly, but a `Uint8ArrayList` (what libp2p's
+// MessageStream -> duplex adapter (@libp2p/utils#messageStreamToDuplex)
+// actually emits on its `source`, discovered wiring Task 5 against a real
+// libp2p stream) is an array of Buffer segments, not something
+// index/iterator-shaped -- `Buffer.from(list)` silently produces a
+// same-length buffer of zero bytes instead of throwing, because it reads
+// `.length` but not the segment contents. `.subarray()` is Uint8ArrayList's
+// own API for materializing its contents as a single contiguous Buffer, so
+// prefer it whenever the chunk exposes it.
+function toBuffer(chunk) {
+  if (Buffer.isBuffer(chunk)) return chunk;
+  if (typeof chunk?.subarray === 'function') return Buffer.from(chunk.subarray());
+  return Buffer.from(chunk);
+}
+
 export async function* readFrames(source, { maxFrameSize = DEFAULT_MAX_FRAME_SIZE } = {}) {
   let buffer = Buffer.alloc(0);
   for await (const chunk of source) {
-    buffer = Buffer.concat([buffer, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)]);
+    buffer = Buffer.concat([buffer, toBuffer(chunk)]);
     while (buffer.length >= LENGTH_PREFIX_BYTES) {
       const frameLength = buffer.readUInt32BE(0);
       if (frameLength > maxFrameSize) {
