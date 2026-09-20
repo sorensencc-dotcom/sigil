@@ -159,3 +159,27 @@
 **Context:** Identified during Task 8 (CLI wiring and default multiaddr selection) of the 2026-09-20 plan. Documented in the brief and STATUS.md as a known limitation of the current wiring.
 
 **Depends on:** Production deployment decision and documentation strategy — can defer until Phase 1 shipping, but should be resolved before wide operator adoption.
+
+---
+
+## libp2p transport driver: final-review residual hardening items (m2-m5, m7, m8, n1, n2)
+
+**What:** A batch of non-blocking findings from the 2026-09-20 libp2p transport driver plan's final whole-branch review, parked rather than fixed in the mandatory fix wave (which addressed M1-M3, m1, m6 only):
+- m2: neither `p2p-data-protocol.mjs` nor `p2p-control-protocol.mjs` enforces a read timeout on inbound streams — a peer can park a stream indefinitely.
+- m3: `sendEnvelope`/`ping` never explicitly close the dialed stream after one round trip — relies on host `.stop()` for cleanup; a long-lived sender leaks one stream per call.
+- m4: `p2p-control-protocol.mjs`'s handler still has no `try/catch` (libp2p's own connection layer catches the throw and aborts the stream, so this is non-crashing, but asymmetric with the data protocol's structured error response) — worth aligning if peer-state/revocation gossip lands on this protocol later.
+- m5: `p2p-data-protocol.mjs` echoes raw `error.message` to the remote peer for any non-`reject()` throw, which could leak internal error text (e.g. a future unguarded exception) to an untrusted dialing peer.
+- m7: `--p2p` hard-enables mDNS with no opt-out flag; combined with the loopback-only default listen address (see the entry above), the relay by default advertises addresses no LAN peer can dial.
+- m8: p2p-accepted envelopes carry no `request_id`, and the p2p path doesn't wire `logger`/`resendMetrics`, making p2p traffic invisible to relay observability relative to the HTTP transport.
+- n1: `p2p-host.mjs`'s deviation-comment block documents the `peerId`→`privateKey` API change but not the dropped explicit `await node.start()` (relies on `createLibp2p`'s default `start: true`) — correct behavior, just under-documented.
+- n2: dependency pinning is inconsistent (`@libp2p/crypto`/`@libp2p/peer-id` exact-pinned from Task 2's fallback install, the other nine new deps use `^`) — an artifact of how they were installed, not a decision.
+
+**Why:** None of these are blocking — the final reviewer's verdict was NEEDS FIX WAVE for M1-M3 only, with m1/m6 recommended as cheap bundles; everything else was explicitly marked "safe to triage into TODOS.md."
+
+**Pros:** Closing these hardens the p2p transport's parity with the HTTP transport (observability, error hygiene) and its resilience against slow/malicious peers (timeouts, stream cleanup).
+
+**Cons:** None are urgent; m2/m3/m8 need small design decisions (timeout values, whether to construct a per-relay logger/metrics instance at the p2p call site); n1/n2 are pure documentation/cleanup.
+
+**Context:** Full detail and file:line references in the final review at `.superpowers/sdd/2026-09-20-sigil-libp2p-transport-driver/final-review.md` (deleted with the plan workspace after merge — see git history on branch `worktree-sigil-libp2p-transport` if this workspace is gone).
+
+**Depends on:** None — each item is independently fixable; no design blockers.
