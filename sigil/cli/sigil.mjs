@@ -180,7 +180,7 @@ export function startOidcIssuerAllowlistPolling({ repository, allowlistSet, inte
 }
 
 async function cmdRelayUp(argv) {
-  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' }, 'oidc-issuer-refresh-interval-ms': { type: 'string' }, domain: { type: 'string' }, 'federation-mode': { type: 'string' }, 'federation-identity': { type: 'string' }, 'relay-request-freshness-ms': { type: 'string' } } });
+  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' }, 'oidc-issuer-refresh-interval-ms': { type: 'string' }, domain: { type: 'string' }, 'federation-mode': { type: 'string' }, 'federation-identity': { type: 'string' }, 'relay-request-freshness-ms': { type: 'string' }, p2p: { type: 'boolean' }, 'p2p-listen': { type: 'string' }, 'p2p-identity': { type: 'string' } } });
   const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
   const port = Number(opt(args, ['port']) ?? 0);
   const streamPort = Number(opt(args, ['stream-port']) ?? (port ? port + 1 : 0));
@@ -262,6 +262,63 @@ async function cmdRelayUp(argv) {
     repository = createMemoryRepository({ registry });
   }
 
+  // Optional libp2p transport (spec §8), started alongside the existing
+  // HTTP/WS relay rather than replacing it. Off by default -- without
+  // --p2p, cmdRelayUp's behavior is byte-for-byte unchanged from before this
+  // block existed.
+  //
+  // Identity source: the registry (`data.endpoints`, loaded above) only ever
+  // holds PUBLIC endpoint data (registry-store.mjs's toRegistryMap /
+  // addEndpointToRegistry never write a private key into registry.json --
+  // that would leak every registered endpoint's signing key to anyone who
+  // can read the relay's registry file). The libp2p host needs its OWN
+  // private key material to derive a PeerId (see p2p-host.mjs), so it is
+  // loaded the same way --federation-identity is: a separate identity file
+  // (written by `sigil init`, containing private_key_pem) via loadIdentity.
+  let p2pHost = null;
+  if (args.values.p2p) {
+    const p2pIdentityPath = opt(args, ['p2p-identity']);
+    if (!p2pIdentityPath) throw new Error('sigil relay up: --p2p requires --p2p-identity <path> (an identity file written by "sigil init", not the registry file)');
+    const p2pIdentity = loadIdentity(p2pIdentityPath); // throws on missing / non-JSON
+    const { createP2pHost } = await import('../relay/v1/transport-libp2p/p2p-host.mjs');
+    const { wireDataProtocol } = await import('../relay/v1/transport-libp2p/p2p-data-protocol.mjs');
+    const { wireControlProtocol } = await import('../relay/v1/transport-libp2p/p2p-control-protocol.mjs');
+    p2pHost = await createP2pHost({
+      identity: p2pIdentity,
+      // Default to loopback, not 0.0.0.0: this relay's whole in-process test
+      // suite (and its own p2p-host.test.mjs) dials over 127.0.0.1, and an
+      // 0.0.0.0 listen's interface-expansion into getMultiaddrs() is not
+      // guaranteed to include a loopback entry on every platform/sandbox.
+      listenAddrs: [opt(args, ['p2p-listen']) ?? '/ip4/127.0.0.1/tcp/0'],
+      enableMdns: true,
+      // enableDht deliberately left false (off by default in createP2pHost
+      // too): the installed @libp2p/kad-dht@16.4.5 declares a hard
+      // dependency on a "@libp2p/ping" service component that
+      // createP2pHost's `services` object never registers (confirmed by
+      // running this exact startup path -- it throws "Service
+      // '@libp2p/kad-dht' required capability '@libp2p/ping' but it was not
+      // provided" at createLibp2p() time). Task 4's own report already
+      // flagged enableDht as wired-but-never-exercised-by-any-test; turning
+      // it on here would make every `--p2p` relay fail to start. Fixing
+      // kadDHT's missing ping dependency belongs in p2p-host.mjs (Task 4's
+      // file), out of this task's CLI-wiring scope -- left as a follow-up.
+      enableDht: false,
+    });
+    wireControlProtocol(p2pHost);
+    // repository is passed through exactly as http-server.mjs's own
+    // acceptEnvelopeAsync call site does (registered/relayDomain/
+    // federationMode/repository) -- both the Postgres- and memory-backed
+    // repositories built above implement `withTransaction`, so
+    // acceptEnvelopeAsync always takes its repository-backed persistence
+    // path here and never needs the legacy `options.persist` callback (that
+    // callback exists only for the no-repository unit-test path in
+    // accept-envelope.mjs). No `repository.saveDelivery`/`insertMessage`
+    // method exists anywhere in this codebase -- verified by grep before
+    // wiring this up, per this task's brief.
+    wireDataProtocol(p2pHost, { registered: registry, relayDomain, federationMode, repository });
+    for (const addr of p2pHost.getMultiaddrs()) console.log(`sigil relay p2p listening on ${addr.toString()}`);
+  }
+
   let agentmailDeployment = null;
   if (process.env.SIGIL_AGENTMAIL_ENABLE === '1') {
     const loadAdapterModule = async (key) => {
@@ -331,6 +388,7 @@ async function cmdRelayUp(argv) {
   await new Promise((resolve) => {
     const shutdown = async () => {
       agentmailDeployment?.close();
+      if (p2pHost) await p2pHost.stop();
       await new Promise((done) => server.close(() => done()));
       await new Promise((done) => streamHttpServer.close(() => done()));
       resolve();
