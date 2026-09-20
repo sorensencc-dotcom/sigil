@@ -539,6 +539,10 @@ test('consumeApprovalDecision ignores a decision whose approving human or creden
   await pool.query(`UPDATE human_credentials SET status = 'revoked' WHERE credential_id = 'cred_${suffix}'`);
   assert.equal(await repository.consumeApprovalDecision({ endpointId: ids.endpoint, actionHash: `hash_${suffix}` }), null);
 
+  // An active credential past valid_until must also lose authority over a pending decision.
+  await pool.query(`UPDATE human_credentials SET status = 'active', valid_until = NOW() - INTERVAL '1 minute' WHERE credential_id = 'cred_${suffix}'`);
+  assert.equal(await repository.consumeApprovalDecision({ endpointId: ids.endpoint, actionHash: `hash_${suffix}` }), null);
+
   const row = await pool.query('SELECT status FROM approval_decisions WHERE decision_id = $1', [`decision_${suffix}`]);
   assert.equal(row.rows[0].status, 'approved'); // untouched -- never actually claimed
 });

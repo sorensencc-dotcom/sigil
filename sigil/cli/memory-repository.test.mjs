@@ -256,3 +256,24 @@ test('memory relay withTransaction commits a consumed approval decision when the
   // Still consumed after a successful transaction -- no rollback fired.
   assert.equal(await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_a', now: new Date('2026-08-16T12:02:00Z') }), null);
 });
+
+test('memory relay keeps concurrent transaction rollback state isolated', async () => {
+  const repository = createMemoryRepository();
+  await repository.recordApprovalDecision({ decisionId: 'decision_a', endpointId: 'ep_claude', actionHash: 'hash_a', expiresAt: '2026-08-17T00:00:00Z', now: new Date('2026-08-16T12:00:00Z') });
+  await repository.recordApprovalDecision({ decisionId: 'decision_b', endpointId: 'ep_claude', actionHash: 'hash_b', expiresAt: '2026-08-17T00:00:00Z', now: new Date('2026-08-16T12:00:00Z') });
+  let releaseA;
+  const pausedA = new Promise((resolve) => { releaseA = resolve; });
+  const transactionA = repository.withTransaction(async () => {
+    assert.equal((await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_a', now: new Date('2026-08-16T12:01:00Z') })).decision_id, 'decision_a');
+    await pausedA;
+    throw new Error('rollback A');
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  await repository.withTransaction(async () => {
+    assert.equal((await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_b', now: new Date('2026-08-16T12:01:00Z') })).decision_id, 'decision_b');
+  });
+  releaseA();
+  await assert.rejects(transactionA, /rollback A/);
+  assert.equal((await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_a', now: new Date('2026-08-16T12:02:00Z') })).decision_id, 'decision_a');
+  assert.equal(await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_b', now: new Date('2026-08-16T12:02:00Z') }), null);
+});

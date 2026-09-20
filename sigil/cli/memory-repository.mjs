@@ -3,6 +3,7 @@
 // a real local relay for a demo or single-machine session. State lives
 // only in this process -- restarting `sigil relay up` loses history.
 import crypto from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { transitionDelivery } from '../relay/v1/delivery-state.mjs';
 import { boundedDirectoryExpiry } from '../relay/v1/auth-policy.mjs';
 
@@ -72,24 +73,25 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
   // human-approved, one-time decision was silently burned by an unrelated,
   // retriable failure. Only consumeApprovalDecision registers an undo here;
   // this is not a general transaction log.
-  let currentTransactionRollbacks = null;
+  const transactionContext = new AsyncLocalStorage();
   return {
     // Single-process, no real client/connection -- the transaction wrapper
     // exists so acceptEnvelopeAsync's repository-aware path works unchanged
     // against this repository too (design §12 dual-repository equivalence).
     async withTransaction(fn) {
       const rollbacks = [];
-      const previous = currentTransactionRollbacks;
-      currentTransactionRollbacks = rollbacks;
-      try {
-        const result = await fn(null);
-        currentTransactionRollbacks = previous;
-        return result;
-      } catch (error) {
-        currentTransactionRollbacks = previous;
-        for (const undo of rollbacks) undo();
-        throw error;
-      }
+      const parent = transactionContext.getStore();
+      return transactionContext.run({ rollbacks, parent }, async () => {
+        try {
+          const result = await fn(null);
+          // Nested work commits into its parent; top-level work has no parent.
+          parent?.rollbacks.push(...rollbacks);
+          return result;
+        } catch (error) {
+          for (const undo of rollbacks.reverse()) undo();
+          throw error;
+        }
+      });
     },
     async assignStreamSequence(_client, senderEndpointId, conversationId) {
       const key = JSON.stringify([senderEndpointId, conversationId]);
@@ -429,7 +431,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       const decision = [...approvalDecisions.values()].find((d) => d.endpoint_id === endpointId && (d.action_hash === actionHash || d.action_hash === prefixedHash) && d.status === 'approved' && new Date(d.expires_at).getTime() > timestamp);
       if (!decision) return null;
       decision.status = 'consumed';
-      currentTransactionRollbacks?.push(() => { decision.status = 'approved'; });
+      transactionContext.getStore()?.rollbacks.push(() => { decision.status = 'approved'; });
       return decision;
     },
     async createHumanSession({ sessionId, humanId, authenticationMethod, assurance, deviceContext = {}, issuedAt = new Date(), expiresAt, now = new Date() }) {

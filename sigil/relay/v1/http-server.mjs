@@ -8,7 +8,6 @@ import { transitionDelivery } from './delivery-state.mjs';
 import { createBearerAuthenticator } from './transport-auth.mjs';
 import { createApprovalChallenge, coseKeyToPublicKey, parseAttestationObject, verifyPackedAttestation, verifyWebAuthnApproval, verifyWebAuthnAssertion } from './approval-ceremony.mjs';
 import { renderApprovalPage } from './approval-ui.mjs';
-import { computeActionHash } from './action-hash.mjs';
 import { normalizeIssuer } from './issuer-normalization.mjs';
 import { assertAccountLinkCeremony, assertAllowedIssuer, boundedCapabilityGrantExpiry, boundedDirectoryExpiry, boundedTokenExpiry } from './auth-policy.mjs';
 import { verifyMockIdToken } from './mock-oidc.mjs';
@@ -310,12 +309,8 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       // any consumer -- accept-envelope.mjs's gate is the first one).
       let actionHash = body?.action_hash;
       if (body?.action) {
-        try { actionHash = computeActionHash({ ...body.action, endpoint_id: principal?.endpoint_id }); }
-        catch (error) { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'INVALID_ACTION', message: error.message, details: {} })); }
-        if (body.action_hash && body.action_hash !== actionHash) {
-          response.writeHead(409, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
-          return response.end(JSON.stringify({ request_id: requestId, code: 'APPROVAL_REQUIRED', message: 'Action hash does not match canonical action', details: {} }));
-        }
+        response.writeHead(409, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'APPROVAL_REQUIRED', message: 'Structured actions cannot authorize a concrete envelope; provide action_hash', details: {} }));
       }
       const effectiveRelayOrigin = resolveRelayOrigin();
       if (!actionHash || !body?.callback_url || !effectiveRelayOrigin || !principal?.endpoint_id) {
