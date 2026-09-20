@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createIdentity, identityKeys } from '../../cli/identity.mjs';
 import { handleAgentMailWebhook, resolveWorkflow } from './agentmail-adapter.mjs';
+import { createAgentMailLedger } from './agentmail-ledger.mjs';
 
 const token = 'T'.repeat(22);
 const identity = createIdentity({ ownerId: 'usr_operator', endpointId: 'ep_ingress', kind: 'agent' });
@@ -90,6 +91,16 @@ test('judgment mail is durably quarantined and financial mail stays local-only',
   const judgmentResult = await handleAgentMailWebhook(judgment);
   assert.equal(judgmentResult.state, 'quarantined');
   assert.equal(judgment.queued.length, 0);
+
+  const ledger = createAgentMailLedger();
+  const durableJudgment = makeInput({
+    inboxId: 'inbox_b',
+    event: { alias: `judgment+review+${token}@agentmail.test`, eventId: 'evt_durable_judgment', messageId: 'msg_durable_judgment' },
+    ledger,
+  });
+  const durableResult = await handleAgentMailWebhook(durableJudgment);
+  assert.equal(durableResult.state, 'quarantined');
+  assert.equal(durableResult.body?.code, undefined);
 
   const financial = makeInput({ event: { body: 'SYNTHETIC FINANCIAL DATA: account number 000000' } });
   const denied = await handleAgentMailWebhook(financial);

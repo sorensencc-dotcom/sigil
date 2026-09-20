@@ -162,7 +162,6 @@ export async function handleAgentMailWebhook({ rawBody, headers, inboxId, provid
     });
     await ledger?.updateIngressMetadata?.(providerEventId, { provenance });
     if (mapping.endpointId === 'ep_judgment') {
-      await ledger?.transitionIngressState?.(providerEventId, 'quarantined');
       receipt = emitIngressReceipt({ event: { eventId: providerEventId, correlationId: `corr_${providerEventId}` }, outcome: { state: 'quarantined' }, signer: ingress.signer, createdAt: now.toISOString() });
       return { status: 202, eventId: providerEventId, state: 'quarantined', classification: classification.classification, receipt };
     }
