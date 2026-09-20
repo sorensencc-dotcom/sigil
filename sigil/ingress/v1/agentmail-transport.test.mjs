@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createAgentMailTransport } from './agentmail-transport.mjs';
+import { createAgentMailSecretStore } from './agentmail-secret-snapshot.mjs';
 
 const fixtureCredential = 'FIXTURE-ONLY-not-a-real-secret';
+function store(generation = 'g1', value = fixtureCredential) {
+  return createAgentMailSecretStore({ generation, withApiKey: (callback) => callback({ withValue: (fn) => fn(value) }) });
+}
 
 test('transport delegates to the current AgentMail SDK resource clients', async () => {
   const calls = [];
@@ -15,7 +19,7 @@ test('transport delegates to the current AgentMail SDK resource clients', async 
       },
     },
   };
-  const transport = createAgentMailTransport({ ['apiKey']: fixtureCredential, clientFactory: (apiKey) => { assert.equal(apiKey, fixtureCredential); return client; } });
+  const transport = createAgentMailTransport({ secretStore: store(), clientFactory: (apiKey) => { assert.equal(apiKey, fixtureCredential); return client; } });
   assert.deepEqual(await transport.registerWebhook('inbox_a', { url: 'https://relay.test/v1/agentmail', eventTypes: ['message.received'] }), { id: 'wh_1' });
   assert.deepEqual(await transport.fetchMessage('inbox_a', 'msg_1'), { id: 'msg_1' });
   assert.deepEqual(await transport.sendMessage('inbox_a', { to: 'operator@example.test', text: 'synthetic' }), { id: 'sent_1' });
@@ -27,6 +31,17 @@ test('transport delegates to the current AgentMail SDK resource clients', async 
 });
 
 test('transport maps provider failures to redacted stable errors', async () => {
-  const transport = createAgentMailTransport({ ['apiKey']: fixtureCredential, clientFactory: () => ({ inboxes: { webhooks: { async create() {} }, messages: { async get() { const error = new Error('provider failure'); error.statusCode = 504; throw error; }, async send() {} } } }) });
+  const transport = createAgentMailTransport({ secretStore: store(), clientFactory: () => ({ inboxes: { webhooks: { async create() {} }, messages: { async get() { const error = new Error('provider failure'); error.statusCode = 504; throw error; }, async send() {} } } }) });
   await assert.rejects(transport.fetchMessage('inbox_a', 'msg_1'), (error) => error.code === 'AGENTMAIL_PROVIDER_ERROR' && error.status === 504 && !error.message.includes('secret'));
+});
+
+test('transport creates one client per active generation and rejects raw-key construction', async () => {
+  const created = [];
+  const client = { inboxes: { webhooks: { async create() {} }, messages: { async get() { return { ok: true }; }, async send() {} } } };
+  const secretStore = store();
+  const transport = createAgentMailTransport({ secretStore, clientFactory: (key) => { created.push(key); return client; } });
+  await transport.fetchMessage('inbox_a', 'one');
+  await transport.fetchMessage('inbox_a', 'two');
+  assert.deepEqual(created, [fixtureCredential]);
+  assert.throws(() => createAgentMailTransport({ apiKey: fixtureCredential }), { code: 'AGENTMAIL_CONFIG_MISSING' });
 });

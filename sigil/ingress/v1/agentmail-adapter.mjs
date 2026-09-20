@@ -62,6 +62,29 @@ function tokenRecord(tokenStore, alias) {
   return tokenStore?.[alias];
 }
 
+function readSnapshotSecret(snapshot, method, key) {
+  if (!snapshot || typeof snapshot[method] !== 'function') fail('AGENTMAIL_INGRESS_UNAVAILABLE', 'AgentMail secret snapshot is unavailable');
+  return snapshot[method](key, (secret) => {
+    if (!secret || typeof secret.withValue !== 'function') fail('SECRET_SNAPSHOT_INVALID', 'AgentMail secret snapshot is invalid');
+    return secret.withValue((value) => value);
+  });
+}
+
+function resolveWorkflowFromSnapshot(address, snapshot, { domain } = {}) {
+  if (typeof address !== 'string' || address.trim() === '') fail('INVALID_FORWARDING_TOKEN', 'Forwarding address is required');
+  const trimmed = address.trim();
+  const atIndex = trimmed.indexOf('@');
+  if (atIndex <= 0 || atIndex !== trimmed.lastIndexOf('@')) fail('INVALID_FORWARDING_TOKEN', 'Forwarding address does not match the required grammar');
+  if (domain && trimmed.slice(atIndex + 1).toLowerCase() !== String(domain).trim().toLowerCase()) fail('INVALID_FORWARDING_TOKEN', 'Forwarding address domain is not configured');
+  const parts = trimmed.slice(0, atIndex).split('+');
+  if (parts.length !== 3 || !parts[0] || !parts[1] || !TOKEN_PATTERN.test(parts[2])) fail('INVALID_FORWARDING_TOKEN', 'Forwarding address does not match the required grammar');
+  const alias = `${parts[0]}+${parts[1]}`;
+  const expectedToken = readSnapshotSecret(snapshot, 'withForwardingToken', alias);
+  if (typeof expectedToken !== 'string' || !TOKEN_PATTERN.test(expectedToken)) fail('INVALID_FORWARDING_TOKEN', 'Configured forwarding token is invalid');
+  if (parts[2].length !== expectedToken.length || !crypto.timingSafeEqual(Buffer.from(parts[2]), Buffer.from(expectedToken))) fail('TOKEN_MISMATCH', 'Forwarding token workflow mismatch');
+  return { alias, endpointAlias: parts[0], workflow: parts[1] };
+}
+
 export function resolveWorkflow(address, tokenStore = {}, { domain } = {}) {
   if (typeof address !== 'string' || address.trim() === '') fail('INVALID_FORWARDING_TOKEN', 'Forwarding address is required');
   const trimmed = address.trim();
@@ -120,7 +143,7 @@ async function verifyWebhook(provider, args, maxParserSeconds) {
   }
 }
 
-export async function handleAgentMailWebhook({ rawBody, headers, inboxId, provider, registry, ingress, ledger, policy = {}, quarantine, maxAttachmentBytes, maxParserSeconds, senderRateLimiter, enqueue, clock = () => new Date() } = {}) {
+export async function handleAgentMailWebhook({ rawBody, headers, inboxId, provider, registry, secretStore, ingress, ledger, policy = {}, quarantine, maxAttachmentBytes, maxParserSeconds, senderRateLimiter, enqueue, clock = () => new Date() } = {}) {
   let event;
   let providerEventId = null;
   let deadLettered = false;
@@ -129,7 +152,10 @@ export async function handleAgentMailWebhook({ rawBody, headers, inboxId, provid
     const mapping = registry?.resolveInboxMapping
       ? registry.resolveInboxMapping(inboxId)
       : resolveInboxMapping(registry?.inboxMappings, inboxId);
-    event = await verifyWebhook(provider, { rawBody, headers, inboxId, webhookSecretId: mapping.webhookSecretId, webhookSecret: mapping.webhookSecret }, maxParserSeconds);
+    const snapshot = secretStore?.current?.();
+    if (!snapshot) fail('AGENTMAIL_INGRESS_UNAVAILABLE', 'AgentMail secret snapshot is unavailable');
+    const webhookSecret = readSnapshotSecret(snapshot, 'withWebhookSecret', mapping.webhookSecretId);
+    event = await verifyWebhook(provider, { rawBody, headers, inboxId, webhookSecretId: mapping.webhookSecretId, webhookSecret }, maxParserSeconds);
     if (!event || typeof event !== 'object') fail('WEBHOOK_SIGNATURE_INVALID', 'Webhook authenticity could not be verified');
     const registeredEndpoint = registry instanceof Map ? registry.get(mapping.endpointId) : registry?.endpoints?.get?.(mapping.endpointId);
     if (registeredEndpoint && registeredEndpoint.status !== 'active') fail('ENDPOINT_UNAVAILABLE', 'Recipient endpoint is not active');
@@ -138,7 +164,7 @@ export async function handleAgentMailWebhook({ rawBody, headers, inboxId, provid
     if (!exactSenderAllowed(event, policy)) fail('SENDER_NOT_ALLOWLISTED', 'Sender is not authorized for AgentMail ingress');
     if (typeof senderRateLimiter === 'function' && !(await senderRateLimiter(sender, clock()))) fail('SENDER_RATE_LIMITED', 'Sender rate limit exceeded');
     if (mapping.endpointId === 'ep_iron' && (event.external === true || event.sender?.internal !== true)) fail('IRON_EXTERNAL_MAIL_REJECTED', 'External mail is not accepted by the iron endpoint');
-    const workflow = resolveWorkflow(event.alias ?? event.to, policy.forwardingTokens ?? {}, { domain: policy.forwardingDomain });
+    const workflow = resolveWorkflowFromSnapshot(event.alias ?? event.to, snapshot, { domain: policy.forwardingDomain });
     if (!mapping.workflowPolicy.includes(workflow.workflow)) fail('TOKEN_MISMATCH', 'Workflow is not allowed for this inbox');
     providerEventId = String(event.eventId ?? event.id ?? '');
     const providerMessageId = String(event.messageId ?? event.message_id ?? '');
@@ -218,16 +244,15 @@ export async function handleAgentMailWebhook({ rawBody, headers, inboxId, provid
   }
 }
 
-export function createAgentMailIngress({ config, provider, ingress, repository, registry, quarantine, policy = {}, relayOptions = {} } = {}) {
-  if (!config?.inboxMappings || !provider || !ingress || !repository) fail('AGENTMAIL_INGRESS_UNAVAILABLE', 'AgentMail ingress requires config, provider, identity, and repository');
+export function createAgentMailIngress({ config, provider, secretStore, ingress, repository, registry, quarantine, policy = {}, relayOptions = {} } = {}) {
+  if (!config?.inboxMappings || !provider || !secretStore || !ingress || !repository) fail('AGENTMAIL_INGRESS_UNAVAILABLE', 'AgentMail ingress requires config, secret store, provider, identity, and repository');
   const ledger = createAgentMailLedger({ repository, maxQueueDepth: config.limits?.maxQueueDepth });
   const effectivePolicy = {
     ...policy,
     senderAllowlist: policy.senderAllowlist ?? config.senderAllowlist,
-    forwardingTokens: policy.forwardingTokens ?? config.forwardingTokens,
     forwardingDomain: policy.forwardingDomain ?? config.forwardingDomain,
   };
-  const inboxMappings = config.inboxMappings.map((mapping) => ({ ...mapping, webhookSecret: config.webhookSecrets[mapping.webhookSecretId] }));
+  const inboxMappings = config.inboxMappings.map((mapping) => ({ ...mapping }));
   const senderBuckets = new Map();
   const senderRateLimiter = async (sender, timestamp) => {
     const minute = Math.floor(new Date(timestamp).getTime() / 60_000);
@@ -245,6 +270,7 @@ export function createAgentMailIngress({ config, provider, ingress, repository, 
         rawBody,
         headers,
         inboxId,
+        secretStore,
         provider,
         registry: { inboxMappings, endpoints: registry },
         ingress,
@@ -264,3 +290,5 @@ export function createAgentMailIngress({ config, provider, ingress, repository, 
     },
   };
 }
+
+export { resolveWorkflowFromSnapshot };
