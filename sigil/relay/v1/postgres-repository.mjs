@@ -315,6 +315,7 @@ export class PostgresRepository {
            JOIN human_credentials hc ON hc.human_id = ad.human_id AND hc.credential_id = ad.credential_id
           WHERE ad.endpoint_id = $1 AND ad.action_hash IN ($2, $3) AND ad.status = 'approved' AND ad.expires_at > $4
             AND h.status = 'active' AND hc.status = 'active'
+            AND (hc.valid_until IS NULL OR hc.valid_until > $4)
           ORDER BY ad.created_at ASC, ad.decision_id ASC
           LIMIT 1
           FOR UPDATE OF ad SKIP LOCKED

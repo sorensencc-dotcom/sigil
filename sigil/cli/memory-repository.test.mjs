@@ -256,3 +256,80 @@ test('memory relay withTransaction commits a consumed approval decision when the
   // Still consumed after a successful transaction -- no rollback fired.
   assert.equal(await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_a', now: new Date('2026-08-16T12:02:00Z') }), null);
 });
+
+test('memory relay withTransaction isolates concurrent top-level rollback lists (ALS)', async () => {
+  const repository = createMemoryRepository();
+  await repository.recordApprovalDecision({ decisionId: 'decision_a', endpointId: 'ep_claude', actionHash: 'hash_a', expiresAt: '2026-08-17T00:00:00Z', now: new Date('2026-08-16T12:00:00Z') });
+  await repository.recordApprovalDecision({ decisionId: 'decision_b', endpointId: 'ep_claude', actionHash: 'hash_b', expiresAt: '2026-08-17T00:00:00Z', now: new Date('2026-08-16T12:00:00Z') });
+
+  let releaseA;
+  const gateA = new Promise((resolve) => { releaseA = resolve; });
+  let markAReady;
+  const aReady = new Promise((resolve) => { markAReady = resolve; });
+
+  const txA = repository.withTransaction(async () => {
+    const consumed = await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_a', now: new Date('2026-08-16T12:01:00Z') });
+    assert.equal(consumed.decision_id, 'decision_a');
+    markAReady();
+    await gateA;
+    throw Object.assign(new Error('tx A fails after B already committed'), { code: 'TX_A_FAIL' });
+  });
+
+  await aReady;
+  const txB = await repository.withTransaction(async () => {
+    const consumed = await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_b', now: new Date('2026-08-16T12:01:00Z') });
+    assert.equal(consumed.decision_id, 'decision_b');
+    return consumed.decision_id;
+  });
+  assert.equal(txB, 'decision_b');
+
+  releaseA();
+  await assert.rejects(() => txA, { code: 'TX_A_FAIL' });
+
+  // A rolled back its own consume; B's commit must not have been undone by A's failure.
+  const retriedA = await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_a', now: new Date('2026-08-16T12:02:00Z') });
+  assert.equal(retriedA.decision_id, 'decision_a');
+  assert.equal(await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_b', now: new Date('2026-08-16T12:02:00Z') }), null);
+});
+
+test('memory relay nested withTransaction merges child undos into parent', async () => {
+  const repository = createMemoryRepository();
+  await repository.recordApprovalDecision({ decisionId: 'decision_1', endpointId: 'ep_claude', actionHash: 'hash_a', expiresAt: '2026-08-17T00:00:00Z', now: new Date('2026-08-16T12:00:00Z') });
+
+  await assert.rejects(() => repository.withTransaction(async () => {
+    await repository.withTransaction(async () => {
+      const consumed = await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_a', now: new Date('2026-08-16T12:01:00Z') });
+      assert.equal(consumed.decision_id, 'decision_1');
+    });
+    throw Object.assign(new Error('parent fails after nested commit'), { code: 'PARENT_FAIL' });
+  }), { code: 'PARENT_FAIL' });
+
+  const retried = await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_a', now: new Date('2026-08-16T12:02:00Z') });
+  assert.equal(retried.decision_id, 'decision_1');
+});
+
+test('memory relay consumeApprovalDecision rejects expired-but-active credential valid_until', async () => {
+  const repository = createMemoryRepository();
+  await repository.recordApprovalDecision({
+    decisionId: 'decision_1',
+    endpointId: 'ep_claude',
+    actionHash: 'hash_a',
+    expiresAt: '2026-08-17T00:00:00Z',
+    validUntil: '2026-08-16T12:00:30Z',
+    now: new Date('2026-08-16T12:00:00Z'),
+  });
+
+  assert.equal(await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_a', now: new Date('2026-08-16T12:01:00Z') }), null);
+
+  // Still within credential window: consume succeeds.
+  await repository.recordApprovalDecision({
+    decisionId: 'decision_2',
+    endpointId: 'ep_claude',
+    actionHash: 'hash_b',
+    expiresAt: '2026-08-17T00:00:00Z',
+    validUntil: '2026-08-16T13:00:00Z',
+    now: new Date('2026-08-16T12:00:00Z'),
+  });
+  const ok = await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_b', now: new Date('2026-08-16T12:01:00Z') });
+  assert.equal(ok.decision_id, 'decision_2');
+});

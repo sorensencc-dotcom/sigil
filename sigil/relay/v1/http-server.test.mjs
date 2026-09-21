@@ -516,14 +516,19 @@ test('authenticated approval challenge route returns public metadata only', asyn
   assert.equal(rejected.status, 400); assert.equal(rejected.body.code, 'APPROVAL_REQUIRED');
 });
 
-test('approval challenge recomputes canonical action hash and rejects mismatches', async () => {
+test('approval challenge rejects structured body.action (cannot authorize envelopes)', async () => {
   const challenges = new Map();
   const server = createRelayServer({ relayOrigin: 'https://relay.example', approvalChallenges: challenges, authenticate: async () => ({ endpoint_id: 'ep_codex' }) });
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
   const action = { action_type: 'tool.invoke', target: 'calendar:event-1', requested_capabilities: ['calendar/read'], arguments: {}, contract_version: 'sigil.connector/v1' };
-  const rejected = await request(port, { method: 'POST', path: '/v1/approval-challenges', body: { action, action_hash: 'sha256:wrong', callback_url: 'http://127.0.0.1:4567/callback' } });
-  const accepted = await request(port, { method: 'POST', path: '/v1/approval-challenges', body: { action, callback_url: 'http://127.0.0.1:4567/callback' } }); await new Promise((resolve) => server.close(resolve));
-  assert.equal(rejected.status, 409); assert.equal(accepted.status, 201); assert.match(challenges.get(accepted.body.challenge_id).actionHash, /^sha256:jcs-sigil-action-v1:/);
+  const withMismatch = await request(port, { method: 'POST', path: '/v1/approval-challenges', body: { action, action_hash: 'sha256:wrong', callback_url: 'http://127.0.0.1:4567/callback' } });
+  const withActionOnly = await request(port, { method: 'POST', path: '/v1/approval-challenges', body: { action, callback_url: 'http://127.0.0.1:4567/callback' } });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(withMismatch.status, 400);
+  assert.equal(withMismatch.body.code, 'INVALID_ACTION');
+  assert.equal(withActionOnly.status, 400);
+  assert.equal(withActionOnly.body.code, 'INVALID_ACTION');
+  assert.equal(challenges.size, 0);
 });
 
 test('approval challenge route bounds pending approval queue', async () => {
