@@ -350,15 +350,20 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       // directly (Devin review found this contract was previously undocumented,
       // and this endpoint's structured-action branch was never actually wired to
       // any consumer -- accept-envelope.mjs's gate is the first one).
-      let actionHash = body?.action_hash;
-      if (body?.action) {
-        try { actionHash = computeActionHash({ ...body.action, endpoint_id: principal?.endpoint_id }); }
-        catch (error) { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'INVALID_ACTION', message: error.message, details: {} })); }
-        if (body.action_hash && body.action_hash !== actionHash) {
-          response.writeHead(409, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
-          return response.end(JSON.stringify({ request_id: requestId, code: 'APPROVAL_REQUIRED', message: 'Action hash does not match canonical action', details: {} }));
-        }
+      // Reject structured body.action: computeActionHash digests abstract
+      // action fields and can never equal an envelope's canonical hash, so a
+      // 201 here would mint an approval that cannot authorize delivery.
+      // Callers must pass the envelope's own canonical hash as action_hash.
+      if (body?.action != null) {
+        response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({
+          request_id: requestId,
+          code: 'INVALID_ACTION',
+          message: 'Structured body.action cannot authorize envelope delivery; pass the envelope canonical hash as action_hash',
+          details: {},
+        }));
       }
+      let actionHash = body?.action_hash;
       const effectiveRelayOrigin = resolveRelayOrigin();
       if (!actionHash || !body?.callback_url || !effectiveRelayOrigin || !principal?.endpoint_id) {
         response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });

@@ -42,10 +42,21 @@ test('single-flights duplicate resolution and validates provider values', async 
 });
 
 test('maps timeouts and missing values to stable secret errors', async () => {
+  // Provider must observe AbortSignal so the timed-out Promise.race does not leave a
+  // forever-pending promise that keeps Node's test runner from exiting (ERR_TEST_FAILURE
+  // cancelledByParent on Node 22: "Promise resolution is still pending...").
   const resolver = createSecretResolver({
     timeoutMs: 10,
     providers: {
-      'secret://sigil': async () => new Promise(() => {}),
+      'secret://sigil': async ({ signal } = {}) => new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+          reject(Object.assign(new Error('aborted'), { code: 'SECRET_UNAVAILABLE' }));
+          return;
+        }
+        signal?.addEventListener?.('abort', () => {
+          reject(Object.assign(new Error('aborted'), { code: 'SECRET_UNAVAILABLE' }));
+        }, { once: true });
+      }),
     },
   });
   await assert.rejects(resolver.resolve(reference), { code: 'SECRET_UNAVAILABLE' });

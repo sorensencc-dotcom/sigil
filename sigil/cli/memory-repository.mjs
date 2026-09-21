@@ -5,6 +5,7 @@
 import crypto from 'node:crypto';
 import { transitionDelivery } from '../relay/v1/delivery-state.mjs';
 import { boundedDirectoryExpiry } from '../relay/v1/auth-policy.mjs';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 const SEEDED_CAPABILITIES = new Map([
   ['sigil.core/read_shared_context', { namespace: 'sigil.core', risk_tier: 'standard' }],
@@ -72,24 +73,28 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
   // human-approved, one-time decision was silently burned by an unrelated,
   // retriable failure. Only consumeApprovalDecision registers an undo here;
   // this is not a general transaction log.
-  let currentTransactionRollbacks = null;
+  const transactionRollbackStore = new AsyncLocalStorage(); // per-async-context undo stack
   return {
     // Single-process, no real client/connection -- the transaction wrapper
     // exists so acceptEnvelopeAsync's repository-aware path works unchanged
     // against this repository too (design §12 dual-repository equivalence).
     async withTransaction(fn) {
+      const parent = transactionRollbackStore.getStore() ?? null;
       const rollbacks = [];
-      const previous = currentTransactionRollbacks;
-      currentTransactionRollbacks = rollbacks;
-      try {
-        const result = await fn(null);
-        currentTransactionRollbacks = previous;
-        return result;
-      } catch (error) {
-        currentTransactionRollbacks = previous;
-        for (const undo of rollbacks) undo();
-        throw error;
-      }
+      return transactionRollbackStore.run(rollbacks, async () => {
+        try {
+          const result = await fn(null);
+          // Nested success: merge child undos into parent so a later parent
+          // throw still reverses the nested mutations.
+          if (parent) {
+            for (const undo of rollbacks) parent.push(undo);
+          }
+          return result;
+        } catch (error) {
+          for (const undo of rollbacks) undo();
+          throw error;
+        }
+      });
     },
     async assignStreamSequence(_client, senderEndpointId, conversationId) {
       const key = JSON.stringify([senderEndpointId, conversationId]);
@@ -409,8 +414,18 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     // real WebAuthn flow for -- shaped like postgres-repository.mjs's
     // finalizeApprovalDecision output, minus the challenge/credential
     // plumbing a real ceremony would have already verified.
-    async recordApprovalDecision({ decisionId = `decision_${crypto.randomUUID()}`, endpointId, actionHash, expiresAt, now = new Date() }) {
-      const decision = { decision_id: decisionId, endpoint_id: endpointId, action_hash: actionHash, status: 'approved', created_at: (now instanceof Date ? now : new Date(now)).toISOString(), expires_at: expiresAt };
+    async recordApprovalDecision({ decisionId = `decision_${crypto.randomUUID()}`, endpointId, actionHash, expiresAt, validUntil = null, credentialValidUntil = null, now = new Date() }) {
+      const decision = {
+        decision_id: decisionId,
+        endpoint_id: endpointId,
+        action_hash: actionHash,
+        status: 'approved',
+        created_at: (now instanceof Date ? now : new Date(now)).toISOString(),
+        expires_at: expiresAt,
+        // Optional credential window (mirrors human_credentials.valid_until).
+        valid_until: validUntil,
+        credential_valid_until: credentialValidUntil ?? validUntil,
+      };
       approvalDecisions.set(decisionId, decision);
       return decision;
     },
@@ -426,10 +441,20 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     async consumeApprovalDecision({ endpointId, actionHash, now = new Date() }) {
       const timestamp = (now instanceof Date ? now : new Date(now)).getTime();
       const prefixedHash = `sha256:${actionHash}`;
-      const decision = [...approvalDecisions.values()].find((d) => d.endpoint_id === endpointId && (d.action_hash === actionHash || d.action_hash === prefixedHash) && d.status === 'approved' && new Date(d.expires_at).getTime() > timestamp);
+      const decision = [...approvalDecisions.values()].find((d) => {
+        if (d.endpoint_id !== endpointId) return false;
+        if (!(d.action_hash === actionHash || d.action_hash === prefixedHash)) return false;
+        if (d.status !== 'approved') return false;
+        if (!(new Date(d.expires_at).getTime() > timestamp)) return false;
+        // Mirror postgres: expired credentials (valid_until) cannot consume
+        // even when status is still 'active'/approved.
+        const validUntil = d.credential_valid_until ?? d.valid_until ?? null;
+        if (validUntil != null && !(new Date(validUntil).getTime() > timestamp)) return false;
+        return true;
+      });
       if (!decision) return null;
       decision.status = 'consumed';
-      currentTransactionRollbacks?.push(() => { decision.status = 'approved'; });
+      transactionRollbackStore.getStore()?.push(() => { decision.status = 'approved'; });
       return decision;
     },
     async createHumanSession({ sessionId, humanId, authenticationMethod, assurance, deviceContext = {}, issuedAt = new Date(), expiresAt, now = new Date() }) {

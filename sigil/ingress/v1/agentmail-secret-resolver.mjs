@@ -52,7 +52,7 @@ export function createSecretResolver({ providers = {}, allowedSchemes = ['secret
     if (inFlight.has(key)) return inFlight.get(key);
     const task = (async () => {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs).unref?.();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
         if (signal?.aborted) throw secretError('SECRET_UNAVAILABLE', 'Secret resolution was aborted');
         const onAbort = () => controller.abort();
