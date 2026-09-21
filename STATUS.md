@@ -1,5 +1,18 @@
 # Status
 
+## Session update: 2026-09-20 libp2p final-review hardening batch (m2-m5, n1, n2)
+
+- Closed 6 of 8 non-blocking findings parked in TODOS.md from the libp2p transport driver's final review (m2-m5, n1, n2). m7 and m8 remain open, needing their own design decisions.
+- m2: read timeout on inbound streams (`readOneFrameWithTimeout` in `frame-codec.mjs`, 10s default, configurable) — both protocol handlers now abort a stream that never sends a frame.
+- m3: `sendEnvelope`/`ping`/both handlers now close the dialed/inbound stream after one round trip instead of relying on host `.stop()`.
+- m4: control-protocol handler now has `try/catch`/`finally`, matching the data protocol's shape.
+- m5 (rescoped, see below): data-protocol's own catch block no longer forwards an unexpected error's raw message to the remote peer — only `reject()`-originated errors (which carry `.code`) do.
+- n1: documented the dropped explicit `node.start()` call in `p2p-host.mjs`.
+- n2: all ten libp2p-family dependencies exact-pinned; `sigil-dep-audit.mjs` now reports zero loose-version warnings for this family (verified: it previously flagged all ten).
+- **New finding, left open, filed in TODOS.md:** while fixing m5, discovered `accept-envelope.mjs`'s `toResponse` (shared by HTTP and p2p transports) echoes any caught error's raw `.message` verbatim, including unexpected internal exceptions with no `.code` — a broader, transport-shared leak than the p2p-scoped m5 finding described. Not fixed here; changing it touches the HTTP transport's error-response contract and needs its own review.
+- Focused evidence: `transport-libp2p/*.test.mjs` + `relay-up-p2p.test.mjs` 14/14 (including 2 new regression tests: m2 stream-close-on-timeout, m5 no-leak-before-acceptEnvelopeAsync). Full pre-push suite 1027/0/132 skip.
+- Known flaky test, not caused by this change: `sigil relay up --p2p logs a listen multiaddr` intermittently times out (5s wait) when run inside the full parallel suite; passes 3/3 standalone every time observed this session. Not yet filed as its own TODOS.md entry.
+
 ## Session update: 2026-09-20 libp2p DHT ping-service fix
 
 - Registered the `@libp2p/ping` service in `createP2pHost({ enableDht: true })` (`sigil/relay/v1/transport-libp2p/p2p-host.mjs`) — `@libp2p/kad-dht` hard-requires it and `createLibp2p` threw without it. Added `@libp2p/ping` as an explicit dependency (was previously only present transitively). Closes the TODOS.md item of the same name.

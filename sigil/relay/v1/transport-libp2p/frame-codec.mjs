@@ -29,6 +29,32 @@ function toBuffer(chunk) {
   return Buffer.from(chunk);
 }
 
+const DEFAULT_READ_TIMEOUT_MS = 10_000;
+
+// m2 (2026-09-20 libp2p transport driver final review): neither protocol
+// handler enforced a read timeout on inbound streams, so a peer could park
+// a stream indefinitely. Reads the first frame off `source`, aborting
+// `rawStream` (and rejecting) if none arrives within `timeoutMs`. Both
+// protocol handlers expect exactly one frame per stream (spec §8 framing),
+// so "first frame" is "the message".
+export async function readOneFrameWithTimeout(rawStream, source, { maxFrameSize = DEFAULT_MAX_FRAME_SIZE, timeoutMs = DEFAULT_READ_TIMEOUT_MS } = {}) {
+  const iterator = readFrames(source, { maxFrameSize })[Symbol.asyncIterator]();
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const error = Object.assign(new Error(`No frame received within ${timeoutMs}ms`), { code: 'READ_TIMEOUT' });
+      rawStream.abort(error);
+      reject(error);
+    }, timeoutMs);
+  });
+  try {
+    const { value, done } = await Promise.race([iterator.next(), timeout]);
+    return done ? undefined : value;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function* readFrames(source, { maxFrameSize = DEFAULT_MAX_FRAME_SIZE } = {}) {
   let buffer = Buffer.alloc(0);
   for await (const chunk of source) {

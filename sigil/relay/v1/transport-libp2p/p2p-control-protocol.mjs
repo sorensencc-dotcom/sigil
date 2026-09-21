@@ -17,26 +17,40 @@
 //    `Uint8ArrayList` chunk handling was already fixed in Task 5.
 import { pipe } from 'it-pipe';
 import { messageStreamToDuplex } from '@libp2p/utils';
-import { encodeFrame, readFrames } from './frame-codec.mjs';
+import { encodeFrame, readOneFrameWithTimeout } from './frame-codec.mjs';
 
 export const CONTROL_PROTOCOL = '/sigil/control/1.0.0';
 const MAX_FRAME_SIZE = 4096; // control frames are small by design
 
-export function wireControlProtocol(node) {
+export function wireControlProtocol(node, options) {
   node.handle(CONTROL_PROTOCOL, async (rawStream, connection) => {
     const stream = messageStreamToDuplex(rawStream);
-    for await (const frame of readFrames(stream.source, { maxFrameSize: MAX_FRAME_SIZE })) {
+    try {
+      // one message per stream, matching /sigil/data/1.0.0's framing
+      const frame = await readOneFrameWithTimeout(rawStream, stream.source, { maxFrameSize: MAX_FRAME_SIZE, timeoutMs: options?.readTimeoutMs });
       if (frame?.type === 'ping') {
         await pipe([encodeFrame({ pong: true, peer_id: node.peerId.toString(), now: new Date().toISOString() })], stream.sink);
       }
-      break; // one message per stream, matching /sigil/data/1.0.0's framing
+    } catch {
+      // m4: unlike the data protocol, control has no structured error
+      // response to send back -- libp2p's own connection layer already
+      // aborts a thrown stream, so swallowing here (after readOneFrameWithTimeout
+      // has already aborted the stream on timeout) just avoids an unhandled
+      // rejection surfacing as a crash-shaped log line for a routine
+      // idle/malformed peer.
+    } finally {
+      await rawStream.close().catch(() => rawStream.abort(new Error('control protocol handler stream close failed')));
     }
   });
 }
 
 export async function ping(node, peerIdOrMultiaddr) {
   const rawStream = await node.dialProtocol(peerIdOrMultiaddr, CONTROL_PROTOCOL);
-  const stream = messageStreamToDuplex(rawStream);
-  await pipe([encodeFrame({ type: 'ping' })], stream.sink);
-  for await (const frame of readFrames(stream.source, { maxFrameSize: MAX_FRAME_SIZE })) return frame;
+  try {
+    const stream = messageStreamToDuplex(rawStream);
+    await pipe([encodeFrame({ type: 'ping' })], stream.sink);
+    return await readOneFrameWithTimeout(rawStream, stream.source, { maxFrameSize: MAX_FRAME_SIZE });
+  } finally {
+    await rawStream.close().catch(() => rawStream.abort(new Error('ping stream close failed')));
+  }
 }

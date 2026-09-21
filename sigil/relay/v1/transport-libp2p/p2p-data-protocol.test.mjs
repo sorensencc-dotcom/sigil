@@ -62,3 +62,48 @@ test('inbound envelope over /sigil/data/1.0.0 reaches acceptEnvelopeAsync and re
     await receiverHost.stop();
   }
 });
+
+test('m5: an unexpected (non-reject()) error thrown before acceptEnvelopeAsync is reached does not leak its message to the remote peer', async () => {
+  const senderIdentity = makeIdentity();
+  const receiverIdentity = makeIdentity();
+  const senderHost = await createP2pHost({ identity: senderIdentity, listenAddrs: ['/ip4/127.0.0.1/tcp/0'] });
+  const receiverHost = await createP2pHost({ identity: receiverIdentity, listenAddrs: ['/ip4/127.0.0.1/tcp/0'] });
+  try {
+    // A .get() that throws a plain Error (no .code) simulates an unexpected
+    // failure in the sender-registry lookup, as opposed to a known
+    // validate-envelope.mjs reject() -- this is the code path
+    // wireDataProtocol's own catch block controls (the failure surface
+    // scoped by TODOS.md m5). acceptEnvelopeAsync's *own* internal error
+    // responses are a separate, HTTP-transport-shared concern (see the
+    // TODOS.md entry this test's finding was split from).
+    const registered = { get: () => { throw new Error('internal connection string: postgres://sensitive-detail'); } };
+    wireDataProtocol(receiverHost, {
+      registered,
+      relayDomain: undefined,
+      federationMode: undefined,
+      persist: async () => ({ message_id: 'unused', duplicate: false })
+    });
+
+    const envelope = signEnvelope({
+      protocol: 'sigil/1',
+      message_id: 'msg_p2p_leak_01',
+      conversation_id: 'conv_p2p_leak_01',
+      message_type: 'task.request',
+      sender: { owner_id: 'usr_sender', endpoint_id: 'ep_sender', kind: 'agent', key_id: 'key_sender' },
+      recipient: { owner_id: 'usr_receiver', endpoint_id: 'ep_receiver' },
+      body: { task_id: 'task_p2p_leak_01', instruction: 'ping', success_criteria: [], dependencies: [], deadline: '2099-01-01T00:00:00Z' },
+      context_refs: [], capabilities: [], correlation_id: null,
+      idempotency_key: 'send_p2p_leak_01', expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(), created_at: new Date().toISOString()
+    }, senderIdentity.keys.privateKey);
+
+    const [receiverAddr] = receiverHost.getMultiaddrs();
+    const response = await sendEnvelope(senderHost, receiverAddr, envelope);
+    assert.equal(response.status, 400);
+    assert.equal(response.body.code, 'INVALID_ENVELOPE');
+    assert.equal(response.body.message, 'Envelope rejected');
+    assert.doesNotMatch(JSON.stringify(response), /postgres:\/\/sensitive-detail/);
+  } finally {
+    await senderHost.stop();
+    await receiverHost.stop();
+  }
+});

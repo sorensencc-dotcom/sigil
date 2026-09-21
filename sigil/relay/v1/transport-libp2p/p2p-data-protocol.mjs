@@ -41,7 +41,7 @@
 //    unchanged since they only ever fed plain Buffers.
 import { pipe } from 'it-pipe';
 import { messageStreamToDuplex } from '@libp2p/utils';
-import { encodeFrame, readFrames } from './frame-codec.mjs';
+import { encodeFrame, readFrames, readOneFrameWithTimeout } from './frame-codec.mjs';
 import { peerIdFromPublicKey } from './peer-id.mjs';
 import { acceptEnvelopeAsync } from '../accept-envelope.mjs';
 import { reject } from '../validate-envelope.mjs';
@@ -54,11 +54,8 @@ export function wireDataProtocol(node, options) {
     const stream = messageStreamToDuplex(rawStream);
     let responseBody;
     try {
-      let envelope;
-      for await (const frame of readFrames(stream.source, { maxFrameSize: MAX_FRAME_SIZE })) {
-        envelope = frame;
-        break; // one envelope per stream, per spec §8 stream framing
-      }
+      // one envelope per stream, per spec §8 stream framing
+      const envelope = await readOneFrameWithTimeout(rawStream, stream.source, { maxFrameSize: MAX_FRAME_SIZE, timeoutMs: options?.readTimeoutMs });
       if (!envelope) throw reject('INVALID_ENVELOPE', 'Empty data stream');
 
       // Auth model (spec §8): the Noise-authenticated connection.remotePeer
@@ -75,20 +72,34 @@ export function wireDataProtocol(node, options) {
       }
       responseBody = await acceptEnvelopeAsync(envelope, options);
     } catch (error) {
-      responseBody = { status: 400, body: { code: error.code ?? 'INVALID_ENVELOPE', message: error.message } };
+      // m5: only forward messages from this file's own known reject()
+      // calls (they carry `.code`) to the remote peer -- an unexpected
+      // throw from acceptEnvelopeAsync's internals could otherwise leak
+      // internal error text to an untrusted dialing peer.
+      responseBody = error.code
+        ? { status: 400, body: { code: error.code, message: error.message } }
+        : { status: 400, body: { code: 'INVALID_ENVELOPE', message: 'Envelope rejected' } };
     }
     await pipe([encodeFrame(responseBody)], stream.sink);
+    await rawStream.close().catch(() => rawStream.abort(new Error('data protocol handler stream close failed')));
   });
 }
 
 export async function sendEnvelope(node, peerIdOrMultiaddr, envelope) {
   const rawStream = await node.dialProtocol(peerIdOrMultiaddr, DATA_PROTOCOL);
-  const stream = messageStreamToDuplex(rawStream);
-  await pipe([encodeFrame(envelope)], stream.sink);
-  let response;
-  for await (const frame of readFrames(stream.source, { maxFrameSize: MAX_FRAME_SIZE })) {
-    response = frame;
-    break;
+  try {
+    const stream = messageStreamToDuplex(rawStream);
+    await pipe([encodeFrame(envelope)], stream.sink);
+    let response;
+    for await (const frame of readFrames(stream.source, { maxFrameSize: MAX_FRAME_SIZE })) {
+      response = frame;
+      break;
+    }
+    return response;
+  } finally {
+    // One round trip per stream (spec §8 framing); close explicitly rather
+    // than relying on host .stop() for cleanup, so a long-lived sender
+    // doesn't leak one stream per call.
+    await rawStream.close().catch(() => rawStream.abort(new Error('sendEnvelope stream close failed')));
   }
-  return response;
 }

@@ -146,24 +146,31 @@
 
 ---
 
-## libp2p transport driver: final-review residual hardening items (m2-m5, m7, m8, n1, n2)
+## libp2p transport driver: final-review residual hardening items (m7, m8)
 
-**What:** A batch of non-blocking findings from the 2026-09-20 libp2p transport driver plan's final whole-branch review, parked rather than fixed in the mandatory fix wave (which addressed M1-M3, m1, m6 only):
-- m2: neither `p2p-data-protocol.mjs` nor `p2p-control-protocol.mjs` enforces a read timeout on inbound streams — a peer can park a stream indefinitely.
-- m3: `sendEnvelope`/`ping` never explicitly close the dialed stream after one round trip — relies on host `.stop()` for cleanup; a long-lived sender leaks one stream per call.
-- m4: `p2p-control-protocol.mjs`'s handler still has no `try/catch` (libp2p's own connection layer catches the throw and aborts the stream, so this is non-crashing, but asymmetric with the data protocol's structured error response) — worth aligning if peer-state/revocation gossip lands on this protocol later.
-- m5: `p2p-data-protocol.mjs` echoes raw `error.message` to the remote peer for any non-`reject()` throw, which could leak internal error text (e.g. a future unguarded exception) to an untrusted dialing peer.
+**What:** Remaining non-blocking findings from the 2026-09-20 libp2p transport driver plan's final whole-branch review, parked rather than fixed in the mandatory fix wave (which addressed M1-M3, m1, m6 only). m2-m5, n1, and n2 were closed 2026-09-20 (see below); m7 and m8 remain open:
 - m7: `--p2p` hard-enables mDNS with no opt-out flag; combined with the loopback-only default listen address (see the entry above), the relay by default advertises addresses no LAN peer can dial.
 - m8: p2p-accepted envelopes carry no `request_id`, and the p2p path doesn't wire `logger`/`resendMetrics`, making p2p traffic invisible to relay observability relative to the HTTP transport.
-- n1: `p2p-host.mjs`'s deviation-comment block documents the `peerId`→`privateKey` API change but not the dropped explicit `await node.start()` (relies on `createLibp2p`'s default `start: true`) — correct behavior, just under-documented.
-- n2: dependency pinning is inconsistent (`@libp2p/crypto`/`@libp2p/peer-id` exact-pinned from Task 2's fallback install, the other nine new deps use `^`) — an artifact of how they were installed, not a decision.
 
 **Why:** None of these are blocking — the final reviewer's verdict was NEEDS FIX WAVE for M1-M3 only, with m1/m6 recommended as cheap bundles; everything else was explicitly marked "safe to triage into TODOS.md."
 
-**Pros:** Closing these hardens the p2p transport's parity with the HTTP transport (observability, error hygiene) and its resilience against slow/malicious peers (timeouts, stream cleanup).
+**Pros:** Closing these hardens the p2p transport's parity with the HTTP transport (observability) and default-configuration safety.
 
-**Cons:** None are urgent; m2/m3/m8 need small design decisions (timeout values, whether to construct a per-relay logger/metrics instance at the p2p call site); n1/n2 are pure documentation/cleanup.
+**Cons:** None are urgent; m7 needs a decision (add an opt-out flag vs. leave mDNS tied to `--p2p`); m8 needs a decision on whether to construct a per-relay logger/metrics instance at the p2p call site.
 
 **Context:** Full detail and file:line references in the final review at `.superpowers/sdd/2026-09-20-sigil-libp2p-transport-driver/final-review.md` (deleted with the plan workspace after merge — see git history on branch `worktree-sigil-libp2p-transport` if this workspace is gone).
 
 **Depends on:** None — each item is independently fixable; no design blockers.
+
+---
+
+## Closed 2026-09-20: libp2p hardening m2-m5, n1, n2
+
+Fixed in commit on `main` following the 2026-09-20 libp2p transport driver merge:
+- m2: `frame-codec.mjs` gained `readOneFrameWithTimeout` (10s default, configurable via `options.readTimeoutMs`); both `p2p-data-protocol.mjs` and `p2p-control-protocol.mjs` now abort a stream that never sends a frame in time. Regression test in `p2p-control-protocol.test.mjs`.
+- m3: `sendEnvelope`, `ping`, and both protocol handlers now call `rawStream.close()` (falling back to `.abort()`) after one round trip.
+- m4: `p2p-control-protocol.mjs`'s handler now has a `try/catch`/`finally` matching the data protocol's shape.
+- m5 (rescoped): `p2p-data-protocol.mjs`'s own catch block now only forwards `error.message` to the remote peer when the error carries `.code` (i.e. came from this file's own `reject()` calls); an unexpected throw gets a generic `INVALID_ENVELOPE` / "Envelope rejected" response instead. Regression test in `p2p-data-protocol.test.mjs`.
+  - **New finding surfaced while fixing m5, NOT closed by this fix:** `acceptEnvelopeAsync`'s own `toResponse` (`sigil/relay/v1/accept-envelope.mjs:113`) echoes `error.message` verbatim for *any* caught error, including an unexpected internal exception (e.g. a `persist`/repository throw with no `.code`) — and this is shared with the HTTP transport, not p2p-specific. Confirmed by a test with a throwing `persist` reaching the raw message unfiltered before the rescoped m5 test was written to target the actually-reachable p2p-layer catch instead. Left open — fixing `toResponse` changes the HTTP transport's error-response contract too, which needs its own review, not a bundle inside a p2p hardening pass. File a fresh TODOS.md entry (or a spec) scoped to `accept-envelope.mjs` if this is picked up.
+- n1: `p2p-host.mjs`'s deviation comment now documents the dropped explicit `await node.start()`.
+- n2: all ten libp2p-family dependencies in `package.json` are now exact-pinned (matching repo convention — confirmed by `sigil-dep-audit.mjs`, which flags `^` ranges as loose and now reports zero for this dependency family).

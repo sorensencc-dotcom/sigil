@@ -23,3 +23,28 @@ test('ping over /sigil/control/1.0.0 gets a pong from the remote peer', async ()
     await hostB.stop();
   }
 });
+
+test('m2: a peer that dials and never sends a frame gets the stream closed by the remote (server-side read timeout), not left open indefinitely', async () => {
+  const hostA = await createP2pHost({ identity: makeIdentity(), listenAddrs: ['/ip4/127.0.0.1/tcp/0'] });
+  const hostB = await createP2pHost({ identity: makeIdentity(), listenAddrs: ['/ip4/127.0.0.1/tcp/0'] });
+  try {
+    wireControlProtocol(hostB, { readTimeoutMs: 100 });
+    const [addrB] = hostB.getMultiaddrs();
+    // Dial the protocol directly and never write anything -- unlike ping(),
+    // which always sends a frame immediately. The server side's read
+    // timeout, not this client, is what must close the stream.
+    const rawStream = await hostA.dialProtocol(addrB, '/sigil/control/1.0.0');
+    // 100ms read timeout vs. an 8s wait cap: generous margin for the full
+    // repo suite's observed CPU contention under many concurrent libp2p
+    // hosts (the sibling CLI p2p test has been seen to take ~7.6s for a
+    // startup that's <2s in isolation).
+    const remoteClosed = await new Promise((resolve) => {
+      rawStream.addEventListener('close', () => resolve(true), { once: true });
+      setTimeout(() => resolve(false), 8000);
+    });
+    assert.equal(remoteClosed, true);
+  } finally {
+    await hostA.stop();
+    await hostB.stop();
+  }
+});

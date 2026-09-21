@@ -11,6 +11,11 @@
 // `PrivateKey` from the same Ed25519 key material (seed + raw public key,
 // via `@libp2p/crypto/keys#privateKeyFromRaw`) rather than passing a
 // `peerId` directly.
+//
+// This file also does not call `await node.start()` explicitly --
+// `createLibp2p()` defaults its `start` option to `true` and starts the
+// node itself before resolving, so an extra `.start()` call here would be
+// redundant, not a missing step.
 import crypto from 'node:crypto';
 import { createLibp2p } from 'libp2p';
 import { tcp } from '@libp2p/tcp';
