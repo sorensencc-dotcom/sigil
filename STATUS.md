@@ -1,5 +1,16 @@
 # Status
 
+## Session update: 2026-09-20 disposable PostgreSQL repair
+
+- Reset only the disposable `sigil_test` schema in the running `sigil_postgres` container after migration 014 collided with pre-existing `oidc_issuer_allowlist.client_id` state.
+- Live migration evidence: all 27 migrations applied successfully, including AgentMail migrations 024, 025, and 026.
+
+## Session update: 2026-09-20 Doppler resolver adapter
+
+- Added a fail-closed Doppler CLI secret provider for the six configured AgentMail secret references. Secret values remain outside logs and test output; the provider maps only approved `secret://sigil/agentmail/...` paths.
+- Focused evidence: resolver adapter plus AgentMail config/bootstrap/rotation tests passed 13/13 with a 10-second test timeout.
+- Live Doppler read was not verified from Codex because this process does not share the operator's interactive Doppler login. Run the supplied PowerShell check in the authenticated operator shell before activation. Provider rotation remains intentionally unsupported until a safe AgentMail credential-write contract is approved.
+
 ## Session update: 2026-09-20 AgentMail provider adapter
 
 - Added the official `svix` dependency and a concrete AgentMail provider adapter. The adapter verifies raw Svix-signed webhook bodies, rejects unsupported or mismatched events, maps documented `message.received` fields, and retrieves oversized message bodies through the existing transport boundary.
