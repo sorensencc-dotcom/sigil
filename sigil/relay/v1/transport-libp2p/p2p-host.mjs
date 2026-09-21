@@ -19,6 +19,7 @@ import { yamux } from '@chainsafe/libp2p-yamux';
 import { identify } from '@libp2p/identify';
 import { mdns } from '@libp2p/mdns';
 import { kadDHT } from '@libp2p/kad-dht';
+import { ping } from '@libp2p/ping';
 import { privateKeyFromRaw } from '@libp2p/crypto/keys';
 
 function rawEd25519PrivateKeyBytes(identity) {
@@ -40,7 +41,13 @@ export async function createP2pHost({ identity, listenAddrs = ['/ip4/127.0.0.1/t
   const privateKey = libp2pPrivateKeyFromIdentity(identity);
   const services = { identify: identify() };
   if (enableMdns) services.mdns = mdns({ serviceTag: '_sam-mesh._tcp.local' });
-  if (enableDht) services.dht = kadDHT({ protocol: '/sam/dht/1.0.0', clientMode: false });
+  // @libp2p/kad-dht requires a registered `@libp2p/ping` service at
+  // startup (TODOS.md: "p2p-host.mjs's enableDht: true path throws at
+  // startup") -- ping must be registered whenever dht is enabled.
+  if (enableDht) {
+    services.ping = ping();
+    services.dht = kadDHT({ protocol: '/sam/dht/1.0.0', clientMode: false });
+  }
 
   const node = await createLibp2p({
     privateKey,

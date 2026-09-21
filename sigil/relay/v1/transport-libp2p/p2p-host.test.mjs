@@ -27,3 +27,13 @@ test('two hosts dial over loopback TCP and authenticate the remote PeerId via No
     await hostB.stop();
   }
 });
+
+test('createP2pHost({ enableDht: true }) starts without throwing (requires the ping service kad-dht depends on)', async () => {
+  const identity = makeIdentity();
+  const node = await createP2pHost({ identity, enableDht: true });
+  try {
+    assert.equal(node.status, 'started');
+  } finally {
+    await node.stop();
+  }
+});

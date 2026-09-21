@@ -337,16 +337,14 @@ async function cmdRelayUp(argv) {
       listenAddrs: [opt(args, ['p2p-listen']) ?? '/ip4/127.0.0.1/tcp/0'],
       enableMdns: true,
       // enableDht deliberately left false (off by default in createP2pHost
-      // too): the installed @libp2p/kad-dht@16.4.5 declares a hard
-      // dependency on a "@libp2p/ping" service component that
-      // createP2pHost's `services` object never registers (confirmed by
-      // running this exact startup path -- it throws "Service
-      // '@libp2p/kad-dht' required capability '@libp2p/ping' but it was not
-      // provided" at createLibp2p() time). Task 4's own report already
-      // flagged enableDht as wired-but-never-exercised-by-any-test; turning
-      // it on here would make every `--p2p` relay fail to start. Fixing
-      // kadDHT's missing ping dependency belongs in p2p-host.mjs (Task 4's
-      // file), out of this task's CLI-wiring scope -- left as a follow-up.
+      // too): createP2pHost now registers the "@libp2p/ping" service
+      // kad-dht requires (TODOS.md: "p2p-host.mjs's enableDht: true path
+      // throws at startup" -- fixed 2026-09-20, see p2p-host.test.mjs), so
+      // the startup crash this comment used to document no longer applies.
+      // Still off by default here: turning on Kademlia changes what this
+      // relay advertises/discovers on the network, which is a deployment
+      // decision (see TODOS.md "sigil relay up --p2p's default listen
+      // address is loopback-only") not made yet, not a remaining bug.
       enableDht: false,
     });
     wireControlProtocol(p2pHost);

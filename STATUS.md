@@ -1,5 +1,12 @@
 # Status
 
+## Session update: 2026-09-20 libp2p DHT ping-service fix
+
+- Registered the `@libp2p/ping` service in `createP2pHost({ enableDht: true })` (`sigil/relay/v1/transport-libp2p/p2p-host.mjs`) — `@libp2p/kad-dht` hard-requires it and `createLibp2p` threw without it. Added `@libp2p/ping` as an explicit dependency (was previously only present transitively). Closes the TODOS.md item of the same name.
+- `sigil relay up --p2p` still passes `enableDht: false` by default — the crash is fixed, but turning Kademlia on is a separate, undecided deployment choice (network exposure), not a bug fix.
+- Added a regression test (`p2p-host.test.mjs`) asserting `createP2pHost({ enableDht: true })` starts without throwing.
+- Focused evidence: full `transport-libp2p/*.test.mjs` + `sigil/cli/relay-up-p2p.test.mjs` pass 14/14.
+
 ## Session update: 2026-09-20 disposable PostgreSQL repair
 
 - Reset only the disposable `sigil_test` schema in the running `sigil_postgres` container after migration 014 collided with pre-existing `oidc_issuer_allowlist.client_id` state.
