@@ -68,7 +68,8 @@ test('sigil relay up --p2p logs a listen multiaddr', async () => {
       };
       child.stdout.on('data', onData);
       child.on('exit', (code) => reject(new Error(`sigil relay up exited early with code ${code}: ${buf}`)));
-      setTimeout(() => reject(new Error(`timed out waiting for a p2p listen multiaddr: ${buf}`)), 5000);
+      // libp2p startup can exceed five seconds on Windows under a cold Node process.
+      setTimeout(() => reject(new Error(`timed out waiting for a p2p listen multiaddr: ${buf}`)), 15000);
     });
     assert.match(output, /\/ip4\/127\.0\.0\.1\/tcp\/\d+\/p2p\/\w+/);
   } finally {
