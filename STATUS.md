@@ -10,6 +10,42 @@
 - Added a fail-closed Doppler CLI secret provider for the six configured AgentMail secret references. Secret values remain outside logs and test output; the provider maps only approved `secret://sigil/agentmail/...` paths.
 - Focused evidence: resolver adapter plus AgentMail config/bootstrap/rotation tests passed 13/13 with a 10-second test timeout.
 - Live Doppler read was not verified from Codex because this process does not share the operator's interactive Doppler login. Run the supplied PowerShell check in the authenticated operator shell before activation. Provider rotation remains intentionally unsupported until a safe AgentMail credential-write contract is approved.
+## Session update: 2026-09-20 — libp2p transport driver
+
+Added `sigil/relay/v1/transport-libp2p/` (peer-id.mjs, frame-codec.mjs,
+p2p-host.mjs, p2p-data-protocol.mjs, p2p-control-protocol.mjs): a libp2p
+(Noise XX / Yamux / TCP, optional mDNS + Kademlia) transport driver that
+reuses the existing envelope/JCS/ACL/delivery-state pipeline
+(`accept-envelope.mjs`) unmodified. Wired into `sigil relay up --p2p`
+(new `--p2p-identity <path>` and `--p2p-listen <multiaddr>` flags;
+default listen is `/ip4/127.0.0.1/tcp/0`, loopback-only — override
+`--p2p-listen` for real cross-machine deployment).
+
+Verified: unit + integration tests for PeerId derivation, framing,
+authenticated dial, data-protocol round trip via `acceptEnvelopeAsync`
+(including a `PEER_IDENTITY_MISMATCH` negative-path test — a dial from an
+unregistered identity claiming a registered sender endpoint is rejected
+before `acceptEnvelopeAsync` is ever called), control-protocol heartbeat,
+CLI `--p2p` startup — all in-process over loopback TCP. `npm test`
+(dep audit + JCS audit + full suite) green, 1155/1023/0/0/132
+(tests/pass/fail/cancelled/skipped).
+
+Known gap: `--p2p --p2p-listen ...` cannot enable Kademlia DHT as shipped
+— `createP2pHost({enableDht: true})` throws (`@libp2p/kad-dht` requires an
+`@libp2p/ping` service that `p2p-host.mjs` does not register). CLI wiring
+sets `enableDht: false` unconditionally pending that fix. mDNS remains the
+supported in-process discovery path.
+
+Not verified (needs real multi-process/multi-host environment, not
+automatable in `node --test`): mDNS discovery across separate worktrees,
+Kademlia provider lookup across networks, Noise handshake rejecting a
+mismatched PeerID under adversarial (not just application-level registry
+mismatch) conditions, reconnect/retry after a dropped stream. These are
+spec §10 Phase-2 gates still open.
+
+Deferred, not built: control-protocol peer-state and revocation gossip
+(spec §8 lists these alongside heartbeat; heartbeat only shipped here —
+needs a gossip-topology and revocation-trust design this plan didn't make).
 
 ## Session update: 2026-09-20 AgentMail provider adapter
 
