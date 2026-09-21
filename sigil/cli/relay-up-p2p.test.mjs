@@ -53,6 +53,17 @@ test('wireDataProtocol options stay in parity with createRelayServer/acceptEnvel
   assert.match(wireOptions, /onPersisted:\s*createOnPersisted\(stream\)/, 'wireDataProtocol\'s options object is missing "onPersisted: createOnPersisted(stream)" -- p2p-accepted envelopes will never notify WebSocket stream subscribers or emit delivery receipts');
 });
 
+// Regression for TODOS.md m7: --p2p used to hard-enable mDNS with no
+// opt-out. A real end-to-end assertion would need two child-process relays
+// on the same multicast segment and is exactly the "multi-host mDNS
+// verification" TODOS.md already tracks as a separate, unstarted item --
+// static source inspection is the direct way to pin the flag wiring itself.
+test('--p2p-no-mdns flag wires enableMdns: false into createP2pHost', () => {
+  const sigilSource = fs.readFileSync(sigilCli, 'utf8');
+  assert.match(sigilSource, /'p2p-no-mdns':\s*\{\s*type:\s*'boolean'\s*\}/, 'parseArgs options no longer declare p2p-no-mdns as a boolean flag');
+  assert.match(sigilSource, /enableMdns:\s*!args\.values\['p2p-no-mdns'\]/, 'createP2pHost call site no longer derives enableMdns from --p2p-no-mdns');
+});
+
 test('sigil relay up --p2p logs a listen multiaddr', async () => {
   const cwd = tmpCwdWithRegistry(); // sigil init alice writes .sigil/alice.identity.json (has the private key p2p needs)
   const child = spawn(process.execPath, [

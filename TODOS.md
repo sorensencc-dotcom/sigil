@@ -148,15 +148,16 @@
 
 ## libp2p transport driver: final-review residual hardening items (m7, m8)
 
-**What:** Remaining non-blocking findings from the 2026-09-20 libp2p transport driver plan's final whole-branch review, parked rather than fixed in the mandatory fix wave (which addressed M1-M3, m1, m6 only). m2-m5, n1, and n2 were closed 2026-09-20 (see below); m7 and m8 remain open:
-- m7: `--p2p` hard-enables mDNS with no opt-out flag; combined with the loopback-only default listen address (see the entry above), the relay by default advertises addresses no LAN peer can dial.
+**What:** Remaining non-blocking findings from the 2026-09-20 libp2p transport driver plan's final whole-branch review, parked rather than fixed in the mandatory fix wave (which addressed M1-M3, m1, m6 only). m2-m5, n1, n2, and m7 were closed 2026-09-20 (see below); m8 remains open:
 - m8: p2p-accepted envelopes carry no `request_id`, and the p2p path doesn't wire `logger`/`resendMetrics`, making p2p traffic invisible to relay observability relative to the HTTP transport.
 
 **Why:** None of these are blocking — the final reviewer's verdict was NEEDS FIX WAVE for M1-M3 only, with m1/m6 recommended as cheap bundles; everything else was explicitly marked "safe to triage into TODOS.md."
 
 **Pros:** Closing these hardens the p2p transport's parity with the HTTP transport (observability) and default-configuration safety.
 
-**Cons:** None are urgent; m7 needs a decision (add an opt-out flag vs. leave mDNS tied to `--p2p`); m8 needs a decision on whether to construct a per-relay logger/metrics instance at the p2p call site.
+**Cons:** m8 needs a decision on whether to construct a per-relay logger/metrics instance at the p2p call site.
+
+**Closed 2026-09-20 (m7):** `sigil relay up --p2p` now accepts `--p2p-no-mdns` to disable mDNS advertisement while keeping the data/control protocols and any explicit `--p2p-listen` dial-in address. Default unchanged (mDNS still on with `--p2p`). See `sigil/cli/sigil.mjs`'s `createP2pHost` call site and the `--p2p-no-mdns flag wires enableMdns: false into createP2pHost` regression test in `relay-up-p2p.test.mjs`.
 
 **Context:** Full detail and file:line references in the final review at `.superpowers/sdd/2026-09-20-sigil-libp2p-transport-driver/final-review.md` (deleted with the plan workspace after merge — see git history on branch `worktree-sigil-libp2p-transport` if this workspace is gone).
 

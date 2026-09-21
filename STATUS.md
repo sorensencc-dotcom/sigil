@@ -1,5 +1,12 @@
 # Status
 
+## Session update: 2026-09-20 libp2p final-review m7 (mDNS opt-out)
+
+- Closed 7 of 8 non-blocking findings from the libp2p transport driver's final review. m8 remains open, needing its own design decision (per-relay logger/metrics instance at the p2p call site).
+- m7: `sigil relay up --p2p` accepts `--p2p-no-mdns` to disable mDNS advertisement while keeping the data/control protocols and any explicit `--p2p-listen` dial-in address; default unchanged (mDNS still on with `--p2p`). `sigil.mjs`'s `createP2pHost` call site now derives `enableMdns` from the new flag instead of a hardcoded `true`.
+- Focused evidence: `sigil/cli/relay-up-p2p.test.mjs` 4/4 (new regression test: `--p2p-no-mdns flag wires enableMdns: false into createP2pHost`).
+- Previously-noted flaky test (`sigil relay up --p2p logs a listen multiaddr`, 5s wait, times out under parallel-suite contention) now has its own TODOS.md entry (filed this session) rather than being tracked only here.
+
 ## Session update: 2026-09-20 libp2p final-review hardening batch (m2-m5, n1, n2)
 
 - Closed 6 of 8 non-blocking findings parked in TODOS.md from the libp2p transport driver's final review (m2-m5, n1, n2). m7 and m8 remain open, needing their own design decisions.
