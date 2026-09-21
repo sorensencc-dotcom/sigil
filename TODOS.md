@@ -174,3 +174,19 @@ Fixed in commit on `main` following the 2026-09-20 libp2p transport driver merge
   - **New finding surfaced while fixing m5, NOT closed by this fix:** `acceptEnvelopeAsync`'s own `toResponse` (`sigil/relay/v1/accept-envelope.mjs:113`) echoes `error.message` verbatim for *any* caught error, including an unexpected internal exception (e.g. a `persist`/repository throw with no `.code`) — and this is shared with the HTTP transport, not p2p-specific. Confirmed by a test with a throwing `persist` reaching the raw message unfiltered before the rescoped m5 test was written to target the actually-reachable p2p-layer catch instead. Left open — fixing `toResponse` changes the HTTP transport's error-response contract too, which needs its own review, not a bundle inside a p2p hardening pass. File a fresh TODOS.md entry (or a spec) scoped to `accept-envelope.mjs` if this is picked up.
 - n1: `p2p-host.mjs`'s deviation comment now documents the dropped explicit `await node.start()`.
 - n2: all ten libp2p-family dependencies in `package.json` are now exact-pinned (matching repo convention — confirmed by `sigil-dep-audit.mjs`, which flags `^` ranges as loose and now reports zero for this dependency family).
+
+---
+
+## Flaky test: `sigil relay up --p2p logs a listen multiaddr` (`sigil/cli/relay-up-p2p.test.mjs`)
+
+**What:** Under the full repo `node --test` suite (many files running concurrently), this test intermittently fails with `Error: timed out waiting for a p2p listen multiaddr` (its own 5s wait). Standalone (`node --test sigil/cli/relay-up-p2p.test.mjs`), it has passed every time observed. The same full-suite CPU contention also made a new libp2p regression test (`m2` in `p2p-control-protocol.test.mjs`) fail once until its wait margin was widened to 8s.
+
+**Why:** The test spawns a real `sigil relay up --p2p` child process and waits for its stdout to print a listen multiaddr. Under full-suite parallel load (many concurrent libp2p hosts across other test files), process spawn + libp2p startup can apparently exceed the test's fixed 5s wait, even though the same startup completes in under 2s in isolation.
+
+**Pros:** A wider timeout (or a load-aware retry) removes false-negative pre-push failures that have already required a manual re-run twice in one session (2026-09-20).
+
+**Cons:** Masking timing flakiness with a bigger timeout doesn't fix the underlying contention; a genuinely broken/hung `--p2p` startup would also take longer to fail loudly.
+
+**Context:** Observed twice during the 2026-09-20 libp2p transport driver and hardening-batch push gates; both times a standalone re-run of the same test passed immediately.
+
+**Depends on:** None — widen the wait window (e.g. match the `m2` control-protocol test's 8s margin) or add a bounded retry.
