@@ -299,3 +299,28 @@ test('createDirectoryInviteWithAudit commits the invite and the audit row togeth
   const audit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'directory_invite.created'`);
   assert.equal(Number(audit.rows[0].count), 1);
 });
+
+test('redeemDirectoryInviteWithAudit commits the link and the audit row together, and rolls both back on audit failure', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  await freshSchema(pool);
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const issuerHumanId = await seedHuman(pool, `${suffix}_i`);
+  const redeemerHumanId = await seedHuman(pool, `${suffix}_r`);
+  await seedEndpoint(pool, { endpointId: `ep_issuer_${suffix}`, humanId: issuerHumanId });
+  await seedEndpoint(pool, { endpointId: `ep_redeemer_${suffix}`, humanId: redeemerHumanId });
+  const repository = new PostgresRepository({ pool });
+  const invite = await repository.createDirectoryInvite({ issuerEndpointId: `ep_issuer_${suffix}`, issuerHumanId, expiresAt: new Date(Date.now() + 3600_000), homeRelay: 'local' });
+
+  const failing = new PostgresRepository({ pool: withAuditFailureInjected(pool) });
+  await assert.rejects(() => failing.redeemDirectoryInviteWithAudit({ code: invite.code, redeemerEndpointId: `ep_redeemer_${suffix}`, redeemerHumanId, homeRelay: 'local', actorHumanId: redeemerHumanId }));
+  const stillPending = await pool.query(`SELECT status FROM directory_invites WHERE invite_id = $1`, [invite.invite_id]);
+  assert.equal(stillPending.rows[0].status, 'pending');
+  const noLink = await pool.query('SELECT count(*) FROM directory_links');
+  assert.equal(Number(noLink.rows[0].count), 0);
+
+  const link = await repository.redeemDirectoryInviteWithAudit({ code: invite.code, redeemerEndpointId: `ep_redeemer_${suffix}`, redeemerHumanId, homeRelay: 'local', actorHumanId: redeemerHumanId });
+  assert.ok(link.link_id);
+  const audit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'directory_link.created'`);
+  assert.equal(Number(audit.rows[0].count), 1);
+});

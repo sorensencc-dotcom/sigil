@@ -781,15 +781,20 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     }
     if (request.method === 'POST' && request.url === '/v1/directory/invites/redeem') {
       if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
-      if (!repository?.redeemDirectoryInvite) return response.writeHead(503).end();
+      if (!repository?.redeemDirectoryInvite && !repository?.redeemDirectoryInviteWithAudit) return response.writeHead(503).end();
       const redeemQuota = await reserveDirectoryQuota('directory_invite_redeem', principal.human_id, nowMs);
       if (!redeemQuota.allowed) { response.writeHead(429, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'RATE_LIMITED', message: 'directory_invite_redeem rate limit exceeded', details: {} })); }
       let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       let body; try { body = JSON.parse(raw); } catch { body = null; }
       if (!body?.code) { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'code is required', details: {} })); }
       try {
-        const link = await repository.redeemDirectoryInvite({ code: body.code, redeemerEndpointId: principal.endpoint_id, redeemerHumanId: principal.human_id, homeRelay: resolveRelayOrigin() ?? 'local', now });
-        await repository.recordAuditEvent?.({ eventType: 'directory_link.created', subjectId: link.link_id, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'directory_link', objectId: link.link_id, outcome: 'success', now });
+        const link = repository.redeemDirectoryInviteWithAudit
+          ? await repository.redeemDirectoryInviteWithAudit({ code: body.code, redeemerEndpointId: principal.endpoint_id, redeemerHumanId: principal.human_id, homeRelay: resolveRelayOrigin() ?? 'local', now, actorHumanId: principal.human_id, endpointId: principal.endpoint_id })
+          : await (async () => {
+              const result = await repository.redeemDirectoryInvite({ code: body.code, redeemerEndpointId: principal.endpoint_id, redeemerHumanId: principal.human_id, homeRelay: resolveRelayOrigin() ?? 'local', now });
+              await repository.recordAuditEvent?.({ eventType: 'directory_link.created', subjectId: result.link_id, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'directory_link', objectId: result.link_id, outcome: 'success', now });
+              return result;
+            })();
         response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'OK', link }));
       } catch (error) {
