@@ -827,13 +827,17 @@ async function cmdPeerAdd(argv) {
     if (existing && !args.values.confirm) {
       throw new Error(`sigil peer add: "${domain}" is already pinned (trustMode=${existing.trustMode}) -- pass --confirm to overwrite`);
     }
-    await repository.upsertPeer({ domain, relayUrl, wsUrl, keys: [{ kid, alg: 'Ed25519', publicKey }], trustMode: 'static' });
     // Overwriting a prior pin can swap the key material under a reused kid --
     // record what was there before so that swap is visible in the audit trail.
     const payload = existing
       ? { relayUrl, kid, previousRelayUrl: existing.relayUrl, previousWsUrl: existing.wsUrl, previousKeys: existing.keys, previousTrustMode: existing.trustMode }
       : { relayUrl, kid };
-    await repository.recordAuditEvent({ eventType: 'peer.static_pinned', subjectId: domain, objectType: 'peer_relay', objectId: domain, outcome: 'accepted', payload });
+    if (repository.upsertPeerWithAudit) {
+      await repository.upsertPeerWithAudit({ domain, relayUrl, wsUrl, keys: [{ kid, alg: 'Ed25519', publicKey }], trustMode: 'static', eventType: 'peer.static_pinned', payload });
+    } else {
+      await repository.upsertPeer({ domain, relayUrl, wsUrl, keys: [{ kid, alg: 'Ed25519', publicKey }], trustMode: 'static' });
+      await repository.recordAuditEvent({ eventType: 'peer.static_pinned', subjectId: domain, objectType: 'peer_relay', objectId: domain, outcome: 'accepted', payload });
+    }
     console.log(`Statically pinned ${domain} -> ${relayUrl} (kid ${kid}).`);
   }, { migrate: true });
 }
@@ -863,9 +867,14 @@ async function cmdPeerRemove(argv) {
   if (!domain) throw new Error('usage: sigil peer remove <domain> [--database-url url]');
   await requireValidPeerDomain(domain);
   await withRepository(args, 'sigil peer remove requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable peer directory', async (repository) => {
-    const removed = await repository.removePeer(domain);
+    const removed = repository.removePeerWithAudit
+      ? await repository.removePeerWithAudit(domain)
+      : await (async () => {
+          const result = await repository.removePeer(domain);
+          if (result) await repository.recordAuditEvent({ eventType: 'peer.removed', subjectId: domain, objectType: 'peer_relay', objectId: domain, outcome: 'accepted', payload: {} });
+          return result;
+        })();
     if (removed) {
-      await repository.recordAuditEvent({ eventType: 'peer.removed', subjectId: domain, objectType: 'peer_relay', objectId: domain, outcome: 'accepted', payload: {} });
       console.log(`Removed peer pin for "${domain}".`);
     } else {
       console.log(`No peer pinned for "${domain}".`);

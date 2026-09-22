@@ -91,3 +91,64 @@ test('getPeerByKid resolves the pinned peer that published a kid', { skip: !conn
   assert.equal(fetched?.domain, domain);
   assert.equal(await repository.getPeerByKid('kid-unknown'), null);
 });
+
+// Wraps a real pg.Pool so its connect()ed client throws on the first INSERT
+// INTO audit_events it sees, then behaves normally -- proves real Postgres
+// transaction rollback, not just a mocked assertion. See
+// identity-auth-audit-atomicity.test.mjs for the canonical version of this
+// helper.
+function withAuditFailureInjected(pool) {
+  return {
+    async connect() {
+      const client = await pool.connect();
+      const originalQuery = client.query.bind(client);
+      const originalRelease = client.release.bind(client);
+      client.query = async (text, values) => {
+        if (typeof text === 'string' && text.startsWith('INSERT INTO audit_events')) {
+          throw new Error('simulated audit_events insert failure');
+        }
+        return originalQuery(text, values);
+      };
+      client.release = (...args) => { client.query = originalQuery; return originalRelease(...args); };
+      return client;
+    },
+    query: (text, values) => pool.query(text, values)
+  };
+}
+
+test('upsertPeerWithAudit commits the peer row and the audit row together, and rolls both back on audit failure', { skip: !connectionString }, async (t) => {
+  const { pool, repository } = await bootstrap(t);
+  const domain = `peer-${crypto.randomUUID()}.example`;
+  const fields = { domain, relayUrl: `https://${domain}/relay`, keys: [{ kid: 'k1', alg: 'Ed25519', publicKey: 'pk1' }], trustMode: 'static', eventType: 'peer.static_pinned' };
+
+  const failing = new PostgresRepository({ pool: withAuditFailureInjected(pool) });
+  await assert.rejects(() => failing.upsertPeerWithAudit(fields));
+  const notCreated = await pool.query('SELECT 1 FROM peer_relays WHERE domain = $1', [domain]);
+  assert.equal(notCreated.rowCount, 0);
+
+  const record = await repository.upsertPeerWithAudit(fields);
+  assert.equal(record.domain, domain);
+  const audit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'peer.static_pinned' AND subject_id = $1`, [domain]);
+  assert.equal(Number(audit.rows[0].count), 1);
+});
+
+test('removePeerWithAudit commits the delete and the audit row together, rolls both back on audit failure, and skips the audit when nothing was removed', { skip: !connectionString }, async (t) => {
+  const { pool, repository } = await bootstrap(t);
+  const domain = `peer-${crypto.randomUUID()}.example`;
+  await repository.upsertPeer({ domain, relayUrl: `https://${domain}/relay`, keys: [{ kid: 'k1', alg: 'Ed25519', publicKey: 'pk1' }], trustMode: 'static' });
+
+  const failing = new PostgresRepository({ pool: withAuditFailureInjected(pool) });
+  await assert.rejects(() => failing.removePeerWithAudit(domain));
+  const stillThere = await pool.query('SELECT 1 FROM peer_relays WHERE domain = $1', [domain]);
+  assert.equal(stillThere.rowCount, 1);
+
+  const removed = await repository.removePeerWithAudit(domain);
+  assert.equal(removed, true);
+  const audit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'peer.removed' AND subject_id = $1`, [domain]);
+  assert.equal(Number(audit.rows[0].count), 1);
+
+  const removedAgain = await repository.removePeerWithAudit(domain);
+  assert.equal(removedAgain, false);
+  const auditAfterNoOp = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'peer.removed' AND subject_id = $1`, [domain]);
+  assert.equal(Number(auditAfterNoOp.rows[0].count), 1, 'no second audit row when removePeerWithAudit finds nothing to delete');
+});

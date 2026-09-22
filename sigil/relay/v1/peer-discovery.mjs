@@ -113,6 +113,9 @@ export async function resolvePeer(domain, repository, { fetchImpl = fetch, now =
   const discovered = await discoverPeer(domain, { fetchImpl });
 
   if (!existing) {
+    if (repository.upsertPeerWithAudit) {
+      return repository.upsertPeerWithAudit({ domain, relayUrl: discovered.relayUrl, wsUrl: discovered.wsUrl, keys: discovered.keys, trustMode: 'tofu', now, eventType: 'peer.tofu_pinned', payload: auditPayload(discovered) });
+    }
     const record = await repository.upsertPeer({ domain, relayUrl: discovered.relayUrl, wsUrl: discovered.wsUrl, keys: discovered.keys, trustMode: 'tofu', now });
     await repository.recordAuditEvent({ eventType: 'peer.tofu_pinned', subjectId: domain, objectType: 'peer_relay', objectId: domain, outcome: 'accepted', payload: auditPayload(discovered), now });
     return record;
@@ -143,12 +146,15 @@ export async function rotatePeer(domain, repository, { fetchImpl = fetch, now = 
   parseDomain(domain);
   const existing = await repository.getPeerByDomain(domain);
   const discovered = await discoverPeer(domain, { fetchImpl });
-  const record = await repository.upsertPeer({ domain, relayUrl: discovered.relayUrl, wsUrl: discovered.wsUrl, keys: discovered.keys, trustMode: 'tofu', now });
   // A static pin force-overwritten via rotate silently downgrades to tofu
   // trust (matches the brief: rotate force-overwrites regardless of any
   // existing pin). Record the downgrade in the audit trail so it isn't
   // invisible after the fact.
   const downgradedFromStatic = existing?.trustMode === 'static';
+  if (repository.upsertPeerWithAudit) {
+    return repository.upsertPeerWithAudit({ domain, relayUrl: discovered.relayUrl, wsUrl: discovered.wsUrl, keys: discovered.keys, trustMode: 'tofu', now, eventType: 'peer.rotated', payload: auditPayload(discovered, { forced: true, previousTrustMode: existing?.trustMode ?? null, downgradedFromStatic }) });
+  }
+  const record = await repository.upsertPeer({ domain, relayUrl: discovered.relayUrl, wsUrl: discovered.wsUrl, keys: discovered.keys, trustMode: 'tofu', now });
   await repository.recordAuditEvent({ eventType: 'peer.rotated', subjectId: domain, objectType: 'peer_relay', objectId: domain, outcome: 'accepted', payload: auditPayload(discovered, { forced: true, previousTrustMode: existing?.trustMode ?? null, downgradedFromStatic }), now });
   return record;
 }

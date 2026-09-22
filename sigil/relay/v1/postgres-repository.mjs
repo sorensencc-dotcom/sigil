@@ -1475,6 +1475,39 @@ export class PostgresRepository {
     const result = await this.pool.query('DELETE FROM peer_relays WHERE domain = $1', [domain]);
     return result.rowCount > 0;
   }
+  async upsertPeerWithAudit({ domain, relayUrl, wsUrl = null, keys, trustMode, now = new Date(), eventType, actorHumanId = null, endpointId = null, payload = {} } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    return this.withTransaction(async (client) => {
+      const result = await client.query(
+        `INSERT INTO peer_relays (domain, relay_url, ws_url, keys, trust_mode, discovered_at, updated_at, last_resolved_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $6, $6)
+         ON CONFLICT (domain) DO UPDATE SET relay_url = $2, ws_url = $3, keys = $4, trust_mode = $5, updated_at = $6, last_resolved_at = $6
+         RETURNING domain, relay_url, ws_url, keys, trust_mode, discovered_at, updated_at, last_resolved_at`,
+        [domain, relayUrl, wsUrl, JSON.stringify(keys), trustMode, timestamp]
+      );
+      await client.query(
+        `INSERT INTO audit_events (event_id, event_type, subject_id, actor_human_id, endpoint_id, object_type, object_id, outcome, payload, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [`audit_${crypto.randomUUID()}`, eventType, domain, actorHumanId, endpointId, 'peer_relay', domain, 'accepted', JSON.stringify(payload), timestamp]
+      );
+      return rowToPeerRecord(result.rows[0]);
+    });
+  }
+  async removePeerWithAudit(domain, { now = new Date(), actorHumanId = null, endpointId = null } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    return this.withTransaction(async (client) => {
+      const result = await client.query('DELETE FROM peer_relays WHERE domain = $1', [domain]);
+      const removed = result.rowCount > 0;
+      if (removed) {
+        await client.query(
+          `INSERT INTO audit_events (event_id, event_type, subject_id, actor_human_id, endpoint_id, object_type, object_id, outcome, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [`audit_${crypto.randomUUID()}`, 'peer.removed', domain, actorHumanId, endpointId, 'peer_relay', domain, 'accepted', timestamp]
+        );
+      }
+      return removed;
+    });
+  }
   async isConversationMember(endpointId, conversationId, client = this.pool) {
     const result = await client.query(
       'SELECT 1 FROM conversation_members WHERE conversation_id = $1 AND endpoint_id = $2 AND removed_at IS NULL',
