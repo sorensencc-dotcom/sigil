@@ -1183,6 +1183,26 @@ export class PostgresRepository {
       return { ...result.rows[0], token };
     });
   }
+  async createDirectoryInviteWithAudit({ issuerEndpointId, issuerHumanId, expiresAt, homeRelay, now = new Date(), actorHumanId = null, endpointId = null } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const { code, codeHash } = generateInviteCode();
+    const inviteId = `invite_${crypto.randomUUID()}`;
+    const expiry = boundedDirectoryExpiry({ now, expiresAt });
+    return this.withTransaction(async (client) => {
+      const result = await client.query(
+        `INSERT INTO directory_invites (invite_id, issuer_endpoint_id, issuer_human_id, code_hash, status, expires_at, home_relay, created_at)
+         VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7)
+         RETURNING invite_id, expires_at`,
+        [inviteId, issuerEndpointId, issuerHumanId, codeHash, expiry.toISOString(), homeRelay, timestamp]
+      );
+      await client.query(
+        `INSERT INTO audit_events (event_id, event_type, subject_id, actor_human_id, endpoint_id, object_type, object_id, outcome, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [`audit_${crypto.randomUUID()}`, 'directory_invite.created', inviteId, actorHumanId, endpointId, 'directory_invite', inviteId, 'success', timestamp]
+      );
+      return { invite_id: result.rows[0].invite_id, code, expires_at: result.rows[0].expires_at };
+    });
+  }
   async recordAuditEvent({ eventId = `audit_${crypto.randomUUID()}`, eventType, subjectId, actorId = null, actorHumanId = null, endpointId = null, conversationId = null, objectType = null, objectId = null, actionHash = null, outcome = null, reason = null, payload = {}, metadataRedacted = null, now = new Date(), client = this.pool } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     const result = await client.query(

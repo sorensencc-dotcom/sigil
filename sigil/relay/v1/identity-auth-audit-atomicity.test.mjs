@@ -275,3 +275,27 @@ test('issueEndpointTokenWithAudit commits the token and the audit row together, 
   assert.equal(audit.rowCount, 1);
   assert.equal(JSON.stringify(audit.rows[0].payload).includes(issued.token), false, 'audit payload must not contain the plaintext token');
 });
+
+test('createDirectoryInviteWithAudit commits the invite and the audit row together, and rolls both back on audit failure', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  await freshSchema(pool);
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const humanId = await seedHuman(pool, suffix);
+  await seedEndpoint(pool, { endpointId: `ep_${suffix}`, humanId });
+  const repository = new PostgresRepository({ pool });
+  const expiresAt = new Date(Date.now() + 3600_000);
+
+  const failing = new PostgresRepository({ pool: withAuditFailureInjected(pool) });
+  await assert.rejects(() => failing.createDirectoryInviteWithAudit({ issuerEndpointId: `ep_${suffix}`, issuerHumanId: humanId, expiresAt, homeRelay: 'local', actorHumanId: humanId }));
+  const noAudit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'directory_invite.created'`);
+  assert.equal(Number(noAudit.rows[0].count), 0);
+  const noInvite = await pool.query('SELECT count(*) FROM directory_invites');
+  assert.equal(Number(noInvite.rows[0].count), 0);
+
+  const invite = await repository.createDirectoryInviteWithAudit({ issuerEndpointId: `ep_${suffix}`, issuerHumanId: humanId, expiresAt, homeRelay: 'local', actorHumanId: humanId });
+  assert.ok(invite.invite_id);
+  assert.ok(invite.code);
+  const audit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'directory_invite.created'`);
+  assert.equal(Number(audit.rows[0].count), 1);
+});
