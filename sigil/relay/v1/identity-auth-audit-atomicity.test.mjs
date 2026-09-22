@@ -227,3 +227,26 @@ test('createOidcIdentityWithAudit commits the identity and the audit row togethe
   assert.equal(audit.rowCount, 1);
   assert.equal(audit.rows[0].actor_human_id, humanId);
 });
+
+test('linkAccountWithAudit commits the link and the audit row together, and rolls both back on audit failure', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  await freshSchema(pool);
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const humanId = await seedHuman(pool, suffix);
+  const repository = new PostgresRepository({ pool });
+  const issuedAt = new Date(); const expiresAt = new Date(issuedAt.getTime() + 60_000);
+  const linkFields = { linkId: `link_${suffix}`, humanId, issuer: 'https://idp.example', subject: `sub_${suffix}`, nonceHash: `nonce_${suffix}`, stateHash: `state_${suffix}`, issuedAt, expiresAt };
+
+  const failing = new PostgresRepository({ pool: withAuditFailureInjected(pool) });
+  await assert.rejects(() => failing.linkAccountWithAudit({ ...linkFields, actorHumanId: humanId }));
+  const notCreated = await pool.query('SELECT 1 FROM account_links WHERE link_id = $1', [linkFields.linkId]);
+  assert.equal(notCreated.rowCount, 0);
+  const noAudit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'account_link.created'`);
+  assert.equal(Number(noAudit.rows[0].count), 0);
+
+  const link = await repository.linkAccountWithAudit({ ...linkFields, actorHumanId: humanId });
+  assert.equal(link.link_id, linkFields.linkId);
+  const audit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'account_link.created'`);
+  assert.equal(Number(audit.rows[0].count), 1);
+});

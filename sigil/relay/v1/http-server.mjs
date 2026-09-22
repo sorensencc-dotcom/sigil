@@ -573,11 +573,16 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       if (normalizedLink.error) return;
       try { assertAllowedIssuer(normalizedLink.issuer, oidcIssuerAllowList); } catch (error) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       try { assertAccountLinkCeremony({ nonceHash: body.nonce_hash, stateHash: body.state_hash, issuedAt: body.issued_at, expiresAt: body.expires_at, now }); } catch (error) { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
-      if (!repository?.linkAccount) return response.writeHead(503).end();
+      if (!repository?.linkAccount && !repository?.linkAccountWithAudit) return response.writeHead(503).end();
       try {
         const linkId = `link_${crypto.randomUUID()}`;
-        const link = await repository.linkAccount({ linkId, humanId: principal.human_id, issuer: normalizedLink.issuer, subject: body.subject, nonceHash: body.nonce_hash, stateHash: body.state_hash, issuedAt: body.issued_at, expiresAt: body.expires_at, now });
-        await repository.recordAuditEvent?.({ eventType: 'account_link.created', subjectId: linkId, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'account_link', objectId: linkId, outcome: 'success', now });
+        const link = repository.linkAccountWithAudit
+          ? await repository.linkAccountWithAudit({ linkId, humanId: principal.human_id, issuer: normalizedLink.issuer, subject: body.subject, nonceHash: body.nonce_hash, stateHash: body.state_hash, issuedAt: body.issued_at, expiresAt: body.expires_at, now, actorHumanId: principal.human_id, endpointId: principal.endpoint_id })
+          : await (async () => {
+              const result = await repository.linkAccount({ linkId, humanId: principal.human_id, issuer: normalizedLink.issuer, subject: body.subject, nonceHash: body.nonce_hash, stateHash: body.state_hash, issuedAt: body.issued_at, expiresAt: body.expires_at, now });
+              await repository.recordAuditEvent?.({ eventType: 'account_link.created', subjectId: linkId, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'account_link', objectId: linkId, outcome: 'success', now });
+              return result;
+            })();
         response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'OK', link }));
       } catch (error) {

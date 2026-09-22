@@ -1144,6 +1144,23 @@ export class PostgresRepository {
       return result.rows[0];
     });
   }
+  async linkAccountWithAudit({ linkId, humanId, issuer, subject, nonceHash = null, stateHash = null, issuedAt = null, expiresAt = null, now = new Date(), actorHumanId = null, endpointId = null } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    if (!nonceHash || !stateHash || !issuedAt || !expiresAt) throw Object.assign(new Error('Account-link ceremony is required'), { code: 'ACCOUNT_LINK_CEREMONY_REQUIRED' });
+    return this.withTransaction(async (client) => {
+      const result = await client.query(
+        `INSERT INTO account_links (link_id, human_id, issuer, subject, nonce_hash, state_hash, issued_at, expires_at, consumed_at, status, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', $9) RETURNING link_id, human_id, issuer, subject, nonce_hash, state_hash, issued_at, expires_at, consumed_at, status, created_at`,
+        [linkId, humanId, issuer, subject, nonceHash, stateHash, new Date(issuedAt).toISOString(), new Date(expiresAt).toISOString(), timestamp]
+      );
+      await client.query(
+        `INSERT INTO audit_events (event_id, event_type, subject_id, actor_human_id, endpoint_id, object_type, object_id, outcome, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [`audit_${crypto.randomUUID()}`, 'account_link.created', linkId, actorHumanId, endpointId, 'account_link', linkId, 'success', timestamp]
+      );
+      return result.rows[0];
+    });
+  }
   async recordAuditEvent({ eventId = `audit_${crypto.randomUUID()}`, eventType, subjectId, actorId = null, actorHumanId = null, endpointId = null, conversationId = null, objectType = null, objectId = null, actionHash = null, outcome = null, reason = null, payload = {}, metadataRedacted = null, now = new Date(), client = this.pool } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     const result = await client.query(
