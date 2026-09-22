@@ -1247,6 +1247,24 @@ export class PostgresRepository {
       return { link_id: link.rows[0].link_id, status: link.rows[0].status };
     });
   }
+  async createDirectoryMatchRequestWithAudit({ issuerEndpointId, issuerHumanId, issuer, matchTarget, expiresAt, homeRelay, now = new Date(), actorHumanId = null, endpointId = null } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const requestId = `dreq_${crypto.randomUUID()}`;
+    const expiry = boundedDirectoryExpiry({ now, expiresAt });
+    return this.withTransaction(async (client) => {
+      await client.query(
+        `INSERT INTO directory_match_requests (request_id, issuer_endpoint_id, issuer_human_id, issuer, match_target_hash, status, expires_at, home_relay, created_at)
+         VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8)`,
+        [requestId, issuerEndpointId, issuerHumanId, issuer, hashMatchTarget(matchTarget), expiry.toISOString(), homeRelay, timestamp]
+      );
+      await client.query(
+        `INSERT INTO audit_events (event_id, event_type, subject_id, actor_human_id, endpoint_id, object_type, object_id, outcome, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [`audit_${crypto.randomUUID()}`, 'directory_match_request.created', requestId, actorHumanId, endpointId, 'directory_match_request', requestId, 'success', timestamp]
+      );
+      return { request_id: requestId };
+    });
+  }
   async recordAuditEvent({ eventId = `audit_${crypto.randomUUID()}`, eventType, subjectId, actorId = null, actorHumanId = null, endpointId = null, conversationId = null, objectType = null, objectId = null, actionHash = null, outcome = null, reason = null, payload = {}, metadataRedacted = null, now = new Date(), client = this.pool } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     const result = await client.query(

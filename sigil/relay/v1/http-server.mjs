@@ -810,7 +810,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     }
     if (request.method === 'POST' && request.url === '/v1/directory/matches') {
       if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
-      if (!repository?.createDirectoryMatchRequest) return response.writeHead(503).end();
+      if (!repository?.createDirectoryMatchRequest && !repository?.createDirectoryMatchRequestWithAudit) return response.writeHead(503).end();
       const matchQuota = await reserveDirectoryQuota('directory_match_create', principal.human_id, nowMs);
       if (!matchQuota.allowed) { response.writeHead(429, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'RATE_LIMITED', message: 'directory_match_create rate limit exceeded', details: {} })); }
       let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
@@ -821,8 +821,13 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       try { assertAllowedIssuer(normalizedMatch.issuer, oidcIssuerAllowList); } catch (error) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       try {
         const expiresAt = boundedDirectoryExpiry({ now, expiresAt: body.expires_at });
-        const match = await repository.createDirectoryMatchRequest({ issuerEndpointId: principal.endpoint_id, issuerHumanId: principal.human_id, issuer: normalizedMatch.issuer, matchTarget: body.match_target, expiresAt, homeRelay: resolveRelayOrigin() ?? 'local', now });
-        await repository.recordAuditEvent?.({ eventType: 'directory_match_request.created', subjectId: match.request_id, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'directory_match_request', objectId: match.request_id, outcome: 'success', now });
+        const match = repository.createDirectoryMatchRequestWithAudit
+          ? await repository.createDirectoryMatchRequestWithAudit({ issuerEndpointId: principal.endpoint_id, issuerHumanId: principal.human_id, issuer: normalizedMatch.issuer, matchTarget: body.match_target, expiresAt, homeRelay: resolveRelayOrigin() ?? 'local', now, actorHumanId: principal.human_id, endpointId: principal.endpoint_id })
+          : await (async () => {
+              const result = await repository.createDirectoryMatchRequest({ issuerEndpointId: principal.endpoint_id, issuerHumanId: principal.human_id, issuer: normalizedMatch.issuer, matchTarget: body.match_target, expiresAt, homeRelay: resolveRelayOrigin() ?? 'local', now });
+              await repository.recordAuditEvent?.({ eventType: 'directory_match_request.created', subjectId: result.request_id, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'directory_match_request', objectId: result.request_id, outcome: 'success', now });
+              return result;
+            })();
         response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'OK', match }));
       } catch (error) {

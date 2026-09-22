@@ -324,3 +324,26 @@ test('redeemDirectoryInviteWithAudit commits the link and the audit row together
   const audit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'directory_link.created'`);
   assert.equal(Number(audit.rows[0].count), 1);
 });
+
+test('createDirectoryMatchRequestWithAudit commits the match request and the audit row together, and rolls both back on audit failure', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  await freshSchema(pool);
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const humanId = await seedHuman(pool, suffix);
+  await seedEndpoint(pool, { endpointId: `ep_${suffix}`, humanId });
+  const repository = new PostgresRepository({ pool });
+  const expiresAt = new Date(Date.now() + 3600_000);
+
+  const failing = new PostgresRepository({ pool: withAuditFailureInjected(pool) });
+  await assert.rejects(() => failing.createDirectoryMatchRequestWithAudit({ issuerEndpointId: `ep_${suffix}`, issuerHumanId: humanId, issuer: 'https://idp.example', matchTarget: `target_${suffix}`, expiresAt, homeRelay: 'local', actorHumanId: humanId }));
+  const noRequest = await pool.query('SELECT count(*) FROM directory_match_requests');
+  assert.equal(Number(noRequest.rows[0].count), 0);
+  const noAudit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'directory_match_request.created'`);
+  assert.equal(Number(noAudit.rows[0].count), 0);
+
+  const match = await repository.createDirectoryMatchRequestWithAudit({ issuerEndpointId: `ep_${suffix}`, issuerHumanId: humanId, issuer: 'https://idp.example', matchTarget: `target_${suffix}`, expiresAt, homeRelay: 'local', actorHumanId: humanId });
+  assert.ok(match.request_id);
+  const audit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'directory_match_request.created'`);
+  assert.equal(Number(audit.rows[0].count), 1);
+});
