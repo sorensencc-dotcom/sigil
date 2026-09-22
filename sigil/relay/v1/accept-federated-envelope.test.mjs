@@ -485,3 +485,16 @@ test('inbound federated task.result referencing a task_id with no visible task.r
   assert.equal(r.status, 400);
   assert.equal(r.body.code, 'INVALID_ENVELOPE');
 });
+test('inbound federated envelope audit receives the open transaction client', async () => {
+  const world = worldWithRecipient();
+  await seedSelfPairLink(world);
+  const auditCalls = [];
+  const originalRecordAuditEvent = world.repo.recordAuditEvent.bind(world.repo);
+  world.repo.recordAuditEvent = async (event) => { auditCalls.push(event); return originalRecordAuditEvent(event); };
+  const { body, headers } = forwardPayload(world);
+  const r = await acceptFederatedEnvelope(body, headers, opts9(world));
+  assert.equal(r.status, 202);
+  const inboundAcceptedCall = auditCalls.find((call) => call.eventType === 'federation.inbound_accepted');
+  assert.ok(inboundAcceptedCall);
+  assert.notEqual(inboundAcceptedCall.client, undefined);
+});
