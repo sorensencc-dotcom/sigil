@@ -250,3 +250,28 @@ test('linkAccountWithAudit commits the link and the audit row together, and roll
   const audit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'account_link.created'`);
   assert.equal(Number(audit.rows[0].count), 1);
 });
+
+test('issueEndpointTokenWithAudit commits the token and the audit row together, and rolls both back on audit failure', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  await freshSchema(pool);
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const humanId = await seedHuman(pool, suffix);
+  await seedEndpoint(pool, { endpointId: `ep_${suffix}`, humanId });
+  const repository = new PostgresRepository({ pool });
+  const expiresAt = new Date(Date.now() + 3600_000);
+
+  const failing = new PostgresRepository({ pool: withAuditFailureInjected(pool) });
+  await assert.rejects(() => failing.issueEndpointTokenWithAudit({ tokenId: `tok_${suffix}`, endpointId: `ep_${suffix}`, expiresAt, actorHumanId: humanId }));
+  const notCreated = await pool.query('SELECT 1 FROM endpoint_tokens WHERE token_id = $1', [`tok_${suffix}`]);
+  assert.equal(notCreated.rowCount, 0);
+  const noAudit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'endpoint_token.issued'`);
+  assert.equal(Number(noAudit.rows[0].count), 0);
+
+  const issued = await repository.issueEndpointTokenWithAudit({ tokenId: `tok_${suffix}2`, endpointId: `ep_${suffix}`, expiresAt, actorHumanId: humanId });
+  assert.equal(issued.token_id, `tok_${suffix}2`);
+  assert.ok(issued.token, 'plaintext token must still be returned');
+  const audit = await pool.query(`SELECT payload FROM audit_events WHERE event_type = 'endpoint_token.issued'`);
+  assert.equal(audit.rowCount, 1);
+  assert.equal(JSON.stringify(audit.rows[0].payload).includes(issued.token), false, 'audit payload must not contain the plaintext token');
+});

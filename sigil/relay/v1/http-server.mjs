@@ -641,15 +641,20 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       }
     }
     if (request.method === 'POST' && request.url === '/v1/endpoint-tokens') {
-      if (!repository?.issueEndpointToken) return response.writeHead(503).end();
+      if (!repository?.issueEndpointToken && !repository?.issueEndpointTokenWithAudit) return response.writeHead(503).end();
       let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       let body = {}; if (raw) { try { body = JSON.parse(raw); } catch { body = {}; } }
       try {
         const tokenId = `tok_${crypto.randomUUID()}`;
-        const issued = await repository.issueEndpointToken({ tokenId, endpointId: principal.endpoint_id, expiresAt: boundedTokenExpiry({ now, expiresAt: body.expires_at }), now });
-        // Audit payload deliberately excludes `token` -- only the response
-        // body carries the plaintext secret, and only for this one call.
-        await repository.recordAuditEvent?.({ eventType: 'endpoint_token.issued', subjectId: tokenId, endpointId: principal.endpoint_id, objectType: 'endpoint_token', objectId: tokenId, outcome: 'success', now });
+        const issued = repository.issueEndpointTokenWithAudit
+          ? await repository.issueEndpointTokenWithAudit({ tokenId, endpointId: principal.endpoint_id, expiresAt: boundedTokenExpiry({ now, expiresAt: body.expires_at }), now, actorHumanId: principal.human_id })
+          : await (async () => {
+              const result = await repository.issueEndpointToken({ tokenId, endpointId: principal.endpoint_id, expiresAt: boundedTokenExpiry({ now, expiresAt: body.expires_at }), now });
+              // Audit payload deliberately excludes `token` -- only the response
+              // body carries the plaintext secret, and only for this one call.
+              await repository.recordAuditEvent?.({ eventType: 'endpoint_token.issued', subjectId: tokenId, endpointId: principal.endpoint_id, objectType: 'endpoint_token', objectId: tokenId, outcome: 'success', now });
+              return result;
+            })();
         response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'OK', token_id: issued.token_id, token: issued.token, expires_at: issued.expires_at }));
       } catch (error) {

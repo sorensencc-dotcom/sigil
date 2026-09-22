@@ -1161,6 +1161,28 @@ export class PostgresRepository {
       return result.rows[0];
     });
   }
+  async issueEndpointTokenWithAudit({ tokenId, endpointId, now = new Date(), expiresAt, actorHumanId = null } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const expires = expiresAt instanceof Date ? expiresAt.toISOString() : new Date(expiresAt ?? new Date(timestamp).getTime() + 24 * 60 * 60 * 1000).toISOString();
+    const token = crypto.randomBytes(32).toString('base64url');
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    return this.withTransaction(async (client) => {
+      const result = await client.query(
+        `INSERT INTO endpoint_tokens (token_id, endpoint_id, token_hash, status, created_at, expires_at)
+         VALUES ($1, $2, $3, 'active', $4, $5) RETURNING token_id, endpoint_id, status, created_at, expires_at`,
+        [tokenId, endpointId, tokenHash, timestamp, expires]
+      );
+      // Audit payload deliberately excludes `token` -- only the return value
+      // carries the plaintext secret, matching the pre-existing route comment
+      // this method's call site (http-server.mjs) replaces.
+      await client.query(
+        `INSERT INTO audit_events (event_id, event_type, subject_id, endpoint_id, object_type, object_id, outcome, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [`audit_${crypto.randomUUID()}`, 'endpoint_token.issued', tokenId, endpointId, 'endpoint_token', tokenId, 'success', timestamp]
+      );
+      return { ...result.rows[0], token };
+    });
+  }
   async recordAuditEvent({ eventId = `audit_${crypto.randomUUID()}`, eventType, subjectId, actorId = null, actorHumanId = null, endpointId = null, conversationId = null, objectType = null, objectId = null, actionHash = null, outcome = null, reason = null, payload = {}, metadataRedacted = null, now = new Date(), client = this.pool } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     const result = await client.query(
