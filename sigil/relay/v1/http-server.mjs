@@ -861,11 +861,16 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     if (request.method === 'POST' && confirmMatch) {
       if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
       const [, linkId] = confirmMatch;
-      if (!repository?.confirmDirectoryLink) return response.writeHead(503).end();
+      if (!repository?.confirmDirectoryLink && !repository?.confirmDirectoryLinkWithAudit) return response.writeHead(503).end();
       try {
-        const link = await repository.confirmDirectoryLink({ linkId, confirmingHumanId: principal.human_id, now });
-        if (link.status === 'active') await repository.recordAuditEvent?.({ eventType: 'directory_link.activated', subjectId: linkId, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'directory_link', objectId: linkId, outcome: 'success', now });
-        else await repository.recordAuditEvent?.({ eventType: 'directory_link.confirmed', subjectId: linkId, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'directory_link', objectId: linkId, outcome: 'success', now });
+        const link = repository.confirmDirectoryLinkWithAudit
+          ? await repository.confirmDirectoryLinkWithAudit({ linkId, confirmingHumanId: principal.human_id, now, actorHumanId: principal.human_id, endpointId: principal.endpoint_id })
+          : await (async () => {
+              const result = await repository.confirmDirectoryLink({ linkId, confirmingHumanId: principal.human_id, now });
+              if (result.status === 'active') await repository.recordAuditEvent?.({ eventType: 'directory_link.activated', subjectId: linkId, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'directory_link', objectId: linkId, outcome: 'success', now });
+              else await repository.recordAuditEvent?.({ eventType: 'directory_link.confirmed', subjectId: linkId, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'directory_link', objectId: linkId, outcome: 'success', now });
+              return result;
+            })();
         response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'OK', link }));
       } catch (error) {

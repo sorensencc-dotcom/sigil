@@ -371,3 +371,36 @@ test('nominateDirectoryLinkEndpointWithAudit commits the link and the audit row 
   const audit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'directory_link.created'`);
   assert.equal(Number(audit.rows[0].count), 1);
 });
+
+test('confirmDirectoryLinkWithAudit commits the confirmation and the audit row together, and rolls both back on audit failure', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  await freshSchema(pool);
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const issuerHumanId = await seedHuman(pool, `${suffix}_i`);
+  const redeemerHumanId = await seedHuman(pool, `${suffix}_r`);
+  await seedEndpoint(pool, { endpointId: `ep_issuer_${suffix}`, humanId: issuerHumanId });
+  await seedEndpoint(pool, { endpointId: `ep_redeemer_${suffix}`, humanId: redeemerHumanId });
+  const repository = new PostgresRepository({ pool });
+  const invite = await repository.createDirectoryInvite({ issuerEndpointId: `ep_issuer_${suffix}`, issuerHumanId, expiresAt: new Date(Date.now() + 3600_000), homeRelay: 'local' });
+  const redeemed = await repository.redeemDirectoryInvite({ code: invite.code, redeemerEndpointId: `ep_redeemer_${suffix}`, redeemerHumanId, homeRelay: 'local' });
+
+  const failing = new PostgresRepository({ pool: withAuditFailureInjected(pool) });
+  await assert.rejects(() => failing.confirmDirectoryLinkWithAudit({ linkId: redeemed.link_id, confirmingHumanId: issuerHumanId, actorHumanId: issuerHumanId }));
+  const stillPending = await pool.query('SELECT status FROM directory_links WHERE link_id = $1', [redeemed.link_id]);
+  assert.equal(stillPending.rows[0].status, 'pending');
+  const noAudit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type IN ('directory_link.confirmed', 'directory_link.activated')`);
+  assert.equal(Number(noAudit.rows[0].count), 0);
+
+  // First confirmation -- stays 'pending', emits directory_link.confirmed.
+  const confirmed = await repository.confirmDirectoryLinkWithAudit({ linkId: redeemed.link_id, confirmingHumanId: issuerHumanId, actorHumanId: issuerHumanId });
+  assert.equal(confirmed.status, 'pending');
+  const confirmedAudit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'directory_link.confirmed'`);
+  assert.equal(Number(confirmedAudit.rows[0].count), 1);
+
+  // Second confirmation (the other party) -- flips to 'active', emits directory_link.activated.
+  const activated = await repository.confirmDirectoryLinkWithAudit({ linkId: redeemed.link_id, confirmingHumanId: redeemerHumanId, actorHumanId: redeemerHumanId });
+  assert.equal(activated.status, 'active');
+  const activatedAudit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'directory_link.activated'`);
+  assert.equal(Number(activatedAudit.rows[0].count), 1);
+});

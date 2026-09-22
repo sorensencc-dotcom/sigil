@@ -1306,6 +1306,36 @@ export class PostgresRepository {
       return { link_id: link.rows[0].link_id, status: link.rows[0].status };
     });
   }
+  async confirmDirectoryLinkWithAudit({ linkId, confirmingHumanId, now = new Date(), actorHumanId = null, endpointId = null } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    return this.withTransaction(async (client) => {
+      const current = await client.query('SELECT * FROM directory_links WHERE link_id = $1 FOR UPDATE', [linkId]);
+      if (!current.rows[0]) throw Object.assign(new Error('Directory link not found'), { code: 'LINK_UNAVAILABLE' });
+      const row = current.rows[0];
+      if (row.status !== 'pending') return { link_id: linkId, status: row.status };
+      if (confirmingHumanId !== row.human_a && confirmingHumanId !== row.human_b) {
+        throw Object.assign(new Error('Confirming human is not a party to this link'), { code: 'CONFIRMATION_ACTOR_MISMATCH' });
+      }
+      const isA = confirmingHumanId === row.human_a;
+      if (isA && row.a_confirmed_at) return { link_id: linkId, status: row.status };
+      if (!isA && row.b_confirmed_at) return { link_id: linkId, status: row.status };
+      const otherConfirmed = isA ? row.b_confirmed_at : row.a_confirmed_at;
+      const nextStatus = otherConfirmed ? 'active' : 'pending';
+      const result = await client.query(
+        isA
+          ? `UPDATE directory_links SET a_confirmed_at = $1, a_confirmed_by = $2, status = $3 WHERE link_id = $4 RETURNING link_id, status`
+          : `UPDATE directory_links SET b_confirmed_at = $1, b_confirmed_by = $2, status = $3 WHERE link_id = $4 RETURNING link_id, status`,
+        [timestamp, confirmingHumanId, nextStatus, linkId]
+      );
+      const row2 = result.rows[0];
+      await client.query(
+        `INSERT INTO audit_events (event_id, event_type, subject_id, actor_human_id, endpoint_id, object_type, object_id, outcome, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [`audit_${crypto.randomUUID()}`, row2.status === 'active' ? 'directory_link.activated' : 'directory_link.confirmed', linkId, actorHumanId, endpointId, 'directory_link', linkId, 'success', timestamp]
+      );
+      return row2;
+    });
+  }
   async recordAuditEvent({ eventId = `audit_${crypto.randomUUID()}`, eventType, subjectId, actorId = null, actorHumanId = null, endpointId = null, conversationId = null, objectType = null, objectId = null, actionHash = null, outcome = null, reason = null, payload = {}, metadataRedacted = null, now = new Date(), client = this.pool } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     const result = await client.query(
