@@ -404,3 +404,34 @@ test('confirmDirectoryLinkWithAudit commits the confirmation and the audit row t
   const activatedAudit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'directory_link.activated'`);
   assert.equal(Number(activatedAudit.rows[0].count), 1);
 });
+
+test('revokeDirectoryLinkWithAudit commits the revoke and the audit row together, rolls both back on audit failure, and stays idempotent on replay', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  await freshSchema(pool);
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const issuerHumanId = await seedHuman(pool, `${suffix}_i`);
+  const redeemerHumanId = await seedHuman(pool, `${suffix}_r`);
+  await seedEndpoint(pool, { endpointId: `ep_issuer_${suffix}`, humanId: issuerHumanId });
+  await seedEndpoint(pool, { endpointId: `ep_redeemer_${suffix}`, humanId: redeemerHumanId });
+  const repository = new PostgresRepository({ pool });
+  const invite = await repository.createDirectoryInvite({ issuerEndpointId: `ep_issuer_${suffix}`, issuerHumanId, expiresAt: new Date(Date.now() + 3600_000), homeRelay: 'local' });
+  const redeemed = await repository.redeemDirectoryInvite({ code: invite.code, redeemerEndpointId: `ep_redeemer_${suffix}`, redeemerHumanId, homeRelay: 'local' });
+
+  const failing = new PostgresRepository({ pool: withAuditFailureInjected(pool) });
+  await assert.rejects(() => failing.revokeDirectoryLinkWithAudit({ linkId: redeemed.link_id, revokingHumanId: issuerHumanId, actorHumanId: issuerHumanId }));
+  const stillPending = await pool.query('SELECT status FROM directory_links WHERE link_id = $1', [redeemed.link_id]);
+  assert.equal(stillPending.rows[0].status, 'pending');
+  const noAudit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'directory_link.revoked'`);
+  assert.equal(Number(noAudit.rows[0].count), 0);
+
+  const revoked = await repository.revokeDirectoryLinkWithAudit({ linkId: redeemed.link_id, revokingHumanId: issuerHumanId, actorHumanId: issuerHumanId });
+  assert.equal(revoked.duplicate, false);
+  const audit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'directory_link.revoked'`);
+  assert.equal(Number(audit.rows[0].count), 1);
+
+  const replay = await repository.revokeDirectoryLinkWithAudit({ linkId: redeemed.link_id, revokingHumanId: issuerHumanId, actorHumanId: issuerHumanId });
+  assert.equal(replay.duplicate, true);
+  const auditAfterReplay = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'directory_link.revoked'`);
+  assert.equal(Number(auditAfterReplay.rows[0].count), 1);
+});

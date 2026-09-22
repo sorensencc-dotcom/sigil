@@ -882,10 +882,15 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     if (request.method === 'POST' && revokeMatch) {
       if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
       const [, linkId] = revokeMatch;
-      if (!repository?.revokeDirectoryLink) return response.writeHead(503).end();
+      if (!repository?.revokeDirectoryLink && !repository?.revokeDirectoryLinkWithAudit) return response.writeHead(503).end();
       try {
-        const link = await repository.revokeDirectoryLink({ linkId, revokingHumanId: principal.human_id, now });
-        if (!link.duplicate) await repository.recordAuditEvent?.({ eventType: 'directory_link.revoked', subjectId: linkId, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'directory_link', objectId: linkId, outcome: 'success', now });
+        const link = repository.revokeDirectoryLinkWithAudit
+          ? await repository.revokeDirectoryLinkWithAudit({ linkId, revokingHumanId: principal.human_id, now, actorHumanId: principal.human_id, endpointId: principal.endpoint_id })
+          : await (async () => {
+              const result = await repository.revokeDirectoryLink({ linkId, revokingHumanId: principal.human_id, now });
+              if (!result.duplicate) await repository.recordAuditEvent?.({ eventType: 'directory_link.revoked', subjectId: linkId, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'directory_link', objectId: linkId, outcome: 'success', now });
+              return result;
+            })();
         response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'OK', link }));
       } catch (error) {
