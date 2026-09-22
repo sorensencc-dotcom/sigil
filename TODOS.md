@@ -146,22 +146,20 @@
 
 ---
 
-## libp2p transport driver: final-review residual hardening items (m7, m8)
+## libp2p transport driver: final-review residual hardening items (m7, m8) — CLOSED 2026-09-21
 
-**What:** Remaining non-blocking findings from the 2026-09-20 libp2p transport driver plan's final whole-branch review, parked rather than fixed in the mandatory fix wave (which addressed M1-M3, m1, m6 only). m2-m5, n1, n2, and m7 were closed 2026-09-20 (see below); m8 remains open:
-- m8: p2p-accepted envelopes carry no `request_id`, and the p2p path doesn't wire `logger`/`resendMetrics`, making p2p traffic invisible to relay observability relative to the HTTP transport.
+**What:** Remaining non-blocking findings from the 2026-09-20 libp2p transport driver plan's final whole-branch review, parked rather than fixed in the mandatory fix wave (which addressed M1-M3, m1, m6 only). All items (m2-m5, n1, n2, m7, m8) are now closed.
 
 **Why:** None of these are blocking — the final reviewer's verdict was NEEDS FIX WAVE for M1-M3 only, with m1/m6 recommended as cheap bundles; everything else was explicitly marked "safe to triage into TODOS.md."
 
-**Pros:** Closing these hardens the p2p transport's parity with the HTTP transport (observability) and default-configuration safety.
-
-**Cons:** m8 needs a decision on whether to construct a per-relay logger/metrics instance at the p2p call site.
-
 **Closed 2026-09-20 (m7):** `sigil relay up --p2p` now accepts `--p2p-no-mdns` to disable mDNS advertisement while keeping the data/control protocols and any explicit `--p2p-listen` dial-in address. Default unchanged (mDNS still on with `--p2p`). See `sigil/cli/sigil.mjs`'s `createP2pHost` call site and the `--p2p-no-mdns flag wires enableMdns: false into createP2pHost` regression test in `relay-up-p2p.test.mjs`.
 
-**Context:** Full detail and file:line references in the final review at `.superpowers/sdd/2026-09-20-sigil-libp2p-transport-driver/final-review.md` (deleted with the plan workspace after merge — see git history on branch `worktree-sigil-libp2p-transport` if this workspace is gone).
+**Closed 2026-09-21 (m8):** p2p-accepted envelopes were invisible to relay observability relative to HTTP. Fixed by:
+- `sigil/cli/sigil.mjs`'s `--p2p` block now passes the SAME `relayLogger`/`relayMetrics` instances the HTTP transport gets at the `createRelayServer` call site into `wireDataProtocol`'s options (not a second, separately-constructed logger/metrics pair) — this file already builds one shared logger/metrics per relay process for both transports, so there was no real "which instance" decision to make once that was checked.
+- `sigil/relay/v1/transport-libp2p/p2p-data-protocol.mjs`'s data-protocol handler now mints a `crypto.randomUUID()` `request_id` per inbound stream (mirroring `http-server.mjs`'s fallback for a request with no `x-sigil-request-id` header) and threads it through `acceptEnvelopeAsync` and both success/rejection response bodies.
+- Regression test: `m8: a p2p-accepted envelope gets a generated request_id and is visible to the wired logger/resendMetrics` in `p2p-data-protocol.test.mjs`.
 
-**Depends on:** None — each item is independently fixable; no design blockers.
+**Context:** Full detail and file:line references in the final review at `.superpowers/sdd/2026-09-20-sigil-libp2p-transport-driver/final-review.md` (deleted with the plan workspace after merge — see git history on branch `worktree-sigil-libp2p-transport` if this workspace is gone).
 
 ---
 
@@ -172,7 +170,7 @@ Fixed in commit on `main` following the 2026-09-20 libp2p transport driver merge
 - m3: `sendEnvelope`, `ping`, and both protocol handlers now call `rawStream.close()` (falling back to `.abort()`) after one round trip.
 - m4: `p2p-control-protocol.mjs`'s handler now has a `try/catch`/`finally` matching the data protocol's shape.
 - m5 (rescoped): `p2p-data-protocol.mjs`'s own catch block now only forwards `error.message` to the remote peer when the error carries `.code` (i.e. came from this file's own `reject()` calls); an unexpected throw gets a generic `INVALID_ENVELOPE` / "Envelope rejected" response instead. Regression test in `p2p-data-protocol.test.mjs`.
-  - **New finding surfaced while fixing m5, NOT closed by this fix:** `acceptEnvelopeAsync`'s own `toResponse` (`sigil/relay/v1/accept-envelope.mjs:113`) echoes `error.message` verbatim for *any* caught error, including an unexpected internal exception (e.g. a `persist`/repository throw with no `.code`) — and this is shared with the HTTP transport, not p2p-specific. Confirmed by a test with a throwing `persist` reaching the raw message unfiltered before the rescoped m5 test was written to target the actually-reachable p2p-layer catch instead. Left open — fixing `toResponse` changes the HTTP transport's error-response contract too, which needs its own review, not a bundle inside a p2p hardening pass. File a fresh TODOS.md entry (or a spec) scoped to `accept-envelope.mjs` if this is picked up.
+  - **New finding surfaced while fixing m5 — CLOSED 2026-09-21:** `acceptEnvelopeAsync`'s own `toResponse` (`sigil/relay/v1/accept-envelope.mjs`) echoed `error.message` verbatim for *any* caught error, including an unexpected internal exception (e.g. a `persist`/repository throw with no `.code`, or a raw Postgres error whose own `.code` like `23505` is not one of this module's reject codes) — shared with the HTTP transport, not p2p-specific. Fixed: `toResponse` now only echoes `code`/`message`/`details` verbatim when `error.code` is one of this file's own `statusByCode` keys (i.e. came from this module's own `reject()` calls); any other error returns a generic `500 INTERNAL_ERROR` / `"Internal error"` body and is logged server-side via `options.logger?.error` instead. Mirrors the p2p transport's identical known-code-only forwarding rule (m5). Regression tests: `accept-envelope.test.mjs` ("an unexpected persist error does not leak error.message to the caller", "...is logged server-side via options.logger", "a Postgres error with its own .code is not echoed as if it were a sigil reject code"); `http-server.test.mjs`'s "HTTP relay does not notify when durable persistence fails" updated to assert the new 500/INTERNAL_ERROR contract instead of the old 400/raw-message leak.
 - n1: `p2p-host.mjs`'s deviation comment now documents the dropped explicit `await node.start()`.
 - n2: all ten libp2p-family dependencies in `package.json` are now exact-pinned (matching repo convention — confirmed by `sigil-dep-audit.mjs`, which flags `^` ranges as loose and now reports zero for this dependency family).
 

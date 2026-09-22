@@ -374,6 +374,13 @@ async function cmdRelayUp(argv) {
     // HTTP (M2), and SIGIL_STREAM_SEQ_ENABLED=1 applies uniformly across
     // both transports instead of leaving unstamped holes in the
     // session-layer sequence stream (M3).
+    // m8: reuse the SAME relayLogger/relayMetrics instances the HTTP
+    // transport is handed at the createRelayServer call site below (not a
+    // second, separately-constructed instance) so p2p-accepted traffic
+    // shows up in the same log stream / metric counters as HTTP -- the
+    // "which instance" question TODOS.md flagged as needing a decision was
+    // already settled by this file: both transports share one relay
+    // process's logger and metrics, never per-transport ones.
     wireDataProtocol(p2pHost, {
       registered: registry,
       relayDomain,
@@ -382,6 +389,8 @@ async function cmdRelayUp(argv) {
       repository,
       onPersisted: createOnPersisted(stream),
       stream_seq: { enabled: streamSequenceEnabled },
+      logger: relayLogger,
+      resendMetrics: relayMetrics,
     });
     for (const addr of p2pHost.getMultiaddrs()) console.log(`sigil relay p2p listening on ${addr.toString()}`);
   }

@@ -63,6 +63,55 @@ test('inbound envelope over /sigil/data/1.0.0 reaches acceptEnvelopeAsync and re
   }
 });
 
+test('m8: a p2p-accepted envelope gets a generated request_id and is visible to the wired logger/resendMetrics', async () => {
+  const senderIdentity = makeIdentity();
+  const receiverIdentity = makeIdentity();
+  const senderHost = await createP2pHost({ identity: senderIdentity, listenAddrs: ['/ip4/127.0.0.1/tcp/0'] });
+  const receiverHost = await createP2pHost({ identity: receiverIdentity, listenAddrs: ['/ip4/127.0.0.1/tcp/0'] });
+  try {
+    const registry = new Map([
+      ['ep_sender', { owner_id: 'usr_sender', endpoint_id: 'ep_sender', key_id: 'key_sender', kind: 'agent', status: 'active', public_key: senderIdentity.keys.publicKey }]
+    ]);
+    const logEntries = [];
+    wireDataProtocol(receiverHost, {
+      registry,
+      registered: registry,
+      relayDomain: undefined,
+      federationMode: undefined,
+      persist: async (row) => { throw new Error('boom'); },
+      logger: { error: (entry) => logEntries.push(entry), info: () => {}, warn: () => {}, debug: () => {} },
+      resendMetrics: { increment: () => {} }
+    });
+
+    const envelope = signEnvelope({
+      protocol: 'sigil/1',
+      message_id: 'msg_p2p_m8_01',
+      conversation_id: 'conv_p2p_m8_01',
+      message_type: 'task.request',
+      sender: { owner_id: 'usr_sender', endpoint_id: 'ep_sender', kind: 'agent', key_id: 'key_sender' },
+      recipient: { owner_id: 'usr_receiver', endpoint_id: 'ep_receiver' },
+      body: { task_id: 'task_p2p_m8_01', instruction: 'ping', success_criteria: [], dependencies: [], deadline: '2099-01-01T00:00:00Z' },
+      context_refs: [], capabilities: [], correlation_id: null,
+      idempotency_key: 'send_p2p_m8_01', expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(), created_at: new Date().toISOString()
+    }, senderIdentity.keys.privateKey);
+
+    const [receiverAddr] = receiverHost.getMultiaddrs();
+    const response = await sendEnvelope(senderHost, receiverAddr, envelope);
+    // acceptEnvelopeAsync's own internal-error path (accept-envelope.mjs's
+    // toResponse) returns 500/INTERNAL_ERROR and logs via options.logger --
+    // proof the p2p call site now wires the same logger the HTTP transport
+    // uses, closing TODOS.md's m8 observability-parity gap.
+    assert.equal(response.status, 500);
+    assert.equal(response.body.code, 'INTERNAL_ERROR');
+    assert.ok(response.body.request_id, 'p2p accept response carries a generated request_id');
+    assert.equal(logEntries.length, 1);
+    assert.equal(logEntries[0].message, 'boom');
+  } finally {
+    await senderHost.stop();
+    await receiverHost.stop();
+  }
+});
+
 test('m5: an unexpected (non-reject()) error thrown before acceptEnvelopeAsync is reached does not leak its message to the remote peer', async () => {
   const senderIdentity = makeIdentity();
   const receiverIdentity = makeIdentity();

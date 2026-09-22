@@ -39,6 +39,7 @@
 //    `chunk.subarray()` when present, which is `Uint8ArrayList`'s own
 //    contiguous-materialization method -- Task 3's own tests still pass
 //    unchanged since they only ever fed plain Buffers.
+import crypto from 'node:crypto';
 import { pipe } from 'it-pipe';
 import { messageStreamToDuplex } from '@libp2p/utils';
 import { encodeFrame, readFrames, readOneFrameWithTimeout } from './frame-codec.mjs';
@@ -52,6 +53,12 @@ const MAX_FRAME_SIZE = 1024 * 1024; // 1 MiB, matches frame-codec default
 export function wireDataProtocol(node, options) {
   node.handle(DATA_PROTOCOL, async (rawStream, connection) => {
     const stream = messageStreamToDuplex(rawStream);
+    // m8: p2p has no HTTP request header to carry a caller-supplied
+    // x-sigil-request-id, so mint one per stream the same way http-server.mjs
+    // falls back for a request that didn't send one -- crypto.randomUUID().
+    // Per-call options object (not a shared mutation of the outer `options`)
+    // since multiple streams can be in flight on this handler concurrently.
+    const requestOptions = { ...options, request_id: crypto.randomUUID() };
     let responseBody;
     try {
       // one envelope per stream, per spec §8 stream framing
@@ -70,15 +77,15 @@ export function wireDataProtocol(node, options) {
       if (expectedPeerId.toString() !== connection.remotePeer.toString()) {
         throw reject('PEER_IDENTITY_MISMATCH', 'Authenticated PeerId does not match the sender endpoint\'s registered key');
       }
-      responseBody = await acceptEnvelopeAsync(envelope, options);
+      responseBody = await acceptEnvelopeAsync(envelope, requestOptions);
     } catch (error) {
       // m5: only forward messages from this file's own known reject()
       // calls (they carry `.code`) to the remote peer -- an unexpected
       // throw from acceptEnvelopeAsync's internals could otherwise leak
       // internal error text to an untrusted dialing peer.
       responseBody = error.code
-        ? { status: 400, body: { code: error.code, message: error.message } }
-        : { status: 400, body: { code: 'INVALID_ENVELOPE', message: 'Envelope rejected' } };
+        ? { status: 400, body: { request_id: requestOptions.request_id, code: error.code, message: error.message } }
+        : { status: 400, body: { request_id: requestOptions.request_id, code: 'INVALID_ENVELOPE', message: 'Envelope rejected' } };
     }
     await pipe([encodeFrame(responseBody)], stream.sink);
     await rawStream.close().catch(() => rawStream.abort(new Error('data protocol handler stream close failed')));
