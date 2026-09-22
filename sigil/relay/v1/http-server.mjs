@@ -498,10 +498,15 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       const normalizedCreate = normalizeIssuerOrRespond(body.issuer, response, requestId);
       if (normalizedCreate.error) return;
       try { assertAllowedIssuer(normalizedCreate.issuer, oidcIssuerAllowList); } catch (error) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
-      if (!repository?.createOidcIdentity) return response.writeHead(503).end();
+      if (!repository?.createOidcIdentity && !repository?.createOidcIdentityWithAudit) return response.writeHead(503).end();
       try {
-        const identity = await repository.createOidcIdentity({ issuer: normalizedCreate.issuer, subject: body.subject, humanId: principal.human_id, now });
-        await repository.recordAuditEvent?.({ eventType: 'oidc_identity.created', subjectId: `${normalizedCreate.issuer}|${body.subject}`, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'oidc_identity', objectId: body.subject, outcome: 'success', now });
+        const identity = repository.createOidcIdentityWithAudit
+          ? await repository.createOidcIdentityWithAudit({ issuer: normalizedCreate.issuer, subject: body.subject, humanId: principal.human_id, now, actorHumanId: principal.human_id, endpointId: principal.endpoint_id })
+          : await (async () => {
+              const result = await repository.createOidcIdentity({ issuer: normalizedCreate.issuer, subject: body.subject, humanId: principal.human_id, now });
+              await repository.recordAuditEvent?.({ eventType: 'oidc_identity.created', subjectId: `${normalizedCreate.issuer}|${body.subject}`, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'oidc_identity', objectId: body.subject, outcome: 'success', now });
+              return result;
+            })();
         response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'OK', identity }));
       } catch (error) {

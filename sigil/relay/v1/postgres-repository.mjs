@@ -1128,6 +1128,22 @@ export class PostgresRepository {
       return { ...updated.rows[0], duplicate: false };
     });
   }
+  async createOidcIdentityWithAudit({ issuer, subject, humanId, status = 'active', now = new Date(), actorHumanId = null, endpointId = null } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    return this.withTransaction(async (client) => {
+      const result = await client.query(
+        `INSERT INTO oidc_identities (issuer, subject, human_id, status, created_at)
+         VALUES ($1, $2, $3, $4, $5) RETURNING issuer, subject, human_id, status, created_at`,
+        [issuer, subject, humanId, status, timestamp]
+      );
+      await client.query(
+        `INSERT INTO audit_events (event_id, event_type, subject_id, actor_human_id, endpoint_id, object_type, object_id, outcome, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [`audit_${crypto.randomUUID()}`, 'oidc_identity.created', `${issuer}|${subject}`, actorHumanId, endpointId, 'oidc_identity', subject, 'success', timestamp]
+      );
+      return result.rows[0];
+    });
+  }
   async recordAuditEvent({ eventId = `audit_${crypto.randomUUID()}`, eventType, subjectId, actorId = null, actorHumanId = null, endpointId = null, conversationId = null, objectType = null, objectId = null, actionHash = null, outcome = null, reason = null, payload = {}, metadataRedacted = null, now = new Date(), client = this.pool } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     const result = await client.query(

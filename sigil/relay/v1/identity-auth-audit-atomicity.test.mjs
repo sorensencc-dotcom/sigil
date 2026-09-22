@@ -204,3 +204,26 @@ test('revokeCapabilityGrantWithAudit commits the revoke, revocation record, and 
   const revocationRecordAfterReplay = await pool.query('SELECT count(*) FROM capability_revocations WHERE capability_grant_id = $1', [grant.grant_id]);
   assert.equal(Number(revocationRecordAfterReplay.rows[0].count), 1);
 });
+
+test('createOidcIdentityWithAudit commits the identity and the audit row together, and rolls both back on audit failure', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  await freshSchema(pool);
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const humanId = await seedHuman(pool, suffix);
+  const repository = new PostgresRepository({ pool });
+
+  const failing = new PostgresRepository({ pool: withAuditFailureInjected(pool) });
+  await assert.rejects(() => failing.createOidcIdentityWithAudit({ issuer: 'https://idp.example', subject: `sub_${suffix}`, humanId, actorHumanId: humanId }));
+  const notCreated = await pool.query('SELECT 1 FROM oidc_identities WHERE subject = $1', [`sub_${suffix}`]);
+  assert.equal(notCreated.rowCount, 0);
+  const noAudit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'oidc_identity.created'`);
+  assert.equal(Number(noAudit.rows[0].count), 0);
+
+  const identity = await repository.createOidcIdentityWithAudit({ issuer: 'https://idp.example', subject: `sub_${suffix}`, humanId, actorHumanId: humanId });
+  assert.equal(identity.subject, `sub_${suffix}`);
+  assert.equal(identity.status, 'active');
+  const audit = await pool.query(`SELECT actor_human_id FROM audit_events WHERE event_type = 'oidc_identity.created'`);
+  assert.equal(audit.rowCount, 1);
+  assert.equal(audit.rows[0].actor_human_id, humanId);
+});
