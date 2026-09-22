@@ -82,6 +82,42 @@ test('a race detected by the persistence layer itself overrides the optimistic r
   assert.equal(response.body.duplicate, true);
 });
 
+test('an unexpected persist error does not leak error.message to the caller', async () => {
+  const response = await acceptEnvelopeAsync(envelope, {
+    ...options,
+    lookupIdempotency: async () => null,
+    persist: async () => { throw new Error('password=hunter2 at /internal/db/path'); }
+  });
+  assert.equal(response.status, 500);
+  assert.equal(response.body.code, 'INTERNAL_ERROR');
+  assert.equal(response.body.message, 'Internal error');
+  assert.ok(!JSON.stringify(response.body).includes('hunter2'));
+});
+
+test('an unexpected persist error is logged server-side via options.logger', async () => {
+  const errors = [];
+  await acceptEnvelopeAsync(envelope, {
+    ...options,
+    lookupIdempotency: async () => null,
+    persist: async () => { throw new Error('boom'); },
+    logger: { error: (entry) => errors.push(entry) }
+  });
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].message, 'boom');
+});
+
+test('a Postgres error with its own .code is not echoed as if it were a sigil reject code', async () => {
+  const pgError = new Error('duplicate key value violates unique constraint "some_other_index"');
+  pgError.code = '23505';
+  const response = await acceptEnvelopeAsync(envelope, {
+    ...options,
+    lookupIdempotency: async () => null,
+    persist: async () => { throw pgError; }
+  });
+  assert.equal(response.status, 500);
+  assert.equal(response.body.code, 'INTERNAL_ERROR');
+});
+
 function fakeTransactionalRepository({ taskRequests = new Map(), envelopes = new Map(), riskTiers = new Map(), consumeApprovalDecisionImpl, grants = [] } = {}) {
   const calls = [];
   const repo = {

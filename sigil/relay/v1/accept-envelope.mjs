@@ -110,7 +110,18 @@ async function acceptResendRequest(envelope, options, client) {
 }
 
 function toResponse(options, error) {
-  return { status: statusByCode[error.code] ?? 400, body: { request_id: options.request_id ?? null, code: error.code ?? 'INVALID_ENVELOPE', message: error.message, details: error.details ?? {} } };
+  // Only a code this file itself defines (statusByCode) is safe to echo
+  // verbatim -- it always came from this module's own reject() calls. Any
+  // other thrown error (a raw Postgres exception with its own .code like
+  // '23505', a bare TypeError, etc.) is unexpected and may carry internal
+  // detail (SQL text, file paths, stack fragments) that must not reach an
+  // untrusted caller over the wire. Mirrors the p2p transport's identical
+  // known-code-only forwarding rule in p2p-data-protocol.mjs (m5).
+  if (!Object.prototype.hasOwnProperty.call(statusByCode, error.code)) {
+    options.logger?.error?.({ event: 'accept_envelope.internal_error', message: error.message, stack: error.stack });
+    return { status: 500, body: { request_id: options.request_id ?? null, code: 'INTERNAL_ERROR', message: 'Internal error', details: {} } };
+  }
+  return { status: statusByCode[error.code], body: { request_id: options.request_id ?? null, code: error.code, message: error.message, details: error.details ?? {} } };
 }
 
 export function acceptEnvelope(envelope, options = {}) {

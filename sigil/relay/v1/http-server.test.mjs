@@ -195,8 +195,14 @@ test('HTTP relay does not notify when durable persistence fails', async () => {
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
   const result = await request(port, { method: 'POST', path: '/v1/envelopes', body: envelope });
   await new Promise((resolve) => server.close(resolve));
-  assert.equal(result.status, 400);
-  assert.equal(result.body.message, 'database unavailable');
+  // toResponse (accept-envelope.mjs) treats an unexpected persist throw as
+  // an internal error, not a validation rejection: 500/INTERNAL_ERROR with a
+  // generic message, never the raw exception text (which could carry
+  // internal detail like DB connection info) -- see TODOS.md's
+  // accept-envelope.mjs message-leak entry.
+  assert.equal(result.status, 500);
+  assert.equal(result.body.code, 'INTERNAL_ERROR');
+  assert.equal(result.body.message, 'Internal error');
   assert.deepEqual(notifications, []);
 });
 
