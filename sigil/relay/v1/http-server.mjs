@@ -839,12 +839,17 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     if (request.method === 'POST' && nominateMatch) {
       if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }
       const [, requestIdParam] = nominateMatch;
-      if (!repository?.nominateDirectoryLinkEndpoint) return response.writeHead(503).end();
+      if (!repository?.nominateDirectoryLinkEndpoint && !repository?.nominateDirectoryLinkEndpointWithAudit) return response.writeHead(503).end();
       const nominateQuota = await reserveDirectoryQuota('directory_match_attempt', `${requestIdParam}:${principal.human_id}`, nowMs);
       if (!nominateQuota.allowed) { response.writeHead(429, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'RATE_LIMITED', message: 'directory_match_attempt rate limit exceeded', details: {} })); }
       try {
-        const link = await repository.nominateDirectoryLinkEndpoint({ requestId: requestIdParam, nominatedEndpointId: principal.endpoint_id, nominatedHumanId: principal.human_id, homeRelay: resolveRelayOrigin() ?? 'local', now });
-        await repository.recordAuditEvent?.({ eventType: 'directory_link.created', subjectId: link.link_id, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'directory_link', objectId: link.link_id, outcome: 'success', now });
+        const link = repository.nominateDirectoryLinkEndpointWithAudit
+          ? await repository.nominateDirectoryLinkEndpointWithAudit({ requestId: requestIdParam, nominatedEndpointId: principal.endpoint_id, nominatedHumanId: principal.human_id, homeRelay: resolveRelayOrigin() ?? 'local', now, actorHumanId: principal.human_id, endpointId: principal.endpoint_id })
+          : await (async () => {
+              const result = await repository.nominateDirectoryLinkEndpoint({ requestId: requestIdParam, nominatedEndpointId: principal.endpoint_id, nominatedHumanId: principal.human_id, homeRelay: resolveRelayOrigin() ?? 'local', now });
+              await repository.recordAuditEvent?.({ eventType: 'directory_link.created', subjectId: result.link_id, actorHumanId: principal.human_id, endpointId: principal.endpoint_id, objectType: 'directory_link', objectId: result.link_id, outcome: 'success', now });
+              return result;
+            })();
         response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'OK', link }));
       } catch (error) {

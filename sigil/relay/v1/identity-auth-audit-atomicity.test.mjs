@@ -347,3 +347,27 @@ test('createDirectoryMatchRequestWithAudit commits the match request and the aud
   const audit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'directory_match_request.created'`);
   assert.equal(Number(audit.rows[0].count), 1);
 });
+
+test('nominateDirectoryLinkEndpointWithAudit commits the link and the audit row together, and rolls both back on audit failure', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  await freshSchema(pool);
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const issuerHumanId = await seedHuman(pool, `${suffix}_i`);
+  const nominatedHumanId = await seedHuman(pool, `${suffix}_n`);
+  await seedEndpoint(pool, { endpointId: `ep_issuer_${suffix}`, humanId: issuerHumanId });
+  await seedEndpoint(pool, { endpointId: `ep_nominated_${suffix}`, humanId: nominatedHumanId });
+  const repository = new PostgresRepository({ pool });
+  const match = await repository.createDirectoryMatchRequest({ issuerEndpointId: `ep_issuer_${suffix}`, issuerHumanId, issuer: 'https://idp.example', matchTarget: `target_${suffix}`, expiresAt: new Date(Date.now() + 3600_000), homeRelay: 'local' });
+  await repository.claimDirectoryMatch({ issuer: 'https://idp.example', matchTarget: `target_${suffix}`, matchedHumanId: nominatedHumanId });
+
+  const failing = new PostgresRepository({ pool: withAuditFailureInjected(pool) });
+  await assert.rejects(() => failing.nominateDirectoryLinkEndpointWithAudit({ requestId: match.request_id, nominatedEndpointId: `ep_nominated_${suffix}`, nominatedHumanId, homeRelay: 'local', actorHumanId: nominatedHumanId }));
+  const noLink = await pool.query('SELECT count(*) FROM directory_links');
+  assert.equal(Number(noLink.rows[0].count), 0);
+
+  const link = await repository.nominateDirectoryLinkEndpointWithAudit({ requestId: match.request_id, nominatedEndpointId: `ep_nominated_${suffix}`, nominatedHumanId, homeRelay: 'local', actorHumanId: nominatedHumanId });
+  assert.ok(link.link_id);
+  const audit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'directory_link.created'`);
+  assert.equal(Number(audit.rows[0].count), 1);
+});

@@ -1265,6 +1265,47 @@ export class PostgresRepository {
       return { request_id: requestId };
     });
   }
+  async nominateDirectoryLinkEndpointWithAudit({ requestId, nominatedEndpointId, nominatedHumanId, homeRelay, now = new Date(), actorHumanId = null, endpointId = null } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    return this.withTransaction(async (client) => {
+      const ownership = await client.query('SELECT owner_id FROM endpoints WHERE endpoint_id = $1', [nominatedEndpointId]);
+      if (!ownership.rows[0] || ownership.rows[0].owner_id !== nominatedHumanId) {
+        throw Object.assign(new Error('Match request is invalid or already consumed'), { code: 'MATCH_UNAVAILABLE' });
+      }
+      const request = await client.query(`SELECT * FROM directory_match_requests WHERE request_id = $1 AND status = 'matched' AND matched_human_id = $2 FOR UPDATE`, [requestId, nominatedHumanId]);
+      if (!request.rows[0]) throw Object.assign(new Error('Match request is invalid or already consumed'), { code: 'MATCH_UNAVAILABLE' });
+      const row = request.rows[0];
+      if (row.issuer_human_id === nominatedHumanId) {
+        throw Object.assign(new Error('Match request is invalid or already consumed'), { code: 'MATCH_UNAVAILABLE' });
+      }
+      await client.query(`UPDATE directory_match_requests SET status = 'consumed', consumed_at = $1 WHERE request_id = $2`, [timestamp, requestId]);
+      const [endpointA, endpointB] = [row.issuer_endpoint_id, nominatedEndpointId].sort();
+      const [humanA, humanB] = endpointA === row.issuer_endpoint_id ? [row.issuer_human_id, nominatedHumanId] : [nominatedHumanId, row.issuer_human_id];
+      let link;
+      try {
+        link = await client.query(
+          `INSERT INTO directory_links (link_id, endpoint_a, endpoint_b, human_a, human_b, status, initiated_via, source_request_id, a_confirmed_at, b_confirmed_at, a_confirmed_by, b_confirmed_by, home_relay, created_at)
+           VALUES ($1, $2, $3, $4, $5, 'pending', 'oidc_match', $6, $7, $8, $9, $10, $11, $12)
+           RETURNING link_id, status`,
+          [`link_${crypto.randomUUID()}`, endpointA, endpointB, humanA, humanB, row.request_id,
+            endpointA === row.issuer_endpoint_id ? null : timestamp,
+            endpointA === row.issuer_endpoint_id ? timestamp : null,
+            endpointA === row.issuer_endpoint_id ? null : nominatedHumanId,
+            endpointA === row.issuer_endpoint_id ? nominatedHumanId : null,
+            homeRelay, timestamp]
+        );
+      } catch (error) {
+        if (error.code === '23505') throw Object.assign(new Error('A directory link already exists or is pending between these endpoints'), { code: 'DIRECTORY_LINK_CONFLICT' });
+        throw error;
+      }
+      await client.query(
+        `INSERT INTO audit_events (event_id, event_type, subject_id, actor_human_id, endpoint_id, object_type, object_id, outcome, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [`audit_${crypto.randomUUID()}`, 'directory_link.created', link.rows[0].link_id, actorHumanId, endpointId, 'directory_link', link.rows[0].link_id, 'success', timestamp]
+      );
+      return { link_id: link.rows[0].link_id, status: link.rows[0].status };
+    });
+  }
   async recordAuditEvent({ eventId = `audit_${crypto.randomUUID()}`, eventType, subjectId, actorId = null, actorHumanId = null, endpointId = null, conversationId = null, objectType = null, objectId = null, actionHash = null, outcome = null, reason = null, payload = {}, metadataRedacted = null, now = new Date(), client = this.pool } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     const result = await client.query(
