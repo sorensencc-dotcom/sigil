@@ -148,8 +148,8 @@ npm install --global github:sorensencc-dotcom/sigil
 Or clone the repository:
 
 ```powershell
-git clone https://github.com/sorensencc-dotcom/sigil.git C:\dev\sigil-repo
-cd C:\dev\sigil-repo
+git clone https://github.com/sorensencc-dotcom/sigil.git <sigil-repo>
+cd <sigil-repo>
 npm install
 ```
 
