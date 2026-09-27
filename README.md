@@ -7,7 +7,24 @@ Governed cryptographic task relay and host connector for Antigravity, Claude, Co
 - **User & Architecture Guide**: [Sigil Wiki](docs/wiki/README.md)
 - **Quickstart Guide**: [Getting started](docs/getting-started.md)
 
-For remote machines, install directly from GitHub with `npm install --global github:sorensencc-dotcom/sigil`; no local `C:\dev\sigil-repo` checkout is required.
+## Quick start
+
+See [Getting started](docs/getting-started.md) for install, identity init, and first relay run.
+
+
+**Status:** Active — v1 protocol conformance (see Current status below)  
+**Audience:** Operators and agent-host integrators who need a signed, authenticated task relay between local connectors and Claude, Codex, Grok, Antigravity, or sovereign local LLMs.
+
+## Governance
+
+- Security boundary and notes: [Security notes](#security-notes)
+- Protocol / auth specs: [`docs/specs/`](docs/specs/)
+- User & architecture wiki: [`docs/wiki/README.md`](docs/wiki/README.md)
+- Getting started: [`docs/getting-started.md`](docs/getting-started.md)
+
+Sigil is a connector/relay product (not Cast Iron Charlie Industrial chrome). CIC-facing diagrams that *use* Sigil should follow [`cic_design_system.md`](https://github.com/sorensencc-dotcom/charlie-deep-research/blob/main/cic_design_system.md) in charlie-deep-research.
+
+For remote machines, install directly from GitHub with `npm install --global github:sorensencc-dotcom/sigil`; no local clone of this repository is required.
 
 Multi-agent execution supports Google Antigravity, Anthropic Claude, OpenAI Codex, xAI Grok, and local Ollama models; see [the wiki guide](docs/wiki/README.md#multi-model-agent-hosts--providers).
 
@@ -143,7 +160,7 @@ $env:SIGIL_CONNECTOR_GRANTS = $env:SIGIL_PACKAGE_PERMISSIONS
 Codex is registered through its MCP CLI:
 
 ```powershell
-codex mcp add sigil --env SIGIL_RUNTIME=codex -- node C:\dev\sigil-repo\sigil\connectors\v1\mcp-stdio-server.mjs
+codex mcp add sigil --env SIGIL_RUNTIME=codex -- sigil mcp
 ```
 
 ## Capability boundary
