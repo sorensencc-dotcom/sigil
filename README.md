@@ -160,7 +160,7 @@ $env:SIGIL_CONNECTOR_GRANTS = $env:SIGIL_PACKAGE_PERMISSIONS
 Codex is registered through its MCP CLI:
 
 ```powershell
-codex mcp add sigil --env SIGIL_RUNTIME=codex -- node ./connectors/v1/mcp-stdio-server.mjs
+codex mcp add sigil --env SIGIL_RUNTIME=codex -- sigil mcp
 ```
 
 ## Capability boundary
