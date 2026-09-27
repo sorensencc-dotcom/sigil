@@ -7,6 +7,10 @@ Governed cryptographic task relay and host connector for Antigravity, Claude, Co
 - **User & Architecture Guide**: [Sigil Wiki](docs/wiki/README.md)
 - **Quickstart Guide**: [Getting started](docs/getting-started.md)
 
+## Quick start
+
+See [Getting started](docs/getting-started.md) for install, identity init, and first relay run.
+
 
 **Status:** Active — v1 protocol conformance (see Current status below)  
 **Audience:** Operators and agent-host integrators who need a signed, authenticated task relay between local connectors and Claude, Codex, Grok, Antigravity, or sovereign local LLMs.
