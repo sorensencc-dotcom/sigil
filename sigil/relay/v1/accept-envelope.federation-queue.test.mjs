@@ -180,7 +180,8 @@ test('queue mode with live database', { skip: !connectionString }, async (t) => 
       });
 
       // The error propagates out as a server fault (no specific HTTP mapping for INJECTED_FAILURE)
-      assert.equal(result.status, 400, 'unexpected error returns a non-2xx status');
+      assert.equal(result.status, 500, 'unexpected error returns INTERNAL_ERROR (500)');
+      assert.equal(result.body?.code, 'INTERNAL_ERROR');
       assert.equal(enqueueCallCount, 1, 'enqueue was attempted exactly once');
 
       // capturedClient must be a real pg client (has a query method), not null or the pool.
