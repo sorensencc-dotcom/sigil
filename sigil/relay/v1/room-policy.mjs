@@ -1,8 +1,11 @@
 import { reject } from './validate-envelope.mjs';
 
-// Message types a room accepts in phase 1. task.request / task.result carry
-// structured delegation inside a room (rooms design: no new delegation frame).
-export const ROOM_MESSAGE_TYPES = new Set(['room.message', 'task.request', 'task.result']);
+// Message types a room accepts in phase 1. task.request / task.result are
+// deliberately excluded: a broadcast task.request has no single assignee, so
+// the task.result assignee binding in accept-envelope.mjs would let any room
+// member post a result for any room task. Phase 3 re-adds them together with
+// an explicit assignee field.
+export const ROOM_MESSAGE_TYPES = new Set(['room.message']);
 
 export function assertRoomTypeHasRoom(envelope, room) {
   if (!room && envelope.message_type.startsWith('room.')) {

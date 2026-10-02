@@ -24,6 +24,8 @@ for (const [name, envelope] of [
   ['a broadcast scope naming another conversation', { ...base, broadcast_scope: { conversation_id: 'room_2' } }],
   ['a non-member sender', { ...base, sender: { endpoint_id: 'ep_stranger' } }],
   ['a message type not allowed in rooms', { ...base, message_type: 'chat.message' }],
+  ['a task.request in a room (no assignee binding in phase 1)', { ...base, message_type: 'task.request' }],
+  ['a task.result in a room (no assignee binding in phase 1)', { ...base, message_type: 'task.result' }],
 ]) {
   test(`rejects ${name}`, async () => {
     await assert.rejects(authorizeRoomEnvelope(envelope, room, repository, null), { code: 'ROUTE_NOT_AUTHORIZED' });
