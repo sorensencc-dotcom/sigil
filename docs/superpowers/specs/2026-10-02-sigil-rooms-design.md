@@ -129,9 +129,22 @@ Sigil uses the routine path through one bot (decided 2026-10-02):
 2. **Inbound.** When a room needs a Grok bot (an @mention, or a router pick), a bridge POSTs the room message to the Floor Warden webhook. The payload names the target bot, the room, the thread, and the triggering message. The Floor Warden hands the work to the named bot inside the app.
 3. **Roster.** The Floor Warden's roster starts with Chief and Helix CI Triage. Adding a bot later means editing that roster in the app and adding the bot's endpoint to the room. It never needs a new URL.
 4. **Endpoints.** Each rostered bot is still its own Sigil endpoint and room member, so room roles, response modes, and the loop guards apply per bot.
-5. **Not ready yet.** The webhook URL exists only after the Floor Warden routine is confirmed and the URL is copied from its routine panel. Until then, Grok bots are not invocable.
+5. **Not ready yet.** The inbound routine is named "Sigil rooms" and stays inbound only. Sigil stores its URL only after that URL is copied from the routine panel. Until then, Grok bots are not invocable.
 
-Still open: the reply path. The bot's answer must come back into the room, either through the rooms MCP plugin (if Grok bots can call custom MCP tools) or through an outbound webhook the Floor Warden calls on Sigil.
+The reply path is an outbound call from the Floor Warden onto Sigil, not the phase 8 rooms MCP (decided 2026-10-02).
+
+#### Reply route
+
+`POST /v1/rooms/{room_id}/replies`
+
+The Floor Warden calls this after a rostered bot answers. Chief and Helix do not call it. Sigil checks the roster, signs a `room.message` as that bot, and accepts it on the existing envelope path. The Floor Warden cannot mint a signature.
+
+- **Auth.** `Authorization: Bearer <floor_warden_reply_token>`. Sigil stores that secret beside the inbound Floor Warden URL. It is not the Grok webhook sender key, not a member bearer, and not an Ed25519 key. Only that ingress identity is allowed. A wrong bearer is `401 UNAUTHENTICATED`. Any other principal is `403 ROUTE_NOT_AUTHORIZED`.
+- **Body.** Required fields: `room_id` (must match the path), `target_bot_id` (allowlist Chief `016f0b34-f0da-49b2-a32f-482d6e635825` and Helix CI Triage `28782df8-9cf6-48a8-ad0c-97c510c66e38`), `sender` (the Sigil endpoint bound to that bot), `in_reply_to`, `text` (trimmed, max 16000 characters), `idempotency_key` (the inbound message id plus `target_bot_id`).
+- **Signing.** Sigil signs `room.message` internally with the answering endpoint's relay-held key and submits the signed broadcast through the same accept path as `POST /v1/envelopes`. It threads the answer under `in_reply_to` (`thread_root_id`). There is no message table and no signature field on this body. `mentions` is empty.
+- **Success.** `202` with `{request_id, message_id, room_seq, duplicate}`. A repeated `idempotency_key` returns the first accept and does not write again.
+- **Errors.** `400 INVALID_REQUEST`, `404 ROOM_NOT_FOUND`, `404 MESSAGE_NOT_FOUND`, `403 BOT_NOT_ON_ROSTER`, `403 BOT_NOT_A_MEMBER`, plus the existing `UNKNOWN_ENDPOINT`, `ENDPOINT_REVOKED`, and `DATABASE_UNAVAILABLE`.
+- **When.** The relay implements the route in phase 6. A call from Grok's cloud waits on the phase 7 tunnel, because Grok cannot reach localhost. That wait does not pull phase 8 forward. Phases 1-4 are unchanged. The inbound routine stays one webhook. No second webhook. No Zapier.
 
 ### Hosted app agents (Muse, ChatGPT, Claude Cowork)
 
@@ -206,9 +219,9 @@ Each phase ships with tests in the repo's `*.test.mjs` pattern and contract entr
 3. **Router.** @mention routing, the LLM router, decision events, and fallback behavior.
 4. **Local web client.** Room list, timeline, threads, roster with response modes, Stop button, and approval cards.
 5. **More bridges.** GitHub Copilot CLI, Antigravity CLI, xAI Grok CLI, Hermes Agent, and Ironbots report posting.
-6. **Ironbots requests and Grok bots.** A request entry point and a command list for each Ironbot. Floor Warden bridge for Grok bots (Chief and Helix CI Triage), once the Floor Warden routine is confirmed and its webhook URL is copied.
-7. **Mobile.** PWA, tunnel, and push.
-8. **Rooms MCP plugin.** Remote MCP server (Streamable HTTP + OAuth) for Meta Muse, ChatGPT, Claude Cowork, and any other app with custom connectors. Needs the tunnel from the mobile phase.
+6. **Ironbots requests and Grok bots.** A request entry point and a command list for each Ironbot. Floor Warden bridge for Grok bots (Chief and Helix CI Triage). The inbound "Sigil rooms" webhook stays inbound only, and the reply route lands on the relay in this phase. Calls from Grok's cloud wait on the phase 7 tunnel.
+7. **Mobile.** PWA, tunnel, and push. The tunnel is also what lets the Floor Warden reach the phase 6 reply route from Grok's cloud. It does not pull phase 8 forward.
+8. **Rooms MCP plugin.** Remote MCP server (Streamable HTTP + OAuth) for Meta Muse, ChatGPT, Claude Cowork, and any other app with custom connectors. Needs the tunnel from the mobile phase. Tools stay `list_rooms`, `read_room`, `post_message`, and `my_mentions`. This phase is still later. Grok bot replies do not use it.
 9. **Other humans.** Invites, OIDC, roles, and `invokable_by`.
 
 ## Rejected draft scope
@@ -226,5 +239,5 @@ The Gemini drafts contain the following items. None of them appears in the Hyper
 ## Open questions
 
 1. **Vendor claims.** The Cowork, ChatGPT, and Muse connector claims need checking against current vendor documentation.
-2. **Floor Warden.** Confirm the Floor Warden routine and copy its webhook URL from the routine panel. Then decide the reply path: the rooms MCP plugin, or an outbound webhook from the Floor Warden to Sigil.
+2. **Floor Warden reply path.** Decided 2026-10-02. The Floor Warden calls `POST /v1/rooms/{room_id}/replies` on Sigil. The phase 8 rooms MCP is not the reply path, and the inbound "Sigil rooms" routine stays inbound only (no second webhook). Still open: copy that routine's webhook URL and sender key from the routine panel into Sigil.
 3. **Branch.** Should this work start on its own branch off `main`? The current branch is `fix/verify-contract-revocation-check`.
