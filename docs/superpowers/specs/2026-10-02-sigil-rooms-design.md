@@ -62,7 +62,7 @@ Room managers manage the roster and the response modes. Being a room manager gra
 
 ### Relay (room authority)
 
-- **Addressing.** A client or agent sends a normal `sigil/1` envelope with `message_type: "room.message"` and `recipient.endpoint_id: "room:<room_id>"`. The accept path recognizes room endpoints and fans the message out instead of rejecting it with `RECIPIENT_NOT_FOUND`.
+- **Addressing.** A room is a Sigil conversation (`conversations.kind = 'room'`), and its roster is `conversation_members`. Room traffic uses the existing broadcast form of the envelope: no `recipient`, with `broadcast_scope: { conversation_id }` naming the room. Today `validateEnvelope` already accepts broadcast envelopes when a `broadcastAuthorizer` allows them. Two pieces are missing: the HTTP server never wires one in, and persistence writes no deliveries for broadcasts. Rooms fill both gaps for room conversations only. Any envelope addressed directly to a recipient inside a room conversation is rejected. Otherwise the existing auto-membership insert in `persistAcceptedEnvelope` would silently add its sender to the room.
 - **Ordering.** At accept, the relay assigns a gapless `room_seq` per room in the same transaction that persists the message. `room_seq` is the display order. The existing per-sender `stream_seq` from migration 020 stays the gap-detection mechanism for each sender's stream.
 - **Fan-out.** The relay writes one delivery per member endpoint through the existing delivery queue. Humans receive every message. Agents receive a message only when an invocation targets them, which keeps CLI cost proportional to work.
 - **History.** `GET /v1/rooms/{room_id}/messages?after_seq=N` lets any client catch up after a reconnect. This replaces the drafts' offline outbox.
@@ -178,10 +178,10 @@ Two v1 choices keep these paths open: `workspace_id` on every table, and agents 
 
 ## Data model (new migration)
 
-- `workspaces(id, name, created_at)`
-- `rooms(id, workspace_id, name, description, archived_at, next_room_seq)`
-- `room_members(room_id, member_id, member_kind, role, response_mode, invokable_by, joined_at)`
-- `room_messages(room_id, room_seq, message_id, thread_root_id, sender_endpoint_id, body_json, created_at)`, unique on `(room_id, room_seq)` and on `message_id`
+- `workspaces(workspace_id, name, created_by, created_at)`. v1 creates one personal workspace per human (`ws_<human_id>`).
+- `rooms(conversation_id → conversations, workspace_id, name, description, next_room_seq, archived_at, created_at)`, unique on `(workspace_id, name)`
+- `conversation_members` gains `response_mode`. Room roles (`owner`, `room_manager`, `member`) use the existing `role` column. `invokable_by` arrives with the other-humans phase.
+- `envelopes` gains `room_seq`, unique on `(conversation_id, room_seq)`. Room messages stay in `envelopes`, with no separate message table.
 - `room_invocations(id, room_id, trigger_message_id, endpoint_id, decided_by, reason, status, cost_units, started_at, finished_at)`
 - `room_budgets(room_id, day, cost_units_used, cost_units_limit)`
 
@@ -189,7 +189,7 @@ Two v1 choices keep these paths open: `workspace_id` on every table, and agents 
 
 Each phase ships with tests in the repo's `*.test.mjs` pattern and contract entries in `relay-api.json`.
 
-1. **Relay rooms.** Migration, room endpoints, `room.message` and `room.event` schemas, `room_seq`, fan-out, history API, and the WebSocket ticket.
+1. **Relay rooms.** Migration, room conversations, the `room.message` schema, `room_seq`, fan-out, stream notification, and the room HTTP API (create, list, members, history). `room.event` arrives with the router (phase 3), and the WebSocket ticket with the web client (phase 4).
 2. **Two bridges and the guards.** Claude and Codex bridges, session continuity, hop budget, rate limit, and Stop. Exit test: Claude and Codex hold a 6-turn exchange in one room, then the hop budget stops them.
 3. **Router.** @mention routing, the LLM router, decision events, and fallback behavior.
 4. **Local web client.** Room list, timeline, threads, roster with response modes, Stop button, and approval cards.
