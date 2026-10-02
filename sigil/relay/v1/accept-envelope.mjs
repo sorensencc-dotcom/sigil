@@ -266,11 +266,11 @@ async function acceptWithRepository(envelope, options) {
       return forwardEnvelope(envelope, route, options, client);
     }
 
-    // Rooms (rooms design, phase 1): a room conversation accepts only member
-    // broadcasts; the fan-out list is computed here, on this transaction's client.
+    // Rooms (rooms design, phase 1): look up the room here (validateEnvelope's
+    // broadcast gate needs it); membership is authorized only after
+    // validateEnvelope proves the sender's signature, so an unauthenticated
+    // caller cannot probe room membership.
     const room = repository.lookupRoom ? await repository.lookupRoom(envelope.conversation_id, client) : null;
-    assertRoomTypeHasRoom(envelope, room);
-    const roomFanout = room ? await authorizeRoomEnvelope(envelope, room, repository, client) : null;
 
     // route.action === 'local' -> fall through to recipient/persist checks.
     // Every direct recipient must exist in the relay's endpoint directory
@@ -360,6 +360,8 @@ async function acceptWithRepository(envelope, options) {
       }
     }
     const result = validateEnvelope(envelope, { ...options, idempotency: new Map(), capabilityGrants, ...(room ? { broadcastAuthorizer: () => true } : {}) });
+    assertRoomTypeHasRoom(envelope, room);
+    const roomFanout = room ? await authorizeRoomEnvelope(envelope, room, repository, client) : null;
     const prior = await repository.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key, client);
     if (prior && prior.canonical_hash !== result.canonical_hash) throw reject('DUPLICATE_MESSAGE', 'Idempotency key conflicts with an existing body');
     if (prior) return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: prior.message_id, duplicate: true } };

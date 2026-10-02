@@ -81,3 +81,14 @@ test('a room message replayed with the same idempotency key is a duplicate, not 
   assert.equal(replay.body.duplicate, true);
   assert.deepEqual((await repository.listRoomMessages('room_1', 0n, 100)).map((m) => m.room_seq), ['1']);
 });
+
+test('a non-member with a forged signature gets the signature error, not a membership answer', async () => {
+  const { keys, registered, repository } = world();
+  await roomWithMembers(repository);
+  const envelope = roomEnvelope(keys, 'ep_stranger');
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), keys.ep_web.privateKey).toString('base64url');
+  const result = await acceptEnvelopeAsync(envelope, { repository, registered, now: NOW });
+  assert.equal(result.status, 401);
+  assert.equal(result.body.code, 'INVALID_SIGNATURE');
+  assert.deepEqual(await repository.listRoomMessages('room_1', 0n, 100), []);
+});
