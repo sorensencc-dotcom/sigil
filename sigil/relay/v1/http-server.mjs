@@ -6,6 +6,7 @@ import { verifyInboundRelayRequest, relayRejectSkewPayload } from './federation-
 import { acceptDirectoryRedemption, acceptDirectoryConfirmation, acceptDirectoryRevocation } from './accept-federation-directory.mjs';
 import { transitionDelivery } from './delivery-state.mjs';
 import { createBearerAuthenticator } from './transport-auth.mjs';
+import { handleRoomRoute } from './room-routes.mjs';
 import { createApprovalChallenge, coseKeyToPublicKey, parseAttestationObject, verifyPackedAttestation, verifyWebAuthnApproval, verifyWebAuthnAssertion } from './approval-ceremony.mjs';
 import { renderApprovalPage } from './approval-ui.mjs';
 import { computeActionHash } from './action-hash.mjs';
@@ -416,6 +417,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       response.writeHead(result.status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(result.body ? JSON.stringify(result.body) : '');
     }
+    if (await handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody })) return;
     if (request.method === 'GET' && request.url.startsWith('/v1/inbox')) {
       if (!repository?.listInbox) return response.writeHead(503).end();
       const since = new URL(request.url, 'http://sigil.local').searchParams.get('since') ?? '';
