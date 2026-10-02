@@ -55,11 +55,12 @@ test('persistAcceptedEnvelope fans a room message out and lists it by room_seq',
     sender: { endpoint_id: 'ep_chris_web', owner_id: 'usr_chris' }, broadcast_scope: { conversation_id: 'room_1' },
     body: { text: 'hi' }, idempotency_key: 'idem_1', created_at: NOW.toISOString(), expires_at: '2026-10-02T13:00:00.000Z',
   };
-  const persisted = await repository.persistAcceptedEnvelope({ envelope, message_id: 'msg_1', canonical_hash: 'h', roomSeq: 1n, roomFanout: ['ep_claude', 'ep_codex'] });
+  const persisted = await repository.persistAcceptedEnvelope({ envelope, message_id: 'msg_1', canonical_hash: 'h', canonical_bytes: Buffer.from('signed-bytes'), roomSeq: 1n, roomFanout: ['ep_claude', 'ep_codex'] });
   assert.deepEqual(persisted.fanout.map((f) => f.endpoint_id), ['ep_claude', 'ep_codex']);
   assert.equal((await repository.listInbox('ep_claude')).length, 1);
   assert.equal((await repository.listInbox('ep_chris_web')).length, 0);
   const messages = await repository.listRoomMessages('room_1', 0n, 100);
   assert.deepEqual(messages.map((m) => [m.room_seq, m.message_id]), [['1', 'msg_1']]);
+  assert.equal(messages[0].canonical_bytes, Buffer.from('signed-bytes').toString('base64url'), 'history carries the stored signed bytes as base64url');
   assert.deepEqual(await repository.listRoomMessages('room_1', 1n, 100), []);
 });

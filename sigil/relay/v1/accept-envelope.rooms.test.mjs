@@ -40,10 +40,12 @@ test('a member room.message is accepted, sequenced, and fanned out', async () =>
   let persistedEvent;
   const first = await acceptEnvelopeAsync(roomEnvelope(keys, 'ep_web'), { repository, registered, now: NOW, onPersisted: async (event) => { persistedEvent = event; } });
   assert.equal(first.status, 202);
-  const second = await acceptEnvelopeAsync(roomEnvelope(keys, 'ep_claude', { body: { text: 'reply', thread_root_id: first.body.message_id } }), { repository, registered, now: NOW });
+  const secondEnvelope = roomEnvelope(keys, 'ep_claude', { body: { text: 'reply', thread_root_id: first.body.message_id } });
+  const second = await acceptEnvelopeAsync(secondEnvelope, { repository, registered, now: NOW });
   assert.equal(second.status, 202);
   const history = await repository.listRoomMessages('room_1', 0n, 100);
   assert.deepEqual(history.map((m) => m.room_seq), ['1', '2']);
+  assert.equal(history[1].canonical_bytes, signedBytes(secondEnvelope).toString('base64url'), 'history carries the signed bytes the accept path stored');
   assert.deepEqual(persistedEvent.persisted.fanout.map((f) => f.endpoint_id), ['ep_claude', 'ep_codex']);
   assert.equal((await repository.listInbox('ep_codex')).length, 2);
   assert.equal((await repository.listInbox('ep_web')).length, 1, 'the sender never receives its own message');

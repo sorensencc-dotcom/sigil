@@ -1648,7 +1648,7 @@ export class PostgresRepository {
     const result = await client.query(
       `SELECT room_seq, message_id, protocol, message_type, body, context_refs, capabilities, correlation_id,
               sender_endpoint_id, sender_owner_id, broadcast_scope, conversation_id, idempotency_key,
-              signature_algorithm, signature_key_id, signature_value, expires_at, created_at
+              signature_algorithm, signature_key_id, signature_value, expires_at, created_at, canonical_bytes
          FROM envelopes
         WHERE conversation_id = $1 AND room_seq > $2
         ORDER BY room_seq
@@ -1656,9 +1656,13 @@ export class PostgresRepository {
       [conversationId, String(afterSeq), limit],
     );
     const iso = (value) => (value instanceof Date ? value.toISOString() : value);
+    // canonical_bytes is the stored signed byte string (base64url): clients
+    // verify signatures against it, not against the envelope rebuilt below
+    // from columns (timestamp/JSON re-serialization can change the bytes).
     return result.rows.map((row) => ({
       room_seq: String(row.room_seq),
       message_id: row.message_id,
+      canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'),
       envelope: {
         protocol: row.protocol,
         message_id: row.message_id,

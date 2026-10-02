@@ -301,7 +301,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
         .filter((row) => row.envelope.conversation_id === conversationId && row.roomSeq != null && row.roomSeq > BigInt(afterSeq))
         .sort((a, b) => (a.roomSeq < b.roomSeq ? -1 : a.roomSeq > b.roomSeq ? 1 : 0))
         .slice(0, limit)
-        .map((row) => ({ room_seq: String(row.roomSeq), message_id: row.message_id, envelope: row.envelope }));
+        .map((row) => ({ room_seq: String(row.roomSeq), message_id: row.message_id, canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'), envelope: row.envelope }));
     },
     async listInbox(endpointId, since = '', viewerOwnerId = null) {
       return [...deliveries.values()]

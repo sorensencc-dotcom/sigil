@@ -69,6 +69,7 @@ test('postgres room lifecycle, ordering, and fan-out', { skip: !connectionString
   const messages = await repository.listRoomMessages(conversationId, 0n, 100);
   assert.deepEqual(messages.map((m) => [m.room_seq, m.message_id]), [['1', `msg_${suffix}`]]);
   assert.equal(messages[0].envelope.body.text, 'hi');
+  assert.equal(messages[0].canonical_bytes, Buffer.from('canonical').toString('base64url'), 'history carries the stored signed bytes as base64url');
 
   await assert.rejects(repository.withTransaction(async (client) => {
     await repository.assignRoomSequence(client, conversationId);
