@@ -11,7 +11,6 @@ import { renderApprovalPage } from './approval-ui.mjs';
 import { computeActionHash } from './action-hash.mjs';
 import { normalizeIssuer } from './issuer-normalization.mjs';
 import { assertAccountLinkCeremony, assertAllowedIssuer, boundedCapabilityGrantExpiry, boundedDirectoryExpiry, boundedTokenExpiry } from './auth-policy.mjs';
-import { verifyMockIdToken } from './mock-oidc.mjs';
 import { verifyRealIdToken, createJwksCache, createDiscoveryCache, CLOCK_SKEW_SECONDS } from './oidc-client.mjs';
 import { attemptDirectoryMatchOnOidcLogin } from './directory-trust.mjs';
 import { resolveDirectoryRateLimits, resolveRelayRequestFreshnessMs, resolveStreamSequence } from './relay-config.mjs';
@@ -904,6 +903,16 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       let body; try { body = JSON.parse(raw); } catch { body = null; }
       if (!body?.id_token) { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'id_token is required', details: {} })); }
 
+      // Imported here, not at module top: mock-oidc.mjs reads a dev/test-only
+      // keypair fixture on load, and that fixture is deliberately not in the
+      // published package. A static import broke `import '@sorensencc/sigil/relay'`
+      // for every installed consumer, even with mock OIDC disabled.
+      let verifyMockIdToken;
+      try { ({ verifyMockIdToken } = await import('./mock-oidc.mjs')); }
+      catch {
+        response.writeHead(503, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'MOCK_OIDC_UNAVAILABLE', message: 'Mock OIDC is only available from a source checkout', details: {} }));
+      }
       let claims;
       try { claims = verifyMockIdToken(body.id_token, { now: () => now }); }
       catch (error) {
