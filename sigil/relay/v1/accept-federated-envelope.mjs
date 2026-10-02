@@ -4,6 +4,7 @@ import { verifyInboundRelayRequest, relayRejectSkewPayload } from './federation-
 import { validateEnvelope, signedBytes, reject } from './validate-envelope.mjs';
 import { resolveRateLimits, resolveRelayRequestFreshnessMs, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
 import { enforceCapabilityRiskGate } from './capability-risk-gate.mjs';
+import { assertNotRoomConversation } from './room-policy.mjs';
 
 function respond(status, code, message, options, details = {}) {
   return { status, body: { request_id: options.request_id ?? null, code, message, details } };
@@ -176,6 +177,12 @@ export async function acceptFederatedEnvelope(body, headers, options) {
     if (envelope.sender.owner_id !== senderOwnerId) {
       throw reject('SENDER_OWNER_ASSERTION_MISMATCH', 'envelope.sender.owner_id does not equal the relay-asserted sender_owner_id');
     }
+    // 6 (rooms, phase 1): rooms are relay-local. A federated envelope is
+    // always direct, and the direct persist path would enroll its sender and
+    // recipient into the room's conversation_members. Refuse a room
+    // conversation and any room.* type. Runs after check 5 verified the
+    // envelope signature, on this transaction's client.
+    assertNotRoomConversation(envelope, repository.lookupRoom ? await repository.lookupRoom(envelope.conversation_id, client) : null);
     // 6 (capability/risk-tier + approval gate, closes Bypass #2): the
     // federated inbound path previously never checked envelope.capabilities
     // against the local capability_registry at all -- a high-risk capability
@@ -290,7 +297,7 @@ export async function acceptFederatedEnvelope(body, headers, options) {
     // driver error (23503 / 23514 / 23502, etc.) is not a protocol enum
     // value and must never be echoed to the peer -- collapse anything
     // unrecognised to INVALID_FEDERATION_REQUEST / 400.
-    const statusByCode = { RELAY_REPLAYED: 409, REPLAY_DETECTED: 409, MESSAGE_EXPIRED: 422, RECIPIENT_NOT_FOUND: 400, DIRECTORY_LINK_REQUIRED: 403, SENDER_OWNER_ASSERTION_MISMATCH: 403, RATE_LIMITED: 429, QUOTA_EXCEEDED: 429, INVALID_ENVELOPE: 400, INVALID_SIGNATURE: 401, VERSION_UNSUPPORTED: 400, CAPABILITY_DENIED: 403, APPROVAL_REQUIRED: 403, TASK_ASSIGNEE_MISMATCH: 403, DUPLICATE_TASK_ID: 409 };
+    const statusByCode = { ROUTE_NOT_AUTHORIZED: 403, RELAY_REPLAYED: 409, REPLAY_DETECTED: 409, MESSAGE_EXPIRED: 422, RECIPIENT_NOT_FOUND: 400, DIRECTORY_LINK_REQUIRED: 403, SENDER_OWNER_ASSERTION_MISMATCH: 403, RATE_LIMITED: 429, QUOTA_EXCEEDED: 429, INVALID_ENVELOPE: 400, INVALID_SIGNATURE: 401, VERSION_UNSUPPORTED: 400, CAPABILITY_DENIED: 403, APPROVAL_REQUIRED: 403, TASK_ASSIGNEE_MISMATCH: 403, DUPLICATE_TASK_ID: 409 };
     const known = Object.prototype.hasOwnProperty.call(statusByCode, error.code);
     const code = known ? error.code : 'INVALID_FEDERATION_REQUEST';
     const status = known ? statusByCode[error.code] : 400;

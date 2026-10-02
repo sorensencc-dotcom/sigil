@@ -13,6 +13,15 @@ export function assertRoomTypeHasRoom(envelope, room) {
   }
 }
 
+// Rooms are relay-local in phase 1. A forwarded (outbound) or federated
+// (inbound) envelope is always direct, and the direct persist path auto-adds
+// sender and recipient to conversation_members, so neither path may carry a
+// room conversation or a room.* message type.
+export function assertNotRoomConversation(envelope, room) {
+  if (room) throw reject('ROUTE_NOT_AUTHORIZED', 'Room conversations are not federated', { conversation_id: envelope.conversation_id });
+  assertRoomTypeHasRoom(envelope, null);
+}
+
 // Authorizes an envelope addressed to a room and returns the endpoint ids to
 // deliver it to. Direct (recipient) envelopes are refused because
 // persistAcceptedEnvelope's direct path auto-adds sender and recipient to

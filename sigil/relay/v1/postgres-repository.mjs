@@ -777,16 +777,21 @@ export class PostgresRepository {
          ON CONFLICT (conversation_id) DO NOTHING`,
         [row.envelope.conversation_id, row.envelope.sender.owner_id, row.envelope.created_at]
       );
+      // Direct-path auto-membership never applies to a room: a room roster
+      // changes only through owner-authorized addRoomMember (defense in
+      // depth behind the accept paths' room refusals).
       await client.query(
         `INSERT INTO conversation_members (conversation_id, endpoint_id, role, added_by, added_at)
-         VALUES ($1, $2, 'member', $3, $4)
+         SELECT $1, $2, 'member', $3, $4
+          WHERE NOT EXISTS (SELECT 1 FROM rooms WHERE conversation_id = $1)
          ON CONFLICT (conversation_id, endpoint_id) DO NOTHING`,
         [row.envelope.conversation_id, row.envelope.sender.endpoint_id, row.envelope.sender.owner_id, row.envelope.created_at]
       );
       if (row.envelope.recipient?.endpoint_id) {
         await client.query(
           `INSERT INTO conversation_members (conversation_id, endpoint_id, role, added_by, added_at)
-           VALUES ($1, $2, 'member', $3, $4)
+           SELECT $1, $2, 'member', $3, $4
+            WHERE NOT EXISTS (SELECT 1 FROM rooms WHERE conversation_id = $1)
            ON CONFLICT (conversation_id, endpoint_id) DO NOTHING`,
           [row.envelope.conversation_id, row.envelope.recipient.endpoint_id, row.envelope.sender.owner_id, row.envelope.created_at]
         );

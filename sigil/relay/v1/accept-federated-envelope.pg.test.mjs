@@ -224,3 +224,82 @@ test('federated envelope whose signature.key_id collides with a local endpoint k
   const shadow = await pool.query('SELECT 1 FROM endpoints WHERE endpoint_id = $1', [ids.sender]);
   assert.equal(shadow.rowCount, 0);
 });
+
+// Rooms phase 1 live-DB pin: a federated (always direct) envelope whose
+// conversation_id is a local room is refused, and the room roster is not
+// touched -- the direct persist path would otherwise enroll the foreign
+// sender and the local recipient into conversation_members.
+test('federated direct envelope into a local room → 403 ROUTE_NOT_AUTHORIZED, roster unchanged', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const ids = {
+    owner: `usr_chris_${suffix}@primary.example`,
+    sender: `ep_codex_${suffix}@${ORIGIN}`,
+    recipient: `ep_claude_${suffix}@${RELAY}`,
+    senderKey: `key_ep_codex_${suffix}@${ORIGIN}`,
+    recipientKey: `key_ep_claude_${suffix}@${RELAY}`,
+    room: `room_${suffix}`,
+    message: `msg_fed_room_${suffix}`,
+  };
+  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  assertDisposableTestDatabase(connectionString);
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
+  for (const file of sqlFiles) {
+    await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
+  }
+
+  const senderKeys = crypto.generateKeyPairSync('ed25519');
+  const relayKeys = crypto.generateKeyPairSync('ed25519');
+  const relayIdentity = { key_id: `relay-a-${suffix}`, private_key_pem: relayKeys.privateKey.export({ type: 'pkcs8', format: 'pem' }) };
+  const relayPub = relayKeys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url');
+  const senderPub = senderKeys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url');
+  await pool.query(`
+    INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.owner}', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
+      VALUES ('${ids.recipient}', '${ids.owner}', 'claude', 'install_claude_${suffix}', 'Claude', 'active', NOW());
+    INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
+      VALUES ('${ids.recipientKey}', '${ids.recipient}', 'Ed25519', decode('00', 'hex'), 'active', NOW());
+  `);
+
+  const repository = new PostgresRepository({ pool });
+  await repository.upsertPeer({ domain: ORIGIN, relayUrl: 'https://a.example/relay', keys: [{ kid: relayIdentity.key_id, alg: 'Ed25519', publicKey: relayPub }], trustMode: 'tofu' });
+  await repository.createFederationDirectoryLink({
+    linkRef: crypto.randomUUID(),
+    localOwnerId: ids.owner, localEndpointId: ids.recipient,
+    remoteOwnerId: ids.owner, remoteEndpointId: ids.sender,
+    remoteDomain: ORIGIN, role: 'issuer', initiatedVia: 'self_pair', status: 'active',
+    localConfirmedAt: new Date(), remoteConfirmedAt: new Date(), sourceInviteId: null, peerDomain: ORIGIN,
+  });
+  await repository.createRoom({ conversationId: ids.room, workspaceId: `ws_${suffix}`, name: 'build', createdByHumanId: ids.owner, ownerEndpointId: ids.recipient, now: SERVER_NOW });
+
+  const base = {
+    protocol: 'sigil/1', message_id: ids.message, conversation_id: ids.room, message_type: 'chat.message',
+    sender: { owner_id: ids.owner, endpoint_id: ids.sender, kind: 'agent' },
+    recipient: { owner_id: ids.owner, endpoint_id: ids.recipient, kind: 'agent' },
+    body: { text: 'let me in' }, context_refs: [], capabilities: [], idempotency_key: `idem_fed_room_${suffix}`,
+    created_at: '2029-12-31T12:00:00.000Z', expires_at: '2029-12-31T12:10:00.000Z',
+  };
+  const value = crypto.sign(null, signedBytes({ ...base, signature: undefined }), senderKeys.privateKey).toString('base64url');
+  const envelope = { ...base, signature: { algorithm: 'Ed25519', key_id: ids.senderKey, value } };
+  const { body } = buildForwardRequest(envelope, {
+    originDomain: ORIGIN,
+    senderKey: { kid: ids.senderKey, alg: 'Ed25519', publicKey: senderPub },
+    senderOwnerId: ids.owner,
+    now: SIGNED_AT,
+  });
+  const { signature, keyId } = signForwardRequest(canonicalJsonBytes(body), relayIdentity);
+  const r = await acceptFederatedEnvelope(body, { 'sigil-relay-signature': signature, 'sigil-relay-key-id': keyId }, {
+    repository, registered: new Map(), relayDomain: RELAY, request_id: 'req_pg_room', now: SERVER_NOW,
+  });
+  assert.equal(r.status, 403);
+  assert.equal(r.body.code, 'ROUTE_NOT_AUTHORIZED');
+
+  const members = await pool.query('SELECT endpoint_id FROM conversation_members WHERE conversation_id = $1 ORDER BY endpoint_id', [ids.room]);
+  assert.deepEqual(members.rows.map((row) => row.endpoint_id), [ids.recipient], 'only the room owner remains on the roster');
+  const persisted = await pool.query('SELECT 1 FROM envelopes WHERE message_id = $1', [ids.message]);
+  assert.equal(persisted.rowCount, 0);
+  const shadow = await pool.query('SELECT 1 FROM endpoints WHERE endpoint_id = $1', [ids.sender]);
+  assert.equal(shadow.rowCount, 0, 'a refused federated sender is never shadow-registered');
+});

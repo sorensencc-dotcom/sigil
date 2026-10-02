@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { validateEnvelope, reject, signedBytes, checkRecipientLocality } from './validate-envelope.mjs';
-import { authorizeRoomEnvelope, assertRoomTypeHasRoom } from './room-policy.mjs';
+import { authorizeRoomEnvelope, assertRoomTypeHasRoom, assertNotRoomConversation } from './room-policy.mjs';
 import { resolveRateLimits, resolveStreamSequence, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
 import { writeRejectionAudit } from './rejection-audit.mjs';
 import { decideRoute, buildForwardRequest, signForwardRequest, postForward } from './federation-router.mjs';
@@ -202,6 +202,15 @@ async function acceptWithRepository(envelope, options) {
       // a transaction (I1: no held Postgres connection across postForward).
       await enforceCapabilityRiskGate(envelope, repository, { now });
 
+      // Rooms are relay-local (phase 1): refuse a room conversation or a
+      // room.* type before anything leaves this relay. No transaction is
+      // open here, so the lookup uses the repository's pool default. This
+      // path never verifies the envelope signature (the receiving peer
+      // does), so the answer reveals only that a room with this
+      // conversation_id exists -- never membership -- to a caller that
+      // already passed transport authentication.
+      assertNotRoomConversation(envelope, repository.lookupRoom ? await repository.lookupRoom(envelope.conversation_id) : null);
+
       // client = null: forwardEnvelope passes it only to lookupRecipientEndpoint
       // (L210) for the sender-key lookup, handled by the existing `?? null`
       // guard. buildForwardRequest / signForwardRequest / postForward never
@@ -263,6 +272,8 @@ async function acceptWithRepository(envelope, options) {
       if (envelope.message_type === 'session.resend_request') {
         throw reject('ROUTE_NOT_AUTHORIZED', 'Session resend requests are local-only');
       }
+      // Rooms are relay-local (phase 1); see the sync-forward branch above.
+      assertNotRoomConversation(envelope, repository.lookupRoom ? await repository.lookupRoom(envelope.conversation_id, client) : null);
       return forwardEnvelope(envelope, route, options, client);
     }
 
