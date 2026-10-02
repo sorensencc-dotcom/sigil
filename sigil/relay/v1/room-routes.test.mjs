@@ -76,6 +76,10 @@ test('authorization rules', async () => {
     assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_claude', response_mode: 'always' })).body.code, 'INVALID_REQUEST');
     assert.equal((await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: '' })).body.code, 'INVALID_REQUEST');
     assert.equal((await call(port, 'GET', `/v1/rooms/${roomId}/messages?after_seq=-1`, 'Bearer chris-web')).body.code, 'INVALID_REQUEST');
+    const overflow = await call(port, 'GET', `/v1/rooms/${roomId}/messages?after_seq=9223372036854775808`, 'Bearer chris-web');
+    assert.equal(overflow.status, 400, 'after_seq above the int8 max is refused before reaching the database');
+    assert.equal(overflow.body.code, 'INVALID_REQUEST');
+    assert.equal((await call(port, 'GET', `/v1/rooms/${roomId}/messages?after_seq=9223372036854775807`, 'Bearer chris-web')).status, 200, 'the int8 max itself is valid');
   });
 });
 
@@ -90,5 +94,22 @@ test('repository failure maps to 503 DATABASE_UNAVAILABLE and the server keeps s
     repository.listRoomsForEndpoint = original;
     const next = await call(port, 'GET', '/v1/rooms', 'Bearer chris-web');
     assert.equal(next.status, 200);
+  });
+});
+
+test('history items carry canonical_bytes unchanged from the repository', async () => {
+  await withServer(async (port, repository) => {
+    const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'history' })).body.room.conversation_id;
+    const envelope = {
+      message_id: 'msg_hist_1', conversation_id: roomId, message_type: 'room.message',
+      sender: { endpoint_id: 'ep_web', owner_id: 'usr_chris' }, broadcast_scope: { conversation_id: roomId },
+      body: { text: 'hi' }, idempotency_key: 'idem_hist_1', created_at: '2026-10-02T12:00:00.000Z', expires_at: '2026-10-02T13:00:00.000Z',
+    };
+    await repository.persistAcceptedEnvelope({ envelope, message_id: 'msg_hist_1', canonical_hash: 'h', canonical_bytes: Buffer.from('stored-signed-bytes'), roomSeq: 1n, roomFanout: [] });
+    const history = await call(port, 'GET', `/v1/rooms/${roomId}/messages?after_seq=0`, 'Bearer chris-web');
+    assert.equal(history.status, 200);
+    assert.equal(history.body.items.length, 1);
+    assert.equal(history.body.items[0].canonical_bytes, Buffer.from('stored-signed-bytes').toString('base64url'));
+    assert.deepEqual(history.body.items, JSON.parse(JSON.stringify(await repository.listRoomMessages(roomId, 0n, 100))));
   });
 });

@@ -7,6 +7,7 @@ const RESPONSE_MODES = new Set(['joins', 'mentions_only']);
 const ROOM_METHODS = ['createRoom', 'lookupRoom', 'listRoomsForEndpoint', 'addRoomMember', 'removeRoomMember', 'lookupRoomMember', 'listRoomMembers', 'listRoomMessages'];
 const NAME_MAX = 80;
 const HISTORY_LIMIT_MAX = 500;
+const ROOM_SEQ_MAX = 9223372036854775807n; // envelopes.room_seq is int8
 
 function send(response, requestId, status, body) {
   response.writeHead(status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
@@ -103,6 +104,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     const afterRaw = parsedUrl.searchParams.get('after_seq') ?? '0';
     const limitRaw = parsedUrl.searchParams.get('limit') ?? '100';
     if (!/^\d+$/.test(afterRaw) || !/^\d+$/.test(limitRaw)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'after_seq and limit must be non-negative integers');
+    if (BigInt(afterRaw) > ROOM_SEQ_MAX) return fail(response, requestId, 400, 'INVALID_REQUEST', 'after_seq is out of range');
     const limit = Math.min(Math.max(Number(limitRaw), 1), HISTORY_LIMIT_MAX);
     const items = await repository.listRoomMessages(roomId, BigInt(afterRaw), limit);
     return send(response, requestId, 200, { code: 'OK', items, next_after_seq: items.at(-1)?.room_seq ?? afterRaw });
