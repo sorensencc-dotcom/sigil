@@ -109,17 +109,29 @@ Bridge order follows existing support and value:
 | GitHub Copilot CLI | New. Same spawn pattern. |
 | Antigravity CLI | New. Same spawn pattern. Antigravity once faked an approval and force-pushed during IronLedger Phase 1 (2026-09-01), so its bridge starts with a read-only tool allowlist and has no `high` risk-tier capabilities. |
 | xAI Grok CLI | New. Same spawn pattern. |
-| Grok bots (Grok Bot app) | Not a local fleet, and not spawned. The bots live in the Grok Bot app on this account. The app wakes a bot when it receives a message, when one of its routines fires, or when another bot hands it work. Each bot admitted to a room is its own endpoint. A bot wakes in three ways only:
-- a person messages it in the app;
-- one of its routines fires, on a schedule or from an outside event (Slack, GitHub, email, webhook, and a few others);
-- another Grok bot hands it work inside the app.
-
-A router on this machine can use none of these today. The only possible route is a webhook routine, if the app gives that bot a webhook URL; that is an open question, not a connector to build. Until it is answered, Grok bots are not router-invocable. Start with Chief and Helix CI Triage only; add others when a room needs them. |
+| Grok bots (Grok Bot app) | Not on this machine and not spawned. Reached through one Floor Warden webhook. See "Grok bots through the Floor Warden". |
 | Nous Research Hermes Agent | New. Same spawn pattern. |
 | Meta Muse, ChatGPT, Claude Cowork | Hosted apps, not CLIs. See "Hosted app agents". |
 | Ironbots (9 scheduled bots) | Two steps. First, each bot posts its run report into a room as `room.message` (notebook-ingester, kb-sentinel, trm-bot, watchlist-miner, daemon-healer, ironledger-sentinel, ci-watchdog, and the others in `_status-feed/ironbots_daily_report.json`). Second, each bot gets a request entry point so you can ask it things in the room, for example "kb-sentinel, rerun drift on helix" or "ci-watchdog, why did the governance job fail?". Each bot becomes an agent endpoint with a narrow command list rather than a free-form LLM CLI. |
 
 Every new CLI bridge needs a confirmed headless (non-interactive) mode and a session-resume mode before it is built. Where a CLI has no resume mode, the bridge replays recent room history instead.
+
+### Grok bots through the Floor Warden
+
+Grok bots live in the Grok Bot app on the user's account. Nothing on this machine starts them. The app wakes a bot in three ways only:
+- a person messages it in the app;
+- one of its routines fires, on a schedule or from an outside event (Slack, GitHub, email, webhook, and a few others);
+- another Grok bot hands it work inside the app.
+
+Sigil uses the routine path through one bot (decided 2026-10-02):
+
+1. **One webhook, not one per bot.** A single Floor Warden bot in the Grok Bot app owns one webhook routine. Sigil stores that one URL as a secret.
+2. **Inbound.** When a room needs a Grok bot (an @mention, or a router pick), a bridge POSTs the room message to the Floor Warden webhook. The payload names the target bot, the room, the thread, and the triggering message. The Floor Warden hands the work to the named bot inside the app.
+3. **Roster.** The Floor Warden's roster starts with Chief and Helix CI Triage. Adding a bot later means editing that roster in the app and adding the bot's endpoint to the room. It never needs a new URL.
+4. **Endpoints.** Each rostered bot is still its own Sigil endpoint and room member, so room roles, response modes, and the loop guards apply per bot.
+5. **Not ready yet.** The webhook URL exists only after the Floor Warden routine is confirmed and the URL is copied from its routine panel. Until then, Grok bots are not invocable.
+
+Still open: the reply path. The bot's answer must come back into the room, either through the rooms MCP plugin (if Grok bots can call custom MCP tools) or through an outbound webhook the Floor Warden calls on Sigil.
 
 ### Hosted app agents (Muse, ChatGPT, Claude Cowork)
 
@@ -194,7 +206,7 @@ Each phase ships with tests in the repo's `*.test.mjs` pattern and contract entr
 3. **Router.** @mention routing, the LLM router, decision events, and fallback behavior.
 4. **Local web client.** Room list, timeline, threads, roster with response modes, Stop button, and approval cards.
 5. **More bridges.** GitHub Copilot CLI, Antigravity CLI, xAI Grok CLI, Hermes Agent, and Ironbots report posting.
-6. **Ironbots requests and Grok bots.** A request entry point and a command list for each Ironbot. Grok bot delivery for Chief and Helix CI Triage, once the delivery mechanism is confirmed.
+6. **Ironbots requests and Grok bots.** A request entry point and a command list for each Ironbot. Floor Warden bridge for Grok bots (Chief and Helix CI Triage), once the Floor Warden routine is confirmed and its webhook URL is copied.
 7. **Mobile.** PWA, tunnel, and push.
 8. **Rooms MCP plugin.** Remote MCP server (Streamable HTTP + OAuth) for Meta Muse, ChatGPT, Claude Cowork, and any other app with custom connectors. Needs the tunnel from the mobile phase.
 9. **Other humans.** Invites, OIDC, roles, and `invokable_by`.
@@ -214,5 +226,5 @@ The Gemini drafts contain the following items. None of them appears in the Hyper
 ## Open questions
 
 1. **Vendor claims.** The Cowork, ChatGPT, and Muse connector claims need checking against current vendor documentation.
-2. **Grok bot webhook routine.** Does the Grok Bot app give Chief and Helix CI Triage a webhook URL for a routine? If yes, the router can wake them by POSTing a room message to that URL. A reply path is still needed: either the bot calls the rooms MCP plugin (if Grok bots can use custom MCP tools), or the bot sends its reply through a webhook of its own. If there is no webhook URL, Grok bots cannot join rooms in v1.
+2. **Floor Warden.** Confirm the Floor Warden routine and copy its webhook URL from the routine panel. Then decide the reply path: the rooms MCP plugin, or an outbound webhook from the Floor Warden to Sigil.
 3. **Branch.** Should this work start on its own branch off `main`? The current branch is `fix/verify-contract-revocation-check`.
