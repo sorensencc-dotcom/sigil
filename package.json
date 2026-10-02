@@ -75,7 +75,6 @@
   },
   "homepage": "https://github.com/sorensencc-dotcom/sigil#readme",
   "dependencies": {
-    "@cic/delivery-guard": "file:CIC-GOVERNANCE/packages/delivery-guard",
     "@chainsafe/libp2p-noise": "17.0.0",
     "@chainsafe/libp2p-yamux": "8.0.1",
     "@libp2p/crypto": "5.1.23",
