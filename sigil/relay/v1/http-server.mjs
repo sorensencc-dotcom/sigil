@@ -417,7 +417,14 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       response.writeHead(result.status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(result.body ? JSON.stringify(result.body) : '');
     }
-    if (await handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody })) return;
+    try {
+      if (await handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody })) return;
+    } catch (error) {
+      logger?.error?.('room route failed', error);
+      if (response.headersSent) return response.end();
+      response.writeHead(503, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+      return response.end(JSON.stringify({ request_id: requestId, code: 'DATABASE_UNAVAILABLE', message: 'Rooms temporarily unavailable', details: {} }));
+    }
     if (request.method === 'GET' && request.url.startsWith('/v1/inbox')) {
       if (!repository?.listInbox) return response.writeHead(503).end();
       const since = new URL(request.url, 'http://sigil.local').searchParams.get('since') ?? '';

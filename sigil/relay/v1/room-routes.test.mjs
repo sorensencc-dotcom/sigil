@@ -78,3 +78,17 @@ test('authorization rules', async () => {
     assert.equal((await call(port, 'GET', `/v1/rooms/${roomId}/messages?after_seq=-1`, 'Bearer chris-web')).body.code, 'INVALID_REQUEST');
   });
 });
+
+test('repository failure maps to 503 DATABASE_UNAVAILABLE and the server keeps serving', async () => {
+  await withServer(async (port, repository) => {
+    const original = repository.listRoomsForEndpoint;
+    repository.listRoomsForEndpoint = async () => { throw new Error('connection terminated: secret-detail'); };
+    const failed = await call(port, 'GET', '/v1/rooms', 'Bearer chris-web');
+    assert.equal(failed.status, 503);
+    assert.equal(failed.body.code, 'DATABASE_UNAVAILABLE');
+    assert.doesNotMatch(JSON.stringify(failed.body), /secret-detail/);
+    repository.listRoomsForEndpoint = original;
+    const next = await call(port, 'GET', '/v1/rooms', 'Bearer chris-web');
+    assert.equal(next.status, 200);
+  });
+});
