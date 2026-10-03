@@ -30,7 +30,8 @@ export function createAgentDaemon({
   logger = console,
   pollIntervalMs = 15000,
   heartbeatIntervalMs = 15000,
-  missedHeartbeatsLimit = 3
+  missedHeartbeatsLimit = 3,
+  onRoomMessage = null
 } = {}) {
   if (!identity || !relayUrl) throw new Error('identity and relayUrl are required');
 
@@ -188,13 +189,27 @@ export function createAgentDaemon({
       }
     }
 
+    if (messageType === 'room.message' && onRoomMessage) {
+      let outcome = 'failed';
+      try {
+        outcome = (await onRoomMessage({ deliveryId, envelope }))?.outcome ?? 'failed';
+      } catch (err) {
+        logger.error?.(`Room bridge failed: ${err.message}`, err);
+      }
+      if (deliveryId) await relay.acknowledge(deliveryId, { outcome: 'acknowledged' }).catch(() => {});
+      return { delivery_id: deliveryId, outcome: `room_${outcome}` };
+    }
+
     if (deliveryId) {
       await relay.acknowledge(deliveryId, { outcome: 'acknowledged' }).catch(() => {});
     }
     return { delivery_id: deliveryId, outcome: 'acknowledged' };
   }
 
+  let polling = false;
   async function poll() {
+    if (polling) return 0;
+    polling = true;
     try {
       const page = await relay.reconcileInbox(since);
       for (const item of page.items) {
@@ -205,6 +220,8 @@ export function createAgentDaemon({
     } catch (err) {
       logger.error?.(`Daemon inbox poll error: ${err.message}`);
       return 0;
+    } finally {
+      polling = false;
     }
   }
 

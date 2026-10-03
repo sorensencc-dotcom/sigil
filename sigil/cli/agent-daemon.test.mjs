@@ -384,3 +384,51 @@ test('agent daemon handles relay poll network errors gracefully without crashing
   }
 });
 
+
+test('agent daemon hands room.message deliveries to onRoomMessage and acks them', async () => {
+  const identity = createIdentity({ ownerId: 'usr_soren', endpointId: 'ep_claude', kind: 'agent' });
+  const acks = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => { if (url.toString().includes('/ack')) acks.push(url.toString()); return { ok: true, status: 200, text: async () => '{}' }; };
+  try {
+    const handled = [];
+    const daemon = createAgentDaemon({ identity, relayUrl: 'http://127.0.0.1:8791', onRoomMessage: async (item) => { handled.push(item); return { outcome: 'replied' }; } });
+    const envelope = { message_id: 'msg_r', message_type: 'room.message', conversation_id: 'room_1', body: { text: 'hi' } };
+    const result = await daemon.processItem({ delivery_id: 'del_r', envelope });
+    assert.deepEqual(result, { delivery_id: 'del_r', outcome: 'room_replied' });
+    assert.equal(handled[0].envelope.message_id, 'msg_r');
+    assert.equal(acks.length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('agent daemon poll() is not re-entrant: concurrent polls run onRoomMessage once', async () => {
+  const identity = createIdentity({ ownerId: 'usr_soren', endpointId: 'ep_claude', kind: 'agent' });
+  const originalFetch = globalThis.fetch;
+  const envelope = { message_id: 'msg_slow', message_type: 'room.message', conversation_id: 'room_1', body: { text: 'hi' } };
+  let inboxFetches = 0;
+  globalThis.fetch = async (url) => {
+    if (url.toString().includes('/ack')) return { ok: true, status: 200, text: async () => '{}' };
+    inboxFetches += 1;
+    return { ok: true, status: 200, text: async () => JSON.stringify({ items: [{ delivery_id: 'del_slow', envelope }], next_since: 'c1' }) };
+  };
+  try {
+    let calls = 0;
+    const daemon = createAgentDaemon({
+      identity,
+      relayUrl: 'http://127.0.0.1:8791',
+      logger: { error: () => {}, warn: () => {}, log: () => {} },
+      onRoomMessage: async () => { calls += 1; await new Promise((r) => setTimeout(r, 300)); return { outcome: 'replied' }; }
+    });
+    const [a, b] = await Promise.all([daemon.poll(), daemon.poll()]);
+    assert.equal(calls, 1);
+    assert.equal(inboxFetches, 1);
+    assert.deepEqual([a, b].sort(), [0, 1]);
+    // flag cleared afterwards
+    await daemon.poll();
+    assert.equal(calls, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
