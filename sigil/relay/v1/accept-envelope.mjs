@@ -375,7 +375,10 @@ async function acceptWithRepository(envelope, options) {
     }
     const result = validateEnvelope(envelope, { ...options, idempotency: new Map(), capabilityGrants, ...(room ? { broadcastAuthorizer: () => true } : {}) });
     assertRoomTypeHasRoom(envelope, room);
-    const roomFanout = room ? await authorizeRoomEnvelope(envelope, room, repository, client) : null;
+    const roomPlan = room
+      ? await authorizeRoomEnvelope(envelope, room, repository, client, { inboxDepthLimit: options.inboxDepthLimit ?? DEFAULT_INBOX_DEPTH_LIMIT, registered: options.registered, now })
+      : null;
+    const roomFanout = roomPlan?.fanout ?? null;
     const prior = await repository.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key, client);
     if (prior && prior.canonical_hash !== result.canonical_hash) throw reject('DUPLICATE_MESSAGE', 'Idempotency key conflicts with an existing body');
     if (prior) return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: prior.message_id, duplicate: true } };

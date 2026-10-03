@@ -22,17 +22,43 @@ export function assertNotRoomConversation(envelope, room) {
   assertRoomTypeHasRoom(envelope, null);
 }
 
-// Authorizes an envelope addressed to a room and returns the endpoint ids to
-// deliver it to. Direct (recipient) envelopes are refused because
-// persistAcceptedEnvelope's direct path auto-adds sender and recipient to
-// conversation_members, which would let any endpoint join a room uninvited.
-export async function authorizeRoomEnvelope(envelope, room, repository, client) {
+// Authorizes an envelope addressed to a room and decides who receives it.
+// Direct (recipient) envelopes are refused because persistAcceptedEnvelope's
+// direct path auto-adds sender and recipient to conversation_members, which
+// would let any endpoint join a room uninvited.
+//
+// Fan-out eligibility: a revoked or unknown endpoint gets nothing, and a
+// recipient whose inbox is at the depth limit is skipped (audited) instead
+// of failing the whole room message -- one stuck inbox must not silence the
+// room, and every member can catch up from room history.
+export async function authorizeRoomEnvelope(envelope, room, repository, client, { inboxDepthLimit, registered, now } = {}) {
   const details = { conversation_id: envelope.conversation_id };
   if (envelope.recipient || !envelope.broadcast_scope) throw reject('ROUTE_NOT_AUTHORIZED', 'Room envelopes must use broadcast_scope', details);
   if (envelope.broadcast_scope.conversation_id !== room.conversation_id) throw reject('ROUTE_NOT_AUTHORIZED', 'broadcast_scope must name the room', details);
   if (!ROOM_MESSAGE_TYPES.has(envelope.message_type)) throw reject('ROUTE_NOT_AUTHORIZED', 'Message type is not allowed in rooms', { ...details, message_type: envelope.message_type });
-  const sender = await repository.lookupRoomMember(room.conversation_id, envelope.sender.endpoint_id, client);
-  if (!sender) throw reject('ROUTE_NOT_AUTHORIZED', 'Sender is not a room member', details);
-  const members = await repository.listRoomMembers(room.conversation_id, client);
-  return members.map((member) => member.endpoint_id).filter((endpointId) => endpointId !== envelope.sender.endpoint_id);
+  const senderMember = await repository.lookupRoomMember(room.conversation_id, envelope.sender.endpoint_id, client);
+  if (!senderMember) throw reject('ROUTE_NOT_AUTHORIZED', 'Sender is not a room member', details);
+  const others = (await repository.listRoomMembers(room.conversation_id, client)).filter((member) => member.endpoint_id !== envelope.sender.endpoint_id);
+  const fanout = [];
+  const skipped = [];
+  for (const member of others) {
+    const reason = await deliveryBlocker(member.endpoint_id, repository, client, { inboxDepthLimit, registered });
+    if (reason) skipped.push({ endpoint_id: member.endpoint_id, reason });
+    else fanout.push(member.endpoint_id);
+  }
+  for (const skip of skipped) {
+    await repository.recordAuditEvent?.({ eventType: 'room.delivery_skipped', subjectId: envelope.message_id, endpointId: skip.endpoint_id, conversationId: room.conversation_id, outcome: 'skipped', reason: skip.reason, now, client });
+  }
+  return { senderMember, fanout, skipped, agentMembers: others.filter((member) => member.response_mode !== null) };
+}
+
+// Returns null when endpointId may receive a room delivery now, otherwise the
+// reason it may not. Shared with room-dispatch.mjs for agent deliveries.
+export async function deliveryBlocker(endpointId, repository, client, { inboxDepthLimit, registered }) {
+  const endpoint = repository.lookupRecipientEndpoint
+    ? (await repository.lookupRecipientEndpoint(endpointId, client)) ?? registered?.get(endpointId)
+    : registered?.get(endpointId);
+  if (!endpoint || endpoint.status !== 'active') return 'endpoint_inactive';
+  if (await repository.countOpenDeliveries(endpointId, client) >= inboxDepthLimit) return 'inbox_full';
+  return null;
 }

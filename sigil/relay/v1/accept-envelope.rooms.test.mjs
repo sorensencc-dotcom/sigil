@@ -160,3 +160,25 @@ test('a sync-forwarded high-risk envelope aimed at a room is refused without con
   assert.equal(result.body.code, 'ROUTE_NOT_AUTHORIZED');
   assert.equal(world.approvalState(), 'approved', 'the approval is still unconsumed');
 });
+
+test('fan-out skips a revoked member endpoint', async () => {
+  const { keys, registered, repository } = world();
+  await roomWithMembers(repository);
+  registered.get('ep_codex').status = 'revoked';
+  let persistedEvent;
+  const result = await acceptEnvelopeAsync(roomEnvelope(keys, 'ep_web'), { repository, registered, now: NOW, onPersisted: async (event) => { persistedEvent = event; } });
+  assert.equal(result.status, 202);
+  assert.deepEqual(persistedEvent.persisted.fanout.map((f) => f.endpoint_id), ['ep_claude']);
+});
+
+test('fan-out skips a member whose inbox is at the depth limit and audits the skip', async () => {
+  const { keys, registered, repository } = world();
+  await roomWithMembers(repository);
+  await acceptEnvelopeAsync(roomEnvelope(keys, 'ep_web'), { repository, registered, now: NOW, inboxDepthLimit: 1 });
+  let persistedEvent;
+  const second = await acceptEnvelopeAsync(roomEnvelope(keys, 'ep_web'), { repository, registered, now: NOW, inboxDepthLimit: 1, onPersisted: async (event) => { persistedEvent = event; } });
+  assert.equal(second.status, 202, 'the room message is still accepted');
+  assert.deepEqual(persistedEvent.persisted.fanout, []);
+  const skips = repository._debugGetAuditEvents().filter((e) => e.event_type === 'room.delivery_skipped');
+  assert.deepEqual(skips.map((e) => [e.endpoint_id, e.reason]).sort(), [['ep_claude', 'inbox_full'], ['ep_codex', 'inbox_full']]);
+});

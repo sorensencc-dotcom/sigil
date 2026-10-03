@@ -12,11 +12,13 @@ const members = [
 const repository = {
   async lookupRoomMember(_c, endpointId) { return members.find((m) => m.endpoint_id === endpointId) ?? null; },
   async listRoomMembers() { return members; },
+  async countOpenDeliveries() { return 0; },
+  async lookupRecipientEndpoint() { return { status: 'active' }; },
 };
 const base = { conversation_id: 'room_1', message_type: 'room.message', sender: { endpoint_id: 'ep_web' }, broadcast_scope: { conversation_id: 'room_1' } };
 
 test('a member broadcast fans out to every other active member', async () => {
-  assert.deepEqual(await authorizeRoomEnvelope(base, room, repository, null), ['ep_claude', 'ep_codex']);
+  assert.deepEqual((await authorizeRoomEnvelope(base, room, repository, null, { inboxDepthLimit: 10 })).fanout, ['ep_claude', 'ep_codex']);
 });
 
 for (const [name, envelope] of [
