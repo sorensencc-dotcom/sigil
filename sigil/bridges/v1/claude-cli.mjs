@@ -1,7 +1,7 @@
 // sigil/bridges/v1/claude-cli.mjs
 import { runCli } from './cli-runner.mjs';
 
-export const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+export const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
 function invalid(message) {
   return Object.assign(new Error(message), { code: 'CLI_INVALID_OUTPUT' });
@@ -10,6 +10,8 @@ function invalid(message) {
 export function assertSessionId(sessionId) {
   if (sessionId != null && !SESSION_ID_PATTERN.test(sessionId)) throw Object.assign(new Error('Session id is not a plain token'), { code: 'CLI_INVALID_SESSION' });
 }
+
+const TOOL_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
 
 export function parseClaudeOutput(stdout) {
   let parsed;
@@ -20,6 +22,9 @@ export function parseClaudeOutput(stdout) {
 }
 
 export function createClaudeCli({ command = 'claude', commandArgs = [], allowedTools = ['Read', 'Grep', 'Glob'], cwd, env, timeoutMs, runner = runCli } = {}) {
+  if (!Array.isArray(allowedTools) || allowedTools.length === 0 || !allowedTools.every((t) => typeof t === 'string' && TOOL_NAME_PATTERN.test(t))) {
+    throw Object.assign(new Error('allowedTools must be a non-empty list of plain tool names'), { code: 'CLI_INVALID_CONFIG' });
+  }
   return {
     name: 'claude',
     async run({ prompt, sessionId = null, signal }) {

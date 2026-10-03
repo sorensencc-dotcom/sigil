@@ -58,3 +58,30 @@ test('both adapters run end to end against the fake CLI', async () => {
   assert.equal(second.sessionId, 'sess_x');
   assert.match(second.text, /resumed=true/);
 });
+
+test('session ids that look like flags are refused before spawning, both adapters', async () => {
+  const runner = async () => { throw new Error('must not spawn'); };
+  for (const cli of [createClaudeCli({ runner }), createCodexCli({ runner })]) {
+    for (const sessionId of ['--dangerously-skip-permissions', '-x']) {
+      await assert.rejects(cli.run({ prompt: 'p', sessionId }), { code: 'CLI_INVALID_SESSION' });
+    }
+  }
+});
+
+test('Codex sandbox accepts only read-only and workspace-write', () => {
+  assert.doesNotThrow(() => createCodexCli({ sandbox: 'workspace-write' }));
+  for (const sandbox of ['danger-full-access', 'read-only" -c x="', '']) {
+    assert.throws(() => createCodexCli({ sandbox }), { code: 'CLI_INVALID_CONFIG' });
+  }
+});
+
+test('Claude allowedTools must be a non-empty list of plain tool names', () => {
+  for (const allowedTools of [[], ['--dangerously-skip-permissions'], ['Read', ''], ['Bash(rm:*)'], 'Read']) {
+    assert.throws(() => createClaudeCli({ allowedTools }), { code: 'CLI_INVALID_CONFIG' });
+  }
+});
+
+test('Codex stream with only error items is CLI_INVALID_OUTPUT', () => {
+  const stdout = `${JSON.stringify({ type: 'thread.started', thread_id: 't1' })}\n${JSON.stringify({ type: 'item.completed', item: { type: 'error', message: 'boom' } })}\n`;
+  assert.throws(() => parseCodexOutput(stdout), { code: 'CLI_INVALID_OUTPUT' });
+});

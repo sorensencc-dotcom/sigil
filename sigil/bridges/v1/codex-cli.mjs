@@ -2,6 +2,8 @@
 import { runCli } from './cli-runner.mjs';
 import { assertSessionId } from './claude-cli.mjs';
 
+const SANDBOXES = new Set(['read-only', 'workspace-write']);
+
 export function parseCodexOutput(stdout) {
   let sessionId = null;
   let text = null;
@@ -17,6 +19,7 @@ export function parseCodexOutput(stdout) {
 }
 
 export function createCodexCli({ command = 'codex', commandArgs = [], sandbox = 'read-only', cwd, env, timeoutMs, runner = runCli } = {}) {
+  if (!SANDBOXES.has(sandbox)) throw Object.assign(new Error('sandbox must be read-only or workspace-write'), { code: 'CLI_INVALID_CONFIG' });
   return {
     name: 'codex',
     async run({ prompt, sessionId = null, signal }) {
