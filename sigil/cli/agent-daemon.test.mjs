@@ -432,3 +432,42 @@ test('agent daemon poll() is not re-entrant: concurrent polls run onRoomMessage 
     globalThis.fetch = originalFetch;
   }
 });
+
+test('agent daemon does not ack a room delivery when onRoomMessage throws, and the next poll retries it', async () => {
+  const identity = createIdentity({ ownerId: 'usr_soren', endpointId: 'ep_claude', kind: 'agent' });
+  const originalFetch = globalThis.fetch;
+  const envelope = { message_id: 'msg_retry', message_type: 'room.message', conversation_id: 'room_1', body: { text: 'hi' } };
+  const acks = [];
+  const sinces = [];
+  let acked = false;
+  globalThis.fetch = async (url) => {
+    const text = url.toString();
+    if (text.includes('/ack') || text.includes('/processing')) { acks.push(text); acked = true; return { ok: true, status: 200, text: async () => '{}' }; }
+    sinces.push(new URL(text).searchParams.get('since'));
+    const items = acked ? [] : [{ delivery_id: 'del_retry', queued_at: '2026-10-02T12:00:00.000Z', envelope }];
+    return { ok: true, status: 200, text: async () => JSON.stringify({ items, next_since: items.at(-1)?.queued_at ?? '' }) };
+  };
+  try {
+    const errors = [];
+    let calls = 0;
+    const daemon = createAgentDaemon({
+      identity,
+      relayUrl: 'http://127.0.0.1:8791',
+      logger: { error: (message) => errors.push(message), warn: () => {}, log: () => {} },
+      onRoomMessage: async () => { calls += 1; if (calls === 1) throw new Error('relay lookup failed'); return { outcome: 'replied' }; },
+    });
+    const direct = await daemon.processItem({ delivery_id: 'del_direct', envelope });
+    assert.equal(direct.outcome, 'room_unacked');
+    assert.equal(acks.length, 0, 'a throw is not acked');
+    assert.ok(errors.some((message) => /relay lookup failed/.test(message)));
+    calls = 0;
+    await daemon.poll();
+    assert.equal(acks.length, 0, 'still not acked after the failing poll');
+    await daemon.poll();
+    assert.equal(calls, 2, 'the next poll handed the same delivery to the bridge again');
+    assert.deepEqual(sinces.slice(0, 2), ['', ''], 'since did not advance past the unacked delivery');
+    assert.equal(acks.length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
