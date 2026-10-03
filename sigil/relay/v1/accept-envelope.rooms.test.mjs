@@ -49,6 +49,7 @@ test('a member room.message is accepted, sequenced, and fanned out to humans; a 
   const history = await repository.listRoomMessages('room_1', 0n, 100);
   assert.deepEqual(history.map((m) => m.room_seq), ['1', '2']);
   assert.equal(history[1].canonical_bytes, signedBytes(secondEnvelope).toString('base64url'), 'history carries the signed bytes the accept path stored');
+  assert.equal((await repository.listInbox('ep_claude')).length, 1, 'the invoked agent holds its one delivery');
   assert.equal((await repository.listInbox('ep_codex')).length, 0);
   assert.equal((await repository.listInbox('ep_web')).length, 1, 'the agent reply reached the human');
   assert.equal((await repository.listInbox('ep_web2')).length, 2);

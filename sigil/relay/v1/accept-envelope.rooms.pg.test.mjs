@@ -132,3 +132,27 @@ test('postgres accept path: concurrent room posts are gapless, non-members refus
   const strangerRows = await pool.query('SELECT count(*)::int AS n FROM conversation_members WHERE conversation_id = $1 AND endpoint_id = $2', [conversationId, stranger.endpointId]);
   assert.equal(strangerRows.rows[0].n, 0);
 });
+
+test('postgres accept path: two concurrent replies on one invocation yield one 202 and one ROOM_NOT_INVOKED', { skip: !connectionString }, async (t) => {
+  assertDisposableTestDatabase(connectionString);
+  await applyMigrations(connectionString, { reset: true });
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const world = await seed(pool, suffix);
+  const { web, claude } = world.endpoints;
+  const repository = new PostgresRepository({ pool });
+  const conversationId = `room_${suffix}`;
+  const accept = (envelope) => acceptEnvelopeAsync(envelope, { repository, registered: world.registered, now: NOW });
+  await repository.createRoom({ conversationId, workspaceId: `ws_${world.human}`, name: `race_${suffix}`, createdByHumanId: world.human, ownerEndpointId: web.endpointId, now: NOW });
+  await repository.addRoomMember({ conversationId, endpointId: claude.endpointId, role: 'member', responseMode: 'joins', addedByHumanId: world.human, now: NOW });
+
+  const root = roomEnvelope(world, conversationId, 'web', { body: { text: '@claude', mentions: [claude.endpointId] } });
+  assert.equal((await accept(root)).status, 202);
+  const replies = [1, 2].map((n) => roomEnvelope(world, conversationId, 'claude', { body: { text: `reply ${n}`, thread_root_id: root.message_id } }));
+  const results = await Promise.all(replies.map(accept));
+  assert.deepEqual(results.map((r) => r.status).sort(), [202, 403], JSON.stringify(results));
+  assert.equal(results.find((r) => r.status === 403).body.code, 'ROOM_NOT_INVOKED');
+  const history = await repository.listRoomMessages(conversationId, 0n, 100);
+  assert.equal(history.filter((m) => m.envelope.sender.endpoint_id === claude.endpointId).length, 1, 'exactly one agent message persisted');
+});

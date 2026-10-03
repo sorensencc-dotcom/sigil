@@ -385,7 +385,7 @@ async function acceptWithRepository(envelope, options) {
     if (prior && prior.canonical_hash !== result.canonical_hash) throw reject('DUPLICATE_MESSAGE', 'Idempotency key conflicts with an existing body');
     if (prior) return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: prior.message_id, duplicate: true } };
     const completing = roomPlan ? await assertAgentMayPost(envelope, roomPlan.senderMember, repository, client) : null;
-    // High capability + approval gate already ran once for this
+    // High-risk capability + approval gate already ran once for this
     // transaction via enforceCapabilityRiskGate above (line 247) -- it uses
     // the same sha256(signedBytes(envelope)) hash as result.canonical_hash,
     // so re-running consumeApprovalDecision here would look up an

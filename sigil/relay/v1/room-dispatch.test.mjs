@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { acceptEnvelopeAsync } from './accept-envelope.mjs';
 import { signedBytes } from './validate-envelope.mjs';
+import { applyRoomDispatch } from './room-dispatch.mjs';
 import { createMemoryRepository } from '../../cli/memory-repository.mjs';
 
 const NOW = new Date('2026-10-02T12:01:00.000Z');
@@ -176,4 +177,24 @@ test('a retried agent reply is a duplicate, not ROOM_NOT_INVOKED', async () => {
   await accept(w, reply);
   const { result } = await accept(w, reply);
   assert.deepEqual([result.status, result.body.duplicate], [202, true]);
+});
+
+test('a stale completing invocation is refused (race between two agent replies)', async () => {
+  // The memory repository has no real transactions, so the race is simulated by
+  // handing applyRoomDispatch a `completing` row that another reply already finished.
+  const w = world();
+  await room(w.repository);
+  const root = post(w, 'ep_web', { text: '@ep_claude', mentions: ['ep_claude'] });
+  await accept(w, root);
+  const running = await w.repository.lookupRunningInvocation('room_1', 'ep_claude');
+  await accept(w, post(w, 'ep_claude', { text: 'first', thread_root_id: root.message_id }));
+  const second = post(w, 'ep_claude', { text: 'second', thread_root_id: root.message_id });
+  const roomRow = await w.repository.lookupRoom('room_1');
+  const plan = { senderMember: { response_mode: 'joins' }, agentMembers: [] };
+  await assert.rejects(
+    applyRoomDispatch({ envelope: second, room: roomRow, plan, completing: running, repository: w.repository, now: NOW, inboxDepthLimit: 100, registered: w.registered }),
+    { code: 'ROOM_NOT_INVOKED' },
+  );
+  const rows = await w.repository.listRoomInvocations('room_1');
+  assert.equal(rows.filter((r) => r.status === 'completed').length, 1);
 });

@@ -51,7 +51,10 @@ export async function applyRoomDispatch({ envelope, room, plan, completing, repo
   if (plan.senderMember.response_mode === null) await repository.resetAgentTurns(roomId, threadRootId, { now }, client);
 
   if (completing) {
-    await repository.finishInvocation(completing.invocation_id, { status: 'completed', replyMessageId: envelope.message_id, now }, client);
+    // A concurrent reply may have completed this invocation after the unlocked
+    // read in assertAgentMayPost. Throwing rolls back the whole accept transaction.
+    const finished = await repository.finishInvocation(completing.invocation_id, { status: 'completed', replyMessageId: envelope.message_id, now }, client);
+    if (!finished) throw reject('ROOM_NOT_INVOKED', 'Invocation already completed', { conversation_id: roomId, invocation_id: completing.invocation_id });
     const promoted = await promoteNextInvocation({ roomId, endpointId: envelope.sender.endpoint_id, repository, client, now, inboxDepthLimit, registered });
     if (promoted) roomDeliveries.push(promoted);
   }

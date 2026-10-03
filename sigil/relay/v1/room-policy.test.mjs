@@ -19,7 +19,9 @@ const repository = {
 const base = { conversation_id: 'room_1', message_type: 'room.message', sender: { endpoint_id: 'ep_web' }, broadcast_scope: { conversation_id: 'room_1' } };
 
 test('a member broadcast fans out to every other active human member, never to agents', async () => {
-  assert.deepEqual((await authorizeRoomEnvelope(base, room, repository, null, { inboxDepthLimit: 10 })).fanout, ['ep_web2']);
+  const plan = await authorizeRoomEnvelope(base, room, repository, null, { inboxDepthLimit: 10 });
+  assert.deepEqual(plan.fanout, ['ep_web2']);
+  assert.deepEqual(plan.agentMembers.map((m) => m.endpoint_id), ['ep_claude', 'ep_codex']);
 });
 
 for (const [name, envelope] of [
