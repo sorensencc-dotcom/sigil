@@ -274,3 +274,27 @@ test('POST /v1/capability-grants/:grantId/revoke revokes an owned grant and audi
     assert.equal(audits[0].eventType, 'capability_grant.revoked');
   });
 });
+
+test('POST /v1/capability-grants refuses agent principals (no human_id) with 403 before touching the repository', async () => {
+  let created = false;
+  const repository = { async createCapabilityGrant() { created = true; } };
+  await withServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_agent' }) }, async (port) => {
+    const result = await request(port, { method: 'POST', path: '/v1/capability-grants', body: { capability: 'sigil.task/submit', scope: 'sigil.task/submit', expires_at: new Date(Date.now() + 60_000).toISOString() } });
+    assert.equal(result.status, 403); assert.equal(result.body.code, 'GRANT_HUMAN_REQUIRED'); assert.equal(created, false);
+  });
+});
+
+test('POST /v1/capability-grants/:grantId/revoke lets an agent revoke its own grant, attributed to its endpoint rather than a human', async () => {
+  let call;
+  const repository = {
+    async query() { return { rows: [{ granted_to: 'ep_agent', granted_by: 'usr_1' }] }; },
+    async revokeCapabilityGrant(grantId, options) { call = { grantId, options }; return { grant_id: grantId, duplicate: false }; },
+    async recordAuditEvent() {}
+  };
+  await withServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_agent' }) }, async (port) => {
+    const result = await request(port, { method: 'POST', path: '/v1/capability-grants/grant_1/revoke' });
+    assert.equal(result.status, 200);
+    assert.equal(call.options.revokedBy, null);
+    assert.equal(call.options.revokedByEndpoint, 'ep_agent');
+  });
+});

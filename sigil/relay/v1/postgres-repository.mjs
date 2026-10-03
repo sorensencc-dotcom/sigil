@@ -1032,7 +1032,7 @@ export class PostgresRepository {
     );
     return result.rows[0];
   }
-  async revokeCapabilityGrant(grantId, { revokedBy, reason, now = new Date() } = {}) {
+  async revokeCapabilityGrant(grantId, { revokedBy = null, revokedByEndpoint = null, reason, now = new Date() } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     return this.withTransaction(async (client) => {
       const updated = await client.query(
@@ -1046,9 +1046,9 @@ export class PostgresRepository {
         return { ...existing.rows[0], duplicate: true };
       }
       await client.query(
-        `INSERT INTO capability_revocations (revocation_id, capability_grant_id, revoked_by, reason, created_at)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [`revocation_${crypto.randomUUID()}`, grantId, revokedBy, reason, timestamp]
+        `INSERT INTO capability_revocations (revocation_id, capability_grant_id, revoked_by, revoked_by_endpoint, reason, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [`revocation_${crypto.randomUUID()}`, grantId, revokedBy, revokedByEndpoint, reason ?? '', timestamp]
       );
       return { ...updated.rows[0], duplicate: false };
     });
@@ -1150,7 +1150,7 @@ export class PostgresRepository {
       return result.rows[0];
     });
   }
-  async revokeCapabilityGrantWithAudit(grantId, { revokedBy, reason, now = new Date(), actorHumanId = null, endpointId = null } = {}) {
+  async revokeCapabilityGrantWithAudit(grantId, { revokedBy = null, revokedByEndpoint = null, reason, now = new Date(), actorHumanId = null, endpointId = null } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     return this.withTransaction(async (client) => {
       const updated = await client.query(
@@ -1164,9 +1164,9 @@ export class PostgresRepository {
         return { ...existing.rows[0], duplicate: true };
       }
       await client.query(
-        `INSERT INTO capability_revocations (revocation_id, capability_grant_id, revoked_by, reason, created_at)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [`revocation_${crypto.randomUUID()}`, grantId, revokedBy, reason, timestamp]
+        `INSERT INTO capability_revocations (revocation_id, capability_grant_id, revoked_by, revoked_by_endpoint, reason, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [`revocation_${crypto.randomUUID()}`, grantId, revokedBy, revokedByEndpoint, reason ?? '', timestamp]
       );
       await client.query(
         `INSERT INTO audit_events (event_id, event_type, subject_id, actor_human_id, endpoint_id, object_type, object_id, outcome, reason, created_at)

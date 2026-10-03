@@ -712,6 +712,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       let body; try { body = JSON.parse(raw); } catch { body = null; }
       if (!body?.capability || !body?.scope || !body?.expires_at) { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'capability, scope, and expires_at are required', details: {} })); }
+      if (!principal.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'GRANT_HUMAN_REQUIRED', message: 'Only a human principal can create capability grants', details: {} })); }
       if (!repository?.createCapabilityGrant && !repository?.createCapabilityGrantWithAudit) return response.writeHead(503).end();
       try {
         const grantId = `grant_${crypto.randomUUID()}`;
@@ -744,9 +745,9 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       }
       try {
         const revoked = repository.revokeCapabilityGrantWithAudit
-          ? await repository.revokeCapabilityGrantWithAudit(grantId, { revokedBy: principal.human_id ?? principal.endpoint_id, reason: body.reason ?? null, now, actorHumanId: principal.human_id ?? null, endpointId: principal.endpoint_id })
+          ? await repository.revokeCapabilityGrantWithAudit(grantId, { revokedBy: principal.human_id ?? null, revokedByEndpoint: principal.endpoint_id, reason: body.reason ?? null, now, actorHumanId: principal.human_id ?? null, endpointId: principal.endpoint_id })
           : await (async () => {
-              const result = await repository.revokeCapabilityGrant(grantId, { revokedBy: principal.human_id ?? principal.endpoint_id, reason: body.reason ?? null, now });
+              const result = await repository.revokeCapabilityGrant(grantId, { revokedBy: principal.human_id ?? null, revokedByEndpoint: principal.endpoint_id, reason: body.reason ?? null, now });
               if (!result.duplicate) await repository.recordAuditEvent?.({ eventType: 'capability_grant.revoked', subjectId: grantId, actorHumanId: principal.human_id ?? null, endpointId: principal.endpoint_id, objectType: 'capability_grant', objectId: grantId, outcome: 'success', reason: body.reason ?? null, now });
               return result;
             })();
