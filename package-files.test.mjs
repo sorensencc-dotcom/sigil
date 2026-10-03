@@ -13,13 +13,23 @@ import path from 'node:path';
 // ERR_MODULE_NOT_FOUND for every installed consumer.
 const RELATIVE_IMPORT = /(?:import|export)\s[^'"]*?from\s*['"](\.[^'"]+)['"]|import\(\s*['"](\.[^'"]+)['"]\s*\)|^\s*import\s*['"](\.[^'"]+)['"]/gm;
 
+// npm 10 (Node 22) still runs `prepare` during `npm pack --ignore-scripts`.
+// That hook prints "Installed pre-commit secret-scan hook." on stdout ahead
+// of the JSON array, which npm 11 (Node 24) no longer does. The JSON itself
+// always starts at column 0; slice from that line.
+function parsePackReport(stdout) {
+  const start = stdout.search(/^\s*\[/m);
+  assert.notEqual(start, -1, `npm pack did not emit JSON: ${stdout.slice(0, 300)}`);
+  return JSON.parse(stdout.slice(start));
+}
+
 function packedFiles() {
   // A single command string (no args array) keeps shell mode free of the
   // DEP0190 unescaped-arguments warning; shell mode is required on Windows,
   // where npm is a .cmd shim. --ignore-scripts skips the prepack test run.
   const result = spawnSync('npm pack --dry-run --json --ignore-scripts', { encoding: 'utf8', shell: true, timeout: 120_000 });
   assert.equal(result.status, 0, `npm pack --dry-run failed: ${result.stderr}`);
-  return new Set(JSON.parse(result.stdout)[0].files.map((file) => file.path.replaceAll('\\', '/')));
+  return new Set(parsePackReport(result.stdout)[0].files.map((file) => file.path.replaceAll('\\', '/')));
 }
 
 test('every relative import in the published package resolves to a published file', () => {
@@ -47,7 +57,7 @@ test('every public export and the bin load from the packed tarball', (t) => {
   const pack = spawnSync(`npm pack --ignore-scripts --json --pack-destination "${workdir}"`, { encoding: 'utf8', shell: true, timeout: 120_000 });
   assert.equal(pack.status, 0, `npm pack failed: ${pack.stderr}`);
   // Relative filename + cwd: GNU tar (Git for Windows) parses "C:\..." as host:path.
-  const untar = spawnSync('tar', ['-xzf', JSON.parse(pack.stdout)[0].filename], { cwd: workdir, encoding: 'utf8' });
+  const untar = spawnSync('tar', ['-xzf', parsePackReport(pack.stdout)[0].filename], { cwd: workdir, encoding: 'utf8' });
   assert.equal(untar.status, 0, `tar failed: ${untar.stderr}`);
   const packageDir = path.join(workdir, 'package');
   assert.ok(fs.existsSync('node_modules'), 'run npm ci first: the tarball check links the repo node_modules');
