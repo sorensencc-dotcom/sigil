@@ -95,3 +95,32 @@ test('Codex stream with only error items is CLI_INVALID_OUTPUT', () => {
   const stdout = `${JSON.stringify({ type: 'thread.started', thread_id: 't1' })}\n${JSON.stringify({ type: 'item.completed', item: { type: 'error', message: 'boom' } })}\n`;
   assert.throws(() => parseCodexOutput(stdout), { code: 'CLI_INVALID_OUTPUT' });
 });
+
+test('both adapters pass an env allowlist, not the full process env, when env is not given', async () => {
+  const saved = { secret: process.env.SIGIL_TEST_SECRET, key: process.env.ANTHROPIC_TEST_KEY, codex: process.env.CODEX_TEST_HOME };
+  process.env.SIGIL_TEST_SECRET = 'leak-me';
+  process.env.ANTHROPIC_TEST_KEY = 'auth';
+  process.env.CODEX_TEST_HOME = 'codex';
+  try {
+    const envs = [];
+    const claudeRunner = async ({ env }) => { envs.push(env); return { stdout: JSON.stringify({ result: 'ok', session_id: 's' }) }; };
+    const codexRunner = async ({ env }) => { envs.push(env); return { stdout: `${JSON.stringify({ type: 'thread.started', thread_id: 't' })}\n${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'ok' } })}\n` }; };
+    await createClaudeCli({ runner: claudeRunner }).run({ prompt: 'p' });
+    await createCodexCli({ runner: codexRunner }).run({ prompt: 'p' });
+    for (const env of envs) {
+      assert.ok(env && typeof env === 'object');
+      assert.equal(env.SIGIL_TEST_SECRET, undefined);
+      assert.equal(env.ANTHROPIC_TEST_KEY, 'auth');
+      assert.equal(env.CODEX_TEST_HOME, 'codex');
+      const pathKey = Object.keys(process.env).find((name) => name.toUpperCase() === 'PATH');
+      assert.equal(env[pathKey], process.env[pathKey]);
+    }
+    const explicit = [];
+    await createClaudeCli({ env: { ONLY: '1' }, runner: async ({ env }) => { explicit.push(env); return { stdout: JSON.stringify({ result: 'ok', session_id: 's' }) }; } }).run({ prompt: 'p' });
+    assert.deepEqual(explicit[0], { ONLY: '1' });
+  } finally {
+    for (const [name, value] of [['SIGIL_TEST_SECRET', saved.secret], ['ANTHROPIC_TEST_KEY', saved.key], ['CODEX_TEST_HOME', saved.codex]]) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+  }
+});

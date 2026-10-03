@@ -7,6 +7,21 @@ import { spawn } from 'node:child_process';
 const DEFAULT_TIMEOUT_MS = 600_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 4_194_304;
 
+// Agent CLIs see untrusted room text, so they get only what they need to start
+// and authenticate, never the daemon's full environment (relay tokens, cloud
+// keys). Names compare case-insensitively because Windows env names do.
+const ENV_ALLOWLIST = new Set(['PATH', 'PATHEXT', 'SYSTEMROOT', 'COMSPEC', 'TEMP', 'TMP', 'USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA', 'HOMEDRIVE', 'HOMEPATH', 'LANG']);
+const ENV_AUTH_PREFIXES = ['ANTHROPIC_', 'CLAUDE_', 'CODEX_', 'OPENAI_'];
+
+export function agentEnv(source = process.env) {
+  const env = {};
+  for (const [name, value] of Object.entries(source)) {
+    const upper = name.toUpperCase();
+    if (ENV_ALLOWLIST.has(upper) || ENV_AUTH_PREFIXES.some((prefix) => upper.startsWith(prefix))) env[name] = value;
+  }
+  return env;
+}
+
 function cliError(code, message) {
   return Object.assign(new Error(message), { code });
 }

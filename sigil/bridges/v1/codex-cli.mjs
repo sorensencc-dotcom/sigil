@@ -1,5 +1,5 @@
 // sigil/bridges/v1/codex-cli.mjs
-import { runCli } from './cli-runner.mjs';
+import { agentEnv, runCli } from './cli-runner.mjs';
 import { assertSessionId } from './claude-cli.mjs';
 
 const SANDBOXES = new Set(['read-only', 'workspace-write']);
@@ -26,7 +26,7 @@ export function createCodexCli({ command = 'codex', commandArgs = [], sandbox = 
       assertSessionId(sessionId);
       const common = ['--json', '--skip-git-repo-check', '-c', `sandbox_mode="${sandbox}"`, '-'];
       const args = [...commandArgs, 'exec', ...(sessionId ? ['resume', sessionId] : []), ...common];
-      const { stdout } = await runner({ command, args, input: prompt, cwd, env, timeoutMs, signal });
+      const { stdout } = await runner({ command, args, input: prompt, cwd, env: env ?? agentEnv(), timeoutMs, signal });
       return parseCodexOutput(stdout);
     },
   };

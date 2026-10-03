@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runCli } from './cli-runner.mjs';
+import { agentEnv, runCli } from './cli-runner.mjs';
 
 const fake = new URL('./fixtures/fake-agent-cli.mjs', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
 
@@ -42,4 +42,9 @@ test('an already-aborted signal never spawns', async () => {
   let spawned = false;
   await assert.rejects(runCli({ command: 'x', signal: controller.signal, spawnImpl: () => { spawned = true; } }), { code: 'CLI_CANCELLED' });
   assert.equal(spawned, false);
+});
+
+test('agentEnv keeps the allowlist and CLI auth prefixes and drops everything else', () => {
+  const env = agentEnv({ PATH: 'p', Path: 'p2', SystemRoot: 'C:\Windows', USERPROFILE: 'u', ANTHROPIC_API_KEY: 'a', CLAUDE_CONFIG_DIR: 'c', CODEX_HOME: 'x', OPENAI_API_KEY: 'o', SIGIL_TEST_SECRET: 's', AWS_SECRET_ACCESS_KEY: 'k' });
+  assert.deepEqual(env, { PATH: 'p', Path: 'p2', SystemRoot: 'C:\Windows', USERPROFILE: 'u', ANTHROPIC_API_KEY: 'a', CLAUDE_CONFIG_DIR: 'c', CODEX_HOME: 'x', OPENAI_API_KEY: 'o' });
 });

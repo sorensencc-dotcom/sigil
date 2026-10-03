@@ -1,5 +1,5 @@
 // sigil/bridges/v1/claude-cli.mjs
-import { runCli } from './cli-runner.mjs';
+import { agentEnv, runCli } from './cli-runner.mjs';
 
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
@@ -41,7 +41,7 @@ export function createClaudeCli({ command = 'claude', commandArgs = [], allowedT
         ...(sessionId ? ['--resume', sessionId] : []),
         '--strict-mcp-config', '--tools', ...allowedTools, '--allowedTools', ...allowedTools,
       ];
-      const { stdout } = await runner({ command, args, input: prompt, cwd, env, timeoutMs, signal });
+      const { stdout } = await runner({ command, args, input: prompt, cwd, env: env ?? agentEnv(), timeoutMs, signal });
       return parseClaudeOutput(stdout);
     },
   };
