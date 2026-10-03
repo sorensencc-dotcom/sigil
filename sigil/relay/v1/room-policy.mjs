@@ -23,6 +23,8 @@ export function assertNotRoomConversation(envelope, room) {
 }
 
 // Authorizes an envelope addressed to a room and decides who receives it.
+// Humans receive every room message; agents receive only invoked messages
+// (room-dispatch.mjs).
 // Direct (recipient) envelopes are refused because persistAcceptedEnvelope's
 // direct path auto-adds sender and recipient to conversation_members, which
 // would let any endpoint join a room uninvited.
@@ -39,9 +41,10 @@ export async function authorizeRoomEnvelope(envelope, room, repository, client, 
   const senderMember = await repository.lookupRoomMember(room.conversation_id, envelope.sender.endpoint_id, client);
   if (!senderMember) throw reject('ROUTE_NOT_AUTHORIZED', 'Sender is not a room member', details);
   const others = (await repository.listRoomMembers(room.conversation_id, client)).filter((member) => member.endpoint_id !== envelope.sender.endpoint_id);
+  const humans = others.filter((member) => member.response_mode === null);
   const fanout = [];
   const skipped = [];
-  for (const member of others) {
+  for (const member of humans) {
     const reason = await deliveryBlocker(member.endpoint_id, repository, client, { inboxDepthLimit, registered });
     if (reason) skipped.push({ endpoint_id: member.endpoint_id, reason });
     else fanout.push(member.endpoint_id);

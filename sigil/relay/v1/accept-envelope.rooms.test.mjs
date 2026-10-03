@@ -9,7 +9,7 @@ import { createMemoryRepository } from '../../cli/memory-repository.mjs';
 const NOW = new Date('2026-10-02T12:01:00.000Z');
 
 function world() {
-  const keys = Object.fromEntries(['ep_web', 'ep_claude', 'ep_codex', 'ep_stranger'].map((id) => [id, crypto.generateKeyPairSync('ed25519')]));
+  const keys = Object.fromEntries(['ep_web', 'ep_web2', 'ep_claude', 'ep_codex', 'ep_stranger'].map((id) => [id, crypto.generateKeyPairSync('ed25519')]));
   const registered = new Map(Object.entries(keys).map(([id, pair]) => [id, { owner_id: 'usr_chris', status: 'active', key_id: `key_${id}`, public_key: pair.publicKey }]));
   const repository = createMemoryRepository({ registry: registered });
   return { keys, registered, repository };
@@ -30,25 +30,28 @@ function roomEnvelope(keys, senderId, overrides = {}) {
 
 async function roomWithMembers(repository) {
   await repository.createRoom({ conversationId: 'room_1', workspaceId: 'ws_usr_chris', name: 'build', createdByHumanId: 'usr_chris', ownerEndpointId: 'ep_web', now: NOW });
+  await repository.addRoomMember({ conversationId: 'room_1', endpointId: 'ep_web2', role: 'member', responseMode: null, addedByHumanId: 'usr_chris', now: NOW });
   await repository.addRoomMember({ conversationId: 'room_1', endpointId: 'ep_claude', role: 'member', responseMode: 'joins', addedByHumanId: 'usr_chris', now: NOW });
   await repository.addRoomMember({ conversationId: 'room_1', endpointId: 'ep_codex', role: 'member', responseMode: 'mentions_only', addedByHumanId: 'usr_chris', now: NOW });
 }
 
-test('a member room.message is accepted, sequenced, and fanned out', async () => {
+test('a member room.message is accepted, sequenced, and fanned out to humans; a mention invokes an agent', async () => {
   const { keys, registered, repository } = world();
   await roomWithMembers(repository);
   let persistedEvent;
-  const first = await acceptEnvelopeAsync(roomEnvelope(keys, 'ep_web'), { repository, registered, now: NOW, onPersisted: async (event) => { persistedEvent = event; } });
+  const first = await acceptEnvelopeAsync(roomEnvelope(keys, 'ep_web', { body: { text: 'hello room', mentions: ['ep_claude'] } }), { repository, registered, now: NOW, onPersisted: async (event) => { persistedEvent = event; } });
   assert.equal(first.status, 202);
+  assert.deepEqual(persistedEvent.persisted.fanout.map((f) => f.endpoint_id), ['ep_web2'], 'agents get no fan-out');
+  assert.deepEqual(persistedEvent.persisted.roomDeliveries.map((d) => d.endpoint_id), ['ep_claude']);
   const secondEnvelope = roomEnvelope(keys, 'ep_claude', { body: { text: 'reply', thread_root_id: first.body.message_id } });
   const second = await acceptEnvelopeAsync(secondEnvelope, { repository, registered, now: NOW });
   assert.equal(second.status, 202);
   const history = await repository.listRoomMessages('room_1', 0n, 100);
   assert.deepEqual(history.map((m) => m.room_seq), ['1', '2']);
   assert.equal(history[1].canonical_bytes, signedBytes(secondEnvelope).toString('base64url'), 'history carries the signed bytes the accept path stored');
-  assert.deepEqual(persistedEvent.persisted.fanout.map((f) => f.endpoint_id), ['ep_claude', 'ep_codex']);
-  assert.equal((await repository.listInbox('ep_codex')).length, 2);
-  assert.equal((await repository.listInbox('ep_web')).length, 1, 'the sender never receives its own message');
+  assert.equal((await repository.listInbox('ep_codex')).length, 0);
+  assert.equal((await repository.listInbox('ep_web')).length, 1, 'the agent reply reached the human');
+  assert.equal((await repository.listInbox('ep_web2')).length, 2);
 });
 
 test('a non-member is refused and nothing is persisted', async () => {
@@ -164,11 +167,12 @@ test('a sync-forwarded high-risk envelope aimed at a room is refused without con
 test('fan-out skips a revoked member endpoint', async () => {
   const { keys, registered, repository } = world();
   await roomWithMembers(repository);
-  registered.get('ep_codex').status = 'revoked';
+  registered.get('ep_web2').status = 'revoked';
   let persistedEvent;
   const result = await acceptEnvelopeAsync(roomEnvelope(keys, 'ep_web'), { repository, registered, now: NOW, onPersisted: async (event) => { persistedEvent = event; } });
   assert.equal(result.status, 202);
-  assert.deepEqual(persistedEvent.persisted.fanout.map((f) => f.endpoint_id), ['ep_claude']);
+  assert.deepEqual(persistedEvent.persisted.fanout, []);
+  assert.deepEqual(repository._debugGetAuditEvents().filter((e) => e.event_type === 'room.delivery_skipped').map((e) => [e.endpoint_id, e.reason]), [['ep_web2', 'endpoint_inactive']]);
 });
 
 test('fan-out skips a member whose inbox is at the depth limit and audits the skip', async () => {
@@ -180,5 +184,5 @@ test('fan-out skips a member whose inbox is at the depth limit and audits the sk
   assert.equal(second.status, 202, 'the room message is still accepted');
   assert.deepEqual(persistedEvent.persisted.fanout, []);
   const skips = repository._debugGetAuditEvents().filter((e) => e.event_type === 'room.delivery_skipped');
-  assert.deepEqual(skips.map((e) => [e.endpoint_id, e.reason]).sort(), [['ep_claude', 'inbox_full'], ['ep_codex', 'inbox_full']]);
+  assert.deepEqual(skips.map((e) => [e.endpoint_id, e.reason]).sort(), [['ep_web2', 'inbox_full']]);
 });

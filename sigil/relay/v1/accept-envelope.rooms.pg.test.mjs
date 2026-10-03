@@ -20,7 +20,7 @@ async function seed(pool, suffix) {
   const human = `usr_rooms_${suffix}`;
   const endpoints = {};
   await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW())`, [human]);
-  for (const name of ['web', 'claude', 'codex', 'stranger']) {
+  for (const name of ['web', 'web2', 'claude', 'codex', 'stranger']) {
     const endpointId = `ep_${name}_${suffix}`;
     const keyId = `key_${name}_${suffix}`;
     const keys = crypto.generateKeyPairSync('ed25519');
@@ -61,18 +61,19 @@ test('postgres accept path: concurrent room posts are gapless, non-members refus
   t.after(() => pool.end());
   const suffix = crypto.randomUUID().replaceAll('-', '_');
   const world = await seed(pool, suffix);
-  const { web, claude, codex, stranger } = world.endpoints;
+  const { web, web2, claude, codex, stranger } = world.endpoints;
   const repository = new PostgresRepository({ pool });
   const conversationId = `room_${suffix}`;
   const accept = (envelope) => acceptEnvelopeAsync(envelope, { repository, registered: world.registered, now: NOW });
 
   await repository.createRoom({ conversationId, workspaceId: `ws_${world.human}`, name: `build_${suffix}`, createdByHumanId: world.human, ownerEndpointId: web.endpointId, now: NOW });
+  await repository.addRoomMember({ conversationId, endpointId: web2.endpointId, role: 'member', responseMode: null, addedByHumanId: world.human, now: NOW });
   await repository.addRoomMember({ conversationId, endpointId: claude.endpointId, role: 'member', responseMode: 'joins', addedByHumanId: world.human, now: NOW });
   await repository.addRoomMember({ conversationId, endpointId: codex.endpointId, role: 'member', responseMode: 'mentions_only', addedByHumanId: world.human, now: NOW });
 
-  // 15 concurrent member posts, 5 per member.
-  const senders = ['web', 'claude', 'codex'];
-  const envelopes = Array.from({ length: 15 }, (_, i) => roomEnvelope(world, conversationId, senders[i % 3]));
+  // 15 concurrent human posts (agents may post only while invoked), alternating between the two humans.
+  const senders = ['web', 'web2'];
+  const envelopes = Array.from({ length: 15 }, (_, i) => roomEnvelope(world, conversationId, senders[i % 2]));
   const results = await Promise.all(envelopes.map(accept));
   assert.deepEqual(results.map((r) => r.status), Array(15).fill(202), JSON.stringify(results.filter((r) => r.status !== 202)));
 
@@ -83,7 +84,7 @@ test('postgres accept path: concurrent room posts are gapless, non-members refus
     'SELECT count(*)::int AS n FROM deliveries d JOIN envelopes e ON e.message_id = d.message_id WHERE e.conversation_id = $1',
     [conversationId],
   );
-  assert.equal(deliveries.rows[0].n, 15 * 2, 'each message fans out to the two other members');
+  assert.equal(deliveries.rows[0].n, 15, 'each message fans out to the one other human, never to agents');
 
   // History carries the stored signed bytes; they verify against the sender key.
   const byId = new Map(envelopes.map((e) => [e.message_id, e]));
@@ -110,11 +111,16 @@ test('postgres accept path: concurrent room posts are gapless, non-members refus
   assert.equal(removedPost.body.code, 'ROUTE_NOT_AUTHORIZED');
   const readded = await repository.addRoomMember({ conversationId, endpointId: codex.endpointId, role: 'member', responseMode: 'joins', addedByHumanId: world.human, now: NOW });
   assert.equal(readded.endpoint_id, codex.endpointId);
-  const back = roomEnvelope(world, conversationId, 'codex');
+  const unprompted = await accept(roomEnvelope(world, conversationId, 'codex'));
+  assert.equal(unprompted.status, 403);
+  assert.equal(unprompted.body.code, 'ROOM_NOT_INVOKED', 'a re-added agent still needs an invocation');
+  const invoke = roomEnvelope(world, conversationId, 'web', { body: { text: 'back @codex', mentions: [codex.endpointId] } });
+  assert.equal((await accept(invoke)).status, 202);
+  const back = roomEnvelope(world, conversationId, 'codex', { body: { text: 'back', thread_root_id: invoke.message_id } });
   const backResult = await accept(back);
   assert.equal(backResult.status, 202, JSON.stringify(backResult));
   const after = await repository.listRoomMessages(conversationId, 15n, 100);
-  assert.deepEqual(after.map((m) => [m.room_seq, m.message_id]), [['16', back.message_id]]);
+  assert.deepEqual(after.map((m) => [m.room_seq, m.message_id]), [['16', invoke.message_id], ['17', back.message_id]]);
 
   // Defense in depth: even if a direct envelope for a room conversation
   // reached the persist path, it must not enroll anyone into the roster.
