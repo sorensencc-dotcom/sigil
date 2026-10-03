@@ -949,8 +949,18 @@ async function cmdVerifyContract(argv) {
   const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
   const registry = loadRegistryFile(registryPath);
   const entry = registry.endpoints.find((candidate) => candidate.key_id === contract?.signature?.key_id);
-  const valid = Boolean(entry) && verifyContract(contract, { publicKey: crypto.createPublicKey(entry.public_key_pem) });
-  console.log(JSON.stringify(valid ? { valid: true, key_id: contract.signature.key_id } : { valid: false, reason: entry ? 'SIGNATURE_INVALID' : 'SIGNING_KEY_NOT_REGISTERED' }));
+  if (!entry) {
+    console.log(JSON.stringify({ valid: false, reason: 'SIGNING_KEY_NOT_REGISTERED' }));
+    process.exitCode = 1;
+    return;
+  }
+  if (entry.status === 'revoked') {
+    console.log(JSON.stringify({ valid: false, reason: 'KEY_REVOKED', key_id: entry.key_id }));
+    process.exitCode = 1;
+    return;
+  }
+  const valid = verifyContract(contract, { publicKey: crypto.createPublicKey(entry.public_key_pem) });
+  console.log(JSON.stringify(valid ? { valid: true, key_id: contract.signature.key_id } : { valid: false, reason: 'SIGNATURE_INVALID' }));
   if (!valid) process.exitCode = 1;
 }
 async function cmdAgentRun(argv) {
