@@ -1,5 +1,14 @@
 # Status
 
+## Session update: 2026-10-03 sigil rooms phase 2 (bridges and guards)
+
+- Phase 2 of the rooms design shipped on `feat/sigil-rooms-phase-2`, executed task by task from `docs/superpowers/plans/2026-10-02-sigil-rooms-phase-2-bridges.md`. Branch not pushed.
+- Shipped: migration 028 (`room_invocations`, `room_threads`, `rooms.max_agent_turns`); invocations per mention; hop budget default 6 per thread, reset by a human message; one running invocation per agent per room with queueing; a Stop route that kills the CLI process tree; Claude and Codex bridges through `sigil agent run --room-bridge claude|codex`; invocation list and fail routes; agents excluded from fan-out.
+- Phase 1 leftovers closed: fan-out quota and revoked endpoints, `streamSeq` removed from room notifications, forwarded room envelopes refused before approval consumption, agents refused room management, agent tokens no longer carry `human_id` (Chris chose option b).
+- Evidence: exit test `Claude and Codex hold a 6-turn exchange, then the hop budget stops them` passes (plus `Stop cancels the running invocation and kills the CLI before it answers`). `npm test` 1308 tests, 1152 pass, 0 fail, 1 cancelled, 155 skipped; the cancelled test is the known `sigil relay up --p2p logs a listen multiaddr` load flake (30 s timeout), 4/4 when rerun alone. `npm run test:live` 170 tests, 169 pass, 0 fail, 1 skipped (32 files). Live smoke (`SIGIL_LIVE_ROOM_BRIDGES=1 node sigil/scripts/live-room-bridges.mjs`) with real `claude` and `codex`: 6 alternating agent turns, then a `hop_budget` refusal, exit 0.
+- Known limits: the daemon processes invocations sequentially across rooms; refusals are visible only through `GET /v1/rooms/{id}/invocations` until phase 3's `room.event`; no daily cost budget yet; a running invocation whose bridge dies stays running until a human presses Stop (no timeout); in Postgres the fail and stop routes do not take the `rooms` row lock, so a racing post can rarely get a 500 (data stays consistent); registry entries without `kind` keep `human_id`; agent capability-grant create and revoke now fail closed with 409 in Postgres (decision pending with Chris); `task.request` and `task.result` stay refused in rooms until phase 3.
+- Next action: write the phase 3 plan (router).
+
 ## Session update: 2026-10-02 sigil rooms phase 1 (relay rooms) complete
 
 - Phase 1 of the rooms design (`docs/superpowers/specs/2026-10-02-sigil-rooms-design.md`) shipped on `feat/sigil-rooms`, executed task by task from `docs/superpowers/plans/2026-10-02-sigil-rooms-phase-1-relay.md`. Completed 2026-10-02. Branch not pushed; no PR opened yet.
