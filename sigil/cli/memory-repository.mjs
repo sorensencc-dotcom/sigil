@@ -69,6 +69,8 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
   const workspaces = new Map(); // workspace_id -> row (migration 027)
   const rooms = new Map(); // conversation_id -> room row (migration 027)
   const roomMembers = new Map(); // conversation_id -> Map(endpoint_id -> member row incl. removed_at)
+  const roomInvocations = new Map(); // invocation_id -> row (migration 028)
+  const roomThreads = new Map(); // JSON [room_id, thread_root_id] -> { agent_turns, updated_at } (migration 028)
   // Scoped rollback support for withTransaction (Devin review, PR #6): this
   // repo has no real transaction to roll back, so a mutation performed mid-
   // callback (e.g. consumeApprovalDecision) stayed committed even when the
@@ -246,7 +248,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
         throw Object.assign(new Error('A room with this name already exists in the workspace'), { code: 'ROOM_NAME_TAKEN' });
       }
       if (!workspaces.has(workspaceId)) workspaces.set(workspaceId, { workspace_id: workspaceId, name: workspaceId, created_by: createdByHumanId, created_at: timestamp });
-      const room = { conversation_id: conversationId, workspace_id: workspaceId, name, description, created_at: timestamp };
+      const room = { conversation_id: conversationId, workspace_id: workspaceId, name, description, created_at: timestamp, max_agent_turns: 6 };
       rooms.set(conversationId, { ...room, next_room_seq: 1n, archived_at: null });
       roomMembers.set(conversationId, new Map([[ownerEndpointId, { endpoint_id: ownerEndpointId, role: 'owner', response_mode: null, added_by: createdByHumanId, added_at: timestamp, removed_at: null }]]));
       return room;
@@ -302,6 +304,77 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
         .sort((a, b) => (a.roomSeq < b.roomSeq ? -1 : a.roomSeq > b.roomSeq ? 1 : 0))
         .slice(0, limit)
         .map((row) => ({ room_seq: String(row.roomSeq), message_id: row.message_id, canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'), envelope: row.envelope }));
+    },
+    async createRoomInvocation({ invocationId, roomId, workspaceId: _workspaceId, triggerMessageId, threadRootId, endpointId, decidedBy, reason = null, status, deliveryId = null, now = new Date() }) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      const rows = [...roomInvocations.values()];
+      if (rows.some((row) => row.trigger_message_id === triggerMessageId && row.endpoint_id === endpointId)) {
+        throw Object.assign(new Error('This message already invoked this agent'), { code: 'ROOM_INVOCATION_EXISTS' });
+      }
+      if (status === 'running' && rows.some((row) => row.room_id === roomId && row.endpoint_id === endpointId && row.status === 'running')) {
+        throw Object.assign(new Error('The agent already has a running invocation in this room'), { code: 'ROOM_INVOCATION_RUNNING' });
+      }
+      const row = {
+        invocation_id: invocationId, room_id: roomId, trigger_message_id: triggerMessageId, thread_root_id: threadRootId, endpoint_id: endpointId,
+        decided_by: decidedBy, reason, status, delivery_id: deliveryId, reply_message_id: null, created_at: timestamp,
+        started_at: status === 'running' ? timestamp : null, finished_at: status === 'refused' ? timestamp : null,
+      };
+      roomInvocations.set(invocationId, row);
+      return { ...row };
+    },
+    async lookupRunningInvocation(roomId, endpointId) {
+      const row = [...roomInvocations.values()].find((r) => r.room_id === roomId && r.endpoint_id === endpointId && r.status === 'running');
+      return row ? { ...row } : null;
+    },
+    async nextQueuedInvocation(roomId, endpointId) {
+      const row = [...roomInvocations.values()]
+        .filter((r) => r.room_id === roomId && r.endpoint_id === endpointId && r.status === 'queued')
+        .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.invocation_id.localeCompare(b.invocation_id))[0];
+      return row ? { ...row } : null;
+    },
+    async startInvocation(invocationId, { deliveryId, now = new Date() }) {
+      const row = roomInvocations.get(invocationId);
+      if (!row || row.status !== 'queued') return null;
+      Object.assign(row, { status: 'running', delivery_id: deliveryId, started_at: (now instanceof Date ? now : new Date(now)).toISOString() });
+      return { ...row };
+    },
+    async finishInvocation(invocationId, { status, reason = null, replyMessageId = null, now = new Date() }) {
+      const row = roomInvocations.get(invocationId);
+      if (!row || (row.status !== 'queued' && row.status !== 'running')) return null;
+      Object.assign(row, { status, reason: reason ?? row.reason, reply_message_id: replyMessageId, finished_at: (now instanceof Date ? now : new Date(now)).toISOString() });
+      return { ...row };
+    },
+    async cancelRoomInvocations(roomId, { now = new Date() } = {}) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      const cancelled = [];
+      for (const row of roomInvocations.values()) {
+        if (row.room_id !== roomId || (row.status !== 'queued' && row.status !== 'running')) continue;
+        Object.assign(row, { status: 'cancelled', reason: 'stopped', finished_at: timestamp });
+        cancelled.push({ ...row });
+      }
+      return cancelled;
+    },
+    async listRoomInvocations(roomId, { endpointId = null, status = null, limit = 100 } = {}) {
+      return [...roomInvocations.values()]
+        .filter((r) => r.room_id === roomId && (!endpointId || r.endpoint_id === endpointId) && (!status || r.status === status))
+        .sort((a, b) => b.created_at.localeCompare(a.created_at) || b.invocation_id.localeCompare(a.invocation_id))
+        .slice(0, limit)
+        .map((r) => ({ ...r }));
+    },
+    async reserveAgentTurn(roomId, threadRootId, maxTurns, { now = new Date() } = {}) {
+      const key = JSON.stringify([roomId, threadRootId]);
+      const current = roomThreads.get(key)?.agent_turns ?? 0;
+      if (current >= maxTurns) return { allowed: false, agent_turns: current };
+      roomThreads.set(key, { agent_turns: current + 1, updated_at: (now instanceof Date ? now : new Date(now)).toISOString() });
+      return { allowed: true, agent_turns: current + 1 };
+    },
+    async resetAgentTurns(roomId, threadRootId, { now = new Date() } = {}) {
+      roomThreads.set(JSON.stringify([roomId, threadRootId]), { agent_turns: 0, updated_at: (now instanceof Date ? now : new Date(now)).toISOString() });
+    },
+    async createRoomDelivery({ messageId, endpointId, now = new Date() }) {
+      const deliveryId = `del_${messageId}_${endpointId}`;
+      deliveries.set(deliveryId, { delivery_id: deliveryId, message_id: messageId, recipient_endpoint_id: endpointId, state: 'delivered', queued_at: (now instanceof Date ? now : new Date(now)).toISOString(), attempts: 0, federation_hop: false });
+      return deliveryId;
     },
     async listInbox(endpointId, since = '', viewerOwnerId = null) {
       return [...deliveries.values()]
