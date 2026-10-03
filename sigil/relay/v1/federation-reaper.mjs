@@ -323,11 +323,13 @@ export async function runFederationReaperPass({
 // Returns the already-unref()'d handle so a test can clearInterval it. A thrown
 // pass is logged and the interval keeps ticking.
 export function startFederationReaper({ repository, identity, originDomain, intervalMs = 60_000, fetchImpl }) {
-  return setInterval(async () => {
+  const timer = setInterval(async () => {
     try {
       await runFederationReaperPass({ repository, identity, originDomain, fetchImpl });
     } catch (error) {
       console.error(`sigil: federation reaper pass failed: ${error?.message ?? error}`);
     }
   }, intervalMs).unref();
+  timer.stop = () => clearInterval(timer);
+  return timer;
 }
