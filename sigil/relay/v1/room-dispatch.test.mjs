@@ -9,7 +9,7 @@ import { createMemoryRepository } from '../../cli/memory-repository.mjs';
 const NOW = new Date('2026-10-02T12:01:00.000Z');
 
 function world({ maxTurns } = {}) {
-  const ids = ['ep_web', 'ep_claude', 'ep_codex'];
+  const ids = ['ep_web', 'ep_claude', 'ep_codex', 'ep_bot'];
   const keys = Object.fromEntries(ids.map((id) => [id, crypto.generateKeyPairSync('ed25519')]));
   const registered = new Map(ids.map((id) => [id, { owner_id: 'usr_chris', status: 'active', kind: id === 'ep_web' ? 'human' : 'agent', key_id: `key_${id}`, public_key: keys[id].publicKey }]));
   const repository = createMemoryRepository({ registry: registered });
@@ -197,4 +197,51 @@ test('a stale completing invocation is refused (race between two agent replies)'
   );
   const rows = await w.repository.listRoomInvocations('room_1');
   assert.equal(rows.filter((r) => r.status === 'completed').length, 1);
+});
+
+// Phase 1 rooms can hold agent endpoints with response_mode null (added
+// without a mode, or an agent that created the room). The registry kind
+// still makes them agents.
+async function roomWithModelessAgent(repository) {
+  await room(repository);
+  await repository.addRoomMember({ conversationId: 'room_1', endpointId: 'ep_bot', role: 'member', responseMode: null, addedByHumanId: 'usr_chris', now: NOW });
+}
+
+test('an agent-kind member with response_mode null gets no human fan-out', async () => {
+  const w = world();
+  await roomWithModelessAgent(w.repository);
+  const { result, persisted } = await accept(w, post(w, 'ep_web', { text: 'hello room' }));
+  assert.equal(result.status, 202);
+  assert.deepEqual(persisted.fanout, []);
+  assert.equal((await w.repository.listInbox('ep_bot')).length, 0);
+});
+
+test('an agent-kind member with response_mode null is invoked by a mention (as mentions_only)', async () => {
+  const w = world();
+  await roomWithModelessAgent(w.repository);
+  const root = post(w, 'ep_web', { text: 'hi @ep_bot', mentions: ['ep_bot'] });
+  const { persisted } = await accept(w, root);
+  assert.deepEqual(persisted.roomDeliveries.map((d) => d.endpoint_id), ['ep_bot']);
+  const [inv] = await w.repository.listRoomInvocations('room_1', { endpointId: 'ep_bot' });
+  assert.equal(inv.status, 'running');
+});
+
+test('an agent-kind member with response_mode null cannot post without a running invocation', async () => {
+  const w = world();
+  await roomWithModelessAgent(w.repository);
+  const { result } = await accept(w, post(w, 'ep_bot', { text: 'unprompted' }));
+  assert.equal(result.status, 403);
+  assert.equal(result.body.code, 'ROOM_NOT_INVOKED');
+});
+
+test('an agent-kind member with response_mode null completes its invocation and does not reset the hop budget', async () => {
+  const w = world();
+  await roomWithModelessAgent(w.repository);
+  const root = post(w, 'ep_web', { text: '@ep_bot', mentions: ['ep_bot'] });
+  await accept(w, root);
+  const { result } = await accept(w, post(w, 'ep_bot', { text: 'done', thread_root_id: root.message_id }));
+  assert.equal(result.status, 202);
+  const [inv] = await w.repository.listRoomInvocations('room_1', { endpointId: 'ep_bot' });
+  assert.equal(inv.status, 'completed');
+  assert.equal((await w.repository.reserveAgentTurn('room_1', root.message_id, 6, { now: NOW })).agent_turns, 2, 'the agent reply did not reset the budget');
 });

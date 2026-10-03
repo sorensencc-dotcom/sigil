@@ -8,14 +8,14 @@
 // after its latest human message.
 import crypto from 'node:crypto';
 import { reject } from './validate-envelope.mjs';
-import { deliveryBlocker } from './room-policy.mjs';
+import { deliveryBlocker, memberIsAgent } from './room-policy.mjs';
 
 export function threadRootOf(envelope) {
   return envelope.body?.thread_root_id ?? envelope.message_id;
 }
 
 export async function assertAgentMayPost(envelope, senderMember, repository, client) {
-  if (senderMember.response_mode === null) return null;
+  if (!memberIsAgent(senderMember)) return null;
   const running = await repository.lookupRunningInvocation(envelope.conversation_id, envelope.sender.endpoint_id, client);
   if (!running) throw reject('ROOM_NOT_INVOKED', 'Agents may post only while invoked', { conversation_id: envelope.conversation_id });
   if (threadRootOf(envelope) !== running.thread_root_id) {
@@ -48,7 +48,7 @@ export async function applyRoomDispatch({ envelope, room, plan, completing, repo
   const invocations = [];
   const roomDeliveries = [];
 
-  if (plan.senderMember.response_mode === null) await repository.resetAgentTurns(roomId, threadRootId, { now }, client);
+  if (!memberIsAgent(plan.senderMember)) await repository.resetAgentTurns(roomId, threadRootId, { now }, client);
 
   if (completing) {
     // A concurrent reply may have completed this invocation after the unlocked

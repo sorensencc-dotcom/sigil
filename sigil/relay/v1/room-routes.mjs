@@ -1,6 +1,7 @@
 // sigil/relay/v1/room-routes.mjs
 import crypto from 'node:crypto';
 import { promoteNextInvocation } from './room-dispatch.mjs';
+import { isAgentMember } from './room-policy.mjs';
 
 const MANAGER_ROLES = new Set(['owner', 'room_manager']);
 const GRANTABLE_ROLES = new Set(['room_manager', 'member']);
@@ -33,9 +34,11 @@ async function membership(repository, roomId, principal) {
   return member ? { room, member } : null;
 }
 
-// Agent endpoint tokens carry human_id = owner_id (transport-auth.mjs), so
-// human_id alone does not prove a human is calling. Room management and Stop
-// additionally refuse endpoints registered as agents.
+// Defense in depth: agent endpoint tokens no longer carry human_id
+// (transport-auth.mjs), but a registry entry written before kind existed, or
+// a token minted elsewhere, could still pair an agent endpoint with a
+// human_id. Room management and Stop therefore also refuse any endpoint the
+// registry lists as kind 'agent'.
 function isAgentCaller(registry, principal) {
   return registry?.get?.(principal?.endpoint_id)?.kind === 'agent';
 }
@@ -156,7 +159,10 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
   }
 
   if (request.method === 'POST' && resource === 'stop' && !segment) {
-    if (isAgentCaller(registry, principal) || access.member.response_mode !== null) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'Only human members can stop a room');
+    // Same agent rule as room dispatch (room-policy.mjs isAgentMember):
+    // response_mode set, or the registry or endpoints row says kind 'agent'.
+    const callerIsAgent = isAgentCaller(registry, principal) || await repository.withTransaction((client) => isAgentMember(access.member, repository, client, registry));
+    if (callerIsAgent) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'Only human members can stop a room');
     const cancelled = await repository.cancelRoomInvocations(roomId, { now });
     return send(response, requestId, 200, { code: 'OK', cancelled: cancelled.length });
   }

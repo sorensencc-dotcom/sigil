@@ -127,6 +127,16 @@ test('agent tokens cannot create or manage rooms', async () => {
   });
 });
 
+test('an agent-kind member with response_mode null cannot Stop the room', async () => {
+  await withServer(async (port, repository) => {
+    const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'r' })).body.room.conversation_id;
+    await repository.addRoomMember({ conversationId: roomId, endpointId: 'ep_codex', role: 'member', responseMode: null, addedByHumanId: 'usr_chris', now: new Date() });
+    const stopped = await call(port, 'POST', `/v1/rooms/${roomId}/stop`, 'Bearer codex');
+    assert.deepEqual([stopped.status, stopped.body.code], [403, 'HUMAN_CONTEXT_REQUIRED']);
+    assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/stop`, 'Bearer chris-web')).status, 200);
+  });
+});
+
 test('member add requires response_mode for agents and refuses it for humans', async () => {
   await withServer(async (port) => {
     const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'r' })).body.room.conversation_id;
