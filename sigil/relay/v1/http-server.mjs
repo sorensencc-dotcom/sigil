@@ -57,7 +57,9 @@ export function createOnPersisted(stream) {
   return async ({ envelope: accepted, persisted }) => {
     if (!stream || persisted?.duplicate) return;
     if (accepted.recipient?.endpoint_id) stream.notify(accepted.recipient.endpoint_id, persisted.message_id, persisted.streamSeq);
-    for (const target of persisted.fanout ?? []) stream.notify(target.endpoint_id, target.delivery_id, persisted.streamSeq);
+    // Room recipients get no streamSeq: they see a subset of the sender's
+    // stream, so its sequence would read as gaps. room_seq is the room order.
+    for (const target of [...(persisted.fanout ?? []), ...(persisted.roomDeliveries ?? [])]) stream.notify(target.endpoint_id, target.delivery_id);
     if (accepted.sender?.endpoint_id && typeof stream.notifyReceipt === 'function') {
       stream.notifyReceipt(accepted.sender.endpoint_id, {
         message_id: persisted.message_id,
