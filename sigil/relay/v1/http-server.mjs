@@ -14,7 +14,7 @@ import { normalizeIssuer } from './issuer-normalization.mjs';
 import { assertAccountLinkCeremony, assertAllowedIssuer, boundedCapabilityGrantExpiry, boundedDirectoryExpiry, boundedTokenExpiry } from './auth-policy.mjs';
 import { verifyRealIdToken, createJwksCache, createDiscoveryCache, CLOCK_SKEW_SECONDS } from './oidc-client.mjs';
 import { attemptDirectoryMatchOnOidcLogin } from './directory-trust.mjs';
-import { resolveDirectoryRateLimits, resolveRelayRequestFreshnessMs, resolveStreamSequence } from './relay-config.mjs';
+import { DEFAULT_INBOX_DEPTH_LIMIT, resolveDirectoryRateLimits, resolveRelayRequestFreshnessMs, resolveStreamSequence } from './relay-config.mjs';
 
 function normalizeIssuerOrRespond(rawIssuer, response, requestId) {
   try {
@@ -419,7 +419,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       return response.end(result.body ? JSON.stringify(result.body) : '');
     }
     try {
-      if (await handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody })) return;
+      if (await handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream, inboxDepthLimit: DEFAULT_INBOX_DEPTH_LIMIT })) return;
     } catch (error) {
       logger?.error?.('room route failed', error);
       if (response.headersSent) return response.end();
