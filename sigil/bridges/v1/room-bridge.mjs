@@ -17,6 +17,10 @@ export const ROOM_PREAMBLE = [
   'Reply with plain text only.',
 ].join('\n');
 
+function escapeField(value) {
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 function messageText(envelope) {
   return typeof envelope?.body?.text === 'string' ? envelope.body.text : '';
 }
@@ -42,7 +46,7 @@ export function createRoomBridge({ identity, relay, outbox, cli, sessions, pollI
 
   function buildPrompt({ roomId, members, messages, trigger }) {
     const agents = members.filter((member) => member.response_mode !== null && member.endpoint_id !== self).map((member) => member.endpoint_id);
-    const lines = messages.map((item) => `[seq ${item.room_seq}] ${item.envelope?.sender?.endpoint_id}: ${messageText(item.envelope)}`);
+    const lines = messages.map((item) => `[seq ${item.room_seq}] ${escapeField(item.envelope?.sender?.endpoint_id)}: ${escapeField(messageText(item.envelope)).replace(/\r|\n/g, ' ')}`);
     return [
       ROOM_PREAMBLE,
       '',
@@ -83,12 +87,12 @@ export function createRoomBridge({ identity, relay, outbox, cli, sessions, pollI
     try {
       result = await cli.run({ prompt, sessionId: session?.session_id ?? null, signal: controller.signal });
     } catch (error) {
-      if (error.code === 'CLI_CANCELLED') return { outcome: 'cancelled' };
+      if (controller.signal.aborted || error.code === 'CLI_CANCELLED') return { outcome: 'cancelled' };
       return fail(roomId, invocation, error.code ?? 'CLI_FAILED');
     } finally {
       clearInterval(watcher);
     }
-    sessions.set(roomId, { session_id: result.sessionId, last_seq: context.lastSeq });
+    if (controller.signal.aborted) return { outcome: 'cancelled' };
 
     const text = result.text.slice(0, TEXT_MAX);
     const mentions = members
@@ -114,6 +118,7 @@ export function createRoomBridge({ identity, relay, outbox, cli, sessions, pollI
     } catch (error) {
       return fail(roomId, invocation, error.code ?? 'REPLY_REJECTED');
     }
+    sessions.set(roomId, { session_id: result.sessionId, last_seq: context.lastSeq });
     return { outcome: 'replied' };
   }
 

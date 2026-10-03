@@ -7,7 +7,7 @@ import path from 'node:path';
 
 export function createSessionStore(filePath) {
   const read = () => {
-    try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
+    try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); } catch (error) { if (error.code === 'ENOENT' || error instanceof SyntaxError) return {}; throw error; }
   };
   return {
     get(roomId) { return read()[roomId] ?? null; },
