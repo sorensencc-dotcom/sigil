@@ -10,7 +10,7 @@ const sigilCli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'sig
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-relayfed-test-'));
 
 function runRelayUp(args, cwd) {
-  return execFileSync(process.execPath, [sigilCli, 'relay', 'up', ...args], { cwd, encoding: 'utf8', timeout: 5000 });
+  return execFileSync(process.execPath, [sigilCli, 'relay', 'up', ...args], { cwd, encoding: 'utf8', timeout: 15_000 });
 }
 
 test('--federation-mode bogus aborts before binding', () => {

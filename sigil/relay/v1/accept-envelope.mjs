@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { validateEnvelope, reject, signedBytes, checkRecipientLocality } from './validate-envelope.mjs';
+import { authorizeRoomEnvelope, assertRoomTypeHasRoom, assertNotRoomConversation } from './room-policy.mjs';
 import { resolveRateLimits, resolveStreamSequence, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
 import { writeRejectionAudit } from './rejection-audit.mjs';
 import { decideRoute, buildForwardRequest, signForwardRequest, postForward } from './federation-router.mjs';
@@ -201,6 +202,15 @@ async function acceptWithRepository(envelope, options) {
       // a transaction (I1: no held Postgres connection across postForward).
       await enforceCapabilityRiskGate(envelope, repository, { now });
 
+      // Rooms are relay-local (phase 1): refuse a room conversation or a
+      // room.* type before anything leaves this relay. No transaction is
+      // open here, so the lookup uses the repository's pool default. This
+      // path never verifies the envelope signature (the receiving peer
+      // does), so the answer reveals only that a room with this
+      // conversation_id exists -- never membership -- to a caller that
+      // already passed transport authentication.
+      assertNotRoomConversation(envelope, repository.lookupRoom ? await repository.lookupRoom(envelope.conversation_id) : null);
+
       // client = null: forwardEnvelope passes it only to lookupRecipientEndpoint
       // (L210) for the sender-key lookup, handled by the existing `?? null`
       // guard. buildForwardRequest / signForwardRequest / postForward never
@@ -262,8 +272,16 @@ async function acceptWithRepository(envelope, options) {
       if (envelope.message_type === 'session.resend_request') {
         throw reject('ROUTE_NOT_AUTHORIZED', 'Session resend requests are local-only');
       }
+      // Rooms are relay-local (phase 1); see the sync-forward branch above.
+      assertNotRoomConversation(envelope, repository.lookupRoom ? await repository.lookupRoom(envelope.conversation_id, client) : null);
       return forwardEnvelope(envelope, route, options, client);
     }
+
+    // Rooms (rooms design, phase 1): look up the room here (validateEnvelope's
+    // broadcast gate needs it); membership is authorized only after
+    // validateEnvelope proves the sender's signature, so an unauthenticated
+    // caller cannot probe room membership.
+    const room = repository.lookupRoom ? await repository.lookupRoom(envelope.conversation_id, client) : null;
 
     // route.action === 'local' -> fall through to recipient/persist checks.
     // Every direct recipient must exist in the relay's endpoint directory
@@ -352,7 +370,9 @@ async function acceptWithRepository(envelope, options) {
         if (!link) throw reject('DIRECTORY_LINK_REQUIRED', 'No active directory link between sender and recipient', { sender_endpoint_id: envelope.sender.endpoint_id, recipient_endpoint_id: envelope.recipient.endpoint_id });
       }
     }
-    const result = validateEnvelope(envelope, { ...options, idempotency: new Map(), capabilityGrants });
+    const result = validateEnvelope(envelope, { ...options, idempotency: new Map(), capabilityGrants, ...(room ? { broadcastAuthorizer: () => true } : {}) });
+    assertRoomTypeHasRoom(envelope, room);
+    const roomFanout = room ? await authorizeRoomEnvelope(envelope, room, repository, client) : null;
     const prior = await repository.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key, client);
     if (prior && prior.canonical_hash !== result.canonical_hash) throw reject('DUPLICATE_MESSAGE', 'Idempotency key conflicts with an existing body');
     if (prior) return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: prior.message_id, duplicate: true } };
@@ -395,11 +415,12 @@ async function acceptWithRepository(envelope, options) {
     const streamSeq = streamSequence.enabled && !envelope.message_type.startsWith('session.') && !envelope.message_type.startsWith('admin.')
       ? await repository.assignStreamSequence(client, envelope.sender.endpoint_id, envelope.conversation_id)
       : null;
+    const roomSeq = room ? await repository.assignRoomSequence(client, envelope.conversation_id) : null;
     // canonical_bytes/action_hash mirror what http-server.mjs's now-removed
     // persistAccepted wrapper used to attach before calling the repository
     // directly -- kept here so repository-backed callers (postgres, memory)
     // still see the same row shape regardless of transport.
-    const persisted = await repository.persistAcceptedEnvelope({ envelope, ...result, canonical_bytes: signedBytes(envelope), action_hash: result.canonical_hash, streamSeq }, client);
+    const persisted = await repository.persistAcceptedEnvelope({ envelope, ...result, canonical_bytes: signedBytes(envelope), action_hash: result.canonical_hash, streamSeq, roomSeq, roomFanout }, client);
     const persistedWithStreamSeq = { ...persisted, streamSeq };
     if (options.onPersisted) await options.onPersisted({ envelope, persisted: persistedWithStreamSeq });
     return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: persisted?.message_id ?? result.message_id, duplicate: persisted?.duplicate ?? false } };

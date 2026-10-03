@@ -6,6 +6,7 @@ import { verifyInboundRelayRequest, relayRejectSkewPayload } from './federation-
 import { acceptDirectoryRedemption, acceptDirectoryConfirmation, acceptDirectoryRevocation } from './accept-federation-directory.mjs';
 import { transitionDelivery } from './delivery-state.mjs';
 import { createBearerAuthenticator } from './transport-auth.mjs';
+import { handleRoomRoute } from './room-routes.mjs';
 import { createApprovalChallenge, coseKeyToPublicKey, parseAttestationObject, verifyPackedAttestation, verifyWebAuthnApproval, verifyWebAuthnAssertion } from './approval-ceremony.mjs';
 import { renderApprovalPage } from './approval-ui.mjs';
 import { computeActionHash } from './action-hash.mjs';
@@ -56,6 +57,7 @@ export function createOnPersisted(stream) {
   return async ({ envelope: accepted, persisted }) => {
     if (!stream || persisted?.duplicate) return;
     if (accepted.recipient?.endpoint_id) stream.notify(accepted.recipient.endpoint_id, persisted.message_id, persisted.streamSeq);
+    for (const target of persisted.fanout ?? []) stream.notify(target.endpoint_id, target.delivery_id, persisted.streamSeq);
     if (accepted.sender?.endpoint_id && typeof stream.notifyReceipt === 'function') {
       stream.notifyReceipt(accepted.sender.endpoint_id, {
         message_id: persisted.message_id,
@@ -413,6 +415,14 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       });
       response.writeHead(result.status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(result.body ? JSON.stringify(result.body) : '');
+    }
+    try {
+      if (await handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody })) return;
+    } catch (error) {
+      logger?.error?.('room route failed', error);
+      if (response.headersSent) return response.end();
+      response.writeHead(503, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+      return response.end(JSON.stringify({ request_id: requestId, code: 'DATABASE_UNAVAILABLE', message: 'Rooms temporarily unavailable', details: {} }));
     }
     if (request.method === 'GET' && request.url.startsWith('/v1/inbox')) {
       if (!repository?.listInbox) return response.writeHead(503).end();

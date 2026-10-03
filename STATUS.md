@@ -1,5 +1,14 @@
 # Status
 
+## Session update: 2026-10-02 sigil rooms phase 1 (relay rooms) complete
+
+- Phase 1 of the rooms design (`docs/superpowers/specs/2026-10-02-sigil-rooms-design.md`) shipped on `feat/sigil-rooms`, executed task by task from `docs/superpowers/plans/2026-10-02-sigil-rooms-phase-1-relay.md`. Completed 2026-10-02. Branch not pushed; no PR opened yet.
+- Relay rooms: migration 027 (`workspaces`, `rooms`, `conversation_members.response_mode`, `envelopes.room_seq`), `room.message` body schema, room methods in both repositories, `room-policy.mjs` (membership checked after signature verification), gapless per-room `room_seq` assigned in the accept transaction, fan-out deliveries plus stream notify, and `/v1/rooms*` HTTP routes with contract entries.
+- Final-review fixes: federated and forwarded envelopes cannot enter or enroll into a room; `task.request`/`task.result` are refused in rooms until phase 3 adds assignee binding; history items carry `canonical_bytes`; room route repository failures return 503.
+- Evidence: `npm test` 1233 tests, 1086 pass, 146 skipped, 1 fail (the known `sigil relay up --p2p logs a listen multiaddr` load flake, 4/4 when rerun alone). `npm run test:live` 161 tests, 160 pass, 0 fail, 1 skipped (pre-existing multi-worker race suite).
+- Not fixed here: the published package omits `sigil/contracts/v1/*.mjs`, so `validate-envelope.mjs` imports fail from the tarball; needs its own `fix(sigil)` PR off `main`.
+- Next action: phase 2 (Claude and Codex bridges plus the hop budget, rate limit, and Stop guards).
+
 ## Session update: 2026-09-20 libp2p final-review m7 (mDNS opt-out)
 
 - Closed 7 of 8 non-blocking findings from the libp2p transport driver's final review. m8 remains open, needing its own design decision (per-relay logger/metrics instance at the p2p call site).

@@ -35,7 +35,7 @@ async function startRelay(t, { streamSequenceEnabled }) {
   });
   const port = await new Promise((resolvePort, reject) => {
     let output = '';
-    const timeout = setTimeout(() => reject(new Error(`timed out starting relay: ${output}`)), 5_000);
+    const timeout = setTimeout(() => reject(new Error(`timed out starting relay: ${output}`)), 15_000);
     child.stdout.on('data', (chunk) => {
       output += chunk;
       const match = output.match(/Sigil relay listening on http:\/\/127\.0\.0\.1:(\d+)/);

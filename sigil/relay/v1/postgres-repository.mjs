@@ -113,6 +113,25 @@ function relayJobToFederationOutboxRecord(row) {
   return { ...record, state: jobStateToFederationState[state] ?? state };
 }
 
+function roomRow(row) {
+  return {
+    conversation_id: row.conversation_id,
+    workspace_id: row.workspace_id,
+    name: row.name,
+    description: row.description ?? null,
+    created_at: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
+  };
+}
+
+function memberRow(row) {
+  return {
+    endpoint_id: row.endpoint_id,
+    role: row.role,
+    response_mode: row.response_mode ?? null,
+    added_at: row.added_at instanceof Date ? row.added_at.toISOString() : row.added_at,
+  };
+}
+
 export class PostgresRepository {
   constructor({ pool = new pg.Pool(), schema = 'public' } = {}) { this.pool = pool; this.schema = schema; }
   async query(text, values = []) { return this.pool.query(text, values); }
@@ -751,30 +770,37 @@ export class PostgresRepository {
     }
   }
   async #insertAcceptedEnvelope(row, client) {
-    await client.query(
-      `INSERT INTO conversations (conversation_id, kind, created_by, created_at)
-       VALUES ($1, 'direct', $2, $3)
-       ON CONFLICT (conversation_id) DO NOTHING`,
-      [row.envelope.conversation_id, row.envelope.sender.owner_id, row.envelope.created_at]
-    );
-    await client.query(
-      `INSERT INTO conversation_members (conversation_id, endpoint_id, role, added_by, added_at)
-       VALUES ($1, $2, 'member', $3, $4)
-       ON CONFLICT (conversation_id, endpoint_id) DO NOTHING`,
-      [row.envelope.conversation_id, row.envelope.sender.endpoint_id, row.envelope.sender.owner_id, row.envelope.created_at]
-    );
-    if (row.envelope.recipient?.endpoint_id) {
+    if (row.roomSeq == null) {
+      await client.query(
+        `INSERT INTO conversations (conversation_id, kind, created_by, created_at)
+         VALUES ($1, 'direct', $2, $3)
+         ON CONFLICT (conversation_id) DO NOTHING`,
+        [row.envelope.conversation_id, row.envelope.sender.owner_id, row.envelope.created_at]
+      );
+      // Direct-path auto-membership never applies to a room: a room roster
+      // changes only through owner-authorized addRoomMember (defense in
+      // depth behind the accept paths' room refusals).
       await client.query(
         `INSERT INTO conversation_members (conversation_id, endpoint_id, role, added_by, added_at)
-         VALUES ($1, $2, 'member', $3, $4)
+         SELECT $1, $2, 'member', $3, $4
+          WHERE NOT EXISTS (SELECT 1 FROM rooms WHERE conversation_id = $1)
          ON CONFLICT (conversation_id, endpoint_id) DO NOTHING`,
-        [row.envelope.conversation_id, row.envelope.recipient.endpoint_id, row.envelope.sender.owner_id, row.envelope.created_at]
+        [row.envelope.conversation_id, row.envelope.sender.endpoint_id, row.envelope.sender.owner_id, row.envelope.created_at]
       );
+      if (row.envelope.recipient?.endpoint_id) {
+        await client.query(
+          `INSERT INTO conversation_members (conversation_id, endpoint_id, role, added_by, added_at)
+           SELECT $1, $2, 'member', $3, $4
+            WHERE NOT EXISTS (SELECT 1 FROM rooms WHERE conversation_id = $1)
+           ON CONFLICT (conversation_id, endpoint_id) DO NOTHING`,
+          [row.envelope.conversation_id, row.envelope.recipient.endpoint_id, row.envelope.sender.owner_id, row.envelope.created_at]
+        );
+      }
     }
     const result = await client.query(
-      `INSERT INTO envelopes (message_id, conversation_id, protocol, message_type, sender_endpoint_id, sender_owner_id, recipient_endpoint_id, broadcast_scope, body, context_refs, capabilities, correlation_id, idempotency_key, expires_at, created_at, signature_algorithm, signature_key_id, signature_value, canonical_bytes, action_hash, federation_hop, stream_seq, envelope_status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,'accepted') RETURNING message_id`,
-      [row.envelope.message_id, row.envelope.conversation_id, row.envelope.protocol, row.envelope.message_type, row.envelope.sender.endpoint_id, row.envelope.sender.owner_id, row.envelope.recipient?.endpoint_id ?? null, row.envelope.broadcast_scope ? JSON.stringify(row.envelope.broadcast_scope) : null, JSON.stringify(row.envelope.body), JSON.stringify(row.envelope.context_refs ?? []), row.envelope.capabilities, row.envelope.correlation_id, row.envelope.idempotency_key, row.envelope.expires_at, row.envelope.created_at, row.envelope.signature.algorithm, row.envelope.signature.key_id, row.envelope.signature.value, row.canonical_bytes ?? null, row.action_hash ?? null, row.federation_hop === true, row.streamSeq ?? null]
+      `INSERT INTO envelopes (message_id, conversation_id, protocol, message_type, sender_endpoint_id, sender_owner_id, recipient_endpoint_id, broadcast_scope, body, context_refs, capabilities, correlation_id, idempotency_key, expires_at, created_at, signature_algorithm, signature_key_id, signature_value, canonical_bytes, action_hash, federation_hop, stream_seq, room_seq, envelope_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,'accepted') RETURNING message_id`,
+      [row.envelope.message_id, row.envelope.conversation_id, row.envelope.protocol, row.envelope.message_type, row.envelope.sender.endpoint_id, row.envelope.sender.owner_id, row.envelope.recipient?.endpoint_id ?? null, row.envelope.broadcast_scope ? JSON.stringify(row.envelope.broadcast_scope) : null, JSON.stringify(row.envelope.body), JSON.stringify(row.envelope.context_refs ?? []), row.envelope.capabilities, row.envelope.correlation_id, row.envelope.idempotency_key, row.envelope.expires_at, row.envelope.created_at, row.envelope.signature.algorithm, row.envelope.signature.key_id, row.envelope.signature.value, row.canonical_bytes ?? null, row.action_hash ?? null, row.federation_hop === true, row.streamSeq ?? null, row.roomSeq ?? null]
     );
     const deliveryId = row.delivery_id ?? `del_${crypto.randomUUID()}`;
     if (row.envelope.recipient?.endpoint_id) {
@@ -783,6 +809,19 @@ export class PostgresRepository {
          VALUES ($1,$2,$3,'queued',0,$4,$4,$4,$5)`,
         [deliveryId, row.envelope.message_id, row.envelope.recipient.endpoint_id, row.envelope.created_at, row.federation_hop === true]
       );
+    }
+    let fanout = null;
+    if (Array.isArray(row.roomFanout)) {
+      fanout = [];
+      for (const endpointId of row.roomFanout) {
+        const fanoutDeliveryId = `del_${crypto.randomUUID()}`;
+        await client.query(
+          `INSERT INTO deliveries (delivery_id, message_id, recipient_endpoint_id, state, attempts, queued_at, updated_at, next_attempt_at, federation_hop)
+           VALUES ($1,$2,$3,'queued',0,$4,$4,$4,false)`,
+          [fanoutDeliveryId, row.envelope.message_id, endpointId, row.envelope.created_at],
+        );
+        fanout.push({ endpoint_id: endpointId, delivery_id: fanoutDeliveryId });
+      }
     }
     await client.query(
       `INSERT INTO idempotency_keys (idempotency_key, endpoint_id, message_id, canonical_hash, created_at, expires_at)
@@ -794,7 +833,7 @@ export class PostgresRepository {
        VALUES ($1, 'envelope.accepted', $2, $3, $4, $5, $6)`,
       [`audit_${crypto.randomUUID()}`, row.envelope.message_id, row.envelope.sender.endpoint_id, row.envelope.conversation_id, JSON.stringify({ recipient_endpoint_id: row.envelope.recipient?.endpoint_id ?? null }), row.envelope.created_at]
     );
-    return { message_id: result.rows[0].message_id, duplicate: false, delivery_id: row.envelope.recipient?.endpoint_id ? deliveryId : null };
+    return { message_id: result.rows[0].message_id, duplicate: false, delivery_id: row.envelope.recipient?.endpoint_id ? deliveryId : null, ...(fanout ? { fanout } : {}) };
   }
   async acknowledgeDelivery({ deliveryId, endpointId, now = new Date() } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
@@ -1507,6 +1546,140 @@ export class PostgresRepository {
       }
       return removed;
     });
+  }
+  async createRoom({ conversationId, workspaceId, name, description = null, createdByHumanId, ownerEndpointId, now = new Date() }) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    try {
+      return await this.withTransaction(async (client) => {
+        await client.query(
+          `INSERT INTO workspaces (workspace_id, name, created_by, created_at) VALUES ($1, $1, $2, $3)
+           ON CONFLICT (workspace_id) DO NOTHING`,
+          [workspaceId, createdByHumanId, timestamp],
+        );
+        await client.query(
+          `INSERT INTO conversations (conversation_id, kind, created_by, created_at) VALUES ($1, 'room', $2, $3)`,
+          [conversationId, createdByHumanId, timestamp],
+        );
+        const result = await client.query(
+          `INSERT INTO rooms (conversation_id, workspace_id, name, description, created_at) VALUES ($1, $2, $3, $4, $5)
+           RETURNING conversation_id, workspace_id, name, description, created_at`,
+          [conversationId, workspaceId, name, description, timestamp],
+        );
+        await client.query(
+          `INSERT INTO conversation_members (conversation_id, endpoint_id, role, added_by, added_at, response_mode)
+           VALUES ($1, $2, 'owner', $3, $4, NULL)`,
+          [conversationId, ownerEndpointId, createdByHumanId, timestamp],
+        );
+        return roomRow(result.rows[0]);
+      });
+    } catch (error) {
+      if (error.code === '23505' && error.constraint === 'rooms_workspace_id_name_key') {
+        throw Object.assign(new Error('A room with this name already exists in the workspace'), { code: 'ROOM_NAME_TAKEN' });
+      }
+      throw error;
+    }
+  }
+  async lookupRoom(conversationId, client = this.pool) {
+    const result = await client.query(
+      'SELECT conversation_id, workspace_id, name, description, created_at FROM rooms WHERE conversation_id = $1',
+      [conversationId],
+    );
+    return result.rows[0] ? roomRow(result.rows[0]) : null;
+  }
+  async listRoomsForEndpoint(endpointId, client = this.pool) {
+    const result = await client.query(
+      `SELECT r.conversation_id, r.workspace_id, r.name, r.description, r.created_at
+         FROM rooms r JOIN conversation_members m ON m.conversation_id = r.conversation_id
+        WHERE m.endpoint_id = $1 AND m.removed_at IS NULL
+        ORDER BY r.created_at, r.conversation_id`,
+      [endpointId],
+    );
+    return result.rows.map(roomRow);
+  }
+  async addRoomMember({ conversationId, endpointId, role, responseMode = null, addedByHumanId, now = new Date() }, client = this.pool) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const result = await client.query(
+      `INSERT INTO conversation_members (conversation_id, endpoint_id, role, added_by, added_at, response_mode)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (conversation_id, endpoint_id) DO UPDATE
+         SET role = EXCLUDED.role, added_by = EXCLUDED.added_by, added_at = EXCLUDED.added_at,
+             response_mode = EXCLUDED.response_mode, removed_at = NULL
+         WHERE conversation_members.removed_at IS NOT NULL
+       RETURNING endpoint_id, role, response_mode, added_at`,
+      [conversationId, endpointId, role, addedByHumanId, timestamp, responseMode],
+    );
+    if (!result.rows[0]) throw Object.assign(new Error('Endpoint is already a room member'), { code: 'ROOM_MEMBER_EXISTS' });
+    return memberRow(result.rows[0]);
+  }
+  async removeRoomMember({ conversationId, endpointId, now = new Date() }, client = this.pool) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const result = await client.query(
+      `UPDATE conversation_members SET removed_at = $3
+        WHERE conversation_id = $1 AND endpoint_id = $2 AND removed_at IS NULL`,
+      [conversationId, endpointId, timestamp],
+    );
+    return result.rowCount > 0;
+  }
+  async lookupRoomMember(conversationId, endpointId, client = this.pool) {
+    const result = await client.query(
+      `SELECT endpoint_id, role, response_mode, added_at FROM conversation_members
+        WHERE conversation_id = $1 AND endpoint_id = $2 AND removed_at IS NULL`,
+      [conversationId, endpointId],
+    );
+    return result.rows[0] ? memberRow(result.rows[0]) : null;
+  }
+  async listRoomMembers(conversationId, client = this.pool) {
+    const result = await client.query(
+      `SELECT endpoint_id, role, response_mode, added_at FROM conversation_members
+        WHERE conversation_id = $1 AND removed_at IS NULL ORDER BY added_at, endpoint_id`,
+      [conversationId],
+    );
+    return result.rows.map(memberRow);
+  }
+  async assignRoomSequence(client, conversationId) {
+    const result = await client.query(
+      `UPDATE rooms SET next_room_seq = next_room_seq + 1 WHERE conversation_id = $1
+       RETURNING next_room_seq - 1 AS assigned_seq`,
+      [conversationId],
+    );
+    return BigInt(result.rows[0].assigned_seq);
+  }
+  async listRoomMessages(conversationId, afterSeq = 0n, limit = 100, client = this.pool) {
+    const result = await client.query(
+      `SELECT room_seq, message_id, protocol, message_type, body, context_refs, capabilities, correlation_id,
+              sender_endpoint_id, sender_owner_id, broadcast_scope, conversation_id, idempotency_key,
+              signature_algorithm, signature_key_id, signature_value, expires_at, created_at, canonical_bytes
+         FROM envelopes
+        WHERE conversation_id = $1 AND room_seq > $2
+        ORDER BY room_seq
+        LIMIT $3`,
+      [conversationId, String(afterSeq), limit],
+    );
+    const iso = (value) => (value instanceof Date ? value.toISOString() : value);
+    // canonical_bytes is the stored signed byte string (base64url): clients
+    // verify signatures against it, not against the envelope rebuilt below
+    // from columns (timestamp/JSON re-serialization can change the bytes).
+    return result.rows.map((row) => ({
+      room_seq: String(row.room_seq),
+      message_id: row.message_id,
+      canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'),
+      envelope: {
+        protocol: row.protocol,
+        message_id: row.message_id,
+        conversation_id: row.conversation_id,
+        message_type: row.message_type,
+        sender: { endpoint_id: row.sender_endpoint_id, owner_id: row.sender_owner_id },
+        broadcast_scope: typeof row.broadcast_scope === 'string' ? JSON.parse(row.broadcast_scope) : row.broadcast_scope,
+        body: typeof row.body === 'string' ? JSON.parse(row.body) : row.body,
+        context_refs: row.context_refs ?? [],
+        capabilities: row.capabilities ?? [],
+        correlation_id: row.correlation_id,
+        idempotency_key: row.idempotency_key,
+        created_at: iso(row.created_at),
+        expires_at: iso(row.expires_at),
+        signature: { algorithm: row.signature_algorithm, key_id: row.signature_key_id, value: row.signature_value },
+      },
+    }));
   }
   async isConversationMember(endpointId, conversationId, client = this.pool) {
     const result = await client.query(

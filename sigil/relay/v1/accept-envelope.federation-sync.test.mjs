@@ -254,3 +254,39 @@ test('sync mode: a high-risk capability on a forwarded envelope WITH a matching 
   assert.equal(consumeCalls[0].client, undefined, 'the sync forward path must consume the approval decision without an open transaction');
   assert.equal(repository.withTransactionCallCount, 0);
 });
+
+// Rooms phase 1: rooms are relay-local. A forwarded envelope must never carry
+// a room conversation, and room.* message types never leave the relay.
+test('sync mode: an envelope whose conversation is a local room is refused, not forwarded', async () => {
+  const repository = fakeRepo();
+  const lookupClients = [];
+  repository.lookupRoom = async (conversationId, client) => { lookupClients.push(client); return conversationId === 'conv_fed_1' ? { conversation_id: 'conv_fed_1' } : null; };
+  let forwarded = false;
+  const result = await acceptEnvelopeAsync(makeEnvelope(), {
+    ...baseOptions(),
+    repository,
+    postForwardImpl: async () => { forwarded = true; return { ok: true, status: 202 }; },
+  });
+  assert.equal(result.status, 403);
+  assert.equal(result.body.code, 'ROUTE_NOT_AUTHORIZED');
+  assert.equal(forwarded, false);
+  assert.deepEqual(lookupClients, [undefined], 'the sync forward path must not open a transaction for the room lookup');
+  assert.equal(repository.withTransactionCallCount, 0);
+});
+
+test('sync mode: a room.* message type is refused on the forward path', async () => {
+  const repository = fakeRepo();
+  repository.lookupRoom = async () => null;
+  const envelope = makeEnvelope();
+  envelope.message_type = 'room.message';
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), senderKeys.privateKey).toString('base64url');
+  let forwarded = false;
+  const result = await acceptEnvelopeAsync(envelope, {
+    ...baseOptions(),
+    repository,
+    postForwardImpl: async () => { forwarded = true; return { ok: true, status: 202 }; },
+  });
+  assert.equal(result.status, 400);
+  assert.equal(result.body.code, 'INVALID_ENVELOPE');
+  assert.equal(forwarded, false);
+});

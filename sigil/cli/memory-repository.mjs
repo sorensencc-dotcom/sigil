@@ -66,6 +66,9 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
   const relayJobs = new Map();
   const auditEvents = [];
   const approvalDecisions = new Map(); // decision_id -> row (in-memory stand-in for approval_decisions)
+  const workspaces = new Map(); // workspace_id -> row (migration 027)
+  const rooms = new Map(); // conversation_id -> room row (migration 027)
+  const roomMembers = new Map(); // conversation_id -> Map(endpoint_id -> member row incl. removed_at)
   // Scoped rollback support for withTransaction (Devin review, PR #6): this
   // repo has no real transaction to roll back, so a mutation performed mid-
   // callback (e.g. consumeApprovalDecision) stayed committed even when the
@@ -213,7 +216,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     },
     async persistAcceptedEnvelope(row) {
       const federationHop = row.federation_hop === true;
-      envelopes.set(row.message_id, { ...row, streamSeq: row.streamSeq ?? null, federation_hop: federationHop });
+      envelopes.set(row.message_id, { ...row, streamSeq: row.streamSeq ?? null, roomSeq: row.roomSeq ?? null, federation_hop: federationHop });
       idempotency.set(`${row.envelope.sender.endpoint_id}:${row.envelope.idempotency_key}`, { message_id: row.message_id, canonical_hash: row.canonical_hash });
       if (row.envelope.recipient?.endpoint_id) {
         const deliveryId = `del_${row.message_id}`;
@@ -227,7 +230,78 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
           federation_hop: federationHop
         });
       }
+      if (Array.isArray(row.roomFanout)) {
+        const fanout = row.roomFanout.map((endpointId) => {
+          const deliveryId = `del_${row.message_id}_${endpointId}`;
+          deliveries.set(deliveryId, { delivery_id: deliveryId, message_id: row.message_id, recipient_endpoint_id: endpointId, state: 'delivered', queued_at: new Date().toISOString(), attempts: 0, federation_hop: false });
+          return { endpoint_id: endpointId, delivery_id: deliveryId };
+        });
+        return { message_id: row.message_id, duplicate: false, fanout };
+      }
       return { message_id: row.message_id, duplicate: false };
+    },
+    async createRoom({ conversationId, workspaceId, name, description = null, createdByHumanId, ownerEndpointId, now = new Date() }) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      if ([...rooms.values()].some((room) => room.workspace_id === workspaceId && room.name === name)) {
+        throw Object.assign(new Error('A room with this name already exists in the workspace'), { code: 'ROOM_NAME_TAKEN' });
+      }
+      if (!workspaces.has(workspaceId)) workspaces.set(workspaceId, { workspace_id: workspaceId, name: workspaceId, created_by: createdByHumanId, created_at: timestamp });
+      const room = { conversation_id: conversationId, workspace_id: workspaceId, name, description, created_at: timestamp };
+      rooms.set(conversationId, { ...room, next_room_seq: 1n, archived_at: null });
+      roomMembers.set(conversationId, new Map([[ownerEndpointId, { endpoint_id: ownerEndpointId, role: 'owner', response_mode: null, added_by: createdByHumanId, added_at: timestamp, removed_at: null }]]));
+      return room;
+    },
+    async lookupRoom(conversationId) {
+      const room = rooms.get(conversationId);
+      if (!room) return null;
+      const { next_room_seq: _seq, archived_at: _archived, ...visible } = room;
+      return visible;
+    },
+    async listRoomsForEndpoint(endpointId) {
+      return [...rooms.keys()]
+        .filter((conversationId) => roomMembers.get(conversationId)?.get(endpointId)?.removed_at === null)
+        .map((conversationId) => { const { next_room_seq: _seq, archived_at: _archived, ...visible } = rooms.get(conversationId); return visible; });
+    },
+    async addRoomMember({ conversationId, endpointId, role, responseMode = null, addedByHumanId, now = new Date() }) {
+      const members = roomMembers.get(conversationId);
+      if (!members) throw Object.assign(new Error('Room not found'), { code: 'ROOM_NOT_FOUND' });
+      if (members.get(endpointId)?.removed_at === null) throw Object.assign(new Error('Endpoint is already a room member'), { code: 'ROOM_MEMBER_EXISTS' });
+      const member = { endpoint_id: endpointId, role, response_mode: responseMode, added_by: addedByHumanId, added_at: (now instanceof Date ? now : new Date(now)).toISOString(), removed_at: null };
+      members.set(endpointId, member);
+      return { endpoint_id: member.endpoint_id, role: member.role, response_mode: member.response_mode, added_at: member.added_at };
+    },
+    async removeRoomMember({ conversationId, endpointId, now = new Date() }) {
+      const member = roomMembers.get(conversationId)?.get(endpointId);
+      if (!member || member.removed_at !== null) return false;
+      member.removed_at = (now instanceof Date ? now : new Date(now)).toISOString();
+      return true;
+    },
+    async lookupRoomMember(conversationId, endpointId) {
+      const member = roomMembers.get(conversationId)?.get(endpointId);
+      if (!member || member.removed_at !== null) return null;
+      return { endpoint_id: member.endpoint_id, role: member.role, response_mode: member.response_mode, added_at: member.added_at };
+    },
+    async listRoomMembers(conversationId) {
+      return [...(roomMembers.get(conversationId)?.values() ?? [])]
+        .filter((member) => member.removed_at === null)
+        .sort((a, b) => a.added_at.localeCompare(b.added_at))
+        .map((member) => ({ endpoint_id: member.endpoint_id, role: member.role, response_mode: member.response_mode, added_at: member.added_at }));
+    },
+    // Not undone by withTransaction: a rejected accept can leave a gap in the
+    // memory repo's room_seq. Postgres assigns inside the accept transaction,
+    // so its sequence stays gapless.
+    async assignRoomSequence(_client, conversationId) {
+      const room = rooms.get(conversationId);
+      const assigned = room.next_room_seq;
+      room.next_room_seq = assigned + 1n;
+      return assigned;
+    },
+    async listRoomMessages(conversationId, afterSeq = 0n, limit = 100) {
+      return [...envelopes.values()]
+        .filter((row) => row.envelope.conversation_id === conversationId && row.roomSeq != null && row.roomSeq > BigInt(afterSeq))
+        .sort((a, b) => (a.roomSeq < b.roomSeq ? -1 : a.roomSeq > b.roomSeq ? 1 : 0))
+        .slice(0, limit)
+        .map((row) => ({ room_seq: String(row.roomSeq), message_id: row.message_id, canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'), envelope: row.envelope }));
     },
     async listInbox(endpointId, since = '', viewerOwnerId = null) {
       return [...deliveries.values()]

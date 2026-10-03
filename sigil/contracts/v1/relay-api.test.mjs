@@ -41,3 +41,20 @@ test('error responses have stable machine-readable shape', () => {
   assert.deepEqual(api.error_response.required, ['request_id', 'code', 'message']);
   assert.equal(api.error_response.details, 'object');
 });
+
+test('every rooms route declares DATABASE_UNAVAILABLE and every room error code is a contract error', () => {
+  const states = JSON.parse(fs.readFileSync(new URL('./errors-and-states.json', import.meta.url)));
+  const rooms = api.routes.filter((route) => route.path === '/v1/rooms' || route.path.startsWith('/v1/rooms/'));
+  assert.equal(rooms.length, 6);
+  for (const route of rooms) {
+    assert.ok(route.errors.includes('DATABASE_UNAVAILABLE'), `${route.method} ${route.path}`);
+  }
+  for (const code of ['ROOM_NOT_FOUND', 'ROOM_NAME_TAKEN', 'ROOM_MEMBER_EXISTS', 'ROOM_MEMBER_NOT_FOUND', 'HUMAN_CONTEXT_REQUIRED', 'INVALID_REQUEST', 'ROUTE_NOT_AUTHORIZED']) {
+    assert.ok(states.errors.includes(code), code);
+  }
+});
+
+test('room history items carry the stored signed bytes', () => {
+  const route = api.routes.find((item) => item.path.startsWith('/v1/rooms/{room_id}/messages'));
+  assert.deepEqual(route.item_fields, ['room_seq', 'message_id', 'canonical_bytes', 'envelope']);
+});

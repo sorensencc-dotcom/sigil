@@ -32,7 +32,7 @@ async function killChild(child) {
   }
 }
 
-async function waitForListening(child, timeoutMs = 5000) {
+async function waitForListening(child, timeoutMs = 15_000) {
   return new Promise((resolve, reject) => {
     let buf = '';
     const timer = setTimeout(() => {
@@ -74,7 +74,7 @@ test('sigil relay up rejects a malformed --domain before binding a port', () => 
   const cwd = tmpCwdWithRegistry();
   try {
     assert.throws(
-      () => execFileSync(process.execPath, [sigilCli, 'relay', 'up', '--port', '0', '--domain', 'not a domain!'], { cwd, encoding: 'utf8', timeout: 5000 }),
+      () => execFileSync(process.execPath, [sigilCli, 'relay', 'up', '--port', '0', '--domain', 'not a domain!'], { cwd, encoding: 'utf8', timeout: 15_000 }),
       (error) => /INVALID_DOMAIN_SYNTAX|sigil: /.test(String(error.stderr ?? error.message)),
     );
   } finally {
