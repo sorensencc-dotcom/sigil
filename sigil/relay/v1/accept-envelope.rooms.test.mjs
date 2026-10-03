@@ -94,3 +94,69 @@ test('a non-member with a forged signature gets the signature error, not a membe
   assert.equal(result.body.code, 'INVALID_SIGNATURE');
   assert.deepEqual(await repository.listRoomMessages('room_1', 0n, 100), []);
 });
+
+// Sync-forward world: a local sender, a pinned peer relay, federationMode 'sync',
+// and one approved decision for a high-risk capability on the exact envelope
+// the test sends. Built from the setup in accept-envelope.federation-sync.test.mjs.
+async function syncForwardWorldWithApprovedHighRiskAction() {
+  const senderId = 'ep_codex@a.example';
+  const senderKeys = crypto.generateKeyPairSync('ed25519');
+  const relayKeys = crypto.generateKeyPairSync('ed25519');
+  const registered = new Map([[senderId, { owner_id: 'usr_chris', status: 'active', key_id: 'key_codex', public_key: senderKeys.publicKey }]]);
+  const repository = createMemoryRepository({ registry: registered });
+  await repository.upsertPeer({ domain: 'b.example', relayUrl: 'https://relay.b.example', wsUrl: null, keys: [], trustMode: 'pinned', now: NOW });
+  const options = {
+    repository,
+    registered,
+    relayDomain: 'a.example',
+    federationMode: 'sync',
+    federationIdentity: { private_key_pem: relayKeys.privateKey.export({ type: 'pkcs8', format: 'pem' }), key_id: 'relay-a-key-1' },
+    now: NOW,
+    request_id: 'req_room_fwd',
+    postForwardImpl: async () => ({ ok: true, status: 202 }),
+  };
+  let decision = null;
+  return {
+    repository,
+    senderId,
+    options,
+    async signedForwardEnvelope(overrides = {}) {
+      const envelope = {
+        protocol: 'sigil/1',
+        message_id: `msg_${crypto.randomUUID()}`,
+        conversation_id: 'conv_fed_1',
+        message_type: 'chat.message',
+        sender: { endpoint_id: senderId, owner_id: 'usr_chris' },
+        recipient: { endpoint_id: 'ep_claude@b.example', owner_id: 'usr_remote_owner' },
+        body: { text: 'hello across the relay boundary' },
+        context_refs: [],
+        capabilities: ['sigil.approval/request'],
+        correlation_id: null,
+        idempotency_key: `send_${crypto.randomUUID()}`,
+        created_at: '2026-10-02T12:00:00.000Z',
+        expires_at: '2026-10-02T13:00:00.000Z',
+        signature: { algorithm: 'Ed25519', key_id: 'key_codex', value: '' },
+        ...overrides,
+      };
+      envelope.signature.value = crypto.sign(null, signedBytes(envelope), senderKeys.privateKey).toString('base64url');
+      decision = await repository.recordApprovalDecision({
+        endpointId: senderId,
+        actionHash: crypto.createHash('sha256').update(signedBytes(envelope)).digest('hex'),
+        expiresAt: '2026-10-02T14:00:00.000Z',
+        now: NOW,
+      });
+      return envelope;
+    },
+    approvalState() { return decision.status; },
+  };
+}
+
+test('a sync-forwarded high-risk envelope aimed at a room is refused without consuming its approval', async () => {
+  const world = await syncForwardWorldWithApprovedHighRiskAction();
+  await world.repository.createRoom({ conversationId: 'room_fwd', workspaceId: 'ws_usr_chris', name: 'fwd', createdByHumanId: 'usr_chris', ownerEndpointId: world.senderId, now: NOW });
+  const envelope = await world.signedForwardEnvelope({ conversation_id: 'room_fwd' });
+  const result = await acceptEnvelopeAsync(envelope, world.options);
+  assert.equal(result.status, 403);
+  assert.equal(result.body.code, 'ROUTE_NOT_AUTHORIZED');
+  assert.equal(world.approvalState(), 'approved', 'the approval is still unconsumed');
+});

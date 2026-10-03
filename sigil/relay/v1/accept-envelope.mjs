@@ -194,14 +194,6 @@ async function acceptWithRepository(envelope, options) {
         throw reject('REPLAY_DETECTED', 'message_id was already accepted under a different idempotency_key');
       }
 
-      // Capability/risk-tier + approval gate (closes Bypass #1: a sync-forwarded
-      // envelope previously skipped this check entirely, since it only ran on
-      // the route.action === 'local' branch below). Called with no `client`
-      // argument so lookupCapabilityRegistration/consumeApprovalDecision fall
-      // through to their own pool-default client -- this path must never open
-      // a transaction (I1: no held Postgres connection across postForward).
-      await enforceCapabilityRiskGate(envelope, repository, { now });
-
       // Rooms are relay-local (phase 1): refuse a room conversation or a
       // room.* type before anything leaves this relay. No transaction is
       // open here, so the lookup uses the repository's pool default. This
@@ -209,7 +201,16 @@ async function acceptWithRepository(envelope, options) {
       // does), so the answer reveals only that a room with this
       // conversation_id exists -- never membership -- to a caller that
       // already passed transport authentication.
+      // Runs before the approval gate: the gate commits approval consumption immediately on this no-transaction path.
       assertNotRoomConversation(envelope, repository.lookupRoom ? await repository.lookupRoom(envelope.conversation_id) : null);
+
+      // Capability/risk-tier + approval gate (closes Bypass #1: a sync-forwarded
+      // envelope previously skipped this check entirely, since it only ran on
+      // the route.action === 'local' branch below). Called with no `client`
+      // argument so lookupCapabilityRegistration/consumeApprovalDecision fall
+      // through to their own pool-default client -- this path must never open
+      // a transaction (I1: no held Postgres connection across postForward).
+      await enforceCapabilityRiskGate(envelope, repository, { now });
 
       // client = null: forwardEnvelope passes it only to lookupRecipientEndpoint
       // (L210) for the sender-key lookup, handled by the existing `?? null`
@@ -265,6 +266,10 @@ async function acceptWithRepository(envelope, options) {
     // Runs before the forward/local branch so BOTH routes are gated
     // identically, on this transaction's client so approval consumption
     // commits or rolls back atomically with the rest of the accept.
+    if (route.action === 'forward') {
+      // Rooms are relay-local; refuse before the approval gate (see sync branch).
+      assertNotRoomConversation(envelope, repository.lookupRoom ? await repository.lookupRoom(envelope.conversation_id, client) : null);
+    }
     await enforceCapabilityRiskGate(envelope, repository, { client, now });
 
     // Queue-forward: enqueueForward's INSERT + audit are atomic inside this txn.
@@ -272,8 +277,6 @@ async function acceptWithRepository(envelope, options) {
       if (envelope.message_type === 'session.resend_request') {
         throw reject('ROUTE_NOT_AUTHORIZED', 'Session resend requests are local-only');
       }
-      // Rooms are relay-local (phase 1); see the sync-forward branch above.
-      assertNotRoomConversation(envelope, repository.lookupRoom ? await repository.lookupRoom(envelope.conversation_id, client) : null);
       return forwardEnvelope(envelope, route, options, client);
     }
 
