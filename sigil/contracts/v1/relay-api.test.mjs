@@ -54,6 +54,13 @@ test('every rooms route declares DATABASE_UNAVAILABLE and every room error code 
   }
 });
 
+test('POST /v1/envelopes declares ROOM_NOT_INVOKED and it is a contract error', () => {
+  const states = JSON.parse(fs.readFileSync(new URL('./errors-and-states.json', import.meta.url)));
+  const route = api.routes.find((item) => item.method === 'POST' && item.path === '/v1/envelopes');
+  assert.ok(route.errors.includes('ROOM_NOT_INVOKED'));
+  assert.ok(states.errors.includes('ROOM_NOT_INVOKED'));
+});
+
 test('room history items carry the stored signed bytes', () => {
   const route = api.routes.find((item) => item.path.startsWith('/v1/rooms/{room_id}/messages'));
   assert.deepEqual(route.item_fields, ['room_seq', 'message_id', 'canonical_bytes', 'envelope']);
