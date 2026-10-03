@@ -24,14 +24,17 @@ test('Claude error results and empty output are CLI_INVALID_OUTPUT', () => {
   assert.throws(() => parseCodexOutput(''), { code: 'CLI_INVALID_OUTPUT' });
 });
 
-test('Claude args: print mode, json, allowlist, resume only with a session', async () => {
+test('Claude args: print mode, json, isolated settings/MCP, tools = allowlist, resume only with a session', async () => {
   const seen = [];
   const runner = async ({ args, input }) => { seen.push({ args, input }); return { stdout: JSON.stringify({ result: 'ok', session_id: 'sess_1' }) }; };
   const cli = createClaudeCli({ runner });
   await cli.run({ prompt: 'p1' });
   await cli.run({ prompt: 'p2', sessionId: 'sess_1' });
-  assert.deepEqual(seen[0].args, ['-p', '--output-format', 'json', '--permission-mode', 'default', '--allowedTools', 'Read', 'Grep', 'Glob']);
-  assert.deepEqual(seen[1].args, ['-p', '--output-format', 'json', '--permission-mode', 'default', '--resume', 'sess_1', '--allowedTools', 'Read', 'Grep', 'Glob']);
+  const isolation = ['--setting-sources', 'project', '--permission-mode', 'default'];
+  const tools = ['--strict-mcp-config', '--tools', 'Read', 'Grep', 'Glob', '--allowedTools', 'Read', 'Grep', 'Glob'];
+  assert.deepEqual(seen[0].args, ['-p', '--output-format', 'json', ...isolation, ...tools]);
+  assert.deepEqual(seen[1].args, ['-p', '--output-format', 'json', ...isolation, '--resume', 'sess_1', ...tools]);
+  assert.ok(!seen[0].args.includes('--dangerously-skip-permissions'));
   assert.equal(seen[1].input, 'p2');
 });
 
@@ -79,6 +82,13 @@ test('Claude allowedTools must be a non-empty list of plain tool names', () => {
   for (const allowedTools of [[], ['--dangerously-skip-permissions'], ['Read', ''], ['Bash(rm:*)'], 'Read']) {
     assert.throws(() => createClaudeCli({ allowedTools }), { code: 'CLI_INVALID_CONFIG' });
   }
+});
+
+test('custom allowedTools become both the --tools list and the --allowedTools list', async () => {
+  const seen = [];
+  const runner = async ({ args }) => { seen.push(args); return { stdout: JSON.stringify({ result: 'ok', session_id: 's' }) }; };
+  await createClaudeCli({ allowedTools: ['Read'], runner }).run({ prompt: 'p' });
+  assert.deepEqual(seen[0].slice(-5), ['--strict-mcp-config', '--tools', 'Read', '--allowedTools', 'Read']);
 });
 
 test('Codex stream with only error items is CLI_INVALID_OUTPUT', () => {
