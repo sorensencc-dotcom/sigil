@@ -1,7 +1,10 @@
 // sigil/bridges/v1/session-store.mjs
 // One CLI session per (room, endpoint): a bridge serves one endpoint, so the
-// file is keyed by room. last_seq is the highest room_seq already shown to
-// the CLI, so a resumed session only gets messages it has not seen.
+// file is keyed by room. Value: { session_id, last_seq_by_thread }, where
+// last_seq_by_thread[thread_root_id] is the room_seq the last turn in that
+// thread read up to, so a resumed session only gets that thread's unseen
+// messages. Entries from before phase 2 fixes carry a room-wide last_seq,
+// which is ignored (worst case: one turn re-shows up to 20 messages).
 import fs from 'node:fs';
 import path from 'node:path';
 
