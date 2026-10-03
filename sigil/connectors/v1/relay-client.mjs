@@ -33,4 +33,21 @@ export class RelayClient {
     return this.request(`/v1/deliveries/${encodeURIComponent(deliveryId)}/ack`, { method: 'POST', body: JSON.stringify({ outcome, reason }) });
   }
   async reportProcessing(deliveryId, state, reason = null) { return this.request(`/v1/deliveries/${encodeURIComponent(deliveryId)}/processing`, { method: 'POST', body: JSON.stringify({ state, reason }) }); }
+  async listRoomMembers(roomId) { return (await this.request(`/v1/rooms/${encodeURIComponent(roomId)}/members`)).items; }
+  async listRoomMessages(roomId, afterSeq = '0', limit = 500) {
+    const page = await this.request(`/v1/rooms/${encodeURIComponent(roomId)}/messages?after_seq=${encodeURIComponent(afterSeq)}&limit=${limit}`);
+    return { items: page.items, next_after_seq: page.next_after_seq };
+  }
+  async listRoomInvocations(roomId, { endpointId = null, status = null } = {}) {
+    const query = new URLSearchParams();
+    if (endpointId) query.set('endpoint_id', endpointId);
+    if (status) query.set('status', status);
+    const suffix = query.size ? `?${query}` : '';
+    return (await this.request(`/v1/rooms/${encodeURIComponent(roomId)}/invocations${suffix}`)).items;
+  }
+  async failRoomInvocation(roomId, reason, invocationId = null) {
+    const body = { reason };
+    if (invocationId !== null) body.invocation_id = invocationId;
+    return (await this.request(`/v1/rooms/${encodeURIComponent(roomId)}/invocations/fail`, { method: 'POST', body: JSON.stringify(body) })).invocation;
+  }
 }
