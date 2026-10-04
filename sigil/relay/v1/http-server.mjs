@@ -72,7 +72,7 @@ export function createOnPersisted(stream) {
   };
 }
 
-export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain, federationMode, federationIdentity, fetchImpl, relayRequestFreshnessMs, stream_seq, resendMetrics, logger, agentmailIngress, agentmailControl } = {}) {
+export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain, federationMode, federationIdentity, fetchImpl, relayRequestFreshnessMs, stream_seq, resendMetrics, logger, agentmailIngress, agentmailControl, roomSystemIdentity } = {}) {
   // B3: one clamped relay-request freshness window for this server. It bounds
   // how long a captured signed peer request stays replayable and doubles as the
   // nonce row's expiry horizon (expiresAt = signed_at + freshnessMs).
@@ -413,13 +413,13 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       const result = await acceptEnvelopeAsync(envelope, {
         registered: registry, request_id: requestId, now, repository, relayDomain, persist,
         federationMode, federationIdentity, fetchImpl, stream_seq: streamSequence, resendMetrics, logger,
-        onPersisted: createOnPersisted(stream),
+        onPersisted: createOnPersisted(stream), systemIdentity: roomSystemIdentity,
       });
       response.writeHead(result.status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(result.body ? JSON.stringify(result.body) : '');
     }
     try {
-      if (await handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream, inboxDepthLimit: DEFAULT_INBOX_DEPTH_LIMIT })) return;
+      if (await handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream, inboxDepthLimit: DEFAULT_INBOX_DEPTH_LIMIT, systemIdentity: roomSystemIdentity })) return;
     } catch (error) {
       logger?.error?.('room route failed', error);
       if (response.headersSent) return response.end();

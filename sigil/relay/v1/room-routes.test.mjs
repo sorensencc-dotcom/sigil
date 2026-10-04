@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createRelayServer } from './http-server.mjs';
 import { createMemoryRepository } from '../../cli/memory-repository.mjs';
+import { createIdentity } from '../../cli/identity.mjs';
 
 const principals = {
   'Bearer chris-web': { endpoint_id: 'ep_web', owner_id: 'usr_chris', human_id: 'usr_chris' },
@@ -204,4 +205,26 @@ test('response_mode router is refused for a human endpoint', async () => {
     const refused = await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_web', response_mode: 'router' });
     assert.deepEqual([refused.status, refused.body.code], [400, 'INVALID_REQUEST']);
   });
+});
+
+test('Stop emits one invocation_stopped event per cancelled invocation', async () => {
+  const roomSystemIdentity = createIdentity({ ownerId: 'relay_system', endpointId: 'ep_relay_system', kind: 'system' });
+  const repository = createMemoryRepository({ registry });
+  await repository.ensureRoomSystemEndpoint({ identity: roomSystemIdentity, now: new Date() });
+  const server = createRelayServer({ registry, repository, roomSystemIdentity, authenticate: async (request) => principals[request.headers.authorization] ?? null });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const port = server.address().port;
+    const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'r' })).body.room.conversation_id;
+    await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_claude', response_mode: 'joins' });
+    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', now: new Date() };
+    await repository.createRoomInvocation({ ...base, invocationId: 'inv_1', triggerMessageId: 'msg_1', status: 'running' });
+    await repository.createRoomInvocation({ ...base, invocationId: 'inv_2', triggerMessageId: 'msg_2', status: 'queued' });
+    const stopped = await call(port, 'POST', `/v1/rooms/${roomId}/stop`, 'Bearer chris-web');
+    assert.deepEqual([stopped.status, stopped.body.cancelled], [200, 2]);
+    const events = (await repository.listRoomMessages(roomId, 0n, 100)).map((item) => item.envelope).filter((e) => e.message_type === 'room.event');
+    assert.deepEqual(events.map((e) => e.body.kind), ['invocation_stopped', 'invocation_stopped']);
+    assert.deepEqual(events.map((e) => e.body.invocation_id).sort(), ['inv_1', 'inv_2']);
+    assert.deepEqual(events[0].body.endpoint_ids, ['ep_claude']);
+  } finally { await new Promise((resolve) => server.close(resolve)); }
 });

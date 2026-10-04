@@ -1,5 +1,6 @@
 // sigil/relay/v1/room-routes.mjs
 import crypto from 'node:crypto';
+import { emitRoomEvent } from './room-events.mjs';
 import { promoteNextInvocation } from './room-dispatch.mjs';
 import { isAgentMember } from './room-policy.mjs';
 
@@ -43,7 +44,7 @@ function isAgentCaller(registry, principal) {
   return registry?.get?.(principal?.endpoint_id)?.kind === 'agent';
 }
 
-export async function handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream = null, inboxDepthLimit }) {
+export async function handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream = null, inboxDepthLimit, systemIdentity = null }) {
   const path = parsedUrl.pathname;
   if (path !== '/v1/rooms' && !path.startsWith('/v1/rooms/')) return false;
   if (!repository || ROOM_METHODS.some((method) => typeof repository[method] !== 'function')) return fail(response, requestId, 503, 'DATABASE_UNAVAILABLE', 'Rooms are unavailable');
@@ -150,7 +151,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
       // A late failure from an older bridge turn must not fail a newer invocation.
       if (expectedId !== null && running.invocation_id !== expectedId) return null;
       const invocation = await repository.finishInvocation(running.invocation_id, { status: 'failed', reason, now }, client);
-      const promoted = await promoteNextInvocation({ roomId, endpointId: principal.endpoint_id, repository, client, now, inboxDepthLimit, registered: registry });
+      const promoted = await promoteNextInvocation({ roomId, endpointId: principal.endpoint_id, repository, client, now, inboxDepthLimit, registered: registry, systemIdentity, room: access.room });
       return { invocation, promoted };
     });
     if (!outcome) return fail(response, requestId, 404, 'INVOCATION_NOT_FOUND', 'No matching running invocation for this endpoint in this room');
@@ -163,7 +164,16 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     // response_mode set, or the registry or endpoints row says kind 'agent'.
     const callerIsAgent = isAgentCaller(registry, principal) || await repository.withTransaction((client) => isAgentMember(access.member, repository, client, registry));
     if (callerIsAgent) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'Only human members can stop a room');
-    const cancelled = await repository.cancelRoomInvocations(roomId, { now });
+    const cancelled = await repository.withTransaction(async (client) => {
+      const rows = await repository.cancelRoomInvocations(roomId, { now }, client);
+      if (systemIdentity && rows.length) {
+        const room = await repository.lookupRoom(roomId, client);
+        for (const invocation of rows) {
+          await emitRoomEvent({ identity: systemIdentity, repository, client, room, body: { kind: 'invocation_stopped', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: 'stopped' }, idempotencyKey: `evt_stopped_${invocation.invocation_id}`, now, inboxDepthLimit, registered: registry });
+        }
+      }
+      return rows;
+    });
     return send(response, requestId, 200, { code: 'OK', cancelled: cancelled.length });
   }
 

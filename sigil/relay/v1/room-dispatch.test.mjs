@@ -5,6 +5,7 @@ import { acceptEnvelopeAsync } from './accept-envelope.mjs';
 import { signedBytes } from './validate-envelope.mjs';
 import { applyRoomDispatch } from './room-dispatch.mjs';
 import { createMemoryRepository } from '../../cli/memory-repository.mjs';
+import { createIdentity } from '../../cli/identity.mjs';
 
 const NOW = new Date('2026-10-02T12:01:00.000Z');
 
@@ -295,4 +296,49 @@ test('mentioning the router member creates no invocation', async () => {
   const { persisted } = await accept(w, post(w, 'ep_web', { text: '@ep_router hi', mentions: ['ep_router'] }));
   assert.deepEqual(await w.repository.listRoomInvocations('room_1'), []);
   assert.equal(persisted.roomDeliveries.some((d) => d.endpoint_id === 'ep_router'), false, 'a mention naming an agent member is not routed');
+});
+
+async function withSystem(w) {
+  const systemIdentity = createIdentity({ ownerId: 'relay_system', endpointId: 'ep_relay_system', kind: 'system' });
+  await w.repository.ensureRoomSystemEndpoint({ identity: systemIdentity, now: NOW });
+  return systemIdentity;
+}
+
+// Claude and Codex ping-pong in one thread until the hop budget refuses a mention.
+async function driveToHopRefusal(w, extra) {
+  const root = post(w, 'ep_web', { text: '@ep_claude', mentions: ['ep_claude'] });
+  await accept(w, root, extra);
+  let speaker = 'ep_claude';
+  for (let turn = 1; turn <= 6; turn += 1) {
+    const next = speaker === 'ep_claude' ? 'ep_codex' : 'ep_claude';
+    const { result } = await accept(w, post(w, speaker, { text: `turn ${turn} @${next}`, thread_root_id: root.message_id, mentions: [next] }), extra);
+    assert.equal(result.status, 202, `turn ${turn}`);
+    speaker = next;
+  }
+}
+
+test('a hop_budget refusal emits an invocation_refused room.event', async () => {
+  const w = world();
+  await room(w.repository);
+  const systemIdentity = await withSystem(w);
+  await driveToHopRefusal(w, { systemIdentity });
+  const refused = (await w.repository.listRoomInvocations('room_1')).filter((r) => r.status === 'refused');
+  assert.equal(refused.length, 1);
+  const events = (await w.repository.listRoomMessages('room_1', 0n, 100)).filter((item) => item.envelope.message_type === 'room.event');
+  assert.equal(events.length, 1);
+  const { body } = events[0].envelope;
+  assert.equal(body.kind, 'invocation_refused');
+  assert.equal(body.invocation_id, refused[0].invocation_id);
+  assert.deepEqual(body.endpoint_ids, [refused[0].endpoint_id]);
+  assert.equal(body.reason, 'hop_budget');
+});
+
+test('no events are emitted when no system identity is configured', async () => {
+  const w = world();
+  await room(w.repository);
+  await driveToHopRefusal(w, {});
+  assert.equal((await w.repository.listRoomInvocations('room_1')).filter((r) => r.status === 'refused').length, 1);
+  const items = await w.repository.listRoomMessages('room_1', 0n, 100);
+  assert.ok(items.length > 0);
+  assert.ok(items.every((item) => item.envelope.message_type === 'room.message'));
 });

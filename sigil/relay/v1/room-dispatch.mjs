@@ -9,6 +9,8 @@
 // after its latest human message.
 import crypto from 'node:crypto';
 import { reject } from './validate-envelope.mjs';
+import { clampReason } from '../../contracts/v1/room-event-schema.mjs';
+import { emitRoomEvent } from './room-events.mjs';
 import { deliveryBlocker, isInvocableAgent, isRouterMember, memberIsAgent } from './room-policy.mjs';
 
 export function threadRootOf(envelope) {
@@ -28,13 +30,23 @@ export async function assertAgentMayPost(envelope, senderMember, repository, cli
 // Moves the oldest queued invocation for (room, agent) to running and writes
 // its delivery. Queued rows whose agent can no longer receive are refused, so
 // one bad row never blocks the queue.
-export async function promoteNextInvocation({ roomId, endpointId, repository, client, now, inboxDepthLimit, registered }) {
+async function emitRefusal({ systemIdentity, repository, client, room, invocation, now, inboxDepthLimit, registered }) {
+  if (!systemIdentity) return;
+  await emitRoomEvent({
+    identity: systemIdentity, repository, client, room,
+    body: { kind: 'invocation_refused', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: clampReason(invocation.reason ?? 'refused') },
+    idempotencyKey: `evt_refused_${invocation.invocation_id}`, now, inboxDepthLimit, registered,
+  });
+}
+
+export async function promoteNextInvocation({ roomId, endpointId, repository, client, now, inboxDepthLimit, registered, systemIdentity = null, room = null }) {
   for (;;) {
     const next = await repository.nextQueuedInvocation(roomId, endpointId, client);
     if (!next) return null;
     const blocker = await deliveryBlocker(endpointId, repository, client, { inboxDepthLimit, registered });
     if (blocker) {
       await repository.finishInvocation(next.invocation_id, { status: 'refused', reason: blocker, now }, client);
+      if (room) await emitRefusal({ systemIdentity, repository, client, room, invocation: { invocation_id: next.invocation_id, endpoint_id: endpointId, reason: blocker }, now, inboxDepthLimit, registered });
       continue;
     }
     const deliveryId = await repository.createRoomDelivery({ messageId: next.trigger_message_id, endpointId, now }, client);
@@ -43,7 +55,7 @@ export async function promoteNextInvocation({ roomId, endpointId, repository, cl
   }
 }
 
-export async function applyRoomDispatch({ envelope, room, plan, completing, repository, client, now, inboxDepthLimit, registered }) {
+export async function applyRoomDispatch({ envelope, room, plan, completing, repository, client, now, inboxDepthLimit, registered, systemIdentity = null }) {
   const roomId = room.conversation_id;
   const threadRootId = threadRootOf(envelope);
   const invocations = [];
@@ -56,7 +68,7 @@ export async function applyRoomDispatch({ envelope, room, plan, completing, repo
     // read in assertAgentMayPost. Throwing rolls back the whole accept transaction.
     const finished = await repository.finishInvocation(completing.invocation_id, { status: 'completed', replyMessageId: envelope.message_id, now }, client);
     if (!finished) throw reject('ROOM_NOT_INVOKED', 'Invocation already completed', { conversation_id: roomId, invocation_id: completing.invocation_id });
-    const promoted = await promoteNextInvocation({ roomId, endpointId: envelope.sender.endpoint_id, repository, client, now, inboxDepthLimit, registered });
+    const promoted = await promoteNextInvocation({ roomId, endpointId: envelope.sender.endpoint_id, repository, client, now, inboxDepthLimit, registered, systemIdentity, room });
     if (promoted) roomDeliveries.push(promoted);
   }
 
@@ -69,11 +81,13 @@ export async function applyRoomDispatch({ envelope, room, plan, completing, repo
     const blocker = busy ? null : await deliveryBlocker(endpointId, repository, client, { inboxDepthLimit, registered });
     if (blocker) {
       invocations.push(await repository.createRoomInvocation({ ...row, status: 'refused', reason: blocker }, client));
+      await emitRefusal({ systemIdentity, repository, client, room, invocation: invocations.at(-1), now, inboxDepthLimit, registered });
       continue;
     }
     const turn = await repository.reserveAgentTurn(roomId, threadRootId, room.max_agent_turns, { now }, client);
     if (!turn.allowed) {
       invocations.push(await repository.createRoomInvocation({ ...row, status: 'refused', reason: 'hop_budget' }, client));
+      await emitRefusal({ systemIdentity, repository, client, room, invocation: invocations.at(-1), now, inboxDepthLimit, registered });
       continue;
     }
     if (busy) {
