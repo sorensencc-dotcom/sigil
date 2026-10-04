@@ -225,6 +225,37 @@ test('Stop emits one invocation_stopped event per cancelled invocation', async (
     const events = (await repository.listRoomMessages(roomId, 0n, 100)).map((item) => item.envelope).filter((e) => e.message_type === 'room.event');
     assert.deepEqual(events.map((e) => e.body.kind), ['invocation_stopped', 'invocation_stopped']);
     assert.deepEqual(events.map((e) => e.body.invocation_id).sort(), ['inv_1', 'inv_2']);
-    assert.deepEqual(events[0].body.endpoint_ids, ['ep_claude']);
+    for (const event of events) assert.deepEqual(event.body.endpoint_ids, ['ep_claude']);
   } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
+test('a queued invocation refused on promotion emits invocation_refused', async () => {
+  const roomSystemIdentity = createIdentity({ ownerId: 'relay_system', endpointId: 'ep_relay_system', kind: 'system' });
+  const localRegistry = new Map(registry);
+  localRegistry.delete('ep_relay_system');
+  const repository = createMemoryRepository({ registry: localRegistry });
+  await repository.ensureRoomSystemEndpoint({ identity: roomSystemIdentity, now: new Date() });
+  const server = createRelayServer({ registry: localRegistry, repository, roomSystemIdentity, authenticate: async (request) => principals[request.headers.authorization] ?? null });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const port = server.address().port;
+    const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'r' })).body.room.conversation_id;
+    await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_claude', response_mode: 'joins' });
+    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', now: new Date() };
+    await repository.createRoomInvocation({ ...base, invocationId: 'inv_1', triggerMessageId: 'msg_1', status: 'running' });
+    await repository.createRoomInvocation({ ...base, invocationId: 'inv_2', triggerMessageId: 'msg_2', status: 'queued' });
+    // The agent goes inactive while inv_2 waits, so completing inv_1 promotes into a refusal.
+    registry.get('ep_claude').status = 'revoked';
+    const failed = await call(port, 'POST', `/v1/rooms/${roomId}/invocations/fail`, 'Bearer claude', { reason: 'cli exited 1' });
+    assert.equal(failed.status, 200);
+    const refused = (await repository.listRoomInvocations(roomId)).find((row) => row.invocation_id === 'inv_2');
+    assert.deepEqual([refused.status, refused.reason], ['refused', 'endpoint_inactive']);
+    const events = (await repository.listRoomMessages(roomId, 0n, 100)).map((item) => item.envelope).filter((e) => e.message_type === 'room.event');
+    assert.equal(events.length, 1);
+    assert.deepEqual([events[0].body.kind, events[0].body.invocation_id, events[0].body.reason], ['invocation_refused', 'inv_2', 'endpoint_inactive']);
+    assert.deepEqual(events[0].body.endpoint_ids, ['ep_claude']);
+  } finally {
+    registry.get('ep_claude').status = 'active';
+    await new Promise((resolve) => server.close(resolve));
+  }
 });

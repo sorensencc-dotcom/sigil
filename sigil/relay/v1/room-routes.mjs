@@ -220,9 +220,8 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     const cancelled = await repository.withTransaction(async (client) => {
       const rows = await repository.cancelRoomInvocations(roomId, { now }, client);
       if (systemIdentity && rows.length) {
-        const room = await repository.lookupRoom(roomId, client);
         for (const invocation of rows) {
-          await emitRoomEvent({ identity: systemIdentity, repository, client, room, body: { kind: 'invocation_stopped', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: 'stopped' }, idempotencyKey: `evt_stopped_${invocation.invocation_id}`, now, inboxDepthLimit, registered: registry });
+          await emitRoomEvent({ identity: systemIdentity, repository, client, room: access.room, body: { kind: 'invocation_stopped', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: 'stopped' }, idempotencyKey: `evt_stopped_${invocation.invocation_id}`, now, inboxDepthLimit, registered: registry });
         }
       }
       return rows;

@@ -39,14 +39,14 @@ export async function emitRefusal({ systemIdentity, repository, client, room, in
   });
 }
 
-export async function promoteNextInvocation({ roomId, endpointId, repository, client, now, inboxDepthLimit, registered, systemIdentity = null, room = null }) {
+export async function promoteNextInvocation({ roomId, endpointId, repository, client, now, inboxDepthLimit, registered, systemIdentity = null, room }) {
   for (;;) {
     const next = await repository.nextQueuedInvocation(roomId, endpointId, client);
     if (!next) return null;
     const blocker = await deliveryBlocker(endpointId, repository, client, { inboxDepthLimit, registered });
     if (blocker) {
       await repository.finishInvocation(next.invocation_id, { status: 'refused', reason: blocker, now }, client);
-      if (room) await emitRefusal({ systemIdentity, repository, client, room, invocation: { invocation_id: next.invocation_id, endpoint_id: endpointId, reason: blocker }, now, inboxDepthLimit, registered });
+      await emitRefusal({ systemIdentity, repository, client, room, invocation: { invocation_id: next.invocation_id, endpoint_id: endpointId, reason: blocker }, now, inboxDepthLimit, registered });
       continue;
     }
     const deliveryId = await repository.createRoomDelivery({ messageId: next.trigger_message_id, endpointId, now }, client);
