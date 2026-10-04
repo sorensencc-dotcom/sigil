@@ -1,14 +1,15 @@
 // sigil/relay/v1/room-dispatch.mjs
 // Rooms phase 2: who runs next. Every decision to run an agent is a
-// room_invocations row. Phase 2's only source is an explicit mention; the
-// phase 3 router adds decided_by = 'router'. The relay, not the bridges,
+// room_invocations row. Mentions create invocations here; the router member
+// receives unmentioned human messages and posts its pick to the invocations
+// route (decided_by = 'router'). The relay, not the bridges,
 // enforces the loop guards: an agent may post only while it holds a running
 // invocation (its post completes it), at most one invocation runs per agent
 // per room, and each thread allows max_agent_turns reserved agent turns
 // after its latest human message.
 import crypto from 'node:crypto';
 import { reject } from './validate-envelope.mjs';
-import { deliveryBlocker, memberIsAgent } from './room-policy.mjs';
+import { deliveryBlocker, isInvocableAgent, isRouterMember, memberIsAgent } from './room-policy.mjs';
 
 export function threadRootOf(envelope) {
   return envelope.body?.thread_root_id ?? envelope.message_id;
@@ -59,8 +60,9 @@ export async function applyRoomDispatch({ envelope, room, plan, completing, repo
     if (promoted) roomDeliveries.push(promoted);
   }
 
-  const agentIds = new Set(plan.agentMembers.map((member) => member.endpoint_id));
-  const targets = [...new Set(envelope.body?.mentions ?? [])].filter((id) => agentIds.has(id));
+  const agentIds = new Set(plan.agentMembers.filter(isInvocableAgent).map((member) => member.endpoint_id));
+  const allMentions = [...new Set(envelope.body?.mentions ?? [])];
+  const targets = allMentions.filter((id) => agentIds.has(id));
   for (const endpointId of targets) {
     const row = { invocationId: `inv_${crypto.randomUUID()}`, roomId, workspaceId: room.workspace_id, triggerMessageId: envelope.message_id, threadRootId, endpointId, decidedBy: 'mention', now };
     const busy = await repository.lookupRunningInvocation(roomId, endpointId, client);
@@ -82,5 +84,17 @@ export async function applyRoomDispatch({ envelope, room, plan, completing, repo
     invocations.push(await repository.createRoomInvocation({ ...row, status: 'running', deliveryId }, client));
     roomDeliveries.push({ endpoint_id: endpointId, delivery_id: deliveryId });
   }
-  return { invocations, roomDeliveries };
+  const routerDeliveries = [];
+  const humanSender = !memberIsAgent(plan.senderMember);
+  const namesAnAgent = allMentions.some((id) => plan.agentMembers.some((member) => member.endpoint_id === id));
+  const hasJoinedAgent = plan.agentMembers.some((member) => member.response_mode === 'joins');
+  if (humanSender && !namesAnAgent && hasJoinedAgent && envelope.message_type === 'room.message') {
+    for (const router of plan.agentMembers.filter(isRouterMember)) {
+      if (await deliveryBlocker(router.endpoint_id, repository, client, { inboxDepthLimit, registered })) continue;
+      const deliveryId = await repository.createRoomDelivery({ messageId: envelope.message_id, endpointId: router.endpoint_id, now }, client);
+      routerDeliveries.push({ endpoint_id: router.endpoint_id, delivery_id: deliveryId });
+      roomDeliveries.push({ endpoint_id: router.endpoint_id, delivery_id: deliveryId });
+    }
+  }
+  return { invocations, roomDeliveries, routerDeliveries };
 }

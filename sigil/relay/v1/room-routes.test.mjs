@@ -15,6 +15,7 @@ const registry = new Map([
   ['ep_web', { owner_id: 'usr_chris', status: 'active', kind: 'human' }],
   ['ep_claude', { owner_id: 'usr_chris', status: 'active', kind: 'agent' }],
   ['ep_codex', { owner_id: 'usr_chris', status: 'active', kind: 'agent' }],
+  ['ep_router', { owner_id: 'usr_chris', status: 'active', kind: 'agent' }],
   ['ep_other_agent', { owner_id: 'usr_other', status: 'active', kind: 'agent' }],
 ]);
 
@@ -185,5 +186,22 @@ test('fail with invocation_id only fails the matching running invocation', async
     assert.equal(matched.body.invocation.status, 'failed');
 
     assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/invocations/fail`, 'Bearer claude', { invocation_id: 42 })).body.code, 'INVALID_REQUEST');
+  });
+});
+
+test('a human room manager can add an agent endpoint with response_mode router', async () => {
+  await withServer(async (port) => {
+    const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'r' })).body.room.conversation_id;
+    const added = await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_router', response_mode: 'router' });
+    assert.equal(added.status, 201);
+    assert.equal(added.body.member.response_mode, 'router');
+  });
+});
+
+test('response_mode router is refused for a human endpoint', async () => {
+  await withServer(async (port) => {
+    const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'r' })).body.room.conversation_id;
+    const refused = await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_web', response_mode: 'router' });
+    assert.deepEqual([refused.status, refused.body.code], [400, 'INVALID_REQUEST']);
   });
 });

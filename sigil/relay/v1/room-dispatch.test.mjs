@@ -9,7 +9,7 @@ import { createMemoryRepository } from '../../cli/memory-repository.mjs';
 const NOW = new Date('2026-10-02T12:01:00.000Z');
 
 function world({ maxTurns } = {}) {
-  const ids = ['ep_web', 'ep_claude', 'ep_codex', 'ep_bot'];
+  const ids = ['ep_web', 'ep_claude', 'ep_codex', 'ep_bot', 'ep_router'];
   const keys = Object.fromEntries(ids.map((id) => [id, crypto.generateKeyPairSync('ed25519')]));
   const registered = new Map(ids.map((id) => [id, { owner_id: 'usr_chris', status: 'active', kind: id === 'ep_web' ? 'human' : 'agent', key_id: `key_${id}`, public_key: keys[id].publicKey }]));
   const repository = createMemoryRepository({ registry: registered });
@@ -244,4 +244,55 @@ test('an agent-kind member with response_mode null completes its invocation and 
   const [inv] = await w.repository.listRoomInvocations('room_1', { endpointId: 'ep_bot' });
   assert.equal(inv.status, 'completed');
   assert.equal((await w.repository.reserveAgentTurn('room_1', root.message_id, 6, { now: NOW })).agent_turns, 2, 'the agent reply did not reset the budget');
+});
+
+async function addRouter(repository) {
+  await repository.addRoomMember({ conversationId: 'room_1', endpointId: 'ep_router', role: 'member', responseMode: 'router', addedByHumanId: 'usr_chris', now: NOW });
+}
+
+test('an unmentioned human message is delivered to the router member only', async () => {
+  const w = world();
+  await room(w.repository);
+  await addRouter(w.repository);
+  const { persisted } = await accept(w, post(w, 'ep_web', { text: 'who can fix this?', mentions: [] }));
+  assert.deepEqual(persisted.roomDeliveries.map((d) => d.endpoint_id), ['ep_router']);
+  assert.deepEqual(persisted.fanout, [], 'the router is an agent member, not human fan-out');
+});
+
+test('a mentioned message is never delivered to the router', async () => {
+  const w = world();
+  await room(w.repository);
+  await addRouter(w.repository);
+  const { persisted } = await accept(w, post(w, 'ep_web', { text: '@ep_claude hi', mentions: ['ep_claude'] }));
+  assert.equal(persisted.roomDeliveries.some((d) => d.endpoint_id === 'ep_router'), false);
+  assert.deepEqual(persisted.roomDeliveries.map((d) => d.endpoint_id), ['ep_claude']);
+});
+
+test('an agent message is never delivered to the router', async () => {
+  const w = world();
+  await room(w.repository);
+  await addRouter(w.repository);
+  const root = post(w, 'ep_web', { text: '@ep_claude start', mentions: ['ep_claude'] });
+  await accept(w, root);
+  const { result, persisted } = await accept(w, post(w, 'ep_claude', { text: 'done', mentions: [], thread_root_id: root.message_id }));
+  assert.equal(result.status, 202);
+  assert.equal(persisted.roomDeliveries.some((d) => d.endpoint_id === 'ep_router'), false);
+});
+
+test('no router delivery when no joined agent exists', async () => {
+  const w = world();
+  await w.repository.createRoom({ conversationId: 'room_1', workspaceId: 'ws_usr_chris', name: 'build', createdByHumanId: 'usr_chris', ownerEndpointId: 'ep_web', now: NOW });
+  await w.repository.addRoomMember({ conversationId: 'room_1', endpointId: 'ep_codex', role: 'member', responseMode: 'mentions_only', addedByHumanId: 'usr_chris', now: NOW });
+  await addRouter(w.repository);
+  const { persisted } = await accept(w, post(w, 'ep_web', { text: 'anyone?', mentions: [] }));
+  assert.deepEqual(persisted.roomDeliveries, []);
+});
+
+test('mentioning the router member creates no invocation', async () => {
+  const w = world();
+  await room(w.repository);
+  await addRouter(w.repository);
+  const { persisted } = await accept(w, post(w, 'ep_web', { text: '@ep_router hi', mentions: ['ep_router'] }));
+  assert.deepEqual(await w.repository.listRoomInvocations('room_1'), []);
+  assert.equal(persisted.roomDeliveries.some((d) => d.endpoint_id === 'ep_router'), false, 'a mention naming an agent member is not routed');
 });

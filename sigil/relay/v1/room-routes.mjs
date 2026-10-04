@@ -5,7 +5,7 @@ import { isAgentMember } from './room-policy.mjs';
 
 const MANAGER_ROLES = new Set(['owner', 'room_manager']);
 const GRANTABLE_ROLES = new Set(['room_manager', 'member']);
-const RESPONSE_MODES = new Set(['joins', 'mentions_only']);
+const RESPONSE_MODES = new Set(['joins', 'mentions_only', 'router']);
 const ROOM_METHODS = ['createRoom', 'lookupRoom', 'listRoomsForEndpoint', 'addRoomMember', 'removeRoomMember', 'lookupRoomMember', 'listRoomMembers', 'listRoomMessages', 'listRoomInvocations', 'lookupRunningInvocation', 'finishInvocation', 'cancelRoomInvocations', 'nextQueuedInvocation', 'startInvocation', 'createRoomDelivery', 'withTransaction'];
 const NAME_MAX = 80;
 const HISTORY_LIMIT_MAX = 500;
@@ -92,7 +92,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     const responseMode = body?.response_mode ?? null;
     if (typeof endpointId !== 'string' || !endpointId) return fail(response, requestId, 400, 'INVALID_REQUEST', 'endpoint_id is required');
     if (!GRANTABLE_ROLES.has(role)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'role must be room_manager or member');
-    if (responseMode !== null && !RESPONSE_MODES.has(responseMode)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'response_mode must be joins or mentions_only');
+    if (responseMode !== null && !RESPONSE_MODES.has(responseMode)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'response_mode must be joins, mentions_only, or router');
     const endpoint = registry?.get?.(endpointId);
     if (!endpoint || endpoint.status !== 'active' || endpoint.owner_id !== principal.human_id) {
       return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', 'You can only add active endpoints you own');

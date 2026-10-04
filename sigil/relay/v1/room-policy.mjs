@@ -90,3 +90,11 @@ export async function deliveryBlocker(endpointId, repository, client, { inboxDep
   if (await repository.countOpenDeliveries(endpointId, client) >= inboxDepthLimit) return 'inbox_full';
   return null;
 }
+
+export function isRouterMember(member) {
+  return member.response_mode === 'router';
+}
+
+export function isInvocableAgent(member) {
+  return member.response_mode === 'joins' || member.response_mode === 'mentions_only';
+}
