@@ -40,7 +40,7 @@ Out of scope, with the reason:
 
 - Adds the `room.event` message type and its body schema.
 - Allows `response_mode = 'router'` on `conversation_members`.
-- Adds a relay system endpoint (`ep_relay_system`) that signs `room.event` envelopes. It cannot receive deliveries and cannot be a room member.
+- Adds a relay system endpoint (`ep_relay_system`) that signs `room.event` envelopes with its own dedicated key. It cannot receive deliveries and cannot be a room member.
 - Adds a unique index on `room_invocations (trigger_message_id) WHERE decided_by = 'router'`, so a retried router decision cannot create a second set of rows.
 
 ### `room.event` body
@@ -127,4 +127,4 @@ Configuration: `--router-model`, `--router-ollama-url` (default `http://127.0.0.
 
 ## Open questions
 
-None blocking. The relay system identity (`ep_relay_system`) needs a key-management decision during planning: reuse the relay's existing signing key or add a dedicated one.
+None. Decided 2026-10-04: `ep_relay_system` signs with a dedicated key, separate from any other relay key. The plan must cover key generation, storage, configuration, and rotation for it.
