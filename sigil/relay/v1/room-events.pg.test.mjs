@@ -83,4 +83,20 @@ test('postgres emitRoomEvent persists with a room_seq and a repeat key writes no
   assert.deepEqual(results.map((r) => r.duplicate).sort(), [false, true]);
   const raced = await pool.query(`SELECT count(*)::int AS n FROM envelopes WHERE conversation_id = $1 AND idempotency_key = $2`, [roomId, `${roomId}:race_${run}`]);
   assert.equal(raced.rows[0].n, 1);
+
+  // The same raw key in a second room is a separate event, not a 23505.
+  const room2Id = `room2_${run}`;
+  await repository.createRoom({ conversationId: room2Id, workspaceId: `ws_${human}`, name: `evt2_${run}`, createdByHumanId: human, ownerEndpointId: web, now: NOW });
+  const room2 = await repository.lookupRoom(room2Id);
+  const emitIn = (r) => repository.withTransaction((client) => emitRoomEvent({ ...args, room: r, client }));
+  const inRoom2 = await emitIn(room2);
+  assert.equal(inRoom2.duplicate, false);
+  assert.notEqual(inRoom2.message_id, first.message_id);
+  const perRoom = await pool.query(`SELECT conversation_id, count(*)::int AS n FROM envelopes WHERE conversation_id IN ($1, $2) AND idempotency_key IN ($3, $4) GROUP BY conversation_id`, [roomId, room2Id, `${roomId}:evt_${run}`, `${room2Id}:evt_${run}`]);
+  assert.deepEqual(Object.fromEntries(perRoom.rows.map((r) => [r.conversation_id, r.n])), { [roomId]: 1, [room2Id]: 1 });
+  const repeat = await emitIn(room);
+  assert.equal(repeat.duplicate, true);
+  assert.equal(repeat.message_id, first.message_id);
+  const still = await pool.query(`SELECT count(*)::int AS n FROM envelopes WHERE conversation_id = $1 AND idempotency_key = $2`, [roomId, `${roomId}:evt_${run}`]);
+  assert.equal(still.rows[0].n, 1);
 });

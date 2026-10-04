@@ -41,6 +41,9 @@ test('a repeat call with the same idempotency key writes nothing', async () => {
   const args = { identity: system, repository, client: null, room, body: { kind: 'router_failed', endpoint_ids: [] }, idempotencyKey: 'evt_2', now: NOW, inboxDepthLimit: 100, registered };
   const first = await emitRoomEvent(args);
   const second = await emitRoomEvent(args);
+  assert.equal(first.duplicate, false);
+  assert.equal(second.duplicate, true);
+  assert.deepEqual(second.fanout, []);
   assert.equal(second.message_id, first.message_id);
   assert.equal((await repository.listRoomMessages('room_1', 0n, 10)).length, 1);
 });
