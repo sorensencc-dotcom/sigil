@@ -4,6 +4,7 @@ import { canTransition } from './delivery-state.mjs';
 import { assertAssurance, boundedDirectoryExpiry } from './auth-policy.mjs';
 import { withTransaction } from './with-transaction.mjs';
 import { generateInviteCode, hashMatchTarget } from './directory-trust.mjs';
+import { identityKeys } from '../../cli/identity.mjs';
 
 function rowToPeerRecord(row) {
   return {
@@ -433,6 +434,25 @@ export class PostgresRepository {
       await client.query(`INSERT INTO audit_events (event_id,event_type,subject_id,actor_id,object_type,object_id,outcome,created_at) VALUES ($1,'endpoint.created',$2,$3,'endpoint',$2,'success',$4)`, [`audit_${crypto.randomUUID()}`, endpointId, ownerId, timestamp]);
       return endpoint.rows[0];
     } catch (error) { if (error.code === '23505' && error.constraint === 'endpoints_owner_display_name_idx') throw Object.assign(new Error('An endpoint with this display name already exists for this owner'), { code: 'DISPLAY_NAME_COLLISION' }); throw error; } });
+  }
+  // Idempotent: registers the relay's room-event signing identity. public_key is
+  // SPKI DER, the same encoding createEndpointWithAudit and `sigil init` store.
+  async ensureRoomSystemEndpoint({ identity, now = new Date() }) {
+    const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+    const publicKey = identityKeys(identity).publicKey.export({ type: 'spki', format: 'der' });
+    await this.withTransaction(async (client) => {
+      await client.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', $2) ON CONFLICT (human_id) DO NOTHING`, [identity.owner_id, timestamp]);
+      await client.query(
+        `INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
+         VALUES ($1, $2, 'relay', 'relay_system', 'Relay system', 'active', $3) ON CONFLICT (endpoint_id) DO NOTHING`,
+        [identity.endpoint_id, identity.owner_id, timestamp],
+      );
+      await client.query(
+        `INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
+         VALUES ($1, $2, 'Ed25519', $3, 'active', $4) ON CONFLICT (key_id) DO NOTHING`,
+        [identity.key_id, identity.endpoint_id, publicKey, timestamp],
+      );
+    });
   }
   async createDirectoryInvite({ issuerEndpointId, issuerHumanId, expiresAt, homeRelay, now = new Date() } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();

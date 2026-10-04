@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { transitionDelivery } from '../relay/v1/delivery-state.mjs';
 import { boundedDirectoryExpiry } from '../relay/v1/auth-policy.mjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { identityKeys } from './identity.mjs';
 
 const SEEDED_CAPABILITIES = new Map([
   ['sigil.core/read_shared_context', { namespace: 'sigil.core', risk_tier: 'standard' }],
@@ -212,6 +213,13 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     // on in the Postgres path. Insert a minimal active registry entry keyed
     // by endpoint_id, mirroring the shape other entries use; origin_domain
     // marks it as a shadow row. No-op if the endpoint is already present.
+    async ensureRoomSystemEndpoint({ identity }) {
+      if (registry.get(identity.endpoint_id)?.status === 'active') return;
+      registry.set(identity.endpoint_id, {
+        endpoint_id: identity.endpoint_id, owner_id: identity.owner_id, key_id: identity.key_id, status: 'active', kind: 'system',
+        public_key: identityKeys(identity).publicKey,
+      });
+    },
     async registerFederatedSender({ endpoint_id, owner_id, key_id, public_key, origin_domain }) {
       if (registry.has(endpoint_id)) return;
       registry.set(endpoint_id, { endpoint_id, owner_id, key_id, status: 'active', public_key, origin_domain });
