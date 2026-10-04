@@ -24,5 +24,5 @@ export function validateRoomEventBody(body) {
 // and cap the length before they reach a room.
 export function clampReason(text) {
   if (typeof text !== 'string') return '';
-  return text.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, ROOM_EVENT_REASON_MAX);
+  return text.replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, ' ').slice(0, ROOM_EVENT_REASON_MAX);
 }

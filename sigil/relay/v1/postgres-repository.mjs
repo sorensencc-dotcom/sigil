@@ -475,6 +475,12 @@ export class PostgresRepository {
          VALUES ($1, $2, 'relay', 'relay_system', 'Relay system', 'active', $3) ON CONFLICT (endpoint_id) DO NOTHING`,
         [identity.endpoint_id, identity.owner_id, timestamp],
       );
+      // Same reason as the key check below: a pre-existing endpoint row owned by
+      // someone else must not be adopted as the relay system endpoint.
+      const ownerRow = await client.query(`SELECT owner_id FROM endpoints WHERE endpoint_id = $1`, [identity.endpoint_id]);
+      if (ownerRow.rows[0]?.owner_id !== identity.owner_id) {
+        throw Object.assign(new Error(`endpoint "${identity.endpoint_id}" is already registered to a different owner`), { code: 'ROOM_SYSTEM_OWNER_MISMATCH' });
+      }
       await client.query(
         `INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
          VALUES ($1, $2, 'Ed25519', $3, 'active', $4) ON CONFLICT (key_id) DO NOTHING`,

@@ -62,3 +62,24 @@ test('postgres ensureRoomSystemEndpoint rejects a different key under the regist
   const keys = await pool.query(`SELECT key_id FROM endpoint_keys WHERE endpoint_id = 'ep_relay_system'`);
   assert.deepEqual(keys.rows.map((r) => r.key_id), ['key_ep_relay_system']);
 });
+
+test('postgres ensureRoomSystemEndpoint rejects an existing endpoint row owned by someone else', { skip: !connectionString }, async (t) => {
+  assertDisposableTestDatabase(connectionString);
+  await applyMigrations(connectionString);
+  const pool = new pg.Pool({ connectionString });
+  const clean = async () => {
+    await pool.query(`DELETE FROM endpoint_keys WHERE endpoint_id = 'ep_relay_system' OR key_id = 'key_ep_relay_system'`);
+    await pool.query(`DELETE FROM endpoints WHERE endpoint_id = 'ep_relay_system'`);
+    await pool.query(`DELETE FROM humans WHERE human_id IN ('relay_system', 'usr_squatter')`);
+  };
+  await clean();
+  t.after(async () => { await clean(); await pool.end(); });
+  const now = new Date().toISOString();
+  await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ('usr_squatter', 'active', $1)`, [now]);
+  await pool.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at) VALUES ('ep_relay_system', 'usr_squatter', 'relay', 'squat', 'Squat', 'active', $1)`, [now]);
+  const repository = new PostgresRepository({ pool });
+  const identity = createIdentity({ ownerId: ROOM_SYSTEM_OWNER_ID, endpointId: ROOM_SYSTEM_ENDPOINT_ID, kind: 'system' });
+  await assert.rejects(() => repository.ensureRoomSystemEndpoint({ identity }), { code: 'ROOM_SYSTEM_OWNER_MISMATCH' });
+  const keys = await pool.query(`SELECT key_id FROM endpoint_keys WHERE endpoint_id = 'ep_relay_system'`);
+  assert.equal(keys.rowCount, 0);
+});

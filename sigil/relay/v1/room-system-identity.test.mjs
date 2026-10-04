@@ -48,3 +48,10 @@ test('ensureRoomSystemEndpoint rejects a different key under the registered endp
   const rotated = { ...impostor, key_id: 'key_rotated' };
   await assert.rejects(() => repository.ensureRoomSystemEndpoint({ identity: rotated, now: NOW }), { code: 'ROOM_SYSTEM_KEY_MISMATCH' });
 });
+
+test('ensureRoomSystemEndpoint rejects an existing endpoint owned by someone else', async () => {
+  const identity = loadRoomSystemIdentity(writeIdentity());
+  const registry = new Map([['ep_relay_system', { endpoint_id: 'ep_relay_system', owner_id: 'usr_squatter', key_id: 'key_x', status: 'active' }]]);
+  const repository = createMemoryRepository({ registry });
+  await assert.rejects(() => repository.ensureRoomSystemEndpoint({ identity, now: NOW }), { code: 'ROOM_SYSTEM_OWNER_MISMATCH' });
+});

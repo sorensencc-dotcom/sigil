@@ -211,6 +211,9 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       const publicKey = identityKeys(identity).publicKey;
       const existing = registry.get(identity.endpoint_id);
       if (existing?.status === 'active') {
+        if (existing.owner_id !== identity.owner_id) {
+          throw Object.assign(new Error(`endpoint "${identity.endpoint_id}" is already registered to a different owner`), { code: 'ROOM_SYSTEM_OWNER_MISMATCH' });
+        }
         const same = existing.key_id === identity.key_id
           && existing.public_key?.export({ type: 'spki', format: 'der' }).equals(publicKey.export({ type: 'spki', format: 'der' }));
         if (same) return;
