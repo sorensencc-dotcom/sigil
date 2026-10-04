@@ -1779,6 +1779,13 @@ export class PostgresRepository {
     );
     return BigInt(result.rows[0].assigned_seq);
   }
+  async lookupRoomEventByKey(conversationId, idempotencyKey, client = this.pool) {
+    const result = await client.query(
+      `SELECT message_id FROM envelopes WHERE conversation_id = $1 AND message_type = 'room.event' AND idempotency_key = $2 LIMIT 1`,
+      [conversationId, idempotencyKey],
+    );
+    return result.rows[0] ? { message_id: result.rows[0].message_id } : null;
+  }
   async listRoomMessages(conversationId, afterSeq = 0n, limit = 100, client = this.pool) {
     const result = await client.query(
       `SELECT room_seq, message_id, protocol, message_type, body, context_refs, capabilities, correlation_id,
