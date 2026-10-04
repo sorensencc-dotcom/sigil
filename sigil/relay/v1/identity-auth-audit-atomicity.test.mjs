@@ -439,3 +439,40 @@ test('revokeDirectoryLinkWithAudit commits the revoke and the audit row together
   const auditAfterReplay = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'directory_link.revoked'`);
   assert.equal(Number(auditAfterReplay.rows[0].count), 1);
 });
+
+test('revokeCapabilityGrantWithAudit lets an agent revoke its own grant, attributed to its endpoint with no human actor', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  await freshSchema(pool);
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const humanId = await seedHuman(pool, suffix);
+  const endpointId = `ep_${suffix}`;
+  await seedEndpoint(pool, { endpointId, humanId });
+  const repository = new PostgresRepository({ pool });
+  const grant = await repository.createCapabilityGrant({ grantId: `grant_${suffix}`, capability: 'sigil.task/submit', scope: 'sigil.task/submit', grantedTo: endpointId, grantedBy: humanId, expiresAt: new Date(Date.now() + 2 * 3600_000) });
+
+  const revoked = await repository.revokeCapabilityGrantWithAudit(grant.grant_id, { revokedBy: null, revokedByEndpoint: endpointId, reason: null, actorHumanId: null, endpointId });
+  assert.equal(revoked.duplicate, false);
+  assert.ok(revoked.revoked_at);
+  const revocation = await pool.query('SELECT revoked_by, revoked_by_endpoint, reason FROM capability_revocations WHERE capability_grant_id = $1', [grant.grant_id]);
+  assert.deepEqual(revocation.rows, [{ revoked_by: null, revoked_by_endpoint: endpointId, reason: '' }]);
+  const audit = await pool.query(`SELECT actor_human_id, endpoint_id FROM audit_events WHERE event_type = 'capability_grant.revoked' AND object_id = $1`, [grant.grant_id]);
+  assert.deepEqual(audit.rows, [{ actor_human_id: null, endpoint_id: endpointId }]);
+});
+
+test('capability_revocations rejects a row that names neither a human nor an endpoint', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  await freshSchema(pool);
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const humanId = await seedHuman(pool, suffix);
+  const endpointId = `ep_${suffix}`;
+  await seedEndpoint(pool, { endpointId, humanId });
+  const repository = new PostgresRepository({ pool });
+  const grant = await repository.createCapabilityGrant({ grantId: `grant_${suffix}`, capability: 'sigil.task/submit', scope: 'sigil.task/submit', grantedTo: endpointId, grantedBy: humanId, expiresAt: new Date(Date.now() + 2 * 3600_000) });
+
+  await assert.rejects(
+    () => pool.query(`INSERT INTO capability_revocations (revocation_id, capability_grant_id, revoked_by, revoked_by_endpoint, reason, created_at) VALUES ($1, $2, NULL, NULL, '', NOW())`, [`revocation_${suffix}`, grant.grant_id]),
+    /capability_revocations_actor_check/
+  );
+});
