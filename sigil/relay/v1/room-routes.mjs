@@ -148,6 +148,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     const body = await readJson(request, readBody);
     const triggerId = body?.trigger_message_id;
     const invoke = body?.invoke;
+    if (body?.failed !== undefined && typeof body.failed !== 'boolean') return fail(response, requestId, 400, 'INVALID_REQUEST', 'failed must be a boolean');
     const failed = body?.failed === true;
     if (typeof triggerId !== 'string' || !triggerId) return fail(response, requestId, 400, 'INVALID_REQUEST', 'trigger_message_id required');
     if (!Array.isArray(invoke) || invoke.length > 10 || invoke.some((id) => typeof id !== 'string' || !id)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'invoke must be an array of at most 10 endpoint ids');

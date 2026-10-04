@@ -35,7 +35,7 @@ function call(port, method, path, authorization, body) {
   });
 }
 
-async function withWorld(fn, { withSystem = true } = {}) {
+async function withWorld(fn, { withSystem = true, stream } = {}) {
   const keys = Object.fromEntries(IDS.map((id) => [id, crypto.generateKeyPairSync('ed25519')]));
   const registry = new Map(IDS.map((id) => [id, { owner_id: id === 'ep_stranger' ? 'usr_other' : 'usr_chris', status: 'active', kind: id === 'ep_web' || id === 'ep_stranger' ? 'human' : 'agent', key_id: `key_${id}`, public_key: keys[id].publicKey }]));
   const repository = createMemoryRepository({ registry });
@@ -45,7 +45,7 @@ async function withWorld(fn, { withSystem = true } = {}) {
   }
   const systemIdentity = createIdentity({ ownerId: 'relay_system', endpointId: 'ep_relay_system', kind: 'system' });
   await repository.ensureRoomSystemEndpoint({ identity: systemIdentity, now: NOW });
-  const server = createRelayServer({ registry, repository, authenticate: async (request) => principals[request.headers.authorization] ?? null, ...(withSystem ? { roomSystemIdentity: systemIdentity } : {}) });
+  const server = createRelayServer({ registry, repository, authenticate: async (request) => principals[request.headers.authorization] ?? null, ...(withSystem ? { roomSystemIdentity: systemIdentity } : {}), ...(stream ? { stream } : {}) });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const world = { keys, registry, repository, port: server.address().port };
   try { await fn(world); } finally { await new Promise((resolve) => server.close(resolve)); }
@@ -276,5 +276,85 @@ test('hop budget applies to router picks (dispatchToTarget)', async () => {
     assert.equal(invocation.reason, 'hop_budget');
     assert.equal(invocation.decided_by, 'router');
     assert.equal(roomDelivery, null);
+  });
+});
+
+function recordingStream() {
+  const calls = [];
+  return { calls, notify: (...args) => { calls.push(args); }, notifyReceipt() {} };
+}
+
+// Persists an envelope straight into the repository, bypassing the accept pipeline,
+// so a trigger can have a type the pipeline would never store as a human message.
+async function persistRaw(w, messageType, body) {
+  const messageId = `msg_raw_${crypto.randomUUID()}`;
+  const envelope = {
+    protocol: 'sigil/1', message_id: messageId, conversation_id: ROOM, message_type: messageType,
+    sender: { endpoint_id: 'ep_web', owner_id: 'usr_chris' }, broadcast_scope: { conversation_id: ROOM },
+    body, context_refs: [], capabilities: [], idempotency_key: `idem_${messageId}`,
+    created_at: '2026-10-02T12:00:00.000Z', expires_at: '2026-10-02T13:00:00.000Z',
+  };
+  await w.repository.persistAcceptedEnvelope({ envelope, message_id: messageId, canonical_hash: 'h', canonical_bytes: Buffer.from('raw'), streamSeq: null, roomSeq: await w.repository.assignRoomSequence(null, ROOM), roomFanout: [] });
+  return messageId;
+}
+
+test('a human member message of another type is refused with 422 (message_type branch only)', async () => {
+  await withWorld(async (w) => {
+    const otherId = await persistRaw(w, 'task.request', { text: 'do a thing', mentions: [] });
+    const res = await pick(w, { trigger_message_id: otherId, invoke: ['ep_claude'] });
+    assert.deepEqual([res.status, res.body.code], [422, 'INVALID_REQUEST']);
+    assert.deepEqual(await w.repository.listRoomInvocations(ROOM), []);
+    assert.equal((await events(w)).length, 0);
+    // Control: the identical shape as a room.message is accepted, so only the type differed.
+    const okId = await persistRaw(w, 'room.message', { text: 'do a thing', mentions: [] });
+    assert.equal((await pick(w, { trigger_message_id: okId, invoke: ['ep_claude'] })).status, 200);
+  });
+});
+
+test('stream.notify fires once per running pick after commit, never on duplicate or invalid', async () => {
+  const stream = recordingStream();
+  await withWorld(async (w) => {
+    const triggerId = await humanMessage(w, 'hello');
+    // Invalid trigger: nothing notified.
+    assert.equal((await pick(w, { trigger_message_id: 'msg_missing', invoke: ['ep_claude'] })).status, 422);
+    assert.equal(stream.calls.length, 0);
+    // Not eligible (mentions_only): refused, no delivery, nothing notified.
+    assert.equal((await pick(w, { trigger_message_id: triggerId, invoke: ['ep_codex'] })).status, 200);
+    assert.equal(stream.calls.length, 0);
+
+    const second = await humanMessage(w, 'second');
+    const first = await pick(w, { trigger_message_id: second, invoke: ['ep_claude'] });
+    assert.equal(first.status, 200);
+    assert.equal(stream.calls.length, 1);
+    const running = await w.repository.lookupRunningInvocation(ROOM, 'ep_claude');
+    assert.deepEqual(stream.calls[0], ['ep_claude', running.delivery_id]);
+
+    const repeat = await pick(w, { trigger_message_id: second, invoke: ['ep_claude'] });
+    assert.equal(repeat.body.duplicate, true);
+    assert.equal(stream.calls.length, 1, 'a duplicate call notifies nothing');
+  }, { stream });
+});
+
+test('stream.notify never fires when the pick transaction fails', async () => {
+  const stream = recordingStream();
+  await withWorld(async (w) => {
+    const triggerId = await humanMessage(w, 'hello');
+    w.repository.persistAcceptedEnvelope = async () => { throw new Error('boom'); };
+    const res = await pick(w, { trigger_message_id: triggerId, invoke: ['ep_claude'] });
+    assert.ok(res.status >= 400, `status ${res.status}`);
+    assert.equal(stream.calls.length, 0);
+  }, { stream });
+});
+
+test('failed must be a boolean when present; absent means false', async () => {
+  await withWorld(async (w) => {
+    const triggerId = await humanMessage(w, 'hello');
+    for (const bad of ['true', 1, null, {}]) {
+      const res = await pick(w, { trigger_message_id: triggerId, invoke: [], failed: bad });
+      assert.deepEqual([res.status, res.body.code], [400, 'INVALID_REQUEST'], JSON.stringify(bad));
+    }
+    assert.equal((await events(w)).length, 0);
+    assert.equal((await pick(w, { trigger_message_id: triggerId, invoke: [] })).status, 200);
+    assert.equal((await events(w))[0].envelope.body.kind, 'router_decision', 'absent failed is false');
   });
 });
