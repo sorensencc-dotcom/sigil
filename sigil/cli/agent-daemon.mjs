@@ -30,7 +30,8 @@ export function createAgentDaemon({
   logger = console,
   pollIntervalMs = 15000,
   heartbeatIntervalMs = 15000,
-  missedHeartbeatsLimit = 3
+  missedHeartbeatsLimit = 3,
+  onRoomMessage = null
 } = {}) {
   if (!identity || !relayUrl) throw new Error('identity and relayUrl are required');
 
@@ -188,23 +189,46 @@ export function createAgentDaemon({
       }
     }
 
+    if (messageType === 'room.message' && onRoomMessage) {
+      // The bridge fails its own invocation for any error once it knows the
+      // invocation. A throw here means it never got that far (the invocation
+      // lookup failed), so the delivery stays unacked for the next poll.
+      let outcome;
+      try {
+        outcome = (await onRoomMessage({ deliveryId, envelope }))?.outcome ?? 'failed';
+      } catch (err) {
+        logger.error?.(`Room bridge failed before its invocation was known; delivery left for the next poll: ${err.message}`, err);
+        return { delivery_id: deliveryId, outcome: 'room_unacked' };
+      }
+      if (deliveryId) await relay.acknowledge(deliveryId, { outcome: 'acknowledged' }).catch(() => {});
+      return { delivery_id: deliveryId, outcome: `room_${outcome}` };
+    }
+
     if (deliveryId) {
       await relay.acknowledge(deliveryId, { outcome: 'acknowledged' }).catch(() => {});
     }
     return { delivery_id: deliveryId, outcome: 'acknowledged' };
   }
 
+  let polling = false;
   async function poll() {
+    if (polling) return 0;
+    polling = true;
     try {
       const page = await relay.reconcileInbox(since);
+      let leftUnacked = false;
       for (const item of page.items) {
-        await processItem(item);
+        if ((await processItem(item))?.outcome === 'room_unacked') leftUnacked = true;
       }
-      since = page.nextSince ?? since;
+      // The inbox cursor is queued_at-based; advancing past an unacked
+      // delivery would hide it until restart. Acked items do not come back.
+      if (!leftUnacked) since = page.nextSince ?? since;
       return page.items.length;
     } catch (err) {
       logger.error?.(`Daemon inbox poll error: ${err.message}`);
       return 0;
+    } finally {
+      polling = false;
     }
   }
 

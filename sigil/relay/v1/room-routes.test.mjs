@@ -8,12 +8,14 @@ import { createMemoryRepository } from '../../cli/memory-repository.mjs';
 const principals = {
   'Bearer chris-web': { endpoint_id: 'ep_web', owner_id: 'usr_chris', human_id: 'usr_chris' },
   'Bearer claude': { endpoint_id: 'ep_claude', owner_id: 'usr_chris', human_id: 'usr_chris' },
+  'Bearer codex': { endpoint_id: 'ep_codex', owner_id: 'usr_chris', human_id: 'usr_chris' },
   'Bearer stranger': { endpoint_id: 'ep_stranger', owner_id: 'usr_other', human_id: 'usr_other' },
 };
 const registry = new Map([
-  ['ep_web', { owner_id: 'usr_chris', status: 'active' }],
-  ['ep_claude', { owner_id: 'usr_chris', status: 'active' }],
-  ['ep_other_agent', { owner_id: 'usr_other', status: 'active' }],
+  ['ep_web', { owner_id: 'usr_chris', status: 'active', kind: 'human' }],
+  ['ep_claude', { owner_id: 'usr_chris', status: 'active', kind: 'agent' }],
+  ['ep_codex', { owner_id: 'usr_chris', status: 'active', kind: 'agent' }],
+  ['ep_other_agent', { owner_id: 'usr_other', status: 'active', kind: 'agent' }],
 ]);
 
 function call(port, method, path, authorization, body) {
@@ -111,5 +113,77 @@ test('history items carry canonical_bytes unchanged from the repository', async 
     assert.equal(history.body.items.length, 1);
     assert.equal(history.body.items[0].canonical_bytes, Buffer.from('stored-signed-bytes').toString('base64url'));
     assert.deepEqual(history.body.items, JSON.parse(JSON.stringify(await repository.listRoomMessages(roomId, 0n, 100))));
+  });
+});
+
+test('agent tokens cannot create or manage rooms', async () => {
+  await withServer(async (port) => {
+    assert.equal((await call(port, 'POST', '/v1/rooms', 'Bearer claude', { name: 'agent-room' })).body.code, 'HUMAN_CONTEXT_REQUIRED');
+    const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'r' })).body.room.conversation_id;
+    await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_claude', response_mode: 'joins', role: 'room_manager' });
+    assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer claude', { endpoint_id: 'ep_codex', response_mode: 'joins' })).body.code, 'HUMAN_CONTEXT_REQUIRED');
+    assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/members/ep_claude/remove`, 'Bearer claude')).body.code, 'HUMAN_CONTEXT_REQUIRED');
+    assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/stop`, 'Bearer claude')).body.code, 'HUMAN_CONTEXT_REQUIRED');
+  });
+});
+
+test('an agent-kind member with response_mode null cannot Stop the room', async () => {
+  await withServer(async (port, repository) => {
+    const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'r' })).body.room.conversation_id;
+    await repository.addRoomMember({ conversationId: roomId, endpointId: 'ep_codex', role: 'member', responseMode: null, addedByHumanId: 'usr_chris', now: new Date() });
+    const stopped = await call(port, 'POST', `/v1/rooms/${roomId}/stop`, 'Bearer codex');
+    assert.deepEqual([stopped.status, stopped.body.code], [403, 'HUMAN_CONTEXT_REQUIRED']);
+    assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/stop`, 'Bearer chris-web')).status, 200);
+  });
+});
+
+test('member add requires response_mode for agents and refuses it for humans', async () => {
+  await withServer(async (port) => {
+    const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'r' })).body.room.conversation_id;
+    assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_claude' })).body.code, 'INVALID_REQUEST');
+    assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_web', response_mode: 'joins' })).body.code, 'INVALID_REQUEST');
+  });
+});
+
+test('invocations list, fail, and stop', async () => {
+  await withServer(async (port, repository) => {
+    const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'r' })).body.room.conversation_id;
+    await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_claude', response_mode: 'joins' });
+    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', now: new Date() };
+    await repository.createRoomInvocation({ ...base, invocationId: 'inv_1', triggerMessageId: 'msg_1', status: 'running' });
+    await repository.createRoomInvocation({ ...base, invocationId: 'inv_2', triggerMessageId: 'msg_2', status: 'queued' });
+
+    const listed = await call(port, 'GET', `/v1/rooms/${roomId}/invocations?endpoint_id=ep_claude&status=running`, 'Bearer claude');
+    assert.deepEqual(listed.body.items.map((i) => i.invocation_id), ['inv_1']);
+
+    const failed = await call(port, 'POST', `/v1/rooms/${roomId}/invocations/fail`, 'Bearer claude', { reason: 'cli exited 1' });
+    assert.equal(failed.status, 200);
+    assert.equal(failed.body.invocation.status, 'failed');
+    assert.equal((await repository.lookupRunningInvocation(roomId, 'ep_claude')).invocation_id, 'inv_2', 'fail promotes the queued invocation');
+    assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/invocations/fail`, 'Bearer chris-web', {})).body.code, 'INVOCATION_NOT_FOUND');
+
+    const stopped = await call(port, 'POST', `/v1/rooms/${roomId}/stop`, 'Bearer chris-web');
+    assert.deepEqual([stopped.status, stopped.body.cancelled], [200, 1]);
+    assert.equal(await repository.lookupRunningInvocation(roomId, 'ep_claude'), null);
+  });
+});
+
+test('fail with invocation_id only fails the matching running invocation', async () => {
+  await withServer(async (port, repository) => {
+    const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'r' })).body.room.conversation_id;
+    await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_claude', response_mode: 'joins' });
+    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', now: new Date() };
+    await repository.createRoomInvocation({ ...base, invocationId: 'inv_new', triggerMessageId: 'msg_1', status: 'running' });
+
+    const stale = await call(port, 'POST', `/v1/rooms/${roomId}/invocations/fail`, 'Bearer claude', { invocation_id: 'inv_old', reason: 'late' });
+    assert.deepEqual([stale.status, stale.body.code], [404, 'INVOCATION_NOT_FOUND']);
+    assert.equal((await repository.lookupRunningInvocation(roomId, 'ep_claude')).invocation_id, 'inv_new', 'a mismatched id changes nothing');
+
+    const matched = await call(port, 'POST', `/v1/rooms/${roomId}/invocations/fail`, 'Bearer claude', { invocation_id: 'inv_new', reason: 'cli exited 1' });
+    assert.equal(matched.status, 200);
+    assert.equal(matched.body.invocation.invocation_id, 'inv_new');
+    assert.equal(matched.body.invocation.status, 'failed');
+
+    assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/invocations/fail`, 'Bearer claude', { invocation_id: 42 })).body.code, 'INVALID_REQUEST');
   });
 });

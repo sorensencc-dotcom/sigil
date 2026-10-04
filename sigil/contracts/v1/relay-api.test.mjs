@@ -45,13 +45,20 @@ test('error responses have stable machine-readable shape', () => {
 test('every rooms route declares DATABASE_UNAVAILABLE and every room error code is a contract error', () => {
   const states = JSON.parse(fs.readFileSync(new URL('./errors-and-states.json', import.meta.url)));
   const rooms = api.routes.filter((route) => route.path === '/v1/rooms' || route.path.startsWith('/v1/rooms/'));
-  assert.equal(rooms.length, 6);
+  assert.equal(rooms.length, 9);
   for (const route of rooms) {
     assert.ok(route.errors.includes('DATABASE_UNAVAILABLE'), `${route.method} ${route.path}`);
   }
-  for (const code of ['ROOM_NOT_FOUND', 'ROOM_NAME_TAKEN', 'ROOM_MEMBER_EXISTS', 'ROOM_MEMBER_NOT_FOUND', 'HUMAN_CONTEXT_REQUIRED', 'INVALID_REQUEST', 'ROUTE_NOT_AUTHORIZED']) {
+  for (const code of ['ROOM_NOT_FOUND', 'ROOM_NAME_TAKEN', 'ROOM_MEMBER_EXISTS', 'ROOM_MEMBER_NOT_FOUND', 'HUMAN_CONTEXT_REQUIRED', 'INVOCATION_NOT_FOUND', 'INVALID_REQUEST', 'ROUTE_NOT_AUTHORIZED']) {
     assert.ok(states.errors.includes(code), code);
   }
+});
+
+test('POST /v1/envelopes declares ROOM_NOT_INVOKED and it is a contract error', () => {
+  const states = JSON.parse(fs.readFileSync(new URL('./errors-and-states.json', import.meta.url)));
+  const route = api.routes.find((item) => item.method === 'POST' && item.path === '/v1/envelopes');
+  assert.ok(route.errors.includes('ROOM_NOT_INVOKED'));
+  assert.ok(states.errors.includes('ROOM_NOT_INVOKED'));
 });
 
 test('room history items carry the stored signed bytes', () => {

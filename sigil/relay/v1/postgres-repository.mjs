@@ -120,7 +120,16 @@ function roomRow(row) {
     name: row.name,
     description: row.description ?? null,
     created_at: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
+    max_agent_turns: Number(row.max_agent_turns),
   };
+}
+
+const INVOCATION_COLUMNS = `invocation_id, room_id, trigger_message_id, thread_root_id, endpoint_id, decided_by, reason, status,
+  delivery_id, reply_message_id, created_at, started_at, finished_at`;
+
+function invocationRow(row) {
+  const iso = (value) => (value == null ? null : new Date(value).toISOString());
+  return { ...row, created_at: iso(row.created_at), started_at: iso(row.started_at), finished_at: iso(row.finished_at) };
 }
 
 function memberRow(row) {
@@ -1023,7 +1032,7 @@ export class PostgresRepository {
     );
     return result.rows[0];
   }
-  async revokeCapabilityGrant(grantId, { revokedBy, reason, now = new Date() } = {}) {
+  async revokeCapabilityGrant(grantId, { revokedBy = null, revokedByEndpoint = null, reason, now = new Date() } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     return this.withTransaction(async (client) => {
       const updated = await client.query(
@@ -1037,9 +1046,9 @@ export class PostgresRepository {
         return { ...existing.rows[0], duplicate: true };
       }
       await client.query(
-        `INSERT INTO capability_revocations (revocation_id, capability_grant_id, revoked_by, reason, created_at)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [`revocation_${crypto.randomUUID()}`, grantId, revokedBy, reason, timestamp]
+        `INSERT INTO capability_revocations (revocation_id, capability_grant_id, revoked_by, revoked_by_endpoint, reason, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [`revocation_${crypto.randomUUID()}`, grantId, revokedBy, revokedByEndpoint, reason ?? '', timestamp]
       );
       return { ...updated.rows[0], duplicate: false };
     });
@@ -1141,7 +1150,7 @@ export class PostgresRepository {
       return result.rows[0];
     });
   }
-  async revokeCapabilityGrantWithAudit(grantId, { revokedBy, reason, now = new Date(), actorHumanId = null, endpointId = null } = {}) {
+  async revokeCapabilityGrantWithAudit(grantId, { revokedBy = null, revokedByEndpoint = null, reason, now = new Date(), actorHumanId = null, endpointId = null } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     return this.withTransaction(async (client) => {
       const updated = await client.query(
@@ -1155,9 +1164,9 @@ export class PostgresRepository {
         return { ...existing.rows[0], duplicate: true };
       }
       await client.query(
-        `INSERT INTO capability_revocations (revocation_id, capability_grant_id, revoked_by, reason, created_at)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [`revocation_${crypto.randomUUID()}`, grantId, revokedBy, reason, timestamp]
+        `INSERT INTO capability_revocations (revocation_id, capability_grant_id, revoked_by, revoked_by_endpoint, reason, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [`revocation_${crypto.randomUUID()}`, grantId, revokedBy, revokedByEndpoint, reason ?? '', timestamp]
       );
       await client.query(
         `INSERT INTO audit_events (event_id, event_type, subject_id, actor_human_id, endpoint_id, object_type, object_id, outcome, reason, created_at)
@@ -1562,7 +1571,7 @@ export class PostgresRepository {
         );
         const result = await client.query(
           `INSERT INTO rooms (conversation_id, workspace_id, name, description, created_at) VALUES ($1, $2, $3, $4, $5)
-           RETURNING conversation_id, workspace_id, name, description, created_at`,
+           RETURNING conversation_id, workspace_id, name, description, created_at, max_agent_turns`,
           [conversationId, workspaceId, name, description, timestamp],
         );
         await client.query(
@@ -1581,14 +1590,14 @@ export class PostgresRepository {
   }
   async lookupRoom(conversationId, client = this.pool) {
     const result = await client.query(
-      'SELECT conversation_id, workspace_id, name, description, created_at FROM rooms WHERE conversation_id = $1',
+      'SELECT conversation_id, workspace_id, name, description, created_at, max_agent_turns FROM rooms WHERE conversation_id = $1',
       [conversationId],
     );
     return result.rows[0] ? roomRow(result.rows[0]) : null;
   }
   async listRoomsForEndpoint(endpointId, client = this.pool) {
     const result = await client.query(
-      `SELECT r.conversation_id, r.workspace_id, r.name, r.description, r.created_at
+      `SELECT r.conversation_id, r.workspace_id, r.name, r.description, r.created_at, r.max_agent_turns
          FROM rooms r JOIN conversation_members m ON m.conversation_id = r.conversation_id
         WHERE m.endpoint_id = $1 AND m.removed_at IS NULL
         ORDER BY r.created_at, r.conversation_id`,
@@ -1635,6 +1644,100 @@ export class PostgresRepository {
       [conversationId],
     );
     return result.rows.map(memberRow);
+  }
+  async createRoomInvocation({ invocationId, roomId, workspaceId, triggerMessageId, threadRootId, endpointId, decidedBy, reason = null, status, deliveryId = null, now = new Date() }, client = this.pool) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    try {
+      const result = await client.query(
+        `INSERT INTO room_invocations (invocation_id, room_id, workspace_id, trigger_message_id, thread_root_id, endpoint_id, decided_by, reason, status, delivery_id, created_at, started_at, finished_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
+                 CASE WHEN $9 = 'running' THEN $11::timestamptz END,
+                 CASE WHEN $9 = 'refused' THEN $11::timestamptz END)
+         RETURNING ${INVOCATION_COLUMNS}`,
+        [invocationId, roomId, workspaceId, triggerMessageId, threadRootId, endpointId, decidedBy, reason, status, deliveryId, timestamp],
+      );
+      return invocationRow(result.rows[0]);
+    } catch (error) {
+      if (error.code === '23505' && error.constraint === 'room_invocations_one_running_idx') throw Object.assign(new Error('The agent already has a running invocation in this room'), { code: 'ROOM_INVOCATION_RUNNING' });
+      if (error.code === '23505' && error.constraint === 'room_invocations_trigger_message_id_endpoint_id_key') throw Object.assign(new Error('This message already invoked this agent'), { code: 'ROOM_INVOCATION_EXISTS' });
+      throw error;
+    }
+  }
+  async lookupRunningInvocation(roomId, endpointId, client = this.pool) {
+    const result = await client.query(`SELECT ${INVOCATION_COLUMNS} FROM room_invocations WHERE room_id = $1 AND endpoint_id = $2 AND status = 'running'`, [roomId, endpointId]);
+    return result.rows[0] ? invocationRow(result.rows[0]) : null;
+  }
+  async nextQueuedInvocation(roomId, endpointId, client = this.pool) {
+    const result = await client.query(
+      `SELECT ${INVOCATION_COLUMNS} FROM room_invocations
+        WHERE room_id = $1 AND endpoint_id = $2 AND status = 'queued'
+        ORDER BY created_at, invocation_id LIMIT 1 FOR UPDATE SKIP LOCKED`,
+      [roomId, endpointId],
+    );
+    return result.rows[0] ? invocationRow(result.rows[0]) : null;
+  }
+  async startInvocation(invocationId, { deliveryId, now = new Date() }, client = this.pool) {
+    const result = await client.query(
+      `UPDATE room_invocations SET status = 'running', delivery_id = $2, started_at = $3
+        WHERE invocation_id = $1 AND status = 'queued' RETURNING ${INVOCATION_COLUMNS}`,
+      [invocationId, deliveryId, now instanceof Date ? now.toISOString() : new Date(now).toISOString()],
+    );
+    return result.rows[0] ? invocationRow(result.rows[0]) : null;
+  }
+  async finishInvocation(invocationId, { status, reason = null, replyMessageId = null, now = new Date() }, client = this.pool) {
+    const result = await client.query(
+      `UPDATE room_invocations SET status = $2, reason = COALESCE($3, reason), reply_message_id = $4, finished_at = $5
+        WHERE invocation_id = $1 AND status IN ('queued', 'running') RETURNING ${INVOCATION_COLUMNS}`,
+      [invocationId, status, reason, replyMessageId, now instanceof Date ? now.toISOString() : new Date(now).toISOString()],
+    );
+    return result.rows[0] ? invocationRow(result.rows[0]) : null;
+  }
+  async cancelRoomInvocations(roomId, { now = new Date() } = {}, client = this.pool) {
+    const result = await client.query(
+      `UPDATE room_invocations SET status = 'cancelled', reason = 'stopped', finished_at = $2
+        WHERE room_id = $1 AND status IN ('queued', 'running') RETURNING ${INVOCATION_COLUMNS}`,
+      [roomId, now instanceof Date ? now.toISOString() : new Date(now).toISOString()],
+    );
+    return result.rows.map(invocationRow);
+  }
+  async listRoomInvocations(roomId, { endpointId = null, status = null, limit = 100 } = {}, client = this.pool) {
+    const result = await client.query(
+      `SELECT ${INVOCATION_COLUMNS} FROM room_invocations
+        WHERE room_id = $1 AND ($2::text IS NULL OR endpoint_id = $2) AND ($3::text IS NULL OR status = $3)
+        ORDER BY created_at DESC, invocation_id DESC LIMIT $4`,
+      [roomId, endpointId, status, limit],
+    );
+    return result.rows.map(invocationRow);
+  }
+  async reserveAgentTurn(roomId, threadRootId, maxTurns, { now = new Date() } = {}, client = this.pool) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const reserved = await client.query(
+      `INSERT INTO room_threads (room_id, thread_root_id, agent_turns, updated_at) VALUES ($1, $2, 1, $4)
+       ON CONFLICT (room_id, thread_root_id) DO UPDATE SET agent_turns = room_threads.agent_turns + 1, updated_at = $4
+         WHERE room_threads.agent_turns < $3
+       RETURNING agent_turns`,
+      [roomId, threadRootId, maxTurns, timestamp],
+    );
+    if (reserved.rows[0]) return { allowed: true, agent_turns: reserved.rows[0].agent_turns };
+    const current = await client.query('SELECT agent_turns FROM room_threads WHERE room_id = $1 AND thread_root_id = $2', [roomId, threadRootId]);
+    return { allowed: false, agent_turns: current.rows[0]?.agent_turns ?? 0 };
+  }
+  async resetAgentTurns(roomId, threadRootId, { now = new Date() } = {}, client = this.pool) {
+    await client.query(
+      `INSERT INTO room_threads (room_id, thread_root_id, agent_turns, updated_at) VALUES ($1, $2, 0, $3)
+       ON CONFLICT (room_id, thread_root_id) DO UPDATE SET agent_turns = 0, updated_at = $3`,
+      [roomId, threadRootId, now instanceof Date ? now.toISOString() : new Date(now).toISOString()],
+    );
+  }
+  async createRoomDelivery({ messageId, endpointId, now = new Date() }, client = this.pool) {
+    const deliveryId = `del_${crypto.randomUUID()}`;
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    await client.query(
+      `INSERT INTO deliveries (delivery_id, message_id, recipient_endpoint_id, state, attempts, queued_at, updated_at, next_attempt_at, federation_hop)
+       VALUES ($1,$2,$3,'queued',0,$4,$4,$4,false)`,
+      [deliveryId, messageId, endpointId, timestamp],
+    );
+    return deliveryId;
   }
   async assignRoomSequence(client, conversationId) {
     const result = await client.query(

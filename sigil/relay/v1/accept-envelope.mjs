@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { validateEnvelope, reject, signedBytes, checkRecipientLocality } from './validate-envelope.mjs';
+import { assertAgentMayPost, applyRoomDispatch } from './room-dispatch.mjs';
 import { authorizeRoomEnvelope, assertRoomTypeHasRoom, assertNotRoomConversation } from './room-policy.mjs';
 import { resolveRateLimits, resolveStreamSequence, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
 import { writeRejectionAudit } from './rejection-audit.mjs';
@@ -10,7 +11,7 @@ import { enforceCapabilityRiskGate } from './capability-risk-gate.mjs';
 // rejection worth auditing (design §9, round 3 blocker 5). A malformed-JSON
 // INVALID_ENVELOPE before signature verification has no meaningful
 // sender/conversation_id to audit against, so it's deliberately excluded.
-const AUDITED_REJECTION_CODES = new Set(['CAPABILITY_DENIED', 'REPLAY_DETECTED', 'RATE_LIMITED', 'QUOTA_EXCEEDED', 'DIRECTORY_LINK_REQUIRED', 'TASK_ASSIGNEE_MISMATCH', 'DUPLICATE_TASK_ID', 'APPROVAL_REQUIRED']);
+const AUDITED_REJECTION_CODES = new Set(['CAPABILITY_DENIED', 'REPLAY_DETECTED', 'RATE_LIMITED', 'QUOTA_EXCEEDED', 'DIRECTORY_LINK_REQUIRED', 'TASK_ASSIGNEE_MISMATCH', 'DUPLICATE_TASK_ID', 'APPROVAL_REQUIRED', 'ROOM_NOT_INVOKED']);
 
 const statusByCode = Object.freeze({
   INVALID_ENVELOPE: 400,
@@ -19,6 +20,7 @@ const statusByCode = Object.freeze({
   UNKNOWN_ENDPOINT: 401,
   ENDPOINT_REVOKED: 403,
   ROUTE_NOT_AUTHORIZED: 403,
+  ROOM_NOT_INVOKED: 403,
   CAPABILITY_DENIED: 403,
   APPROVAL_REQUIRED: 403,
   TASK_ASSIGNEE_MISMATCH: 403,
@@ -194,14 +196,6 @@ async function acceptWithRepository(envelope, options) {
         throw reject('REPLAY_DETECTED', 'message_id was already accepted under a different idempotency_key');
       }
 
-      // Capability/risk-tier + approval gate (closes Bypass #1: a sync-forwarded
-      // envelope previously skipped this check entirely, since it only ran on
-      // the route.action === 'local' branch below). Called with no `client`
-      // argument so lookupCapabilityRegistration/consumeApprovalDecision fall
-      // through to their own pool-default client -- this path must never open
-      // a transaction (I1: no held Postgres connection across postForward).
-      await enforceCapabilityRiskGate(envelope, repository, { now });
-
       // Rooms are relay-local (phase 1): refuse a room conversation or a
       // room.* type before anything leaves this relay. No transaction is
       // open here, so the lookup uses the repository's pool default. This
@@ -209,7 +203,16 @@ async function acceptWithRepository(envelope, options) {
       // does), so the answer reveals only that a room with this
       // conversation_id exists -- never membership -- to a caller that
       // already passed transport authentication.
+      // Runs before the approval gate: the gate commits approval consumption immediately on this no-transaction path.
       assertNotRoomConversation(envelope, repository.lookupRoom ? await repository.lookupRoom(envelope.conversation_id) : null);
+
+      // Capability/risk-tier + approval gate (closes Bypass #1: a sync-forwarded
+      // envelope previously skipped this check entirely, since it only ran on
+      // the route.action === 'local' branch below). Called with no `client`
+      // argument so lookupCapabilityRegistration/consumeApprovalDecision fall
+      // through to their own pool-default client -- this path must never open
+      // a transaction (I1: no held Postgres connection across postForward).
+      await enforceCapabilityRiskGate(envelope, repository, { now });
 
       // client = null: forwardEnvelope passes it only to lookupRecipientEndpoint
       // (L210) for the sender-key lookup, handled by the existing `?? null`
@@ -265,6 +268,10 @@ async function acceptWithRepository(envelope, options) {
     // Runs before the forward/local branch so BOTH routes are gated
     // identically, on this transaction's client so approval consumption
     // commits or rolls back atomically with the rest of the accept.
+    if (route.action === 'forward') {
+      // Rooms are relay-local; refuse before the approval gate (see sync branch).
+      assertNotRoomConversation(envelope, repository.lookupRoom ? await repository.lookupRoom(envelope.conversation_id, client) : null);
+    }
     await enforceCapabilityRiskGate(envelope, repository, { client, now });
 
     // Queue-forward: enqueueForward's INSERT + audit are atomic inside this txn.
@@ -272,8 +279,6 @@ async function acceptWithRepository(envelope, options) {
       if (envelope.message_type === 'session.resend_request') {
         throw reject('ROUTE_NOT_AUTHORIZED', 'Session resend requests are local-only');
       }
-      // Rooms are relay-local (phase 1); see the sync-forward branch above.
-      assertNotRoomConversation(envelope, repository.lookupRoom ? await repository.lookupRoom(envelope.conversation_id, client) : null);
       return forwardEnvelope(envelope, route, options, client);
     }
 
@@ -372,10 +377,14 @@ async function acceptWithRepository(envelope, options) {
     }
     const result = validateEnvelope(envelope, { ...options, idempotency: new Map(), capabilityGrants, ...(room ? { broadcastAuthorizer: () => true } : {}) });
     assertRoomTypeHasRoom(envelope, room);
-    const roomFanout = room ? await authorizeRoomEnvelope(envelope, room, repository, client) : null;
+    const roomPlan = room
+      ? await authorizeRoomEnvelope(envelope, room, repository, client, { inboxDepthLimit: options.inboxDepthLimit ?? DEFAULT_INBOX_DEPTH_LIMIT, registered: options.registered, now })
+      : null;
+    const roomFanout = roomPlan?.fanout ?? null;
     const prior = await repository.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key, client);
     if (prior && prior.canonical_hash !== result.canonical_hash) throw reject('DUPLICATE_MESSAGE', 'Idempotency key conflicts with an existing body');
     if (prior) return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: prior.message_id, duplicate: true } };
+    const completing = roomPlan ? await assertAgentMayPost(envelope, roomPlan.senderMember, repository, client) : null;
     // High-risk capability + approval gate already ran once for this
     // transaction via enforceCapabilityRiskGate above (line 247) -- it uses
     // the same sha256(signedBytes(envelope)) hash as result.canonical_hash,
@@ -421,7 +430,10 @@ async function acceptWithRepository(envelope, options) {
     // directly -- kept here so repository-backed callers (postgres, memory)
     // still see the same row shape regardless of transport.
     const persisted = await repository.persistAcceptedEnvelope({ envelope, ...result, canonical_bytes: signedBytes(envelope), action_hash: result.canonical_hash, streamSeq, roomSeq, roomFanout }, client);
-    const persistedWithStreamSeq = { ...persisted, streamSeq };
+    const dispatch = roomPlan
+      ? await applyRoomDispatch({ envelope, room, plan: roomPlan, completing, repository, client, now, inboxDepthLimit: options.inboxDepthLimit ?? DEFAULT_INBOX_DEPTH_LIMIT, registered: options.registered })
+      : null;
+    const persistedWithStreamSeq = { ...persisted, streamSeq, ...(dispatch ? { roomDeliveries: dispatch.roomDeliveries } : {}) };
     if (options.onPersisted) await options.onPersisted({ envelope, persisted: persistedWithStreamSeq });
     return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: persisted?.message_id ?? result.message_id, duplicate: persisted?.duplicate ?? false } };
   }).catch(async (error) => {

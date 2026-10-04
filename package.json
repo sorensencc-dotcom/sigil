@@ -19,6 +19,7 @@
     "sigil/ingress/v1/*.mjs",
     "sigil/relay/v1/*.mjs",
     "sigil/relay/v1/transport-libp2p/*.mjs",
+    "sigil/bridges/v1/*.mjs",
     "sigil/contracts/v1/*.json",
     "sigil/contracts/v1/*.mjs",
     "sigil/migrations/*.sql",

@@ -6,17 +6,22 @@ import { authorizeRoomEnvelope, assertRoomTypeHasRoom } from './room-policy.mjs'
 const room = { conversation_id: 'room_1' };
 const members = [
   { endpoint_id: 'ep_web', role: 'owner', response_mode: null },
+  { endpoint_id: 'ep_web2', role: 'member', response_mode: null },
   { endpoint_id: 'ep_claude', role: 'member', response_mode: 'joins' },
   { endpoint_id: 'ep_codex', role: 'member', response_mode: 'mentions_only' },
 ];
 const repository = {
   async lookupRoomMember(_c, endpointId) { return members.find((m) => m.endpoint_id === endpointId) ?? null; },
   async listRoomMembers() { return members; },
+  async countOpenDeliveries() { return 0; },
+  async lookupRecipientEndpoint() { return { status: 'active' }; },
 };
 const base = { conversation_id: 'room_1', message_type: 'room.message', sender: { endpoint_id: 'ep_web' }, broadcast_scope: { conversation_id: 'room_1' } };
 
-test('a member broadcast fans out to every other active member', async () => {
-  assert.deepEqual(await authorizeRoomEnvelope(base, room, repository, null), ['ep_claude', 'ep_codex']);
+test('a member broadcast fans out to every other active human member, never to agents', async () => {
+  const plan = await authorizeRoomEnvelope(base, room, repository, null, { inboxDepthLimit: 10 });
+  assert.deepEqual(plan.fanout, ['ep_web2']);
+  assert.deepEqual(plan.agentMembers.map((m) => m.endpoint_id), ['ep_claude', 'ep_codex']);
 });
 
 for (const [name, envelope] of [

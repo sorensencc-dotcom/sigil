@@ -46,6 +46,8 @@ Commands:
   init <name> [--owner <owner_id> | --federation-owner <federated_id>] [--registry path] [--domain domain]      Create a local identity and register it (domain defaults to "local"; --federation-owner allows an owner id whose domain differs from --domain)
   sign-contract --contract path --identity path [--output path]          Sign a TorqueQuery agent dispatch contract
   verify-contract --contract path --registry path                        Verify a signed TorqueQuery agent dispatch contract
+  agent run --identity path --relay-url url [--worker path] [--room-bridge claude|codex] [--room-sessions path] [--agent-command cmd] [--agent-cwd dir]
+                                                            Run the agent daemon; --room-bridge answers room.message deliveries via a local CLI
   agentmail provision --identity path --installation-id id [--registry path] [--audit-output path]
                                                             Explicitly provision non-mailbox ep_ingress; creates no grants or inbox mapping
   relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] [--relay-request-freshness-ms N] [--p2p [--p2p-identity path] [--p2p-listen multiaddr] [--p2p-no-mdns]] Run a local relay (blocks; Ctrl+C to stop; set SIGIL_STREAM_SEQ_ENABLED=1 to stamp stream sequences)
@@ -964,11 +966,32 @@ async function cmdVerifyContract(argv) {
   if (!valid) process.exitCode = 1;
 }
 async function cmdAgentRun(argv) {
-  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, worker: { type: 'string' }, config: { type: 'string' } } });
+  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, worker: { type: 'string' }, config: { type: 'string' }, 'room-bridge': { type: 'string' }, 'room-sessions': { type: 'string' }, 'agent-command': { type: 'string' }, 'agent-cwd': { type: 'string' } } });
   const config = loadConfigFile(opt(args, ['config']) ?? DEFAULT_CLI_CONFIG);
   const resolved = resolveConfig({ flags: { relayUrl: opt(args, ['relay-url']), streamUrl: opt(args, ['stream-url']), identity: opt(args, ['identity']) }, config });
-  if (!resolved.identityPath) throw new Error('usage: sigil agent run --identity path --relay-url url [--worker path]');
+  if (!resolved.identityPath) throw new Error('usage: sigil agent run --identity path --relay-url url [--worker path] [--room-bridge claude|codex] [--room-sessions path] [--agent-command cmd] [--agent-cwd dir]');
   const identity = loadIdentity(resolved.identityPath);
+  const bridgeKind = opt(args, ['room-bridge']);
+  let onRoomMessage = null;
+  if (bridgeKind) {
+    if (bridgeKind !== 'claude' && bridgeKind !== 'codex') throw new Error('--room-bridge must be claude or codex');
+    const { createRoomBridge } = await import('../bridges/v1/room-bridge.mjs');
+    const { createSessionStore } = await import('../bridges/v1/session-store.mjs');
+    const { createClaudeCli } = await import('../bridges/v1/claude-cli.mjs');
+    const { createCodexCli } = await import('../bridges/v1/codex-cli.mjs');
+    const cliOptions = { command: opt(args, ['agent-command']) ?? bridgeKind, cwd: opt(args, ['agent-cwd']) ?? process.cwd() };
+    const cli = bridgeKind === 'claude' ? createClaudeCli(cliOptions) : createCodexCli(cliOptions);
+    const sessionsPath = opt(args, ['room-sessions']) ?? path.join('.sigil', `room-sessions-${identity.endpoint_id.replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
+    const bridge = createRoomBridge({
+      identity,
+      relay: new RelayClient({ baseUrl: resolved.relayUrl, token: identity.relay_token }),
+      outbox: new LocalOutbox({ privateKey: identityKeys(identity).privateKey, endpoint: { owner_id: identity.owner_id, endpoint_id: identity.endpoint_id, key_id: identity.key_id, kind: identity.kind } }),
+      cli,
+      sessions: createSessionStore(sessionsPath)
+    });
+    onRoomMessage = bridge.handle;
+    console.log(`Room bridge: ${bridgeKind} (sessions in ${sessionsPath})`);
+  }
   const { fileURLToPath } = await import('node:url');
   const workerScript = opt(args, ['worker']) ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'claude-worker.mjs');
   const { createAgentDaemon } = await import('./agent-daemon.mjs');
@@ -978,7 +1001,8 @@ async function cmdAgentRun(argv) {
     streamUrl: resolved.streamUrl,
     workerCommand: process.execPath,
     workerArgs: [workerScript],
-    autoReply: true
+    autoReply: true,
+    onRoomMessage
   });
   console.log(`Sigil autonomous agent daemon running for ${identity.endpoint_id} (${identity.owner_id}).`);
   console.log(`Relay: ${resolved.relayUrl}`);

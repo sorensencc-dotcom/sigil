@@ -14,7 +14,7 @@ import { normalizeIssuer } from './issuer-normalization.mjs';
 import { assertAccountLinkCeremony, assertAllowedIssuer, boundedCapabilityGrantExpiry, boundedDirectoryExpiry, boundedTokenExpiry } from './auth-policy.mjs';
 import { verifyRealIdToken, createJwksCache, createDiscoveryCache, CLOCK_SKEW_SECONDS } from './oidc-client.mjs';
 import { attemptDirectoryMatchOnOidcLogin } from './directory-trust.mjs';
-import { resolveDirectoryRateLimits, resolveRelayRequestFreshnessMs, resolveStreamSequence } from './relay-config.mjs';
+import { DEFAULT_INBOX_DEPTH_LIMIT, resolveDirectoryRateLimits, resolveRelayRequestFreshnessMs, resolveStreamSequence } from './relay-config.mjs';
 
 function normalizeIssuerOrRespond(rawIssuer, response, requestId) {
   try {
@@ -57,7 +57,9 @@ export function createOnPersisted(stream) {
   return async ({ envelope: accepted, persisted }) => {
     if (!stream || persisted?.duplicate) return;
     if (accepted.recipient?.endpoint_id) stream.notify(accepted.recipient.endpoint_id, persisted.message_id, persisted.streamSeq);
-    for (const target of persisted.fanout ?? []) stream.notify(target.endpoint_id, target.delivery_id, persisted.streamSeq);
+    // Room recipients get no streamSeq: they see a subset of the sender's
+    // stream, so its sequence would read as gaps. room_seq is the room order.
+    for (const target of [...(persisted.fanout ?? []), ...(persisted.roomDeliveries ?? [])]) stream.notify(target.endpoint_id, target.delivery_id);
     if (accepted.sender?.endpoint_id && typeof stream.notifyReceipt === 'function') {
       stream.notifyReceipt(accepted.sender.endpoint_id, {
         message_id: persisted.message_id,
@@ -417,7 +419,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       return response.end(result.body ? JSON.stringify(result.body) : '');
     }
     try {
-      if (await handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody })) return;
+      if (await handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream, inboxDepthLimit: DEFAULT_INBOX_DEPTH_LIMIT })) return;
     } catch (error) {
       logger?.error?.('room route failed', error);
       if (response.headersSent) return response.end();
@@ -710,6 +712,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       let body; try { body = JSON.parse(raw); } catch { body = null; }
       if (!body?.capability || !body?.scope || !body?.expires_at) { response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'capability, scope, and expires_at are required', details: {} })); }
+      if (!principal.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'GRANT_HUMAN_REQUIRED', message: 'Only a human principal can create capability grants', details: {} })); }
       if (!repository?.createCapabilityGrant && !repository?.createCapabilityGrantWithAudit) return response.writeHead(503).end();
       try {
         const grantId = `grant_${crypto.randomUUID()}`;
@@ -742,9 +745,9 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       }
       try {
         const revoked = repository.revokeCapabilityGrantWithAudit
-          ? await repository.revokeCapabilityGrantWithAudit(grantId, { revokedBy: principal.human_id ?? principal.endpoint_id, reason: body.reason ?? null, now, actorHumanId: principal.human_id ?? null, endpointId: principal.endpoint_id })
+          ? await repository.revokeCapabilityGrantWithAudit(grantId, { revokedBy: principal.human_id ?? null, revokedByEndpoint: principal.endpoint_id, reason: body.reason ?? null, now, actorHumanId: principal.human_id ?? null, endpointId: principal.endpoint_id })
           : await (async () => {
-              const result = await repository.revokeCapabilityGrant(grantId, { revokedBy: principal.human_id ?? principal.endpoint_id, reason: body.reason ?? null, now });
+              const result = await repository.revokeCapabilityGrant(grantId, { revokedBy: principal.human_id ?? null, revokedByEndpoint: principal.endpoint_id, reason: body.reason ?? null, now });
               if (!result.duplicate) await repository.recordAuditEvent?.({ eventType: 'capability_grant.revoked', subjectId: grantId, actorHumanId: principal.human_id ?? null, endpointId: principal.endpoint_id, objectType: 'capability_grant', objectId: grantId, outcome: 'success', reason: body.reason ?? null, now });
               return result;
             })();
