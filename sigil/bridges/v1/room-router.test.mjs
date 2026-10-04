@@ -108,3 +108,19 @@ test('createOllamaClient posts to /api/chat and returns message content', async 
   const bad = createOllamaClient({ fetchImpl: async () => ({ ok: false, status: 500 }) });
   await assert.rejects(bad.chat({ model: 'm', messages: [] }), /500/);
 });
+
+test('relay read errors: 4xx drops the delivery, 5xx rethrows', async () => {
+  const fail = (status) => async () => { throw Object.assign(new Error(`read ${status}`), { status }); };
+  for (const method of ['listRoomMembers', 'listRoomMessages']) {
+    const { router, posts } = harness();
+    const relay = {
+      listRoomMembers: async () => members,
+      listRoomMessages: async () => ({ items: [], next_after_seq: '0' }),
+      createRoomInvocations: async (r, b) => { posts.push(b); return { items: [] }; },
+    };
+    const build = (status) => createRoomRouter({ identity, relay: { ...relay, [method]: fail(status) }, ollama: { chat: async () => '{}' }, model: 'm', logger: quiet });
+    assert.equal((await build(404).handle({ deliveryId: 'd', envelope })).outcome, 'dropped');
+    assert.equal(posts.length, 0);
+    await assert.rejects(build(503).handle({ deliveryId: 'd', envelope }), /read 503/);
+  }
+});

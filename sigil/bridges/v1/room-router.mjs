@@ -57,17 +57,22 @@ export function createRoomRouter({ identity, relay, ollama, model, timeoutMs = 2
     }
   }
 
-  async function post(roomId, body) {
+  // Relay 4xx means the delivery can never succeed (room gone, router removed):
+  // report it as dropped. 5xx and network errors rethrow so the daemon retries.
+  async function relayCall(what, fn) {
     try {
-      await relay.createRoomInvocations(roomId, body);
-      return true;
+      return { ok: true, value: await fn() };
     } catch (error) {
       if (Number.isInteger(error.status) && error.status >= 400 && error.status < 500) {
-        logger.error?.(`Relay refused the router decision (${error.status}); dropping the delivery: ${error.message}`);
-        return false;
+        logger.error?.(`Relay refused ${what} (${error.status}); dropping the delivery: ${error.message}`);
+        return { ok: false };
       }
       throw error;
     }
+  }
+
+  async function post(roomId, body) {
+    return (await relayCall('the router decision', () => relay.createRoomInvocations(roomId, body))).ok;
   }
 
   async function recentMessages(roomId) {
@@ -84,10 +89,14 @@ export function createRoomRouter({ identity, relay, ollama, model, timeoutMs = 2
   async function handle({ envelope }) {
     const roomId = envelope.conversation_id;
     if ((envelope.body?.mentions ?? []).length > 0) return { outcome: 'dropped' };
-    const members = await relay.listRoomMembers(roomId);
+    const membersResult = await relayCall('the member list', () => relay.listRoomMembers(roomId));
+    if (!membersResult.ok) return { outcome: 'dropped' };
+    const members = membersResult.value;
     const joined = members.filter((member) => member.response_mode === 'joins' && member.endpoint_id !== identity.endpoint_id);
     const joinedIds = new Set(joined.map((member) => member.endpoint_id));
-    const history = await recentMessages(roomId);
+    const historyResult = await relayCall('the message history', () => recentMessages(roomId));
+    if (!historyResult.ok) return { outcome: 'dropped' };
+    const history = historyResult.value;
     const lines = history.map((item) => `[seq ${item.room_seq}] ${escapeField(item.envelope?.sender?.endpoint_id)}: ${escapeField(item.envelope?.body?.text)}`);
     const prompt = [
       '<agents>',

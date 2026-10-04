@@ -80,7 +80,6 @@ test('failRoomInvocation sends invocation_id in body when provided', async () =>
   assert.equal(calls.length, 2);
 });
 
-
 test('createRoomInvocations posts the decision body and surfaces status on errors', async () => {
   const calls = [];
   const fetchImpl = async (url, options = {}) => {
