@@ -452,6 +452,18 @@ export class PostgresRepository {
          VALUES ($1, $2, 'Ed25519', $3, 'active', $4) ON CONFLICT (key_id) DO NOTHING`,
         [identity.key_id, identity.endpoint_id, publicKey, timestamp],
       );
+      // ON CONFLICT DO NOTHING hides a pre-existing row that differs from the
+      // identity, which would leave the relay signing under an unregistered key.
+      const stored = await client.query(`SELECT endpoint_id, public_key FROM endpoint_keys WHERE key_id = $1`, [identity.key_id]);
+      const row = stored.rows[0];
+      if (!row || row.endpoint_id !== identity.endpoint_id || !Buffer.from(row.public_key).equals(Buffer.from(publicKey))) {
+        throw Object.assign(new Error(`room system key "${identity.key_id}" is already registered with a different endpoint or key`), { code: 'ROOM_SYSTEM_KEY_MISMATCH' });
+      }
+      // Rotation is a deliberate later operation: never allow a second active key.
+      const otherActive = await client.query(`SELECT key_id FROM endpoint_keys WHERE endpoint_id = $1 AND status = 'active' AND key_id <> $2`, [identity.endpoint_id, identity.key_id]);
+      if (otherActive.rows.length > 0) {
+        throw Object.assign(new Error(`endpoint "${identity.endpoint_id}" already has a different active key`), { code: 'ROOM_SYSTEM_KEY_MISMATCH' });
+      }
     });
   }
   async createDirectoryInvite({ issuerEndpointId, issuerHumanId, expiresAt, homeRelay, now = new Date() } = {}) {

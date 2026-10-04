@@ -38,3 +38,13 @@ test('ensureRoomSystemEndpoint is idempotent and registers the signing key', asy
   assert.equal(entry.status, 'active');
   assert.deepEqual(entry.public_key.export({ type: 'spki', format: 'der' }), identityKeys(identity).publicKey.export({ type: 'spki', format: 'der' }));
 });
+
+test('ensureRoomSystemEndpoint rejects a different key under the registered endpoint', async () => {
+  const identity = loadRoomSystemIdentity(writeIdentity());
+  const repository = createMemoryRepository({ registry: new Map() });
+  await repository.ensureRoomSystemEndpoint({ identity, now: NOW });
+  const impostor = loadRoomSystemIdentity(writeIdentity());
+  await assert.rejects(() => repository.ensureRoomSystemEndpoint({ identity: impostor, now: NOW }), { code: 'ROOM_SYSTEM_KEY_MISMATCH' });
+  const rotated = { ...impostor, key_id: 'key_rotated' };
+  await assert.rejects(() => repository.ensureRoomSystemEndpoint({ identity: rotated, now: NOW }), { code: 'ROOM_SYSTEM_KEY_MISMATCH' });
+});

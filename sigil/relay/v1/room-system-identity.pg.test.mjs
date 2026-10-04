@@ -12,9 +12,16 @@ const connectionString = process.env.SIGIL_TEST_DATABASE_URL;
 
 test('postgres ensureRoomSystemEndpoint is idempotent and stores a readable SPKI key', { skip: !connectionString }, async (t) => {
   assertDisposableTestDatabase(connectionString);
-  await applyMigrations(connectionString, { reset: true });
+  // Non-destructive: migrate without reset, then clear only the fixed-id rows this test owns.
+  await applyMigrations(connectionString);
   const pool = new pg.Pool({ connectionString });
-  t.after(() => pool.end());
+  const clean = async () => {
+    await pool.query(`DELETE FROM endpoint_keys WHERE endpoint_id = 'ep_relay_system' OR key_id IN ('key_ep_relay_system', 'key_rotated')`);
+    await pool.query(`DELETE FROM endpoints WHERE endpoint_id = 'ep_relay_system'`);
+    await pool.query(`DELETE FROM humans WHERE human_id = 'relay_system'`);
+  };
+  await clean();
+  t.after(async () => { await clean(); await pool.end(); });
   const repository = new PostgresRepository({ pool });
   const identity = createIdentity({ ownerId: ROOM_SYSTEM_OWNER_ID, endpointId: ROOM_SYSTEM_ENDPOINT_ID, kind: 'system' });
   const now = new Date();
@@ -32,4 +39,26 @@ test('postgres ensureRoomSystemEndpoint is idempotent and stores a readable SPKI
   assert.deepEqual(readBack.export({ type: 'spki', format: 'der' }), identityKeys(identity).publicKey.export({ type: 'spki', format: 'der' }));
   const sig = crypto.sign(null, Buffer.from('x'), identityKeys(identity).privateKey);
   assert.equal(crypto.verify(null, Buffer.from('x'), readBack, sig), true);
+});
+
+test('postgres ensureRoomSystemEndpoint rejects a different key under the registered endpoint', { skip: !connectionString }, async (t) => {
+  assertDisposableTestDatabase(connectionString);
+  await applyMigrations(connectionString);
+  const pool = new pg.Pool({ connectionString });
+  const clean = async () => {
+    await pool.query(`DELETE FROM endpoint_keys WHERE endpoint_id = 'ep_relay_system' OR key_id IN ('key_ep_relay_system', 'key_rotated')`);
+    await pool.query(`DELETE FROM endpoints WHERE endpoint_id = 'ep_relay_system'`);
+    await pool.query(`DELETE FROM humans WHERE human_id = 'relay_system'`);
+  };
+  await clean();
+  t.after(async () => { await clean(); await pool.end(); });
+  const repository = new PostgresRepository({ pool });
+  const identity = createIdentity({ ownerId: ROOM_SYSTEM_OWNER_ID, endpointId: ROOM_SYSTEM_ENDPOINT_ID, kind: 'system' });
+  await repository.ensureRoomSystemEndpoint({ identity });
+  const impostor = createIdentity({ ownerId: ROOM_SYSTEM_OWNER_ID, endpointId: ROOM_SYSTEM_ENDPOINT_ID, kind: 'system' });
+  await assert.rejects(() => repository.ensureRoomSystemEndpoint({ identity: impostor }), { code: 'ROOM_SYSTEM_KEY_MISMATCH' });
+  const rotated = { ...impostor, key_id: 'key_rotated' };
+  await assert.rejects(() => repository.ensureRoomSystemEndpoint({ identity: rotated }), { code: 'ROOM_SYSTEM_KEY_MISMATCH' });
+  const keys = await pool.query(`SELECT key_id FROM endpoint_keys WHERE endpoint_id = 'ep_relay_system'`);
+  assert.deepEqual(keys.rows.map((r) => r.key_id), ['key_ep_relay_system']);
 });
