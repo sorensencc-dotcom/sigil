@@ -1819,7 +1819,8 @@ export class PostgresRepository {
     if (client == null) throw new Error('lockRoom requires transaction client');
     await client.query('SELECT 1 FROM rooms WHERE conversation_id = $1 FOR UPDATE', [conversationId]);
   }
-  async lookupRoomEventByKey(conversationId, idempotencyKey, client = this.pool) {
+  async lookupRoomEventByKey(conversationId, idempotencyKey, client) {
+    if (client == null) throw new Error('lookupRoomEventByKey requires a transaction client');
     const result = await client.query(
       `SELECT message_id FROM envelopes WHERE conversation_id = $1 AND message_type = 'room.event' AND idempotency_key = $2 LIMIT 1`,
       [conversationId, idempotencyKey],

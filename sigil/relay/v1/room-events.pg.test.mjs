@@ -18,21 +18,29 @@ test('postgres emitRoomEvent persists with a room_seq and a repeat key writes no
   // except the fixed-id system endpoint, which is cleaned before and after.
   await applyMigrations(connectionString);
   const pool = new pg.Pool({ connectionString });
-  const cleanSystem = async () => {
-    // Envelopes signed by the system key reference it by FK; remove them first.
-    const sent = `SELECT message_id FROM envelopes WHERE sender_endpoint_id = 'ep_relay_system'`;
-    await pool.query(`DELETE FROM deliveries WHERE message_id IN (${sent})`);
-    await pool.query(`DELETE FROM audit_events WHERE subject_id IN (${sent})`);
-    await pool.query(`DELETE FROM idempotency_keys WHERE endpoint_id = 'ep_relay_system'`);
-    await pool.query(`DELETE FROM envelopes WHERE sender_endpoint_id = 'ep_relay_system'`);
+  const run = crypto.randomUUID().replaceAll('-', '_');
+  const roomId = `room_${run}`;
+  const room2Id = `room2_${run}`;
+  // Remove the system endpoint and key only when no system-signed envelope is left,
+  // so this test never deletes another test's rows.
+  const dropSystemIfUnused = async () => {
+    const left = await pool.query(`SELECT 1 FROM envelopes WHERE sender_endpoint_id = 'ep_relay_system' LIMIT 1`);
+    if (left.rowCount > 0) return;
     await pool.query(`DELETE FROM endpoint_keys WHERE endpoint_id = 'ep_relay_system'`);
     await pool.query(`DELETE FROM endpoints WHERE endpoint_id = 'ep_relay_system'`);
     await pool.query(`DELETE FROM humans WHERE human_id = 'relay_system'`);
   };
-  await cleanSystem();
-  t.after(async () => { await cleanSystem(); await pool.end(); });
+  // Only rows in this run's two rooms.
+  const cleanRun = async () => {
+    const mine = `SELECT message_id FROM envelopes WHERE conversation_id IN ('${roomId}', '${room2Id}')`;
+    await pool.query(`DELETE FROM deliveries WHERE message_id IN (${mine})`);
+    await pool.query(`DELETE FROM audit_events WHERE subject_id IN (${mine})`);
+        await pool.query(`DELETE FROM idempotency_keys WHERE message_id IN (${mine})`);
+    await pool.query(`DELETE FROM envelopes WHERE conversation_id IN ('${roomId}', '${room2Id}')`);
+  };
+  await dropSystemIfUnused();
+  t.after(async () => { await cleanRun(); await dropSystemIfUnused(); await pool.end(); });
 
-  const run = crypto.randomUUID().replaceAll('-', '_');
   const human = `usr_evt_${run}`;
   const web = `ep_web_${run}`;
   const claude = `ep_claude_${run}`;
@@ -47,7 +55,6 @@ test('postgres emitRoomEvent persists with a room_seq and a repeat key writes no
   const repository = new PostgresRepository({ pool });
   const system = createIdentity({ ownerId: ROOM_SYSTEM_OWNER_ID, endpointId: ROOM_SYSTEM_ENDPOINT_ID, kind: 'system' });
   await repository.ensureRoomSystemEndpoint({ identity: system, now: NOW });
-  const roomId = `room_${run}`;
   await repository.createRoom({ conversationId: roomId, workspaceId: `ws_${human}`, name: `evt_${run}`, createdByHumanId: human, ownerEndpointId: web, now: NOW });
   await repository.addRoomMember({ conversationId: roomId, endpointId: claude, role: 'member', responseMode: 'joins', addedByHumanId: human, now: NOW });
   const room = await repository.lookupRoom(roomId);
@@ -85,7 +92,6 @@ test('postgres emitRoomEvent persists with a room_seq and a repeat key writes no
   assert.equal(raced.rows[0].n, 1);
 
   // The same raw key in a second room is a separate event, not a 23505.
-  const room2Id = `room2_${run}`;
   await repository.createRoom({ conversationId: room2Id, workspaceId: `ws_${human}`, name: `evt2_${run}`, createdByHumanId: human, ownerEndpointId: web, now: NOW });
   const room2 = await repository.lookupRoom(room2Id);
   const emitIn = (r) => repository.withTransaction((client) => emitRoomEvent({ ...args, room: r, client }));
@@ -99,4 +105,10 @@ test('postgres emitRoomEvent persists with a room_seq and a repeat key writes no
   assert.equal(repeat.message_id, first.message_id);
   const still = await pool.query(`SELECT count(*)::int AS n FROM envelopes WHERE conversation_id = $1 AND idempotency_key = $2`, [roomId, `${roomId}:evt_${run}`]);
   assert.equal(still.rows[0].n, 1);
+});
+
+test('postgres lookupRoomEventByKey requires a transaction client', { skip: !connectionString }, async () => {
+  const repository = new PostgresRepository({ pool: { query() { throw new Error('pool must not be used'); } } });
+  await assert.rejects(() => repository.lookupRoomEventByKey('room_x', 'room_x:k', null), /requires a transaction client/);
+  await assert.rejects(() => repository.lookupRoomEventByKey('room_x', 'room_x:k'), /requires a transaction client/);
 });

@@ -58,5 +58,5 @@ export async function emitRoomEvent({ identity, repository, client, room, body, 
     roomSeq,
     roomFanout: fanoutIds,
   }, client);
-  return { message_id: envelope.message_id, fanout: persisted.fanout ?? [], duplicate: false };
+  return { message_id: envelope.message_id, fanout: persisted.fanout, duplicate: false };
 }
