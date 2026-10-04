@@ -82,11 +82,15 @@ export function memberIsAgent(member) {
 
 // Returns null when endpointId may receive a room delivery now, otherwise the
 // reason it may not. Shared with room-dispatch.mjs for agent deliveries.
-export async function deliveryBlocker(endpointId, repository, client, { inboxDepthLimit, registered }) {
+export async function endpointIsActive(endpointId, repository, client, registered) {
   const endpoint = repository.lookupRecipientEndpoint
     ? (await repository.lookupRecipientEndpoint(endpointId, client)) ?? registered?.get(endpointId)
     : registered?.get(endpointId);
-  if (!endpoint || endpoint.status !== 'active') return 'endpoint_inactive';
+  return endpoint?.status === 'active';
+}
+
+export async function deliveryBlocker(endpointId, repository, client, { inboxDepthLimit, registered }) {
+  if (!(await endpointIsActive(endpointId, repository, client, registered))) return 'endpoint_inactive';
   if (await repository.countOpenDeliveries(endpointId, client) >= inboxDepthLimit) return 'inbox_full';
   return null;
 }

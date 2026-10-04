@@ -11,7 +11,7 @@ import crypto from 'node:crypto';
 import { reject } from './validate-envelope.mjs';
 import { clampReason } from '../../contracts/v1/room-event-schema.mjs';
 import { emitRoomEvent } from './room-events.mjs';
-import { deliveryBlocker, isInvocableAgent, isRouterMember, memberIsAgent } from './room-policy.mjs';
+import { deliveryBlocker, endpointIsActive, isInvocableAgent, isRouterMember, memberIsAgent } from './room-policy.mjs';
 
 export function threadRootOf(envelope) {
   return envelope.body?.thread_root_id ?? envelope.message_id;
@@ -101,7 +101,13 @@ export async function applyRoomDispatch({ envelope, room, plan, completing, repo
   const routerDeliveries = [];
   const humanSender = !memberIsAgent(plan.senderMember);
   const namesAnAgent = allMentions.some((id) => plan.agentMembers.some((member) => member.endpoint_id === id));
-  const hasJoinedAgent = plan.agentMembers.some((member) => member.response_mode === 'joins');
+  // Only an active joins agent can pick up the router's invocation.
+  let hasJoinedAgent = false;
+  if (humanSender && !namesAnAgent) {
+    for (const member of plan.agentMembers) {
+      if (member.response_mode === 'joins' && await endpointIsActive(member.endpoint_id, repository, client, registered)) { hasJoinedAgent = true; break; }
+    }
+  }
   if (humanSender && !namesAnAgent && hasJoinedAgent && envelope.message_type === 'room.message') {
     for (const router of plan.agentMembers.filter(isRouterMember)) {
       if (await deliveryBlocker(router.endpoint_id, repository, client, { inboxDepthLimit, registered })) continue;

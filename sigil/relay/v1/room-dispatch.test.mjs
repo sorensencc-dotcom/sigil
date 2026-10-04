@@ -342,3 +342,48 @@ test('no events are emitted when no system identity is configured', async () => 
   assert.ok(items.length > 0);
   assert.ok(items.every((item) => item.envelope.message_type === 'room.message'));
 });
+
+async function routerPlan(w) {
+  const members = await w.repository.listRoomMembers('room_1');
+  return {
+    senderMember: { endpoint_id: 'ep_web', is_agent: false },
+    agentMembers: members.filter((m) => m.response_mode != null).map((m) => ({ ...m, is_agent: true })),
+  };
+}
+
+test('applyRoomDispatch returns the router delivery in routerDeliveries and roomDeliveries', async () => {
+  const w = world();
+  await room(w.repository);
+  await addRouter(w.repository);
+  const roomRow = await w.repository.lookupRoom('room_1');
+  const result = await applyRoomDispatch({ envelope: post(w, 'ep_web', { text: 'who can fix this?', mentions: [] }), room: roomRow, plan: await routerPlan(w), completing: null, repository: w.repository, now: NOW, inboxDepthLimit: 100, registered: w.registered });
+  assert.equal(result.routerDeliveries.length, 1);
+  assert.equal(result.routerDeliveries[0].endpoint_id, 'ep_router');
+  assert.match(result.routerDeliveries[0].delivery_id, /^del_/);
+  assert.deepEqual(result.roomDeliveries, result.routerDeliveries);
+  assert.deepEqual(result.invocations, []);
+});
+
+test('an inactive router is skipped: no delivery and no invocation is created', async () => {
+  const w = world();
+  await room(w.repository);
+  await addRouter(w.repository);
+  w.registered.get('ep_router').status = 'revoked';
+  const roomRow = await w.repository.lookupRoom('room_1');
+  const result = await applyRoomDispatch({ envelope: post(w, 'ep_web', { text: 'who can fix this?', mentions: [] }), room: roomRow, plan: await routerPlan(w), completing: null, repository: w.repository, now: NOW, inboxDepthLimit: 100, registered: w.registered });
+  assert.deepEqual(result.routerDeliveries, []);
+  assert.deepEqual(result.roomDeliveries, []);
+  assert.deepEqual(result.invocations, []);
+  assert.equal(await w.repository.countOpenDeliveries('ep_router'), 0);
+  assert.deepEqual(await w.repository.listRoomInvocations('room_1'), []);
+});
+
+test('no router delivery when the only joined agent is inactive', async () => {
+  const w = world();
+  await room(w.repository);
+  await addRouter(w.repository);
+  w.registered.get('ep_claude').status = 'revoked';
+  const { persisted } = await accept(w, post(w, 'ep_web', { text: 'anyone?', mentions: [] }));
+  assert.deepEqual(persisted.roomDeliveries, []);
+  assert.equal(await w.repository.countOpenDeliveries('ep_router'), 0);
+});
