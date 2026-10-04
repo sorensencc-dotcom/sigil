@@ -50,3 +50,23 @@ test('an invalid body is refused before anything is written', async () => {
   await assert.rejects(emitRoomEvent({ identity: system, repository, client: null, room, body: { kind: 'bogus', endpoint_ids: [] }, idempotencyKey: 'evt_3', now: NOW, inboxDepthLimit: 100, registered }), { code: 'INVALID_ENVELOPE' });
   assert.equal((await repository.listRoomMessages('room_1', 0n, 10)).length, 0);
 });
+
+test('a member whose inbox is full is skipped in the fanout', async () => {
+  const { system, repository, registered, room } = await world();
+  const base = { identity: system, repository, client: null, room, body: { kind: 'router_failed', endpoint_ids: [] }, now: NOW, inboxDepthLimit: 1, registered };
+  const first = await emitRoomEvent({ ...base, idempotencyKey: 'evt_full_1' });
+  assert.deepEqual(first.fanout.map((d) => d.endpoint_id), ['ep_web']);
+  const second = await emitRoomEvent({ ...base, idempotencyKey: 'evt_full_2' });
+  assert.deepEqual(second.fanout, []);
+  assert.equal((await repository.listRoomMessages('room_1', 0n, 10)).length, 2, 'the event still persists');
+});
+
+test('the same key in two rooms is two events', async () => {
+  const { system, repository, registered, room } = await world();
+  await repository.createRoom({ conversationId: 'room_2', workspaceId: 'ws_usr_chris', name: 'other', createdByHumanId: 'usr_chris', ownerEndpointId: 'ep_web', now: NOW });
+  const room2 = await repository.lookupRoom('room_2');
+  const base = { identity: system, repository, client: null, body: { kind: 'router_failed', endpoint_ids: [] }, idempotencyKey: 'evt_same', now: NOW, inboxDepthLimit: 100, registered };
+  const a = await emitRoomEvent({ ...base, room });
+  const b = await emitRoomEvent({ ...base, room: room2 });
+  assert.notEqual(a.message_id, b.message_id);
+});

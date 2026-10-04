@@ -74,4 +74,13 @@ test('postgres emitRoomEvent persists with a room_seq and a repeat key writes no
   assert.equal(after.rows[0].n, 1);
   const deliveries = await pool.query(`SELECT count(*)::int AS n FROM deliveries WHERE message_id = $1`, [first.message_id]);
   assert.equal(deliveries.rows[0].n, 1);
+
+  // Concurrent callers with one key: the room lock serializes them, so the loser
+  // sees the winner's event instead of failing on idempotency_keys.
+  const raceArgs = { ...args, idempotencyKey: `race_${run}` };
+  const results = await Promise.all([1, 2].map(() => repository.withTransaction((client) => emitRoomEvent({ ...raceArgs, client }))));
+  assert.equal(results[0].message_id, results[1].message_id);
+  assert.deepEqual(results.map((r) => r.duplicate).sort(), [false, true]);
+  const raced = await pool.query(`SELECT count(*)::int AS n FROM envelopes WHERE conversation_id = $1 AND idempotency_key = $2`, [roomId, `${roomId}:race_${run}`]);
+  assert.equal(raced.rows[0].n, 1);
 });

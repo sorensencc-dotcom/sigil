@@ -1779,6 +1779,12 @@ export class PostgresRepository {
     );
     return BigInt(result.rows[0].assigned_seq);
   }
+  // Takes the same row lock assignRoomSequence takes, so concurrent room.event
+  // emitters for one room serialize before their idempotency check.
+  async lockRoom(client, conversationId) {
+    if (client == null) throw new Error('lockRoom requires transaction client');
+    await client.query('SELECT 1 FROM rooms WHERE conversation_id = $1 FOR UPDATE', [conversationId]);
+  }
   async lookupRoomEventByKey(conversationId, idempotencyKey, client = this.pool) {
     const result = await client.query(
       `SELECT message_id FROM envelopes WHERE conversation_id = $1 AND message_type = 'room.event' AND idempotency_key = $2 LIMIT 1`,

@@ -13,7 +13,12 @@ const EVENT_TTL_MS = 24 * 60 * 60 * 1000;
 
 export async function emitRoomEvent({ identity, repository, client, room, body, idempotencyKey, now = new Date(), inboxDepthLimit, registered }) {
   validateRoomEventBody(body);
-  const existing = await repository.lookupRoomEventByKey?.(room.conversation_id, idempotencyKey, client);
+  // Serialize per room, then scope the key to the room: idempotency_keys is keyed
+  // (sender endpoint, key) across all rooms, so a raw key reused in two rooms
+  // would otherwise pass the lookup and fail the insert.
+  await repository.lockRoom(client, room.conversation_id);
+  const scopedKey = `${room.conversation_id}:${idempotencyKey}`;
+  const existing = await repository.lookupRoomEventByKey(room.conversation_id, scopedKey, client);
   if (existing) return { message_id: existing.message_id, fanout: [], duplicate: true };
 
   const created = now instanceof Date ? now : new Date(now);
@@ -30,7 +35,7 @@ export async function emitRoomEvent({ identity, repository, client, room, body, 
     body,
     context_refs: [],
     capabilities: [],
-    idempotency_key: idempotencyKey,
+    idempotency_key: scopedKey,
     created_at: created.toISOString(),
     expires_at: new Date(created.getTime() + EVENT_TTL_MS).toISOString(),
   });
