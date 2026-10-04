@@ -30,7 +30,7 @@ export async function assertAgentMayPost(envelope, senderMember, repository, cli
 // Moves the oldest queued invocation for (room, agent) to running and writes
 // its delivery. Queued rows whose agent can no longer receive are refused, so
 // one bad row never blocks the queue.
-async function emitRefusal({ systemIdentity, repository, client, room, invocation, now, inboxDepthLimit, registered }) {
+export async function emitRefusal({ systemIdentity, repository, client, room, invocation, now, inboxDepthLimit, registered }) {
   if (!systemIdentity) return;
   await emitRoomEvent({
     identity: systemIdentity, repository, client, room,
@@ -55,6 +55,23 @@ export async function promoteNextInvocation({ roomId, endpointId, repository, cl
   }
 }
 
+// One invocation decision for one agent: blocker, hop budget, queue, or run.
+// Shared by the mention loop (decidedBy 'mention') and the router route
+// ('router'). Callers emit the invocation_refused event for refused rows.
+export async function dispatchToTarget({ room, triggerMessageId, threadRootId, endpointId, decidedBy, reason = null, repository, client, now, inboxDepthLimit, registered }) {
+  const roomId = room.conversation_id;
+  const row = { invocationId: `inv_${crypto.randomUUID()}`, roomId, workspaceId: room.workspace_id, triggerMessageId, threadRootId, endpointId, decidedBy, reason, now };
+  const busy = await repository.lookupRunningInvocation(roomId, endpointId, client);
+  const blocker = busy ? null : await deliveryBlocker(endpointId, repository, client, { inboxDepthLimit, registered });
+  if (blocker) return { invocation: await repository.createRoomInvocation({ ...row, reason: blocker, status: 'refused' }, client), roomDelivery: null };
+  const turn = await repository.reserveAgentTurn(roomId, threadRootId, room.max_agent_turns, { now }, client);
+  if (!turn.allowed) return { invocation: await repository.createRoomInvocation({ ...row, reason: 'hop_budget', status: 'refused' }, client), roomDelivery: null };
+  if (busy) return { invocation: await repository.createRoomInvocation({ ...row, status: 'queued' }, client), roomDelivery: null };
+  const deliveryId = await repository.createRoomDelivery({ messageId: triggerMessageId, endpointId, now }, client);
+  const invocation = await repository.createRoomInvocation({ ...row, status: 'running', deliveryId }, client);
+  return { invocation, roomDelivery: { endpoint_id: endpointId, delivery_id: deliveryId } };
+}
+
 export async function applyRoomDispatch({ envelope, room, plan, completing, repository, client, now, inboxDepthLimit, registered, systemIdentity = null }) {
   const roomId = room.conversation_id;
   const threadRootId = threadRootOf(envelope);
@@ -76,27 +93,10 @@ export async function applyRoomDispatch({ envelope, room, plan, completing, repo
   const allMentions = [...new Set(envelope.body?.mentions ?? [])];
   const targets = allMentions.filter((id) => agentIds.has(id));
   for (const endpointId of targets) {
-    const row = { invocationId: `inv_${crypto.randomUUID()}`, roomId, workspaceId: room.workspace_id, triggerMessageId: envelope.message_id, threadRootId, endpointId, decidedBy: 'mention', now };
-    const busy = await repository.lookupRunningInvocation(roomId, endpointId, client);
-    const blocker = busy ? null : await deliveryBlocker(endpointId, repository, client, { inboxDepthLimit, registered });
-    if (blocker) {
-      invocations.push(await repository.createRoomInvocation({ ...row, status: 'refused', reason: blocker }, client));
-      await emitRefusal({ systemIdentity, repository, client, room, invocation: invocations.at(-1), now, inboxDepthLimit, registered });
-      continue;
-    }
-    const turn = await repository.reserveAgentTurn(roomId, threadRootId, room.max_agent_turns, { now }, client);
-    if (!turn.allowed) {
-      invocations.push(await repository.createRoomInvocation({ ...row, status: 'refused', reason: 'hop_budget' }, client));
-      await emitRefusal({ systemIdentity, repository, client, room, invocation: invocations.at(-1), now, inboxDepthLimit, registered });
-      continue;
-    }
-    if (busy) {
-      invocations.push(await repository.createRoomInvocation({ ...row, status: 'queued' }, client));
-      continue;
-    }
-    const deliveryId = await repository.createRoomDelivery({ messageId: envelope.message_id, endpointId, now }, client);
-    invocations.push(await repository.createRoomInvocation({ ...row, status: 'running', deliveryId }, client));
-    roomDeliveries.push({ endpoint_id: endpointId, delivery_id: deliveryId });
+    const { invocation, roomDelivery } = await dispatchToTarget({ room, triggerMessageId: envelope.message_id, threadRootId, endpointId, decidedBy: 'mention', repository, client, now, inboxDepthLimit, registered });
+    invocations.push(invocation);
+    if (roomDelivery) roomDeliveries.push(roomDelivery);
+    if (invocation.status === 'refused') await emitRefusal({ systemIdentity, repository, client, room, invocation, now, inboxDepthLimit, registered });
   }
   const routerDeliveries = [];
   const humanSender = !memberIsAgent(plan.senderMember);

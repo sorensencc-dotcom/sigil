@@ -133,6 +133,34 @@ function invocationRow(row) {
   return { ...row, created_at: iso(row.created_at), started_at: iso(row.started_at), finished_at: iso(row.finished_at) };
 }
 
+function roomMessageRow(row) {
+  const iso = (value) => (value instanceof Date ? value.toISOString() : value);
+  // canonical_bytes is the stored signed byte string (base64url): clients
+  // verify signatures against it, not against the envelope rebuilt below
+  // from columns (timestamp/JSON re-serialization can change the bytes).
+  return {
+    room_seq: String(row.room_seq),
+    message_id: row.message_id,
+    canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'),
+    envelope: {
+      protocol: row.protocol,
+      message_id: row.message_id,
+      conversation_id: row.conversation_id,
+      message_type: row.message_type,
+      sender: { endpoint_id: row.sender_endpoint_id, owner_id: row.sender_owner_id },
+      broadcast_scope: typeof row.broadcast_scope === 'string' ? JSON.parse(row.broadcast_scope) : row.broadcast_scope,
+      body: typeof row.body === 'string' ? JSON.parse(row.body) : row.body,
+      context_refs: row.context_refs ?? [],
+      capabilities: row.capabilities ?? [],
+      correlation_id: row.correlation_id,
+      idempotency_key: row.idempotency_key,
+      created_at: iso(row.created_at),
+      expires_at: iso(row.expires_at),
+      signature: { algorithm: row.signature_algorithm, key_id: row.signature_key_id, value: row.signature_value },
+    },
+  };
+}
+
 function memberRow(row) {
   return {
     endpoint_id: row.endpoint_id,
@@ -1803,31 +1831,22 @@ export class PostgresRepository {
         LIMIT $3`,
       [conversationId, String(afterSeq), limit],
     );
-    const iso = (value) => (value instanceof Date ? value.toISOString() : value);
-    // canonical_bytes is the stored signed byte string (base64url): clients
-    // verify signatures against it, not against the envelope rebuilt below
-    // from columns (timestamp/JSON re-serialization can change the bytes).
-    return result.rows.map((row) => ({
-      room_seq: String(row.room_seq),
-      message_id: row.message_id,
-      canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'),
-      envelope: {
-        protocol: row.protocol,
-        message_id: row.message_id,
-        conversation_id: row.conversation_id,
-        message_type: row.message_type,
-        sender: { endpoint_id: row.sender_endpoint_id, owner_id: row.sender_owner_id },
-        broadcast_scope: typeof row.broadcast_scope === 'string' ? JSON.parse(row.broadcast_scope) : row.broadcast_scope,
-        body: typeof row.body === 'string' ? JSON.parse(row.body) : row.body,
-        context_refs: row.context_refs ?? [],
-        capabilities: row.capabilities ?? [],
-        correlation_id: row.correlation_id,
-        idempotency_key: row.idempotency_key,
-        created_at: iso(row.created_at),
-        expires_at: iso(row.expires_at),
-        signature: { algorithm: row.signature_algorithm, key_id: row.signature_key_id, value: row.signature_value },
-      },
-    }));
+    return result.rows.map(roomMessageRow);
+  }
+  async lookupRoomMessage(conversationId, messageId, client = this.pool) {
+    const result = await client.query(
+      `SELECT room_seq, message_id, protocol, message_type, body, context_refs, capabilities, correlation_id,
+              sender_endpoint_id, sender_owner_id, broadcast_scope, conversation_id, idempotency_key,
+              signature_algorithm, signature_key_id, signature_value, expires_at, created_at, canonical_bytes
+         FROM envelopes
+        WHERE conversation_id = $1 AND message_id = $2`,
+      [conversationId, messageId],
+    );
+    return result.rows[0] ? roomMessageRow(result.rows[0]) : null;
+  }
+  async lookupRouterDecision(triggerMessageId, client = this.pool) {
+    const result = await client.query(`SELECT ${INVOCATION_COLUMNS} FROM room_invocations WHERE trigger_message_id = $1 AND decided_by = 'router' ORDER BY created_at, invocation_id`, [triggerMessageId]);
+    return result.rows.map(invocationRow);
   }
   async isConversationMember(endpointId, conversationId, client = this.pool) {
     const result = await client.query(

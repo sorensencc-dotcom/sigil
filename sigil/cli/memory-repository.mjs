@@ -326,6 +326,14 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       const row = [...envelopes.values()].find((r) => r.envelope.conversation_id === conversationId && r.envelope.message_type === 'room.event' && r.envelope.idempotency_key === idempotencyKey);
       return row ? { message_id: row.message_id } : null;
     },
+    async lookupRouterDecision(triggerMessageId) {
+      return [...roomInvocations.values()].filter((r) => r.trigger_message_id === triggerMessageId && r.decided_by === 'router').map((r) => ({ ...r }));
+    },
+    async lookupRoomMessage(conversationId, messageId) {
+      const row = envelopes.get(messageId);
+      if (!row || row.envelope.conversation_id !== conversationId) return null;
+      return { room_seq: row.roomSeq == null ? null : String(row.roomSeq), message_id: row.message_id, envelope: row.envelope };
+    },
     async createRoomInvocation({ invocationId, roomId, workspaceId: _workspaceId, triggerMessageId, threadRootId, endpointId, decidedBy, reason = null, status, deliveryId = null, now = new Date() }) {
       const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
       const rows = [...roomInvocations.values()];
