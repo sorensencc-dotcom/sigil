@@ -36,6 +36,7 @@ export function createOllamaClient({ baseUrl = 'http://127.0.0.1:11434', fetchIm
 
 const FALLBACK_PREFIX = 'fallback: only joins agent';
 const REASON_MAX = 280;
+const RETRYABLE_4XX = new Set([408, 429]);
 
 function parsePick(text, joinedIds) {
   let parsed;
@@ -61,12 +62,13 @@ export function createRoomRouter({ identity, relay, ollama, model, timeoutMs = 2
   }
 
   // Relay 4xx means the delivery can never succeed (room gone, router removed):
-  // report it as dropped. 5xx and network errors rethrow so the daemon retries.
+  // report it as dropped. 408, 429, 5xx, and network errors are transient, so
+  // they rethrow and the daemon retries.
   async function relayCall(what, fn) {
     try {
       return { ok: true, value: await fn() };
     } catch (error) {
-      if (Number.isInteger(error.status) && error.status >= 400 && error.status < 500) {
+      if (Number.isInteger(error.status) && error.status >= 400 && error.status < 500 && !RETRYABLE_4XX.has(error.status)) {
         logger.error?.(`Relay refused ${what} (${error.status}); dropping the delivery: ${error.message}`);
         return { ok: false };
       }

@@ -202,3 +202,18 @@ test('soleAgentFallback false posts the empty pick unchanged', async () => {
   assert.equal((await router.handle({ deliveryId: 'd', envelope })).outcome, 'decided');
   assert.deepEqual(posts[0].body, { trigger_message_id: 'msg_1', invoke: [], reason: 'no error handling question' });
 });
+
+test('relay 408 and 429 rethrow so the daemon retries, on reads and on the decision post', async () => {
+  for (const status of [408, 429]) {
+    const err = () => Object.assign(new Error(`transient ${status}`), { status });
+    const onPost = harness({ post: async () => { throw err(); } });
+    await assert.rejects(onPost.router.handle({ deliveryId: 'd', envelope }), new RegExp(`transient ${status}`));
+    const relay = {
+      listRoomMembers: async () => { throw err(); },
+      listRoomMessages: async () => ({ items: [], next_after_seq: '0' }),
+      createRoomInvocations: async () => ({ items: [] }),
+    };
+    const onRead = createRoomRouter({ identity, relay, ollama: { chat: async () => '{}' }, model: 'm', logger: quiet });
+    await assert.rejects(onRead.handle({ deliveryId: 'd', envelope }), new RegExp(`transient ${status}`));
+  }
+});
