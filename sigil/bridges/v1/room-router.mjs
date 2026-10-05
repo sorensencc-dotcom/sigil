@@ -45,7 +45,7 @@ function parsePick(text, joinedIds) {
   return { invoke: [...new Set(parsed.invoke)].filter((id) => joinedIds.has(id)), reason: parsed.reason };
 }
 
-export function createRoomRouter({ identity, relay, ollama, model, timeoutMs = 20000, contextMessages = 12, logger = console }) {
+export function createRoomRouter({ identity, relay, ollama, model, timeoutMs = 20000, contextMessages = 12, soleAgentFallback = true, logger = console }) {
   async function ask(prompt, joinedIds) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -117,9 +117,10 @@ export function createRoomRouter({ identity, relay, ollama, model, timeoutMs = 2
       const ok = await post(roomId, { trigger_message_id: envelope.message_id, invoke: [], reason: 'router_unavailable', failed: true });
       return { outcome: ok ? 'failed_decision' : 'dropped' };
     }
-    // Model answered but picked nobody: if exactly one joins agent is in the room, route to it.
-    // Never reached on model failure (handled above); relay still validates the invocation.
-    if (pick.invoke.length === 0 && joined.length === 1) {
+    // Spec D5: the model answered but picked nobody and exactly one joins agent is in
+    // the room, so route to it. Never reached on model failure (handled above); the
+    // relay still validates the invocation. Off with --router-sole-agent-fallback off.
+    if (soleAgentFallback && pick.invoke.length === 0 && joined.length === 1) {
       const text = `${FALLBACK_PREFIX}${pick.reason ? `: ${pick.reason}` : ''}`;
       const reason = Array.from(text, (c) => (c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127 || '<>'.includes(c) ? ' ' : c)).join('').slice(0, REASON_MAX);
       const fallbackOk = await post(roomId, { trigger_message_id: envelope.message_id, invoke: [joined[0].endpoint_id], reason });

@@ -46,8 +46,8 @@ Commands:
   init <name> [--owner <owner_id> | --federation-owner <federated_id>] [--registry path] [--domain domain]      Create a local identity and register it (domain defaults to "local"; --federation-owner allows an owner id whose domain differs from --domain)
   sign-contract --contract path --identity path [--output path]          Sign a TorqueQuery agent dispatch contract
   verify-contract --contract path --registry path                        Verify a signed TorqueQuery agent dispatch contract
-  agent run --identity path --relay-url url [--worker path] [--room-bridge claude|codex|router] [--room-sessions path] [--agent-command cmd] [--agent-cwd dir] [--router-model m] [--router-ollama-url u] [--router-timeout-ms n] [--router-context-messages n]
-                                                            Run the agent daemon; --room-bridge answers room.message deliveries via a local CLI, or via a local Ollama router (--router-* flags: model, Ollama URL, timeout, context messages)
+  agent run --identity path --relay-url url [--worker path] [--room-bridge claude|codex|router] [--room-sessions path] [--agent-command cmd] [--agent-cwd dir] [--router-model m] [--router-ollama-url u] [--router-timeout-ms n] [--router-context-messages n] [--router-sole-agent-fallback on|off]
+                                                            Run the agent daemon; --room-bridge answers room.message deliveries via a local CLI, or via a local Ollama router (--router-* flags: model, Ollama URL, timeout, context messages, sole-agent fallback on|off, default on)
   agentmail provision --identity path --installation-id id [--registry path] [--audit-output path]
                                                             Explicitly provision non-mailbox ep_ingress; creates no grants or inbox mapping
   relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] [--relay-request-freshness-ms N] [--room-system-identity path] [--p2p [--p2p-identity path] [--p2p-listen multiaddr] [--p2p-no-mdns]] Run a local relay; --room-system-identity is a dedicated identity file (endpoint ep_relay_system, owner relay_system) that signs room.event envelopes, without it rooms emit no events and the router route answers 503 (blocks; Ctrl+C to stop; set SIGIL_STREAM_SEQ_ENABLED=1 to stamp stream sequences)
@@ -975,10 +975,10 @@ async function cmdVerifyContract(argv) {
   if (!valid) process.exitCode = 1;
 }
 async function cmdAgentRun(argv) {
-  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, worker: { type: 'string' }, config: { type: 'string' }, 'room-bridge': { type: 'string' }, 'room-sessions': { type: 'string' }, 'agent-command': { type: 'string' }, 'agent-cwd': { type: 'string' }, 'router-model': { type: 'string' }, 'router-ollama-url': { type: 'string' }, 'router-timeout-ms': { type: 'string' }, 'router-context-messages': { type: 'string' } } });
+  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, worker: { type: 'string' }, config: { type: 'string' }, 'room-bridge': { type: 'string' }, 'room-sessions': { type: 'string' }, 'agent-command': { type: 'string' }, 'agent-cwd': { type: 'string' }, 'router-model': { type: 'string' }, 'router-ollama-url': { type: 'string' }, 'router-timeout-ms': { type: 'string' }, 'router-context-messages': { type: 'string' }, 'router-sole-agent-fallback': { type: 'string' } } });
   const config = loadConfigFile(opt(args, ['config']) ?? DEFAULT_CLI_CONFIG);
   const resolved = resolveConfig({ flags: { relayUrl: opt(args, ['relay-url']), streamUrl: opt(args, ['stream-url']), identity: opt(args, ['identity']) }, config });
-  if (!resolved.identityPath) throw new Error('usage: sigil agent run --identity path --relay-url url [--worker path] [--room-bridge claude|codex|router] [--room-sessions path] [--agent-command cmd] [--agent-cwd dir] [--router-model m] [--router-ollama-url u] [--router-timeout-ms n] [--router-context-messages n]');
+  if (!resolved.identityPath) throw new Error('usage: sigil agent run --identity path --relay-url url [--worker path] [--room-bridge claude|codex|router] [--room-sessions path] [--agent-command cmd] [--agent-cwd dir] [--router-model m] [--router-ollama-url u] [--router-timeout-ms n] [--router-context-messages n] [--router-sole-agent-fallback on|off]');
   const identity = loadIdentity(resolved.identityPath);
   const bridgeKind = opt(args, ['room-bridge']);
   let onRoomMessage = null;
@@ -987,6 +987,8 @@ async function cmdAgentRun(argv) {
     if (bridgeKind === 'router') {
       const { createRoomRouter, createOllamaClient } = await import('../bridges/v1/room-router.mjs');
       const model = opt(args, ['router-model']) ?? 'qwen2.5:7b';
+      const fallbackFlag = opt(args, ['router-sole-agent-fallback']) ?? 'on';
+      if (fallbackFlag !== 'on' && fallbackFlag !== 'off') throw new Error('--router-sole-agent-fallback must be on or off');
       const router = createRoomRouter({
         identity,
         relay: new RelayClient({ baseUrl: resolved.relayUrl, token: identity.relay_token }),
@@ -994,9 +996,10 @@ async function cmdAgentRun(argv) {
         model,
         timeoutMs: Number(opt(args, ['router-timeout-ms']) ?? 20000),
         contextMessages: Number(opt(args, ['router-context-messages']) ?? 12),
+        soleAgentFallback: fallbackFlag === 'on',
       });
       onRoomMessage = router.handle;
-      console.log(`Room bridge: router (model ${model})`);
+      console.log(`Room bridge: router (model ${model}, sole-agent fallback ${fallbackFlag})`);
     } else {
     const { createRoomBridge } = await import('../bridges/v1/room-bridge.mjs');
     const { createSessionStore } = await import('../bridges/v1/session-store.mjs');

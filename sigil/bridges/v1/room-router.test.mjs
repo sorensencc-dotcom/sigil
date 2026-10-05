@@ -12,7 +12,7 @@ const members = [
 ];
 const quiet = { error() {}, warn() {} };
 
-function harness({ chat, post, pages, roster = members } = {}) {
+function harness({ chat, post, pages, roster = members, soleAgentFallback } = {}) {
   const posts = [];
   const relay = {
     listRoomMembers: async () => roster,
@@ -20,7 +20,7 @@ function harness({ chat, post, pages, roster = members } = {}) {
     createRoomInvocations: async (roomId, body) => { posts.push({ roomId, body }); if (post) return post(body); return { items: [] }; },
   };
   const ollama = { chat: chat ?? (async () => JSON.stringify({ invoke: ['ep_claude'], reason: 'code review' })) };
-  const router = createRoomRouter({ identity, relay, ollama, model: 'qwen2.5:7b', timeoutMs: 50, logger: quiet });
+  const router = createRoomRouter({ identity, relay, ollama, model: 'qwen2.5:7b', timeoutMs: 50, logger: quiet, ...(soleAgentFallback === undefined ? {} : { soleAgentFallback }) });
   return { router, posts };
 }
 
@@ -188,4 +188,17 @@ test('the trigger is not repeated inside room_messages', async () => {
   const prompt = seen.messages[1].content;
   assert.equal(prompt.match(/can someone review migration/g).length, 1);
   assert.match(prompt, /<room_messages>\n<\/room_messages>/);
+});
+
+test('soleAgentFallback true (the default) and explicit true both invoke the sole joins agent', async () => {
+  const on = harness({ chat: emptyPick, soleAgentFallback: true });
+  await on.router.handle({ deliveryId: 'd', envelope });
+  assert.deepEqual(on.posts[0].body.invoke, ['ep_claude']);
+  assert.match(on.posts[0].body.reason, /^fallback: only joins agent/);
+});
+
+test('soleAgentFallback false posts the empty pick unchanged', async () => {
+  const { router, posts } = harness({ chat: emptyPick, soleAgentFallback: false });
+  assert.equal((await router.handle({ deliveryId: 'd', envelope })).outcome, 'decided');
+  assert.deepEqual(posts[0].body, { trigger_message_id: 'msg_1', invoke: [], reason: 'no error handling question' });
 });

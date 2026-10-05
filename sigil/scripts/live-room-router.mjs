@@ -1,6 +1,8 @@
 // sigil/scripts/live-room-router.mjs
 // Live smoke: real Ollama (qwen2.5:7b) routes one unmentioned message to a real `claude` bridge, which replies.
 // Refuses to run unless SIGIL_LIVE_ROOM_ROUTER=1. Not a *.test.mjs file, so `node --test` skips it.
+// SIGIL_LIVE_ROOM_ROUTER_NO_FALLBACK=1 turns the sole-joins-agent fallback (spec D5) off, so the
+// run checks the model's own pick. The output names the decision source: fallback or model.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -27,6 +29,8 @@ const OLLAMA_URL = 'http://127.0.0.1:11434';
 const MODEL = 'qwen2.5:7b';
 const WAIT_MS = 60_000;
 const ROOM = 'room_live_router';
+const SOLE_AGENT_FALLBACK = process.env.SIGIL_LIVE_ROOM_ROUTER_NO_FALLBACK !== '1';
+const FALLBACK_PREFIX = 'fallback: only joins agent';
 
 try {
   const response = await fetch(`${OLLAMA_URL}/api/tags`, { signal: AbortSignal.timeout(5000) });
@@ -76,8 +80,10 @@ const routerBridge = createRoomRouter({
   ollama: createOllamaClient({ baseUrl: OLLAMA_URL }),
   model: MODEL,
   timeoutMs: 45_000,
+  soleAgentFallback: SOLE_AGENT_FALLBACK,
   logger: console,
 });
+console.log(`sole-agent fallback: ${SOLE_AGENT_FALLBACK ? 'on' : 'off'}`);
 const daemons = [
   createAgentDaemon({ identity: claude, relayUrl, onRoomMessage: claudeBridge.handle, pollIntervalMs: 500, logger: quiet }),
   createAgentDaemon({ identity: router, relayUrl, onRoomMessage: routerBridge.handle, pollIntervalMs: 500, logger: quiet }),
@@ -112,15 +118,21 @@ try {
     decision = messages.find((m) => m.envelope.message_type === 'room.event' && m.envelope.body.kind === 'router_decision');
     reply = messages.find((m) => m.envelope.message_type === 'room.message' && m.envelope.sender.endpoint_id === 'ep_claude');
     if (decision && reply) break;
+    // An empty pick invokes nobody, so no reply will come.
+    if (decision && decision.envelope.body.endpoint_ids.length === 0) break;
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   for (const m of messages) console.log(`[${m.room_seq}] ${m.envelope.message_type} ${m.envelope.sender.endpoint_id}: ${JSON.stringify(m.envelope.body).slice(0, 200)}`);
+  if (decision) {
+    const source = String(decision.envelope.body.reason ?? '').startsWith(FALLBACK_PREFIX) ? 'fallback' : 'model';
+    console.log(`\nrouter decision source: ${source}`);
+    console.log(`router decision: invoke=${JSON.stringify(decision.envelope.body.endpoint_ids)} reason=${decision.envelope.body.reason}`);
+  }
   if (decision && reply) {
-    console.log(`\nrouter decision: invoke=${JSON.stringify(decision.envelope.body.endpoint_ids)} reason=${decision.envelope.body.reason}`);
     console.log(`claude reply (first 200 chars): ${String(reply.envelope.body.text).slice(0, 200)}`);
     exitCode = 0;
   } else {
-    console.error(`\nTimed out after ${WAIT_MS / 1000}s: router_decision=${Boolean(decision)}, claude reply=${Boolean(reply)}`);
+    console.error(`\nFAIL (waited up to ${WAIT_MS / 1000}s): router_decision=${Boolean(decision)}, claude reply=${Boolean(reply)}`);
   }
 } catch (error) {
   console.error(error);

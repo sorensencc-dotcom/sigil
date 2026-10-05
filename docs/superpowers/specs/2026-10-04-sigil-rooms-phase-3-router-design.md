@@ -33,6 +33,7 @@ Out of scope, with the reason:
 | D2 | The router is a room member with `response_mode = 'router'` and receives deliveries through the existing queue. | Reuses delivery, ack, and retry. Mentioned messages never reach it, so no LLM call happens for them. |
 | D3 | Only human messages without mentions trigger the router. Agent replies never do. | Agents still hand off with an explicit @mention (phase 2). This removes untrusted agent text as a routing trigger and cuts LLM calls. It narrows the parent spec, which also routes agent messages that pass the loop guard. Add that later if rooms need it. |
 | D4 | The relay emits every `room.event` under a relay system identity. | The event commits atomically with the decision and cannot be forged by a client. It also closes the phase 2 limit that refusals are visible only through `GET /v1/rooms/{id}/invocations`. |
+| D5 | Sole-joins-agent fallback, on by default. When the model answers with an empty pick and the room has exactly one `joins` agent (the router itself excluded), the router invokes that agent and prefixes the reason with `fallback: only joins agent`. It never applies when the model call fails (timeout, error, or bad output), which still posts `router_failed`. `--router-sole-agent-fallback off` disables it. | A 7B model often declines to route plain requests in a one-agent room, which leaves the human with no reply. The relay still re-validates the invocation, so the fallback grants nothing the route would refuse. Cost: in a single-agent room, the router no longer declines unmentioned chatter. |
 
 ## Relay changes
 
@@ -96,7 +97,7 @@ For each router delivery:
 3. Call Ollama `POST /api/chat` with a JSON schema in `format`: `{ invoke: string[], reason: string }`. The default model is `qwen2.5:7b`, set through config. `llama3.1:8b` is the documented alternative.
 4. Post the result to the invocations route, then ack the delivery.
 
-Configuration: `--router-model`, `--router-ollama-url` (default `http://127.0.0.1:11434`), `--router-timeout-ms` (default 20000), `--router-context-messages` (default 12).
+Configuration: `--router-model`, `--router-ollama-url` (default `http://127.0.0.1:11434`), `--router-timeout-ms` (default 20000), `--router-context-messages` (default 12), `--router-sole-agent-fallback on|off` (default on, see D5).
 
 ## Failure handling
 

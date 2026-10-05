@@ -33,12 +33,44 @@ test('agent run --room-bridge router announces the router model before polling',
     const out = await new Promise((resolve, reject) => {
       let buf = '';
       const timer = setTimeout(() => reject(new Error(`timed out: ${buf}`)), 15_000);
-      child.stdout.on('data', (d) => { buf += d; if (buf.includes('Room bridge: router (model qwen2.5:7b)')) { clearTimeout(timer); resolve(buf); } });
+      child.stdout.on('data', (d) => { buf += d; if (buf.includes('Room bridge: router (model qwen2.5:7b, sole-agent fallback on)')) { clearTimeout(timer); resolve(buf); } });
       child.stderr.on('data', (d) => { buf += d; });
       child.once('exit', () => { clearTimeout(timer); reject(new Error(`exited early: ${buf}`)); });
     });
-    assert.match(out, /Room bridge: router \(model qwen2\.5:7b\)/);
+    assert.match(out, /Room bridge: router \(model qwen2\.5:7b, sole-agent fallback on\)/);
   } finally {
     killTree(child);
   }
+});
+
+function announce(extraArgs) {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-agent-router-test-'));
+  const idFile = path.join(cwd, 'agent.json');
+  saveIdentity(idFile, createIdentity({ ownerId: 'alice', endpointId: 'ep_alice_router', kind: 'agent' }));
+  const child = spawn(process.execPath, [sigilCli, 'agent', 'run', '--identity', idFile, '--relay-url', 'http://127.0.0.1:1', '--room-bridge', 'router', ...extraArgs], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+  const done = new Promise((resolve, reject) => {
+    let buf = '';
+    const timer = setTimeout(() => reject(new Error(`timed out: ${buf}`)), 15_000);
+    child.stdout.on('data', (d) => { buf += d; if (buf.includes('Room bridge: router')) { clearTimeout(timer); resolve(buf); } });
+    child.stderr.on('data', (d) => { buf += d; });
+    child.once('exit', () => { clearTimeout(timer); reject(new Error(`exited early: ${buf}`)); });
+  });
+  return done.finally(() => killTree(child));
+}
+
+function runSync(extraArgs) {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-agent-router-test-'));
+  const idFile = path.join(cwd, 'agent.json');
+  saveIdentity(idFile, createIdentity({ ownerId: 'alice', endpointId: 'ep_alice_router', kind: 'agent' }));
+  return spawnSync(process.execPath, [sigilCli, 'agent', 'run', '--identity', idFile, '--relay-url', 'http://127.0.0.1:1', '--room-bridge', 'router', ...extraArgs], { cwd, encoding: 'utf8', timeout: 20_000 });
+}
+
+test('--router-sole-agent-fallback off is announced', async () => {
+  assert.match(await announce(['--router-sole-agent-fallback', 'off']), /sole-agent fallback off\)/);
+});
+
+test('--router-sole-agent-fallback rejects values other than on or off', () => {
+  const result = runSync(['--router-sole-agent-fallback', 'maybe']);
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stderr}${result.stdout}`, /--router-sole-agent-fallback must be on or off/);
 });
