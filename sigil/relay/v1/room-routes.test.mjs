@@ -259,3 +259,23 @@ test('a queued invocation refused on promotion emits invocation_refused', async 
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('fail and stop take the room lock before touching invocation rows', async () => {
+  await withServer(async (port, repository) => {
+    const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'r' })).body.room.conversation_id;
+    await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_claude', response_mode: 'joins' });
+    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', now: new Date() };
+    await repository.createRoomInvocation({ ...base, invocationId: 'inv_1', triggerMessageId: 'msg_1', status: 'running' });
+    await repository.createRoomInvocation({ ...base, invocationId: 'inv_2', triggerMessageId: 'msg_2', status: 'running', endpointId: 'ep_codex' });
+    const calls = [];
+    for (const name of ['lockRoom', 'lookupRunningInvocation', 'finishInvocation', 'cancelRoomInvocations']) {
+      const original = repository[name].bind(repository);
+      repository[name] = async (...args) => { calls.push(name); return original(...args); };
+    }
+    assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/invocations/fail`, 'Bearer claude', { reason: 'cli exited 1' })).status, 200);
+    assert.equal(calls[0], 'lockRoom', `fail route order: ${calls.join(',')}`);
+    calls.length = 0;
+    assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/stop`, 'Bearer chris-web')).status, 200);
+    assert.equal(calls[0], 'lockRoom', `stop route order: ${calls.join(',')}`);
+  });
+});

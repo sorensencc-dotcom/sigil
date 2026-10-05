@@ -200,6 +200,8 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     const expectedId = body?.invocation_id ?? null;
     const reason = typeof body?.reason === 'string' ? body.reason.slice(0, 500) : 'bridge_failed';
     const outcome = await repository.withTransaction(async (client) => {
+      // Take the rooms row lock first, the same order as accept (assignRoomSequence).
+      await repository.lockRoom(client, roomId);
       const running = await repository.lookupRunningInvocation(roomId, principal.endpoint_id, client);
       if (!running) return null;
       // A late failure from an older bridge turn must not fail a newer invocation.
@@ -219,6 +221,8 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     const callerIsAgent = isAgentCaller(registry, principal) || await repository.withTransaction((client) => isAgentMember(access.member, repository, client, registry));
     if (callerIsAgent) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'Only human members can stop a room');
     const cancelled = await repository.withTransaction(async (client) => {
+      // Take the rooms row lock first, the same order as accept (assignRoomSequence).
+      await repository.lockRoom(client, roomId);
       const rows = await repository.cancelRoomInvocations(roomId, { now }, client);
       if (systemIdentity && rows.length) {
         for (const invocation of rows) {
