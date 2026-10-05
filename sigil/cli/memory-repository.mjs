@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { transitionDelivery } from '../relay/v1/delivery-state.mjs';
 import { boundedDirectoryExpiry } from '../relay/v1/auth-policy.mjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { identityKeys } from './identity.mjs';
 
 const SEEDED_CAPABILITIES = new Map([
   ['sigil.core/read_shared_context', { namespace: 'sigil.core', risk_tier: 'standard' }],
@@ -220,6 +221,23 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       const endpoint = registry.get(endpointId);
       return endpoint?.status === 'active' ? endpoint : null;
     },
+    async ensureRoomSystemEndpoint({ identity }) {
+      const publicKey = identityKeys(identity).publicKey;
+      const existing = registry.get(identity.endpoint_id);
+      if (existing?.status === 'active') {
+        if (existing.owner_id !== identity.owner_id) {
+          throw Object.assign(new Error(`endpoint "${identity.endpoint_id}" is already registered to a different owner`), { code: 'ROOM_SYSTEM_OWNER_MISMATCH' });
+        }
+        const same = existing.key_id === identity.key_id
+          && existing.public_key?.export({ type: 'spki', format: 'der' }).equals(publicKey.export({ type: 'spki', format: 'der' }));
+        if (same) return;
+        throw Object.assign(new Error(`endpoint "${identity.endpoint_id}" is already registered with a different key`), { code: 'ROOM_SYSTEM_KEY_MISMATCH' });
+      }
+      registry.set(identity.endpoint_id, {
+        endpoint_id: identity.endpoint_id, owner_id: identity.owner_id, key_id: identity.key_id, status: 'active', kind: 'system',
+        public_key: publicKey,
+      });
+    },
     // Federated-inbound shadow registration (design R10). A foreign sender
     // (endpoint homed on another relay) is not in this relay's registry, so
     // an accepted federated envelope would have nothing to hang its FK chain
@@ -322,6 +340,20 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
         .sort((a, b) => (a.roomSeq < b.roomSeq ? -1 : a.roomSeq > b.roomSeq ? 1 : 0))
         .slice(0, limit)
         .map((row) => ({ room_seq: String(row.roomSeq), message_id: row.message_id, canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'), envelope: row.envelope }));
+    },
+    // Serialization is a Postgres concern; the memory repo has no concurrent transactions.
+    async lockRoom() {},
+    async lookupRoomEventByKey(conversationId, idempotencyKey) {
+      const row = [...envelopes.values()].find((r) => r.envelope.conversation_id === conversationId && r.envelope.message_type === 'room.event' && r.envelope.idempotency_key === idempotencyKey);
+      return row ? { message_id: row.message_id } : null;
+    },
+    async lookupRouterDecision(triggerMessageId) {
+      return [...roomInvocations.values()].filter((r) => r.trigger_message_id === triggerMessageId && r.decided_by === 'router').map((r) => ({ ...r }));
+    },
+    async lookupRoomMessage(conversationId, messageId) {
+      const row = envelopes.get(messageId);
+      if (!row || row.envelope.conversation_id !== conversationId) return null;
+      return { room_seq: row.roomSeq == null ? null : String(row.roomSeq), message_id: row.message_id, envelope: row.envelope };
     },
     async createRoomInvocation({ invocationId, roomId, workspaceId: _workspaceId, triggerMessageId, threadRootId, endpointId, decidedBy, reason = null, status, deliveryId = null, now = new Date() }) {
       const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();

@@ -4,6 +4,7 @@ import { canTransition } from './delivery-state.mjs';
 import { assertAssurance, boundedDirectoryExpiry } from './auth-policy.mjs';
 import { withTransaction } from './with-transaction.mjs';
 import { generateInviteCode, hashMatchTarget } from './directory-trust.mjs';
+import { identityKeys } from '../../cli/identity.mjs';
 
 function rowToPeerRecord(row) {
   return {
@@ -130,6 +131,34 @@ const INVOCATION_COLUMNS = `invocation_id, room_id, trigger_message_id, thread_r
 function invocationRow(row) {
   const iso = (value) => (value == null ? null : new Date(value).toISOString());
   return { ...row, created_at: iso(row.created_at), started_at: iso(row.started_at), finished_at: iso(row.finished_at) };
+}
+
+function roomMessageRow(row) {
+  const iso = (value) => (value instanceof Date ? value.toISOString() : value);
+  // canonical_bytes is the stored signed byte string (base64url): clients
+  // verify signatures against it, not against the envelope rebuilt below
+  // from columns (timestamp/JSON re-serialization can change the bytes).
+  return {
+    room_seq: String(row.room_seq),
+    message_id: row.message_id,
+    canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'),
+    envelope: {
+      protocol: row.protocol,
+      message_id: row.message_id,
+      conversation_id: row.conversation_id,
+      message_type: row.message_type,
+      sender: { endpoint_id: row.sender_endpoint_id, owner_id: row.sender_owner_id },
+      broadcast_scope: typeof row.broadcast_scope === 'string' ? JSON.parse(row.broadcast_scope) : row.broadcast_scope,
+      body: typeof row.body === 'string' ? JSON.parse(row.body) : row.body,
+      context_refs: row.context_refs ?? [],
+      capabilities: row.capabilities ?? [],
+      correlation_id: row.correlation_id,
+      idempotency_key: row.idempotency_key,
+      created_at: iso(row.created_at),
+      expires_at: iso(row.expires_at),
+      signature: { algorithm: row.signature_algorithm, key_id: row.signature_key_id, value: row.signature_value },
+    },
+  };
 }
 
 function memberRow(row) {
@@ -433,6 +462,43 @@ export class PostgresRepository {
       await client.query(`INSERT INTO audit_events (event_id,event_type,subject_id,actor_id,object_type,object_id,outcome,created_at) VALUES ($1,'endpoint.created',$2,$3,'endpoint',$2,'success',$4)`, [`audit_${crypto.randomUUID()}`, endpointId, ownerId, timestamp]);
       return endpoint.rows[0];
     } catch (error) { if (error.code === '23505' && error.constraint === 'endpoints_owner_display_name_idx') throw Object.assign(new Error('An endpoint with this display name already exists for this owner'), { code: 'DISPLAY_NAME_COLLISION' }); throw error; } });
+  }
+  // Idempotent: registers the relay's room-event signing identity. public_key is
+  // SPKI DER, the same encoding createEndpointWithAudit and `sigil init` store.
+  async ensureRoomSystemEndpoint({ identity, now = new Date() }) {
+    const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+    const publicKey = identityKeys(identity).publicKey.export({ type: 'spki', format: 'der' });
+    await this.withTransaction(async (client) => {
+      await client.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', $2) ON CONFLICT (human_id) DO NOTHING`, [identity.owner_id, timestamp]);
+      await client.query(
+        `INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
+         VALUES ($1, $2, 'relay', 'relay_system', 'Relay system', 'active', $3) ON CONFLICT (endpoint_id) DO NOTHING`,
+        [identity.endpoint_id, identity.owner_id, timestamp],
+      );
+      // Same reason as the key check below: a pre-existing endpoint row owned by
+      // someone else must not be adopted as the relay system endpoint.
+      const ownerRow = await client.query(`SELECT owner_id FROM endpoints WHERE endpoint_id = $1`, [identity.endpoint_id]);
+      if (ownerRow.rows[0]?.owner_id !== identity.owner_id) {
+        throw Object.assign(new Error(`endpoint "${identity.endpoint_id}" is already registered to a different owner`), { code: 'ROOM_SYSTEM_OWNER_MISMATCH' });
+      }
+      await client.query(
+        `INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
+         VALUES ($1, $2, 'Ed25519', $3, 'active', $4) ON CONFLICT (key_id) DO NOTHING`,
+        [identity.key_id, identity.endpoint_id, publicKey, timestamp],
+      );
+      // ON CONFLICT DO NOTHING hides a pre-existing row that differs from the
+      // identity, which would leave the relay signing under an unregistered key.
+      const stored = await client.query(`SELECT endpoint_id, public_key FROM endpoint_keys WHERE key_id = $1`, [identity.key_id]);
+      const row = stored.rows[0];
+      if (!row || row.endpoint_id !== identity.endpoint_id || !Buffer.from(row.public_key).equals(Buffer.from(publicKey))) {
+        throw Object.assign(new Error(`room system key "${identity.key_id}" is already registered with a different endpoint or key`), { code: 'ROOM_SYSTEM_KEY_MISMATCH' });
+      }
+      // Rotation is a deliberate later operation: never allow a second active key.
+      const otherActive = await client.query(`SELECT key_id FROM endpoint_keys WHERE endpoint_id = $1 AND status = 'active' AND key_id <> $2`, [identity.endpoint_id, identity.key_id]);
+      if (otherActive.rows.length > 0) {
+        throw Object.assign(new Error(`endpoint "${identity.endpoint_id}" already has a different active key`), { code: 'ROOM_SYSTEM_KEY_MISMATCH' });
+      }
+    });
   }
   async createDirectoryInvite({ issuerEndpointId, issuerHumanId, expiresAt, homeRelay, now = new Date() } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
@@ -1747,6 +1813,20 @@ export class PostgresRepository {
     );
     return BigInt(result.rows[0].assigned_seq);
   }
+  // Takes the same row lock assignRoomSequence takes, so concurrent room.event
+  // emitters for one room serialize before their idempotency check.
+  async lockRoom(client, conversationId) {
+    if (client == null) throw new Error('lockRoom requires transaction client');
+    await client.query('SELECT 1 FROM rooms WHERE conversation_id = $1 FOR UPDATE', [conversationId]);
+  }
+  async lookupRoomEventByKey(conversationId, idempotencyKey, client) {
+    if (client == null) throw new Error('lookupRoomEventByKey requires a transaction client');
+    const result = await client.query(
+      `SELECT message_id FROM envelopes WHERE conversation_id = $1 AND message_type = 'room.event' AND idempotency_key = $2 LIMIT 1`,
+      [conversationId, idempotencyKey],
+    );
+    return result.rows[0] ? { message_id: result.rows[0].message_id } : null;
+  }
   async listRoomMessages(conversationId, afterSeq = 0n, limit = 100, client = this.pool) {
     const result = await client.query(
       `SELECT room_seq, message_id, protocol, message_type, body, context_refs, capabilities, correlation_id,
@@ -1758,31 +1838,22 @@ export class PostgresRepository {
         LIMIT $3`,
       [conversationId, String(afterSeq), limit],
     );
-    const iso = (value) => (value instanceof Date ? value.toISOString() : value);
-    // canonical_bytes is the stored signed byte string (base64url): clients
-    // verify signatures against it, not against the envelope rebuilt below
-    // from columns (timestamp/JSON re-serialization can change the bytes).
-    return result.rows.map((row) => ({
-      room_seq: String(row.room_seq),
-      message_id: row.message_id,
-      canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'),
-      envelope: {
-        protocol: row.protocol,
-        message_id: row.message_id,
-        conversation_id: row.conversation_id,
-        message_type: row.message_type,
-        sender: { endpoint_id: row.sender_endpoint_id, owner_id: row.sender_owner_id },
-        broadcast_scope: typeof row.broadcast_scope === 'string' ? JSON.parse(row.broadcast_scope) : row.broadcast_scope,
-        body: typeof row.body === 'string' ? JSON.parse(row.body) : row.body,
-        context_refs: row.context_refs ?? [],
-        capabilities: row.capabilities ?? [],
-        correlation_id: row.correlation_id,
-        idempotency_key: row.idempotency_key,
-        created_at: iso(row.created_at),
-        expires_at: iso(row.expires_at),
-        signature: { algorithm: row.signature_algorithm, key_id: row.signature_key_id, value: row.signature_value },
-      },
-    }));
+    return result.rows.map(roomMessageRow);
+  }
+  async lookupRoomMessage(conversationId, messageId, client = this.pool) {
+    const result = await client.query(
+      `SELECT room_seq, message_id, protocol, message_type, body, context_refs, capabilities, correlation_id,
+              sender_endpoint_id, sender_owner_id, broadcast_scope, conversation_id, idempotency_key,
+              signature_algorithm, signature_key_id, signature_value, expires_at, created_at, canonical_bytes
+         FROM envelopes
+        WHERE conversation_id = $1 AND message_id = $2`,
+      [conversationId, messageId],
+    );
+    return result.rows[0] ? roomMessageRow(result.rows[0]) : null;
+  }
+  async lookupRouterDecision(triggerMessageId, client = this.pool) {
+    const result = await client.query(`SELECT ${INVOCATION_COLUMNS} FROM room_invocations WHERE trigger_message_id = $1 AND decided_by = 'router' ORDER BY created_at, invocation_id`, [triggerMessageId]);
+    return result.rows.map(invocationRow);
   }
   async isConversationMember(endpointId, conversationId, client = this.pool) {
     const result = await client.query(

@@ -1,12 +1,14 @@
 // sigil/relay/v1/room-routes.mjs
 import crypto from 'node:crypto';
-import { promoteNextInvocation } from './room-dispatch.mjs';
-import { isAgentMember } from './room-policy.mjs';
+import { emitRoomEvent } from './room-events.mjs';
+import { promoteNextInvocation, dispatchToTarget, emitRefusal } from './room-dispatch.mjs';
+import { isAgentMember, isRouterMember } from './room-policy.mjs';
+import { clampReason } from '../../contracts/v1/room-event-schema.mjs';
 
 const MANAGER_ROLES = new Set(['owner', 'room_manager']);
 const GRANTABLE_ROLES = new Set(['room_manager', 'member']);
-const RESPONSE_MODES = new Set(['joins', 'mentions_only']);
-const ROOM_METHODS = ['createRoom', 'lookupRoom', 'listRoomsForEndpoint', 'addRoomMember', 'removeRoomMember', 'lookupRoomMember', 'listRoomMembers', 'listRoomMessages', 'listRoomInvocations', 'lookupRunningInvocation', 'finishInvocation', 'cancelRoomInvocations', 'nextQueuedInvocation', 'startInvocation', 'createRoomDelivery', 'withTransaction'];
+const RESPONSE_MODES = new Set(['joins', 'mentions_only', 'router']);
+const ROOM_METHODS = ['createRoom', 'lookupRoom', 'listRoomsForEndpoint', 'addRoomMember', 'removeRoomMember', 'lookupRoomMember', 'listRoomMembers', 'listRoomMessages', 'listRoomInvocations', 'lookupRunningInvocation', 'finishInvocation', 'cancelRoomInvocations', 'nextQueuedInvocation', 'startInvocation', 'createRoomDelivery', 'lookupRouterDecision', 'lookupRoomMessage', 'lookupRoomEventByKey', 'lockRoom', 'createRoomInvocation', 'reserveAgentTurn', 'withTransaction'];
 const NAME_MAX = 80;
 const HISTORY_LIMIT_MAX = 500;
 const ROOM_SEQ_MAX = 9223372036854775807n; // envelopes.room_seq is int8
@@ -43,7 +45,7 @@ function isAgentCaller(registry, principal) {
   return registry?.get?.(principal?.endpoint_id)?.kind === 'agent';
 }
 
-export async function handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream = null, inboxDepthLimit }) {
+export async function handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream = null, inboxDepthLimit, systemIdentity = null }) {
   const path = parsedUrl.pathname;
   if (path !== '/v1/rooms' && !path.startsWith('/v1/rooms/')) return false;
   if (!repository || ROOM_METHODS.some((method) => typeof repository[method] !== 'function')) return fail(response, requestId, 503, 'DATABASE_UNAVAILABLE', 'Rooms are unavailable');
@@ -92,7 +94,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     const responseMode = body?.response_mode ?? null;
     if (typeof endpointId !== 'string' || !endpointId) return fail(response, requestId, 400, 'INVALID_REQUEST', 'endpoint_id is required');
     if (!GRANTABLE_ROLES.has(role)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'role must be room_manager or member');
-    if (responseMode !== null && !RESPONSE_MODES.has(responseMode)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'response_mode must be joins or mentions_only');
+    if (responseMode !== null && !RESPONSE_MODES.has(responseMode)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'response_mode must be joins, mentions_only, or router');
     const endpoint = registry?.get?.(endpointId);
     if (!endpoint || endpoint.status !== 'active' || endpoint.owner_id !== principal.human_id) {
       return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', 'You can only add active endpoints you own');
@@ -139,18 +141,73 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     return send(response, requestId, 200, { code: 'OK', items });
   }
 
+  if (request.method === 'POST' && resource === 'invocations' && !segment) {
+    // The router's pick is advisory: every endpoint is re-validated here.
+    if (!isRouterMember(access.member)) return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', 'Only the room router can create invocations');
+    if (!systemIdentity) return fail(response, requestId, 503, 'ROOM_EVENTS_UNAVAILABLE', 'The relay has no room system identity');
+    const body = await readJson(request, readBody);
+    const triggerId = body?.trigger_message_id;
+    const invoke = body?.invoke;
+    if (body?.failed !== undefined && typeof body.failed !== 'boolean') return fail(response, requestId, 400, 'INVALID_REQUEST', 'failed must be a boolean');
+    const failed = body?.failed === true;
+    if (typeof triggerId !== 'string' || !triggerId) return fail(response, requestId, 400, 'INVALID_REQUEST', 'trigger_message_id required');
+    if (!Array.isArray(invoke) || invoke.length > 10 || invoke.some((id) => typeof id !== 'string' || !id)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'invoke must be an array of at most 10 endpoint ids');
+    if (failed && invoke.length > 0) return fail(response, requestId, 400, 'INVALID_REQUEST', 'failed decisions cannot invoke agents');
+    const reason = clampReason(body?.reason);
+    const outcome = await repository.withTransaction(async (client) => {
+      // Serialize per room so a retried decision cannot race its original.
+      await repository.lockRoom(client, roomId);
+      const trigger = await repository.lookupRoomMessage(roomId, triggerId, client);
+      const triggerBody = trigger?.envelope?.body;
+      const triggerSender = trigger ? await repository.lookupRoomMember(roomId, trigger.envelope.sender.endpoint_id, client) : null;
+      const humanTrigger = trigger && trigger.envelope.message_type === 'room.message' && triggerSender && !(await isAgentMember(triggerSender, repository, client, registry));
+      if (!humanTrigger || (triggerBody?.mentions ?? []).length > 0) return { invalid: true };
+      const decisionKey = `evt_router_${triggerId}`;
+      const prior = await repository.lookupRouterDecision(triggerId, client);
+      const already = prior.length > 0 || await repository.lookupRoomEventByKey(roomId, `${roomId}:${decisionKey}`, client);
+      if (already) return { items: prior, duplicate: true, deliveries: [] };
+      const room = await repository.lookupRoom(roomId, client);
+      const roster = new Map((await repository.listRoomMembers(roomId, client)).map((member) => [member.endpoint_id, member]));
+      const threadRootId = triggerBody?.thread_root_id ?? triggerId;
+      const items = [];
+      const deliveries = [];
+      const accepted = [];
+      for (const endpointId of [...new Set(invoke)]) {
+        const target = roster.get(endpointId);
+        let result;
+        if (!target || target.response_mode !== 'joins') {
+          const refusedRow = { invocationId: `inv_${crypto.randomUUID()}`, roomId, workspaceId: room.workspace_id, triggerMessageId: triggerId, threadRootId, endpointId, decidedBy: 'router', reason: 'not_eligible', status: 'refused', now };
+          result = { invocation: await repository.createRoomInvocation(refusedRow, client), roomDelivery: null };
+        } else {
+          result = await dispatchToTarget({ room, triggerMessageId: triggerId, threadRootId, endpointId, decidedBy: 'router', reason: reason || null, repository, client, now, inboxDepthLimit, registered: registry });
+        }
+        items.push(result.invocation);
+        if (result.roomDelivery) deliveries.push(result.roomDelivery);
+        if (result.invocation.status === 'refused') await emitRefusal({ systemIdentity, repository, client, room, invocation: result.invocation, now, inboxDepthLimit, registered: registry });
+        else accepted.push(endpointId);
+      }
+      await emitRoomEvent({ identity: systemIdentity, repository, client, room, body: { kind: failed ? 'router_failed' : 'router_decision', endpoint_ids: accepted, ...(reason ? { reason } : {}) }, idempotencyKey: decisionKey, now, inboxDepthLimit, registered: registry });
+      return { items, duplicate: false, deliveries };
+    });
+    if (outcome.invalid) return fail(response, requestId, 422, 'INVALID_REQUEST', 'trigger_message_id must name a human room.message without mentions');
+    for (const delivery of outcome.deliveries) stream?.notify?.(delivery.endpoint_id, delivery.delivery_id);
+    return send(response, requestId, 200, { code: 'OK', items: outcome.items, duplicate: outcome.duplicate });
+  }
+
   if (request.method === 'POST' && resource === 'invocations' && segment === 'fail' && !action) {
     const body = await readJson(request, readBody);
     if (body?.invocation_id != null && typeof body.invocation_id !== 'string') return fail(response, requestId, 400, 'INVALID_REQUEST', 'invocation_id must be a string');
     const expectedId = body?.invocation_id ?? null;
     const reason = typeof body?.reason === 'string' ? body.reason.slice(0, 500) : 'bridge_failed';
     const outcome = await repository.withTransaction(async (client) => {
+      // Take the rooms row lock first, the same order as accept (assignRoomSequence).
+      await repository.lockRoom(client, roomId);
       const running = await repository.lookupRunningInvocation(roomId, principal.endpoint_id, client);
       if (!running) return null;
       // A late failure from an older bridge turn must not fail a newer invocation.
       if (expectedId !== null && running.invocation_id !== expectedId) return null;
       const invocation = await repository.finishInvocation(running.invocation_id, { status: 'failed', reason, now }, client);
-      const promoted = await promoteNextInvocation({ roomId, endpointId: principal.endpoint_id, repository, client, now, inboxDepthLimit, registered: registry });
+      const promoted = await promoteNextInvocation({ roomId, endpointId: principal.endpoint_id, repository, client, now, inboxDepthLimit, registered: registry, systemIdentity, room: access.room });
       return { invocation, promoted };
     });
     if (!outcome) return fail(response, requestId, 404, 'INVOCATION_NOT_FOUND', 'No matching running invocation for this endpoint in this room');
@@ -163,7 +220,17 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     // response_mode set, or the registry or endpoints row says kind 'agent'.
     const callerIsAgent = isAgentCaller(registry, principal) || await repository.withTransaction((client) => isAgentMember(access.member, repository, client, registry));
     if (callerIsAgent) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'Only human members can stop a room');
-    const cancelled = await repository.cancelRoomInvocations(roomId, { now });
+    const cancelled = await repository.withTransaction(async (client) => {
+      // Take the rooms row lock first, the same order as accept (assignRoomSequence).
+      await repository.lockRoom(client, roomId);
+      const rows = await repository.cancelRoomInvocations(roomId, { now }, client);
+      if (systemIdentity && rows.length) {
+        for (const invocation of rows) {
+          await emitRoomEvent({ identity: systemIdentity, repository, client, room: access.room, body: { kind: 'invocation_stopped', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: 'stopped' }, idempotencyKey: `evt_stopped_${invocation.invocation_id}`, now, inboxDepthLimit, registered: registry });
+        }
+      }
+      return rows;
+    });
     return send(response, requestId, 200, { code: 'OK', cancelled: cancelled.length });
   }
 

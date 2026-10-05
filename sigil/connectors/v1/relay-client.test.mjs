@@ -80,3 +80,16 @@ test('failRoomInvocation sends invocation_id in body when provided', async () =>
   assert.equal(calls.length, 2);
 });
 
+test('createRoomInvocations posts the decision body and surfaces status on errors', async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push([options.method, url, JSON.parse(options.body)]);
+    if (calls.length === 2) return { ok: false, status: 403, text: async () => JSON.stringify({ message: 'no', code: 'FORBIDDEN' }) };
+    return { ok: true, status: 200, text: async () => JSON.stringify({ items: [] }) };
+  };
+  const client = new RelayClient({ baseUrl: 'http://relay', token: 't', fetchImpl });
+  assert.deepEqual(await client.createRoomInvocations('room_1', { trigger_message_id: 'm1', invoke: ['ep_a'], reason: 'r' }), { items: [] });
+  assert.deepEqual(calls[0], ['POST', 'http://relay/v1/rooms/room_1/invocations', { trigger_message_id: 'm1', invoke: ['ep_a'], reason: 'r' }]);
+  await assert.rejects(client.createRoomInvocations('room_1', { trigger_message_id: 'm1', invoke: [], reason: 'router_unavailable', failed: true }), (e) => e.status === 403);
+  assert.equal(calls[1][2].failed, true);
+});

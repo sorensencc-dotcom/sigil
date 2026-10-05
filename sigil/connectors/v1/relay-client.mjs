@@ -50,4 +50,7 @@ export class RelayClient {
     if (invocationId !== null) body.invocation_id = invocationId;
     return (await this.request(`/v1/rooms/${encodeURIComponent(roomId)}/invocations/fail`, { method: 'POST', body: JSON.stringify(body) })).invocation;
   }
+  async createRoomInvocations(roomId, { trigger_message_id, invoke, reason = '', failed = false }) {
+    return this.request(`/v1/rooms/${encodeURIComponent(roomId)}/invocations`, { method: 'POST', body: JSON.stringify({ trigger_message_id, invoke, reason, ...(failed ? { failed: true } : {}) }) });
+  }
 }

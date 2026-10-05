@@ -45,7 +45,7 @@ test('error responses have stable machine-readable shape', () => {
 test('every rooms route declares DATABASE_UNAVAILABLE and every room error code is a contract error', () => {
   const states = JSON.parse(fs.readFileSync(new URL('./errors-and-states.json', import.meta.url)));
   const rooms = api.routes.filter((route) => route.path === '/v1/rooms' || route.path.startsWith('/v1/rooms/'));
-  assert.equal(rooms.length, 9);
+  assert.equal(rooms.length, 10);
   for (const route of rooms) {
     assert.ok(route.errors.includes('DATABASE_UNAVAILABLE'), `${route.method} ${route.path}`);
   }
@@ -64,4 +64,11 @@ test('POST /v1/envelopes declares ROOM_NOT_INVOKED and it is a contract error', 
 test('room history items carry the stored signed bytes', () => {
   const route = api.routes.find((item) => item.path.startsWith('/v1/rooms/{room_id}/messages'));
   assert.deepEqual(route.item_fields, ['room_seq', 'message_id', 'canonical_bytes', 'envelope']);
+});
+
+test('relay-api lists the router invocations route and room.event type', () => {
+  const route = api.routes.find((r) => r.method === 'POST' && r.path === '/v1/rooms/{room_id}/invocations')
+    ?? api.endpoints?.find((r) => r.method === 'POST' && r.path === '/v1/rooms/{room_id}/invocations');
+  assert.ok(route, 'route listed');
+  assert.ok(route.errors.includes('ROOM_EVENTS_UNAVAILABLE'));
 });
