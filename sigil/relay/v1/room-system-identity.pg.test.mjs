@@ -12,7 +12,7 @@ const connectionString = process.env.SIGIL_TEST_DATABASE_URL;
 
 test('postgres ensureRoomSystemEndpoint is idempotent and stores a readable SPKI key', { skip: !connectionString }, async (t) => {
   assertDisposableTestDatabase(connectionString);
-  // Non-destructive: migrate without reset, then clear only the fixed-id rows this test owns.
+  // Resets the disposable test database (reset: true), then also clears the fixed-id rows this test owns.
   await applyMigrations(connectionString, { reset: true });
   const pool = new pg.Pool({ connectionString });
   const clean = async () => {
