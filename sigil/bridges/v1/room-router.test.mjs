@@ -12,10 +12,10 @@ const members = [
 ];
 const quiet = { error() {}, warn() {} };
 
-function harness({ chat, post, pages } = {}) {
+function harness({ chat, post, pages, roster = members } = {}) {
   const posts = [];
   const relay = {
-    listRoomMembers: async () => members,
+    listRoomMembers: async () => roster,
     listRoomMessages: async (roomId, afterSeq) => (pages ? pages(afterSeq) : { items: [{ room_seq: '1', message_id: 'msg_1', envelope }], next_after_seq: '1' }),
     createRoomInvocations: async (roomId, body) => { posts.push({ roomId, body }); if (post) return post(body); return { items: [] }; },
   };
@@ -123,4 +123,49 @@ test('relay read errors: 4xx drops the delivery, 5xx rethrows', async () => {
     assert.equal(posts.length, 0);
     await assert.rejects(build(503).handle({ deliveryId: 'd', envelope }), /read 503/);
   }
+});
+
+const emptyPick = async () => JSON.stringify({ invoke: [], reason: 'no error handling question' });
+
+test('empty pick with a single joins agent invokes it and marks the reason', async () => {
+  const { router, posts } = harness({ chat: emptyPick });
+  assert.equal((await router.handle({ deliveryId: 'd', envelope })).outcome, 'decided');
+  assert.deepEqual(posts[0].body, { trigger_message_id: 'msg_1', invoke: ['ep_claude'], reason: 'fallback: only joins agent: no error handling question' });
+});
+
+test('fallback reason is plain text clamped to 280 chars', async () => {
+  const { router, posts } = harness({ chat: async () => JSON.stringify({ invoke: [], reason: '<b>x</b>' + String.fromCharCode(10) + 'y'.repeat(500) }) });
+  await router.handle({ deliveryId: 'd', envelope });
+  assert.equal(posts[0].body.reason.length, 280);
+  assert.equal(posts[0].body.reason.includes(String.fromCharCode(10)) || /[<>]/.test(posts[0].body.reason), false);
+});
+
+test('empty pick with two joins agents posts an empty decision', async () => {
+  const roster = [...members, { endpoint_id: 'ep_gemini', response_mode: 'joins' }];
+  const { router, posts } = harness({ chat: emptyPick, roster });
+  assert.equal((await router.handle({ deliveryId: 'd', envelope })).outcome, 'decided');
+  assert.deepEqual(posts[0].body, { trigger_message_id: 'msg_1', invoke: [], reason: 'no error handling question' });
+});
+
+test('empty pick with only a mentions_only agent posts an empty decision', async () => {
+  const roster = members.map((m) => (m.endpoint_id === 'ep_claude' ? { ...m, response_mode: 'mentions_only' } : m));
+  const { router, posts } = harness({ chat: emptyPick, roster });
+  await router.handle({ deliveryId: 'd', envelope });
+  assert.deepEqual(posts[0].body.invoke, []);
+  assert.equal(posts[0].body.reason, 'no error handling question');
+});
+
+test('model failure with a single joins agent posts router_unavailable and invokes no one', async () => {
+  const { router, posts } = harness({ chat: async () => { throw new Error('ECONNREFUSED'); } });
+  assert.equal((await router.handle({ deliveryId: 'd', envelope })).outcome, 'failed_decision');
+  assert.equal(posts.length, 1);
+  assert.deepEqual(posts[0].body.invoke, []);
+  assert.equal(posts[0].body.failed, true);
+});
+
+test('a non-empty model pick bypasses the fallback', async () => {
+  const roster = [...members, { endpoint_id: 'ep_gemini', response_mode: 'joins' }];
+  const { router, posts } = harness({ chat: async () => JSON.stringify({ invoke: ['ep_gemini'], reason: 'gemini fits' }), roster });
+  await router.handle({ deliveryId: 'd', envelope });
+  assert.deepEqual(posts[0].body, { trigger_message_id: 'msg_1', invoke: ['ep_gemini'], reason: 'gemini fits' });
 });

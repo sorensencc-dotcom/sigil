@@ -34,6 +34,9 @@ export function createOllamaClient({ baseUrl = 'http://127.0.0.1:11434', fetchIm
   };
 }
 
+const FALLBACK_PREFIX = 'fallback: only joins agent';
+const REASON_MAX = 280;
+
 function parsePick(text, joinedIds) {
   let parsed;
   try { parsed = JSON.parse(text); } catch { return null; }
@@ -111,6 +114,14 @@ export function createRoomRouter({ identity, relay, ollama, model, timeoutMs = 2
     if (!pick) {
       const ok = await post(roomId, { trigger_message_id: envelope.message_id, invoke: [], reason: 'router_unavailable', failed: true });
       return { outcome: ok ? 'failed_decision' : 'dropped' };
+    }
+    // Model answered but picked nobody: if exactly one joins agent is in the room, route to it.
+    // Never reached on model failure (handled above); relay still validates the invocation.
+    if (pick.invoke.length === 0 && joined.length === 1) {
+      const text = `${FALLBACK_PREFIX}${pick.reason ? `: ${pick.reason}` : ''}`;
+      const reason = Array.from(text, (c) => (c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127 || '<>'.includes(c) ? ' ' : c)).join('').slice(0, REASON_MAX);
+      const fallbackOk = await post(roomId, { trigger_message_id: envelope.message_id, invoke: [joined[0].endpoint_id], reason });
+      return { outcome: fallbackOk ? 'decided' : 'dropped' };
     }
     const ok = await post(roomId, { trigger_message_id: envelope.message_id, invoke: pick.invoke, reason: pick.reason });
     return { outcome: ok ? 'decided' : 'dropped' };
