@@ -65,6 +65,20 @@ function runSync(extraArgs) {
   return spawnSync(process.execPath, [sigilCli, 'agent', 'run', '--identity', idFile, '--relay-url', 'http://127.0.0.1:1', '--room-bridge', 'router', ...extraArgs], { cwd, encoding: 'utf8', timeout: 20_000 });
 }
 
+for (const flag of ['--router-timeout-ms', '--router-context-messages']) {
+  for (const bad of ['abc', '0', '-5', '1.5', '']) {
+    test(`${flag} ${JSON.stringify(bad)} exits with a clear error`, () => {
+      const result = runSync([`${flag}=${bad}`]);
+      assert.notEqual(result.status, 0);
+      assert.match(`${result.stderr}${result.stdout}`, new RegExp(`${flag} must be a positive integer`));
+    });
+  }
+}
+
+test('valid --router-timeout-ms and --router-context-messages start the router', async () => {
+  assert.match(await announce(['--router-timeout-ms', '15000', '--router-context-messages', '8']), /Room bridge: router/);
+});
+
 test('--router-sole-agent-fallback off is announced', async () => {
   assert.match(await announce(['--router-sole-agent-fallback', 'off']), /sole-agent fallback off\)/);
 });

@@ -989,13 +989,21 @@ async function cmdAgentRun(argv) {
       const model = opt(args, ['router-model']) ?? 'qwen2.5:7b';
       const fallbackFlag = opt(args, ['router-sole-agent-fallback']) ?? 'on';
       if (fallbackFlag !== 'on' && fallbackFlag !== 'off') throw new Error('--router-sole-agent-fallback must be on or off');
+      const positiveInt = (flag, fallback) => {
+        const raw = opt(args, [flag]);
+        if (raw == null) return fallback;
+        if (!/^[1-9]\d*$/.test(raw) || !Number.isSafeInteger(Number(raw))) throw new Error(`--${flag} must be a positive integer`);
+        return Number(raw);
+      };
+      const timeoutMs = positiveInt('router-timeout-ms', 20000);
+      const contextMessages = positiveInt('router-context-messages', 12);
       const router = createRoomRouter({
         identity,
         relay: new RelayClient({ baseUrl: resolved.relayUrl, token: identity.relay_token }),
         ollama: createOllamaClient({ baseUrl: opt(args, ['router-ollama-url']) ?? 'http://127.0.0.1:11434' }),
         model,
-        timeoutMs: Number(opt(args, ['router-timeout-ms']) ?? 20000),
-        contextMessages: Number(opt(args, ['router-context-messages']) ?? 12),
+        timeoutMs,
+        contextMessages,
         soleAgentFallback: fallbackFlag === 'on',
       });
       onRoomMessage = router.handle;
