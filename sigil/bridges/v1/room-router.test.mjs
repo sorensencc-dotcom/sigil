@@ -217,3 +217,10 @@ test('relay 408 and 429 rethrow so the daemon retries, on reads and on the decis
     await assert.rejects(onRead.handle({ deliveryId: 'd', envelope }), new RegExp(`transient ${status}`));
   }
 });
+
+test('fallback reason uses the relay clamp: bidi controls become spaces, prefix kept', async () => {
+  const rlo = String.fromCharCode(0x202e);
+  const { router, posts } = harness({ chat: async () => JSON.stringify({ invoke: [], reason: `abc${rlo}def` }) });
+  await router.handle({ deliveryId: 'd', envelope });
+  assert.equal(posts[0].body.reason, 'fallback: only joins agent: abc def');
+});

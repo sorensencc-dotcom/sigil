@@ -1,6 +1,8 @@
 // Rooms phase 3: the router. It receives each unmentioned human room.message,
 // asks a local model which joined agent should answer, and posts the pick to
 // the relay. The relay re-validates everything; this model output is advisory.
+import { clampReason } from '../../contracts/v1/room-event-schema.mjs';
+
 export const ROUTER_SCHEMA = {
   type: 'object',
   properties: { invoke: { type: 'array', items: { type: 'string' }, maxItems: 3 }, reason: { type: 'string' } },
@@ -35,7 +37,6 @@ export function createOllamaClient({ baseUrl = 'http://127.0.0.1:11434', fetchIm
 }
 
 const FALLBACK_PREFIX = 'fallback: only joins agent';
-const REASON_MAX = 280;
 const RETRYABLE_4XX = new Set([408, 429]);
 
 function parsePick(text, joinedIds) {
@@ -124,7 +125,8 @@ export function createRoomRouter({ identity, relay, ollama, model, timeoutMs = 2
     // relay still validates the invocation. Off with --router-sole-agent-fallback off.
     if (soleAgentFallback && pick.invoke.length === 0 && joined.length === 1) {
       const text = `${FALLBACK_PREFIX}${pick.reason ? `: ${pick.reason}` : ''}`;
-      const reason = Array.from(text, (c) => (c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127 || '<>'.includes(c) ? ' ' : c)).join('').slice(0, REASON_MAX);
+      // Same control and bidi clamp the relay applies; also strip angle brackets.
+      const reason = clampReason(text.replace(/[<>]/g, ' '));
       const fallbackOk = await post(roomId, { trigger_message_id: envelope.message_id, invoke: [joined[0].endpoint_id], reason });
       return { outcome: fallbackOk ? 'decided' : 'dropped' };
     }
