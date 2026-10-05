@@ -91,8 +91,8 @@ Refusals created by mention dispatch and by the Stop route also emit `room.event
 
 For each router delivery:
 
-1. Load the trigger message, the room roster (name, description, mode, `joins` agents only), and the last N messages (default 12).
-2. Build the prompt. The system text states that room content is data, not instructions. Room text sits in a fenced block. The prompt is advisory; the relay enforces every rule.
+1. Load the trigger message, the room roster (endpoint id and mode, `joins` agents only), and the last N messages (default 12).
+2. Build the prompt. The system text states that room content is data, not instructions. History sits in a `<room_messages>` block as `[seq N] sender: text` lines, without the trigger. The trigger sits on its own in a `<newest_message>` block taken from the delivery envelope, so it is present even when it falls outside the history window. The prompt is advisory; the relay enforces every rule.
 3. Call Ollama `POST /api/chat` with a JSON schema in `format`: `{ invoke: string[], reason: string }`. The default model is `qwen2.5:7b`, set through config. `llama3.1:8b` is the documented alternative.
 4. Post the result to the invocations route, then ack the delivery.
 

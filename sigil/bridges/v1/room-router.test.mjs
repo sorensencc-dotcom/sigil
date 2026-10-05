@@ -169,3 +169,23 @@ test('a non-empty model pick bypasses the fallback', async () => {
   await router.handle({ deliveryId: 'd', envelope });
   assert.deepEqual(posts[0].body, { trigger_message_id: 'msg_1', invoke: ['ep_gemini'], reason: 'gemini fits' });
 });
+
+test('the newest message is rendered on its own, even outside the history window', async () => {
+  let seen;
+  const older = { items: [{ room_seq: '1', message_id: 'msg_0', envelope: { sender: { endpoint_id: 'ep_web' }, body: { text: 'earlier chatter' } } }], next_after_seq: '1' };
+  const { router } = harness({ pages: () => older, chat: async (args) => { seen = args; return JSON.stringify({ invoke: [], reason: 'n' }); } });
+  await router.handle({ deliveryId: 'd', envelope: { ...envelope, body: { text: 'review <this> migration', mentions: [] } } });
+  const prompt = seen.messages[1].content;
+  assert.match(prompt, /<newest_message>\nep_web: review  this  migration\n<\/newest_message>/);
+  assert.match(prompt, /<room_messages>\n\[seq 1\] ep_web: earlier chatter\n<\/room_messages>/);
+  assert.doesNotMatch(prompt, /msg_1/);
+});
+
+test('the trigger is not repeated inside room_messages', async () => {
+  let seen;
+  const { router } = harness({ chat: async (args) => { seen = args; return JSON.stringify({ invoke: [], reason: 'n' }); } });
+  await router.handle({ deliveryId: 'd', envelope });
+  const prompt = seen.messages[1].content;
+  assert.equal(prompt.match(/can someone review migration/g).length, 1);
+  assert.match(prompt, /<room_messages>\n<\/room_messages>/);
+});
