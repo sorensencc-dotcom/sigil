@@ -41,7 +41,7 @@ Out of scope, with the reason:
 - Adds the `room.event` message type and its body schema.
 - Allows `response_mode = 'router'` on `conversation_members`.
 - Adds a relay system endpoint (`ep_relay_system`) that signs `room.event` envelopes with its own dedicated key. It cannot receive deliveries and cannot be a room member.
-- Adds a unique index on `room_invocations (trigger_message_id) WHERE decided_by = 'router'`, so a retried router decision cannot create a second set of rows.
+- Added a unique index on `room_invocations (trigger_message_id) WHERE decided_by = 'router'`. Migration 031 drops it: a decision writes one row per endpoint it names, including refused rows, so a decision naming two or more endpoints failed with `23505`. A retried decision stays idempotent through the room row lock, the router-decision lookup, and the `evt_router_<trigger>` event key, with the `(trigger_message_id, endpoint_id)` unique constraint as the backstop.
 
 ### `room.event` body
 
@@ -104,13 +104,13 @@ Configuration: `--router-model`, `--router-ollama-url` (default `http://127.0.0.
 |---|---|
 | Ollama down, timeout, or output fails the schema | Post a decision with empty `invoke` and `kind = router_failed`, then ack. Never invoke everyone. |
 | Relay answers 4xx | Ack the delivery. The request will not succeed on retry. This fixes the phase 2 limit of indefinite retry for the router path. |
-| Relay answers 5xx or the network fails | Leave the delivery unacked. The next poll retries. The unique index makes the retry idempotent. |
+| Relay answers 5xx or the network fails | Leave the delivery unacked. The next poll retries. The room lock and the router-decision lookup make the retry idempotent. |
 | Router endpoint removed from the room mid-flight | The route returns 403, and the router acks. |
 
 ## Testing
 
 - Unit: delivery rules (human only, no mention, joined agent exists, router excluded from fan-out), route validation, event body schema, `reason` cap.
-- PostgreSQL: decision and event commit together or roll back together; the unique index makes a repeat call idempotent; refusal events appear for hop budget, busy queue, and blockers.
+- PostgreSQL: decision and event commit together or roll back together; a repeat call is idempotent; a decision naming several endpoints commits one row each; refusal events appear for hop budget, busy queue, and blockers.
 - Injection: the LLM names an endpoint off the roster, a `mentions_only` agent, a human, and a removed member. The relay refuses each and the room shows the refusal event.
 - Daemon: against a fake Ollama, covering a valid pick, an empty pick, malformed output, a timeout, and a 4xx versus 5xx relay answer.
 - Exit test: a human message with no mention routes to the right agent, which replies; a router failure produces an event and no invocation.

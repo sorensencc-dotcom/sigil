@@ -45,9 +45,9 @@ async function setup(t) {
   await cleanSystem();
   const run = crypto.randomUUID().replaceAll('-', '_');
   const human = `usr_rt_${run}`;
-  const ids = { web: `ep_web_${run}`, claude: `ep_claude_${run}`, router: `ep_router_${run}` };
+  const ids = { web: `ep_web_${run}`, claude: `ep_claude_${run}`, claudeB: `ep_claude_b_${run}`, outsider: `ep_outsider_${run}`, router: `ep_router_${run}` };
   await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW())`, [human]);
-  for (const [endpointId, runtime] of [[ids.web, 'web'], [ids.claude, 'claude'], [ids.router, 'claude']]) {
+  for (const [endpointId, runtime] of [[ids.web, 'web'], [ids.claude, 'claude'], [ids.claudeB, 'claude'], [ids.outsider, 'claude'], [ids.router, 'claude']]) {
     await pool.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at) VALUES ($1, $2, $3, $4, $1, 'active', NOW())`, [endpointId, human, runtime, `install_${endpointId}`]);
   }
   await pool.query(`INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from) VALUES ($1, $2, 'Ed25519', $3, 'active', NOW())`, [`key_${ids.web}`, ids.web, Buffer.alloc(32, 1)]);
@@ -57,6 +57,7 @@ async function setup(t) {
   const roomId = `room_${run}`;
   await repository.createRoom({ conversationId: roomId, workspaceId: `ws_${human}`, name: `rt_${run}`, createdByHumanId: human, ownerEndpointId: ids.web, now: NOW });
   await repository.addRoomMember({ conversationId: roomId, endpointId: ids.claude, role: 'member', responseMode: 'joins', addedByHumanId: human, now: NOW });
+  await repository.addRoomMember({ conversationId: roomId, endpointId: ids.claudeB, role: 'member', responseMode: 'joins', addedByHumanId: human, now: NOW });
   await repository.addRoomMember({ conversationId: roomId, endpointId: ids.router, role: 'member', responseMode: 'router', addedByHumanId: human, now: NOW });
   const triggerId = `msg_trigger_${run}`;
   await repository.withTransaction(async (client) => {
@@ -72,6 +73,8 @@ async function setup(t) {
   const registry = new Map([
     [ids.web, { owner_id: human, status: 'active', kind: 'human' }],
     [ids.claude, { owner_id: human, status: 'active', kind: 'agent' }],
+    [ids.claudeB, { owner_id: human, status: 'active', kind: 'agent' }],
+    [ids.outsider, { owner_id: human, status: 'active', kind: 'agent' }],
     [ids.router, { owner_id: human, status: 'active', kind: 'agent' }],
   ]);
   const server = createRelayServer({ registry, repository, authenticate: async (request) => (request.headers.authorization === 'Bearer router' ? { endpoint_id: ids.router, owner_id: human } : null), roomSystemIdentity: system });
@@ -110,4 +113,17 @@ test('a failing decision event rolls back the invocation row', { skip: !connecti
   assert.ok(res.status >= 500, `expected a server error, got ${res.status}`);
   assert.equal(await countRows(s.pool, `SELECT count(*)::int AS n FROM room_invocations WHERE trigger_message_id = $1`, [s.triggerId]), 0);
   assert.equal(await countRows(s.pool, `SELECT count(*)::int AS n FROM deliveries WHERE message_id = $1 AND recipient_endpoint_id = $2`, [s.triggerId, s.ids.claude]), 0);
+});
+
+test('a router decision naming two joins agents and a non-member commits one row per endpoint', { skip: !connectionString }, async (t) => {
+  const s = await setup(t);
+  const res = await call(s.port, `/v1/rooms/${s.roomId}/invocations`, 'Bearer router', { trigger_message_id: s.triggerId, invoke: [s.ids.claude, s.ids.claudeB, s.ids.outsider], reason: 'both fit' });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.duplicate, false);
+  assert.deepEqual(res.body.items.map((item) => [item.endpoint_id, item.status]), [[s.ids.claude, 'running'], [s.ids.claudeB, 'running'], [s.ids.outsider, 'refused']]);
+  assert.equal(await countRows(s.pool, `SELECT count(*)::int AS n FROM room_invocations WHERE trigger_message_id = $1 AND decided_by = 'router'`, [s.triggerId]), 3);
+  const again = await call(s.port, `/v1/rooms/${s.roomId}/invocations`, 'Bearer router', { trigger_message_id: s.triggerId, invoke: [s.ids.claude, s.ids.claudeB, s.ids.outsider] });
+  assert.equal(again.status, 200);
+  assert.equal(again.body.duplicate, true);
+  assert.equal(await countRows(s.pool, `SELECT count(*)::int AS n FROM room_invocations WHERE trigger_message_id = $1`, [s.triggerId]), 3);
 });
