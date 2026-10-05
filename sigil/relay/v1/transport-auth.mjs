@@ -9,7 +9,10 @@ function digest(token) {
 // control of one endpoint, but every human-scoped route (OIDC identities,
 // account links, directory invites/matches) needs the owner of that
 // endpoint too -- this repo has no separate human-session credential, so
-// the endpoint's registered owner_id stands in as its human_id.
+// the endpoint's registered owner_id stands in as its human_id. Agent
+// endpoints (registry kind 'agent') are the exception: they keep owner_id
+// but get no human_id, so every human-scoped route and capability-grant
+// creation answers them 403 by design.
 export function createBearerAuthenticator(tokenHashes, registry) {
   const hashes = tokenHashes instanceof Map ? tokenHashes : new Map(Object.entries(tokenHashes ?? {}));
   return (request) => {

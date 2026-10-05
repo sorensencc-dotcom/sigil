@@ -77,9 +77,23 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
   // callback (e.g. consumeApprovalDecision) stayed committed even when the
   // callback later threw and the envelope was ultimately rejected -- a
   // human-approved, one-time decision was silently burned by an unrelated,
-  // retriable failure. Only consumeApprovalDecision registers an undo here;
-  // this is not a general transaction log.
+  // retriable failure. Approval consumption and the room dispatch writes
+  // (envelope, invocations, turns, deliveries) register an undo here; this is
+  // not a general transaction log. Undos run newest first, so two writes to
+  // one key restore its original value.
   const transactionRollbackStore = new AsyncLocalStorage(); // per-async-context undo stack
+  const onRollback = (undo) => { transactionRollbackStore.getStore()?.push(undo); };
+  // Registers an undo that puts `key` in `map` back to its current state.
+  const undoMapSet = (map, key) => {
+    const had = map.has(key);
+    const previous = map.get(key);
+    const previousCopy = previous && typeof previous === 'object' ? { ...previous } : previous;
+    onRollback(() => {
+      if (!had) { map.delete(key); return; }
+      if (previous && typeof previous === 'object') Object.assign(previous, previousCopy);
+      map.set(key, previous);
+    });
+  };
   return {
     // Single-process, no real client/connection -- the transaction wrapper
     // exists so acceptEnvelopeAsync's repository-aware path works unchanged
@@ -97,7 +111,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
           }
           return result;
         } catch (error) {
-          for (const undo of rollbacks) undo();
+          for (const undo of rollbacks.reverse()) undo();
           throw error;
         }
       });
@@ -236,10 +250,13 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     },
     async persistAcceptedEnvelope(row) {
       const federationHop = row.federation_hop === true;
+      undoMapSet(envelopes, row.message_id);
+      undoMapSet(idempotency, `${row.envelope.sender.endpoint_id}:${row.envelope.idempotency_key}`);
       envelopes.set(row.message_id, { ...row, streamSeq: row.streamSeq ?? null, roomSeq: row.roomSeq ?? null, federation_hop: federationHop });
       idempotency.set(`${row.envelope.sender.endpoint_id}:${row.envelope.idempotency_key}`, { message_id: row.message_id, canonical_hash: row.canonical_hash });
       if (row.envelope.recipient?.endpoint_id) {
         const deliveryId = `del_${row.message_id}`;
+        undoMapSet(deliveries, deliveryId);
         deliveries.set(deliveryId, {
           delivery_id: deliveryId,
           message_id: row.message_id,
@@ -253,6 +270,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       if (Array.isArray(row.roomFanout)) {
         const fanout = row.roomFanout.map((endpointId) => {
           const deliveryId = `del_${row.message_id}_${endpointId}`;
+          undoMapSet(deliveries, deliveryId);
           deliveries.set(deliveryId, { delivery_id: deliveryId, message_id: row.message_id, recipient_endpoint_id: endpointId, state: 'delivered', queued_at: new Date().toISOString(), attempts: 0, federation_hop: false });
           return { endpoint_id: endpointId, delivery_id: deliveryId };
         });
@@ -351,6 +369,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
         decided_by: decidedBy, reason, status, delivery_id: deliveryId, reply_message_id: null, created_at: timestamp,
         started_at: status === 'running' ? timestamp : null, finished_at: status === 'refused' ? timestamp : null,
       };
+      undoMapSet(roomInvocations, invocationId);
       roomInvocations.set(invocationId, row);
       return { ...row };
     },
@@ -367,12 +386,14 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     async startInvocation(invocationId, { deliveryId, now = new Date() }) {
       const row = roomInvocations.get(invocationId);
       if (!row || row.status !== 'queued') return null;
+      undoMapSet(roomInvocations, invocationId);
       Object.assign(row, { status: 'running', delivery_id: deliveryId, started_at: (now instanceof Date ? now : new Date(now)).toISOString() });
       return { ...row };
     },
     async finishInvocation(invocationId, { status, reason = null, replyMessageId = null, now = new Date() }) {
       const row = roomInvocations.get(invocationId);
       if (!row || (row.status !== 'queued' && row.status !== 'running')) return null;
+      undoMapSet(roomInvocations, invocationId);
       Object.assign(row, { status, reason: reason ?? row.reason, reply_message_id: replyMessageId, finished_at: (now instanceof Date ? now : new Date(now)).toISOString() });
       return { ...row };
     },
@@ -381,6 +402,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       const cancelled = [];
       for (const row of roomInvocations.values()) {
         if (row.room_id !== roomId || (row.status !== 'queued' && row.status !== 'running')) continue;
+        undoMapSet(roomInvocations, row.invocation_id);
         Object.assign(row, { status: 'cancelled', reason: 'stopped', finished_at: timestamp });
         cancelled.push({ ...row });
       }
@@ -397,14 +419,17 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       const key = JSON.stringify([roomId, threadRootId]);
       const current = roomThreads.get(key)?.agent_turns ?? 0;
       if (current >= maxTurns) return { allowed: false, agent_turns: current };
+      undoMapSet(roomThreads, key);
       roomThreads.set(key, { agent_turns: current + 1, updated_at: (now instanceof Date ? now : new Date(now)).toISOString() });
       return { allowed: true, agent_turns: current + 1 };
     },
     async resetAgentTurns(roomId, threadRootId, { now = new Date() } = {}) {
+      undoMapSet(roomThreads, JSON.stringify([roomId, threadRootId]));
       roomThreads.set(JSON.stringify([roomId, threadRootId]), { agent_turns: 0, updated_at: (now instanceof Date ? now : new Date(now)).toISOString() });
     },
     async createRoomDelivery({ messageId, endpointId, now = new Date() }) {
       const deliveryId = `del_${messageId}_${endpointId}`;
+      undoMapSet(deliveries, deliveryId);
       deliveries.set(deliveryId, { delivery_id: deliveryId, message_id: messageId, recipient_endpoint_id: endpointId, state: 'delivered', queued_at: (now instanceof Date ? now : new Date(now)).toISOString(), attempts: 0, federation_hop: false });
       return deliveryId;
     },
@@ -633,7 +658,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       });
       if (!decision) return null;
       decision.status = 'consumed';
-      transactionRollbackStore.getStore()?.push(() => { decision.status = 'approved'; });
+      onRollback(() => { decision.status = 'approved'; });
       return decision;
     },
     async createHumanSession({ sessionId, humanId, authenticationMethod, assurance, deviceContext = {}, issuedAt = new Date(), expiresAt, now = new Date() }) {
