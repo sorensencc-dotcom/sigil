@@ -13,7 +13,7 @@ const connectionString = process.env.SIGIL_TEST_DATABASE_URL;
 test('postgres ensureRoomSystemEndpoint is idempotent and stores a readable SPKI key', { skip: !connectionString }, async (t) => {
   assertDisposableTestDatabase(connectionString);
   // Non-destructive: migrate without reset, then clear only the fixed-id rows this test owns.
-  await applyMigrations(connectionString);
+  await applyMigrations(connectionString, { reset: true });
   const pool = new pg.Pool({ connectionString });
   const clean = async () => {
     await pool.query(`DELETE FROM endpoint_keys WHERE endpoint_id = 'ep_relay_system' OR key_id IN ('key_ep_relay_system', 'key_rotated')`);
@@ -43,7 +43,7 @@ test('postgres ensureRoomSystemEndpoint is idempotent and stores a readable SPKI
 
 test('postgres ensureRoomSystemEndpoint rejects a different key under the registered endpoint', { skip: !connectionString }, async (t) => {
   assertDisposableTestDatabase(connectionString);
-  await applyMigrations(connectionString);
+  await applyMigrations(connectionString, { reset: true });
   const pool = new pg.Pool({ connectionString });
   const clean = async () => {
     await pool.query(`DELETE FROM endpoint_keys WHERE endpoint_id = 'ep_relay_system' OR key_id IN ('key_ep_relay_system', 'key_rotated')`);
@@ -65,7 +65,7 @@ test('postgres ensureRoomSystemEndpoint rejects a different key under the regist
 
 test('postgres ensureRoomSystemEndpoint rejects an existing endpoint row owned by someone else', { skip: !connectionString }, async (t) => {
   assertDisposableTestDatabase(connectionString);
-  await applyMigrations(connectionString);
+  await applyMigrations(connectionString, { reset: true });
   const pool = new pg.Pool({ connectionString });
   const clean = async () => {
     await pool.query(`DELETE FROM endpoint_keys WHERE endpoint_id = 'ep_relay_system' OR key_id = 'key_ep_relay_system'`);

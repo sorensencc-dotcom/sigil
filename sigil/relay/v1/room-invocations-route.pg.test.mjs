@@ -30,7 +30,7 @@ function call(port, path, authorization, body) {
 
 async function setup(t) {
   assertDisposableTestDatabase(connectionString);
-  await applyMigrations(connectionString);
+  await applyMigrations(connectionString, { reset: true });
   const pool = new pg.Pool({ connectionString });
   const cleanSystem = async () => {
     const sent = `SELECT message_id FROM envelopes WHERE sender_endpoint_id = 'ep_relay_system'`;

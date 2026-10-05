@@ -14,9 +14,8 @@ const NOW = new Date();
 
 test('postgres emitRoomEvent persists with a room_seq and a repeat key writes nothing', { skip: !connectionString }, async (t) => {
   assertDisposableTestDatabase(connectionString);
-  // Non-destructive: migrate without reset; every row below uses a unique run suffix
-  // except the fixed-id system endpoint, which is cleaned before and after.
-  await applyMigrations(connectionString);
+  // Reset the schema first: the live runner runs suites one at a time, and a prior suite can leave a partially tracked schema that a plain migrate cannot resume.
+  await applyMigrations(connectionString, { reset: true });
   const pool = new pg.Pool({ connectionString });
   const run = crypto.randomUUID().replaceAll('-', '_');
   const roomId = `room_${run}`;
