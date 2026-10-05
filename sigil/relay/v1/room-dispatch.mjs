@@ -100,17 +100,19 @@ export async function applyRoomDispatch({ envelope, room, plan, completing, repo
   }
   const routerDeliveries = [];
   const humanSender = !memberIsAgent(plan.senderMember);
-  const namesAnAgent = allMentions.some((id) => plan.agentMembers.some((member) => member.endpoint_id === id));
+  // Any mention keeps the message off the router: the invocations route answers
+  // 422 for a trigger with mentions, so routing it would only waste a model call.
+  const noMentions = allMentions.length === 0;
   // Only an active joins agent can pick up the router's invocation.
   let hasJoinedAgent = false;
-  if (humanSender && !namesAnAgent) {
+  if (humanSender && noMentions) {
     for (const member of plan.agentMembers) {
       if (member.response_mode === 'joins' && await endpointIsActive(member.endpoint_id, repository, client, registered)) { hasJoinedAgent = true; break; }
     }
   }
   // Without a system identity the invocations route answers 503, so a router
   // delivery could never be acked; skip routing instead of retrying forever.
-  if (systemIdentity && humanSender && !namesAnAgent && hasJoinedAgent && envelope.message_type === 'room.message') {
+  if (systemIdentity && humanSender && noMentions && hasJoinedAgent && envelope.message_type === 'room.message') {
     for (const router of plan.agentMembers.filter(isRouterMember)) {
       if (await deliveryBlocker(router.endpoint_id, repository, client, { inboxDepthLimit, registered })) continue;
       const deliveryId = await repository.createRoomDelivery({ messageId: envelope.message_id, endpointId: router.endpoint_id, now }, client);

@@ -57,7 +57,7 @@ Events receive a `room_seq`, appear in history, and fan out to human members onl
 At accept, the relay writes a delivery to each member with `response_mode = 'router'` when all of these hold:
 
 1. The sender is a human member.
-2. The message mentions no agent member.
+2. The message carries no mentions at all. This matches step 1 of the invocations route, which answers 422 for any trigger with mentions.
 3. The room has at least one agent member whose mode is `joins`.
 
 Agent messages and `room.event` envelopes never produce a router delivery. Router members do not receive normal room fan-out.

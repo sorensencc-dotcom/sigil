@@ -406,3 +406,13 @@ test('no router delivery when the relay has no room system identity', async () =
   assert.deepEqual(persisted.roomDeliveries, []);
   assert.equal(await w.repository.countOpenDeliveries('ep_router'), 0);
 });
+test('a message mentioning only a non-agent is not delivered to the router', async () => {
+  // The invocations route answers 422 for any trigger with mentions, so routing it would waste a model call.
+  const w = world();
+  await room(w.repository);
+  await addRouter(w.repository);
+  const sys = { systemIdentity: await withSystem(w) };
+  const { persisted } = await accept(w, post(w, 'ep_web', { text: '@ep_nobody hi', mentions: ['ep_nobody'] }), sys);
+  assert.equal(persisted.roomDeliveries.some((d) => d.endpoint_id === 'ep_router'), false);
+  assert.equal(await w.repository.countOpenDeliveries('ep_router'), 0);
+});
