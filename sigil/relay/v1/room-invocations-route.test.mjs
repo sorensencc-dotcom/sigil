@@ -343,6 +343,8 @@ test('stream.notify never fires when the pick transaction fails', async () => {
     const res = await pick(w, { trigger_message_id: triggerId, invoke: ['ep_claude'] });
     assert.ok(res.status >= 400, `status ${res.status}`);
     assert.equal(stream.calls.length, 0);
+    assert.deepEqual(await w.repository.listRoomInvocations(ROOM), [], 'the rolled-back pick leaves no invocation row');
+    assert.equal((await w.repository.listInbox('ep_claude')).length, 0, 'the rolled-back pick leaves no delivery');
   }, { stream });
 });
 
