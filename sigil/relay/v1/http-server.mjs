@@ -5,7 +5,7 @@ import { acceptFederatedEnvelope } from './accept-federated-envelope.mjs';
 import { verifyInboundRelayRequest, relayRejectSkewPayload } from './federation-relay-auth.mjs';
 import { acceptDirectoryRedemption, acceptDirectoryConfirmation, acceptDirectoryRevocation } from './accept-federation-directory.mjs';
 import { transitionDelivery } from './delivery-state.mjs';
-import { toReceiptRow } from './receipt-state.mjs';
+import { mapReceiptState, toReceiptRow } from './receipt-state.mjs';
 import { sendReceiptFrame } from './receipt-notify.mjs';
 import { createBearerAuthenticator } from './transport-auth.mjs';
 import { handleRoomRoute } from './room-routes.mjs';
@@ -55,21 +55,39 @@ async function readBody(request, maxBytes = 1024 * 1024) {
 // sigil/cli/sigil.mjs) must pass the SAME closure bound to the SAME `stream`
 // instance -- otherwise WS subscribers/delivery receipts only fire for
 // envelopes accepted over one transport and not the other.
-export function createOnPersisted(stream) {
+export function createOnPersisted(stream, { repository = null, logger = null } = {}) {
   return async ({ envelope: accepted, persisted }) => {
     if (!stream || persisted?.duplicate) return;
     if (accepted.recipient?.endpoint_id) stream.notify(accepted.recipient.endpoint_id, persisted.message_id, persisted.streamSeq);
     // Room recipients get no streamSeq: they see a subset of the sender's
     // stream, so its sequence would read as gaps. room_seq is the room order.
     for (const target of [...(persisted.fanout ?? []), ...(persisted.roomDeliveries ?? [])]) stream.notify(target.endpoint_id, target.delivery_id);
-    if (accepted.sender?.endpoint_id && typeof stream.notifyReceipt === 'function') {
-      stream.notifyReceipt(accepted.sender.endpoint_id, {
-        message_id: persisted.message_id,
-        delivery_id: persisted.delivery_id ?? `del_${persisted.message_id}`,
-        state: 'delivered',
-        at: accepted.created_at,
-        streamSeq: persisted.streamSeq,
-      });
+    if (typeof stream.notifyReceipt !== 'function') return;
+    // One frame per delivery row that exists, each naming that row's real
+    // delivery id and recipient. The state is the repository's insert state
+    // (queued on Postgres), never a hard-coded value.
+    const state = persisted.deliveryState ?? 'delivered';
+    const frame = (messageId, deliveryId, recipientEndpointId, streamSeq) => ({
+      message_id: messageId, delivery_id: deliveryId, recipient_endpoint_id: recipientEndpointId,
+      state, mapped_state: mapReceiptState(state), at: accepted.created_at, streamSeq,
+    });
+    const senderId = accepted.sender?.endpoint_id;
+    if (senderId && accepted.recipient?.endpoint_id) {
+      stream.notifyReceipt(senderId, frame(persisted.message_id, persisted.delivery_id ?? `del_${persisted.message_id}`, accepted.recipient.endpoint_id, persisted.streamSeq));
+    }
+    if (senderId) {
+      for (const target of persisted.fanout ?? []) stream.notifyReceipt(senderId, frame(persisted.message_id, target.delivery_id, target.endpoint_id, persisted.streamSeq));
+    }
+    for (const target of persisted.roomDeliveries ?? []) {
+      const messageId = target.message_id ?? persisted.message_id;
+      const own = messageId === persisted.message_id;
+      let receiptTo = own ? senderId : null;
+      if (!own) {
+        // A promoted agent's delivery belongs to an earlier trigger message,
+        // so its receipt goes to that message's sender.
+        try { receiptTo = (await repository?.lookupMessageSender?.(messageId))?.endpoint_id ?? null; } catch (error) { logger?.error?.('promoted delivery sender lookup failed', error); }
+      }
+      if (receiptTo) stream.notifyReceipt(receiptTo, frame(messageId, target.delivery_id, target.endpoint_id, own ? persisted.streamSeq : null));
     }
   };
 }
@@ -415,7 +433,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       const result = await acceptEnvelopeAsync(envelope, {
         registered: registry, request_id: requestId, now, repository, relayDomain, persist,
         federationMode, federationIdentity, fetchImpl, stream_seq: streamSequence, resendMetrics, logger,
-        onPersisted: createOnPersisted(stream), systemIdentity: roomSystemIdentity,
+        onPersisted: createOnPersisted(stream, { repository, logger }), systemIdentity: roomSystemIdentity,
       });
       response.writeHead(result.status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(result.body ? JSON.stringify(result.body) : '');

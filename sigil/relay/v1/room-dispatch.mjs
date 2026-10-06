@@ -51,7 +51,7 @@ export async function promoteNextInvocation({ roomId, endpointId, repository, cl
     }
     const deliveryId = await repository.createRoomDelivery({ messageId: next.trigger_message_id, endpointId, now }, client);
     await repository.startInvocation(next.invocation_id, { deliveryId, now }, client);
-    return { endpoint_id: endpointId, delivery_id: deliveryId };
+    return { endpoint_id: endpointId, delivery_id: deliveryId, message_id: next.trigger_message_id };
   }
 }
 
@@ -69,7 +69,7 @@ export async function dispatchToTarget({ room, triggerMessageId, threadRootId, e
   if (busy) return { invocation: await repository.createRoomInvocation({ ...row, status: 'queued' }, client), roomDelivery: null };
   const deliveryId = await repository.createRoomDelivery({ messageId: triggerMessageId, endpointId, now }, client);
   const invocation = await repository.createRoomInvocation({ ...row, status: 'running', deliveryId }, client);
-  return { invocation, roomDelivery: { endpoint_id: endpointId, delivery_id: deliveryId } };
+  return { invocation, roomDelivery: { endpoint_id: endpointId, delivery_id: deliveryId, message_id: triggerMessageId } };
 }
 
 export async function applyRoomDispatch({ envelope, room, plan, completing, repository, client, now, inboxDepthLimit, registered, systemIdentity = null }) {
@@ -116,8 +116,8 @@ export async function applyRoomDispatch({ envelope, room, plan, completing, repo
     for (const router of plan.agentMembers.filter(isRouterMember)) {
       if (await deliveryBlocker(router.endpoint_id, repository, client, { inboxDepthLimit, registered })) continue;
       const deliveryId = await repository.createRoomDelivery({ messageId: envelope.message_id, endpointId: router.endpoint_id, now }, client);
-      routerDeliveries.push({ endpoint_id: router.endpoint_id, delivery_id: deliveryId });
-      roomDeliveries.push({ endpoint_id: router.endpoint_id, delivery_id: deliveryId });
+      routerDeliveries.push({ endpoint_id: router.endpoint_id, delivery_id: deliveryId, message_id: envelope.message_id });
+      roomDeliveries.push({ endpoint_id: router.endpoint_id, delivery_id: deliveryId, message_id: envelope.message_id });
     }
   }
   return { invocations, roomDeliveries, routerDeliveries };

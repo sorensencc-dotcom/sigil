@@ -435,7 +435,7 @@ async function acceptWithRepository(envelope, options) {
     const dispatch = roomPlan
       ? await applyRoomDispatch({ envelope, room, plan: roomPlan, completing, repository, client, now, inboxDepthLimit: options.inboxDepthLimit ?? DEFAULT_INBOX_DEPTH_LIMIT, registered: options.registered, systemIdentity: options.systemIdentity })
       : null;
-    const persistedWithStreamSeq = { ...persisted, streamSeq, ...(dispatch ? { roomDeliveries: dispatch.roomDeliveries } : {}) };
+    const persistedWithStreamSeq = { ...persisted, streamSeq, deliveryState: repository.initialDeliveryState ?? 'delivered', ...(dispatch ? { roomDeliveries: dispatch.roomDeliveries } : {}) };
     if (options.onPersisted) await options.onPersisted({ envelope, persisted: persistedWithStreamSeq });
     return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: persisted?.message_id ?? result.message_id, duplicate: persisted?.duplicate ?? false } };
   }).catch(async (error) => {
