@@ -85,6 +85,7 @@ Commands:
   route test <recipient_federated_id> --identity path [--database-url url] [--registry path]
                                                             Read-only federation routing check: parse recipient, peer-directory pin lookup, /v1/health reachability, advisory same-owner line -- sends no envelope
   send [--identity path] [--relay-url url] [--stream-url url] [--wait-for-receipt] --to endpoint_id --to-owner owner_id --message "text" [--conversation id]
+                                                            --wait-for-receipt: exits 0 on acknowledged/processed, 7 on processing_failed/dead_letter, 8 on timeout (message was sent; do not resend)
   inbox [--identity path] [--relay-url url] [--watch|--wait] [--loop] [--gaps] [--stream-url url] [--interval ms] [--timeout ms] [--local] [--ledger path]
   resend --identity path --relay-url url --conversation C --from N --to M --sender ep_X
   doctor [--identity path] [--relay-url url]               Conformance check: JCS/dependency audits, plus a keypair check (if --identity)
