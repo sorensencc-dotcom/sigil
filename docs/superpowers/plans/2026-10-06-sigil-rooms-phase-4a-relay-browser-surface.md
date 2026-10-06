@@ -60,7 +60,7 @@ Line numbers below were re-read from `origin/main` at `44104e5` on 2026-10-06. R
 - Modify: `docs/superpowers/specs/2026-10-05-sigil-rooms-phase-4a-relay-browser-surface-design.md:62`
 
 **Interfaces:**
-- Produces: a corrected spec paragraph that 4b's design reads, recording Chris's decision (2026-10-06): on localhost the browser client takes a pasted bearer token.
+- Produces: a corrected spec paragraph that 4b's design reads, recording Chris's decision (2026-10-06): on localhost the browser client takes a pasted bearer token and keeps it in `sessionStorage`, so a reload does not lose it.
 
 The spec (line 62) says `POST /v1/auth/login` "returns the token the other routes already accept" and asks the plan to confirm that. It does not hold:
 
@@ -75,7 +75,7 @@ So a browser with no credential cannot reach login, and a browser with a bearer 
 Replace "Where the browser gets its bearer token: ... records the answer in the 4b spec." with:
 
 ```
-Where the browser gets its bearer token: `POST /v1/auth/login` does not supply one. It requires an existing bearer principal and returns a 5-minute `human_sessions` row (`session_id`, `expires_at`), not a token, and no route accepts a `session_id` as a credential. Today the only way to hold a human bearer token is `POST /v1/endpoint-tokens`, which itself needs a bearer token. Decision (Chris, 2026-10-06): the 4b client takes a pasted bearer token, which fits a relay that runs on the user's own machine and adds no auth route that would need its own security review. A session-to-token exchange route is deferred until 4b needs to work off localhost. 4a's routes (`ws-ticket`, `ack`, `messages`) work with any valid human bearer token, so this does not block 4a. The 4b client holds the token in memory only, never in `localStorage` or a URL.
+Where the browser gets its bearer token: `POST /v1/auth/login` does not supply one. It requires an existing bearer principal and returns a 5-minute `human_sessions` row (`session_id`, `expires_at`), not a token, and no route accepts a `session_id` as a credential. Today the only way to hold a human bearer token is `POST /v1/endpoint-tokens`, which itself needs a bearer token. Decision (Chris, 2026-10-06): the 4b client takes a pasted bearer token, which fits a relay that runs on the user's own machine and adds no auth route that would need its own security review. A session-to-token exchange route, or a relay-set `HttpOnly` cookie (the safer store, since page script never sees the token, but it adds an auth route needing its own security review), is deferred until 4b needs to work off localhost. 4a's routes (`ws-ticket`, `ack`, `messages`) work with any valid human bearer token, so this does not block 4a. The 4b client pastes the token once and keeps it in `sessionStorage`: it survives reloads and clears when the tab closes. Never `localStorage`, never a URL. Script injected into the page can read `sessionStorage`; on a localhost-only relay serving the user's own UI that risk is accepted.
 ```
 
 - [ ] **Step 2: Commit**
