@@ -252,11 +252,16 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       registry.set(endpoint_id, { endpoint_id, owner_id, key_id, status: 'active', public_key, origin_domain });
     },
     async persistAcceptedEnvelope(row) {
+      const idempotencyKey = `${row.envelope.sender.endpoint_id}:${row.envelope.idempotency_key}`;
+      const priorKey = idempotency.get(idempotencyKey);
+      if (priorKey && priorKey.message_id !== row.message_id) {
+        throw Object.assign(new Error('idempotency key already used by another message'), { code: 'IDEMPOTENCY_RACE' });
+      }
       const federationHop = row.federation_hop === true;
       undoMapSet(envelopes, row.message_id);
-      undoMapSet(idempotency, `${row.envelope.sender.endpoint_id}:${row.envelope.idempotency_key}`);
+      undoMapSet(idempotency, idempotencyKey);
       envelopes.set(row.message_id, { ...row, streamSeq: row.streamSeq ?? null, roomSeq: row.roomSeq ?? null, federation_hop: federationHop });
-      idempotency.set(`${row.envelope.sender.endpoint_id}:${row.envelope.idempotency_key}`, { message_id: row.message_id, canonical_hash: row.canonical_hash });
+      idempotency.set(idempotencyKey, { message_id: row.message_id, canonical_hash: row.canonical_hash });
       if (row.envelope.recipient?.endpoint_id) {
         const deliveryId = `del_${row.message_id}`;
         undoMapSet(deliveries, deliveryId);

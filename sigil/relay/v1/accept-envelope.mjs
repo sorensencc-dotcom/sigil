@@ -448,6 +448,16 @@ async function acceptWithRepository(envelope, options) {
     // index's violation to the same audited rejection the app-level check
     // produces; every other unique-constraint error (idempotency_keys, etc.)
     // is left as-is.
+    // A racing retry loses the idempotency_keys insert. A raw 23505 would reach
+    // the caller as 500 INTERNAL_ERROR (toResponse), so translate it, the same
+    // way the task-id check below does: assign to `error` (do not throw inside
+    // this .catch) so the flow reaches toResponse. IDEMPOTENCY_RACE is only the
+    // repository-level signal and is NOT in statusByCode, so it is never sent to
+    // a client. The client-visible code is the existing 409 DUPLICATE_MESSAGE.
+    // The send route re-reads the key on that code and answers 200.
+    if ((error.code === '23505' && (error.table === 'idempotency_keys' || /idempotency_keys/.test(error.constraint ?? ''))) || error.code === 'IDEMPOTENCY_RACE') {
+      error = reject('DUPLICATE_MESSAGE', 'Idempotency key was used by a concurrent request');
+    }
     if (error.code === '23505' && error.constraint === 'envelopes_task_request_lookup_idx') {
       error = reject('DUPLICATE_TASK_ID', 'task_id is already claimed by another task.request in this conversation', { task_id: envelope.body?.task_id });
     }
