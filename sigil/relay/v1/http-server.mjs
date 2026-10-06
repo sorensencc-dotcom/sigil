@@ -5,6 +5,7 @@ import { acceptFederatedEnvelope } from './accept-federated-envelope.mjs';
 import { verifyInboundRelayRequest, relayRejectSkewPayload } from './federation-relay-auth.mjs';
 import { acceptDirectoryRedemption, acceptDirectoryConfirmation, acceptDirectoryRevocation } from './accept-federation-directory.mjs';
 import { transitionDelivery } from './delivery-state.mjs';
+import { toReceiptRow } from './receipt-state.mjs';
 import { createBearerAuthenticator } from './transport-auth.mjs';
 import { handleRoomRoute } from './room-routes.mjs';
 import { createApprovalChallenge, coseKeyToPublicKey, parseAttestationObject, verifyPackedAttestation, verifyWebAuthnApproval, verifyWebAuthnAssertion } from './approval-ceremony.mjs';
@@ -425,6 +426,29 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       if (response.headersSent) return response.end();
       response.writeHead(503, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(JSON.stringify({ request_id: requestId, code: 'DATABASE_UNAVAILABLE', message: 'Rooms temporarily unavailable', details: {} }));
+    }
+    const receiptsMatch = request.method === 'GET' ? request.url.match(/^\/v1\/messages\/([^/?]+)\/receipts$/) : null;
+    if (receiptsMatch) {
+      if (!repository?.listReceiptsForMessage || !repository?.lookupMessageSender) return response.writeHead(503).end();
+      const messageId = decodeURIComponent(receiptsMatch[1]);
+      let rows = null;
+      try {
+        const sender = await repository.lookupMessageSender(messageId);
+        // Same answer for a non-sender and an unknown message, so message IDs
+        // cannot be probed. A forwarded federation message has no local
+        // envelopes row, so its sender gets this 404 too.
+        if (sender?.endpoint_id === principal.endpoint_id) rows = await repository.listReceiptsForMessage(messageId);
+      } catch (error) {
+        logger?.error?.('receipts read failed', error);
+        response.writeHead(503, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'DATABASE_UNAVAILABLE', message: 'Receipts temporarily unavailable', details: {} }));
+      }
+      if (!rows) {
+        response.writeHead(404, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'MESSAGE_NOT_FOUND', message: 'Message not found', details: {} }));
+      }
+      response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+      return response.end(JSON.stringify({ request_id: requestId, code: 'OK', message_id: messageId, receipts: rows.map(toReceiptRow) }));
     }
     if (request.method === 'GET' && request.url.startsWith('/v1/inbox')) {
       if (!repository?.listInbox) return response.writeHead(503).end();
