@@ -49,8 +49,8 @@ test('wireDataProtocol options stay in parity with createRelayServer/acceptEnvel
   // `createOnPersisted` factory -- the same factory wireDataProtocol's call
   // site must be handed, so both transports drive the exact same
   // stream.notify/notifyReceipt closure bound to the exact same `stream`.
-  assert.match(httpServerSource, /onPersisted:\s*createOnPersisted\(stream\)/, 'sanity check: http-server.mjs\'s acceptEnvelopeAsync call site no longer uses the shared createOnPersisted(stream) factory -- update this parity test');
-  assert.match(wireOptions, /onPersisted:\s*createOnPersisted\(stream\)/, 'wireDataProtocol\'s options object is missing "onPersisted: createOnPersisted(stream)" -- p2p-accepted envelopes will never notify WebSocket stream subscribers or emit delivery receipts');
+  assert.match(httpServerSource, /onPersisted:\s*createOnPersisted\(stream[,)]/, 'sanity check: http-server.mjs\'s acceptEnvelopeAsync call site no longer uses the shared createOnPersisted(stream) factory -- update this parity test');
+  assert.match(wireOptions, /onPersisted:\s*createOnPersisted\(stream[,)]/, 'wireDataProtocol\'s options object is missing "onPersisted: createOnPersisted(stream)" -- p2p-accepted envelopes will never notify WebSocket stream subscribers or emit delivery receipts');
 });
 
 // Regression for TODOS.md m7: --p2p used to hard-enable mDNS with no

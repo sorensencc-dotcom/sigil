@@ -593,6 +593,20 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       const row = envelopes.get(messageId);
       return row ? { endpoint_id: row.envelope.sender.endpoint_id } : null;
     },
+    // What a freshly inserted delivery's state is. The accept-time receipt
+    // frame reads it so the sender sees the row's real state. This store
+    // inserts `delivered` directly and its `listInbox` has no queued-to-delivered flip.
+    initialDeliveryState: 'delivered',
+    async listReceiptsForMessage(messageId) {
+      return [...deliveries.values()]
+        .filter((d) => d.message_id === messageId)
+        .sort((a, b) => {
+          if (a.queued_at !== b.queued_at) return a.queued_at < b.queued_at ? -1 : 1;
+          if (a.recipient_endpoint_id === b.recipient_endpoint_id) return 0;
+          return a.recipient_endpoint_id < b.recipient_endpoint_id ? -1 : 1;
+        })
+        .map((d) => ({ ...d }));
+    },
     async lookupEnvelopeStreamSequence(messageId) {
       return envelopes.get(messageId)?.streamSeq ?? null;
     },

@@ -360,3 +360,49 @@ test('failed must be a boolean when present; absent means false', async () => {
     assert.equal((await events(w))[0].envelope.body.kind, 'router_decision', 'absent failed is false');
   });
 });
+
+function receiptStream() {
+  const frames = [];
+  return { frames, notify() {}, notifyReceipt: (to, frame) => { frames.push({ to, ...frame }); } };
+}
+
+test('a router pick sends one receipt frame to the trigger sender after commit', async () => {
+  const stream = receiptStream();
+  await withWorld(async (w) => {
+    const triggerId = await humanMessage(w, 'hello');
+    assert.equal((await pick(w, { trigger_message_id: triggerId, invoke: ['ep_claude'] })).status, 200);
+    const running = await w.repository.lookupRunningInvocation(ROOM, 'ep_claude');
+    assert.equal(stream.frames.length, 1);
+    const [frame] = stream.frames;
+    assert.equal(frame.to, 'ep_web');
+    assert.equal(frame.message_id, triggerId);
+    assert.equal(frame.delivery_id, running.delivery_id);
+    assert.equal(frame.recipient_endpoint_id, 'ep_claude');
+    assert.equal(frame.state, w.repository.initialDeliveryState ?? 'delivered');
+    const repeat = await pick(w, { trigger_message_id: triggerId, invoke: ['ep_claude'] });
+    assert.equal(repeat.body.duplicate, true);
+    assert.equal(stream.frames.length, 1, 'a duplicate pick sends no second frame');
+  }, { stream });
+});
+
+test('a promoted queued invocation sends one receipt frame to its trigger sender', async () => {
+  const stream = receiptStream();
+  await withWorld(async (w) => {
+    const first = await humanMessage(w, 'first');
+    const second = await humanMessage(w, 'second');
+    assert.equal((await pick(w, { trigger_message_id: first, invoke: ['ep_claude'] })).status, 200);
+    assert.equal((await pick(w, { trigger_message_id: second, invoke: ['ep_claude'] })).status, 200);
+    stream.frames.length = 0;
+    const failed = await call(w.port, 'POST', `/v1/rooms/${ROOM}/invocations/fail`, 'Bearer claude', { reason: 'cli exited 1' });
+    assert.equal(failed.status, 200);
+    const running = await w.repository.lookupRunningInvocation(ROOM, 'ep_claude');
+    assert.equal(running.trigger_message_id, second);
+    assert.equal(stream.frames.length, 1);
+    const [frame] = stream.frames;
+    assert.equal(frame.to, 'ep_web');
+    assert.equal(frame.message_id, second);
+    assert.equal(frame.delivery_id, running.delivery_id);
+    assert.equal(frame.recipient_endpoint_id, 'ep_claude');
+    assert.equal(frame.state, w.repository.initialDeliveryState ?? 'delivered');
+  }, { stream });
+});

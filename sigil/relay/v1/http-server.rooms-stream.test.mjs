@@ -15,10 +15,12 @@ test('room fan-out notifies every recipient stream', async () => {
   });
   // Room recipients (fanout) get no streamSeq
   assert.deepEqual(notified, [['ep_claude', 'del_a', undefined], ['ep_codex', 'del_b', undefined]]);
-  // Sender's own receipt still carries streamSeq
-  assert.equal(receipts.length, 1);
-  assert.equal(receipts[0].endpointId, 'ep_web');
-  assert.equal(receipts[0].receipt.streamSeq, 3n, 'sender receipt should have streamSeq');
+  // One frame per fan-out target, same accept so same streamSeq
+  assert.equal(receipts.length, 2);
+  assert.deepEqual(receipts.map((r) => r.endpointId), ['ep_web', 'ep_web']);
+  assert.deepEqual(receipts.map((r) => r.receipt.delivery_id), ['del_a', 'del_b']);
+  assert.deepEqual(receipts.map((r) => r.receipt.recipient_endpoint_id), ['ep_claude', 'ep_codex']);
+  assert.ok(receipts.every((r) => r.receipt.streamSeq === 3n), 'fan-out frames carry streamSeq');
 });
 
 test('duplicates notify nobody', async () => {

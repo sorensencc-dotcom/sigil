@@ -396,7 +396,7 @@ async function cmdRelayUp(argv) {
       federationMode,
       federationIdentity,
       repository,
-      onPersisted: createOnPersisted(stream),
+      onPersisted: createOnPersisted(stream, { repository, logger: relayLogger }),
       stream_seq: { enabled: streamSequenceEnabled },
       logger: relayLogger,
       resendMetrics: relayMetrics,
