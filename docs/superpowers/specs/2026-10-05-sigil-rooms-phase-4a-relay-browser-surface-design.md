@@ -1,6 +1,6 @@
 # Sigil rooms phase 4a: relay browser surface design
 
-Status: draft for review, 2026-10-05.
+Status: draft for review, 2026-10-05; revised 2026-10-06 after code review.
 Parent spec: `docs/superpowers/specs/2026-10-02-sigil-rooms-design.md` (Clients section and delivery phase 4).
 Builds on: phase 3 (PR #23, merge `73f0b93`), which adds the router, `room.event`, and the relay system identity.
 
@@ -34,7 +34,7 @@ Out of scope, with the reason:
 - Approval cards and approval routes. They need the WebAuthn design.
 - The React package. That is 4b.
 - Routing-quality measurement. It is a separate task before relying on the 7B router.
-- Multi-relay ticket storage. Tickets live in one relay process; v1 runs one local relay.
+- Multi-relay ticket storage. Tickets live in one relay process; v1 runs one local relay. The main HTTP server and the stream server on `port+1` share one ticket store inside that process.
 - Per-human signing keys. The seam allows them later; no phase needs them yet.
 
 ## Decisions
@@ -55,7 +55,11 @@ Out of scope, with the reason:
 - Storage is in memory: SHA-256 of the ticket maps to `{endpoint_id, owner_id, human_id, expires_at}`. Raw tickets are never stored or logged. Entries live 60 seconds and are swept lazily.
 - At most 8 outstanding tickets per endpoint. A ninth request answers `429`.
 
-Redemption: the browser opens `/v1/stream?ticket=<t>`. The upgrade handler deletes the ticket on first read, so a replay fails. The socket then registers under the ticket's endpoint exactly as a bearer-authenticated socket does.
+Shared store: the stream server listens on `port+1`, separate from the HTTP server that issues tickets. `createRelay` builds one ticket store and passes the same instance to both, so a ticket issued on one port redeems on the other. A test issues on the HTTP port and redeems on the stream port.
+
+CORS and origins: the browser fetches its ticket from `POST /v1/rooms/ws-ticket` with its bearer token, so that route answers CORS preflight only for origins in a relay allowlist (`--browser-origin <origin>`, repeatable; default none, so no browser origin works until configured). The stream upgrade checks `Origin` against the same list. Same-origin and non-browser clients send no `Origin` and are unaffected.
+
+Redemption: the browser opens `/v1/stream?ticket=<t>`. The upgrade handler deletes the ticket on first read, so a replay fails. The socket registers in `browserClients` (see Sockets below), not in the bearer `clients` map.
 
 An unknown, expired, or reused ticket closes with 1008 `unauthorized`. The bearer and `sigil-bearer.` paths are unchanged for CLI and agent clients.
 
@@ -63,11 +67,15 @@ Residual exposure: the ticket travels in the URL, and URLs reach reverse-proxy l
 
 ## The `room.updated` frame
 
-Shape: `{type: 'room.updated', room_id, room_seq}`. It carries no message content, sender, or body.
+Shape: `{type: 'room.updated', room_id, room_seq?, changed: 'messages' | 'members'}`. It carries no message content, sender, or body.
+
+Membership changes do not consume a `room_seq`, so a `members` frame omits `room_seq`. The client reacts to `changed`: `messages` triggers the history fetch, `members` refetches the roster. Adding the field is cheaper than emitting a `room.event` row for every join and leave.
 
 `stream.notifyRoom(endpointId, {room_id, room_seq})` in `sigil/relay/v1/stream-server.mjs` sends it, with the same `readyState` guard as `notify`. It returns false when no socket is connected.
 
-Recipients are human members only, the same rule `emitRoomEvent` uses for fan-out. Agents keep the existing `delivered` frames; the bridges depend on them and this spec does not change that path.
+Recipients are every active human member of the room, including the sender, so the sender's other tabs refresh. `room.updated` does not reuse the `emitRoomEvent` fan-out. That fan-out drops a human at 500 unacked deliveries, and a browser-only human never acks, so they would go silent. The frame is a push hint that creates no delivery row and has no cap. Agents keep the existing `delivered` frames; the bridges depend on them and this spec does not change that path.
+
+Who acks: room deliveries addressed to a browser-only human stay `delivered` unless something acks them. The browser's history fetch acks every delivery for that human in the room up to the highest `room_seq` it fetched, through the existing ack route. The 4b client owns the call; the relay does not infer reads. Until the browser reads, receipts for that human show `delivered`, not `read`.
 
 The frame fires after commit, never inside the transaction, so it cannot announce a rolled-back row. Commit points:
 
@@ -75,14 +83,15 @@ The frame fires after commit, never inside the transaction, so it cannot announc
 2. Every `emitRoomEvent` commit (router decisions, Stop and fail events).
 3. Membership changes, so the roster refreshes.
 
-One helper, `notifyRoomHumans(room, roomSeq)`, is the only caller of `notifyRoom`, so no commit point can omit the frame.
+One helper, `notifyRoomHumans(room, {room_seq, changed})`, is the only caller of `notifyRoom`, so no commit point can omit the frame. The helper registers the frame inside `acceptEnvelopeAsync`, not in a route handler, so the HTTP envelope route, the p2p path, and the AgentMail path all send it.
 
 The existing `onPersisted` hook cannot carry this frame. `acceptEnvelopeAsync` calls it at `accept-envelope.mjs:439`, inside the `withTransaction` callback, before `COMMIT` in `with-transaction.mjs`. A frame sent from there can announce a row that a failed `COMMIT` then discards. (The existing `delivered` notifications share this timing. This spec leaves them unchanged.) The plan adds an after-commit queue instead:
 
-- `withTransaction` gives the callback a way to register after-commit callbacks, `afterCommit(fn)`.
-- `notifyRoomHumans` registers on that queue and sends nothing itself while a transaction is open.
-- The queue runs only after `COMMIT` succeeds and is dropped on rollback. A throwing callback is logged and never fails the already-committed request.
-- Callers outside a transaction send immediately.
+- There are two `withTransaction` implementations and both change: `sigil/relay/v1/with-transaction.mjs` (Postgres) and the method at `sigil/cli/memory-repository.mjs:101` (the in-memory repository behind `sigil relay up`, a wrapper with a rollback undo stack). Both expose `afterCommit(fn)`.
+- The queue lives in an `AsyncLocalStorage` store, so `notifyRoomHumans` finds the open transaction without threading a parameter through every caller. `memory-repository.mjs` already uses `AsyncLocalStorage` for its rollback stack.
+- Nested `withTransaction` calls share the outermost queue. Callbacks run only when the outermost transaction commits, and are dropped if any level rolls back.
+- A throwing callback is logged and never fails the already-committed request.
+- `notifyRoomHumans` outside a transaction sends immediately.
 
 A test forces `COMMIT` to fail and asserts that no frame arrives.
 
@@ -92,7 +101,7 @@ Client contract: on a frame, call `GET /v1/rooms/{id}/messages?after_seq=<last s
 
 Already verified: the history route returns `room.event` rows next to `room.message` rows. `listRoomMessages` filters on `conversation_id` and `room_seq` only, with no `message_type` filter (`postgres-repository.mjs:1830-1841`). The plan adds a test that pins this, and checks that the in-memory repository behaves the same.
 
-Verify during planning: whether `persistAcceptedEnvelope` returns `room_seq` to every call site.
+`persistAcceptedEnvelope` returns `room_seq` at no call site today. The two room callers, `accept-envelope.mjs:429` and `room-events.mjs:48`, already hold it in a local variable, so the plan passes that variable to `notifyRoomHumans`. The repository does not change. Duplicate-accept paths get `room_seq` from `lookupRoomMessage`.
 
 ## Human send route
 
@@ -102,13 +111,21 @@ Verify during planning: whether `persistAcceptedEnvelope` returns `room_seq` to 
 - Caller must be a human principal and a room member. The relay binds the sender from the authenticated token and ignores any sender field.
 - Response: `201 {message_id, room_seq}`. A repeated `idempotency_key` returns the original result with `200`.
 
-Signing seam: `signForEndpoint(endpoint_id)` returns a signer or throws `NO_SIGNING_KEY`. The v1 implementation holds the single identity loaded from `--room-human-identity <path>`. It refuses any other endpoint. At startup the relay checks that the identity is registered as a human endpoint. Routes call the seam and never read key material. The route also checks that the authenticated principal's endpoint equals the loaded identity's endpoint before it asks for a signer, so the seam is never the only guard.
+Idempotency. A retry that builds a fresh envelope with the same key would hit a unique-key conflict (`409`, or `500` when two retries race). The route therefore:
+
+1. Scopes the key to the room, so the same key in two rooms does not collide.
+2. Looks the key up before building an envelope and returns the stored `message_id` and `room_seq` with `200`.
+3. Catches a `23505` unique violation from a racing retry, re-reads the stored row, and answers `200` with it.
+
+Signing seam: `signForEndpoint(endpoint_id)` returns a signer or throws `NO_SIGNING_KEY`. The v1 implementation holds the single identity loaded from `--room-human-identity <path>`. It refuses any other endpoint. At startup the relay checks that the identity file's public key matches the key the registry holds for that endpoint, the way `ROOM_SYSTEM_KEY_MISMATCH` does for the system identity (`postgres-repository.mjs:494-499`, `memory-repository.mjs:234`), and refuses to start on a mismatch. Checking `kind` alone is not enough: the registry defaults `kind` to human while Postgres rows default to agent, so a kind check can pass or fail for the wrong reason. A relay-built envelope is signed with this key, so a mismatch would fail verification at accept time. Routes call the seam and never read key material. The route also checks that the authenticated principal's endpoint equals the loaded identity's endpoint before it asks for a signer, so the seam is never the only guard.
 
 Without `--room-human-identity`, the route answers `503`, as the router route does without `--room-system-identity`. Existing behavior is unchanged.
 
 Path: the relay builds the envelope with the `LocalOutbox` pattern `emitRoomEvent` uses, then sends it through the existing accept pipeline. Room policy, `room_seq` assignment, fan-out, the agent hop budget, and the router all run as they do for CLI-posted messages. There is no second persistence path.
 
-Verify during planning: whether the accept pipeline can be called in-process with a relay-built envelope or only through the HTTP handler. If only through the handler, extract a shared function. Do not call the route over loopback.
+Accept options. The send route must pass the same options as `POST /v1/envelopes`: `onPersisted`, `systemIdentity`, and the registered `stream_seq`. A shared options builder, used by both routes, keeps them in step. Without it the send route would skip the `delivered` frames, the router, or stream sequencing.
+
+Verified: `acceptEnvelopeAsync` is exported and already called in-process by the AgentMail and p2p paths, so no extraction is needed. The relay-built envelope passes verification only if the identity file's key matches the registry, which the startup check enforces. Do not call the route over loopback.
 
 ## Tests
 
@@ -117,14 +134,20 @@ Unit tests, in the repo's `*.test.mjs` pattern:
 - Ticket issue, single use, 60-second expiry, the 8-outstanding cap, human-only access, and no raw ticket in logs.
 - WebSocket upgrade accepts a valid ticket and rejects a replayed, expired, or unknown one with 1008.
 - `room.updated` frame shape, human-only recipients, no content.
-- Send route: validation reuse, member and human checks, `idempotency_key` replay returning `200`, and `503` without the flag.
+- Send route: validation reuse, member and human checks, `idempotency_key` replay returning `200`, two racing retries both answering `200` with one stored message, the same key in two rooms creating two messages, and `503` without the flag.
+- The send route and `POST /v1/envelopes` use the same accept options (shared builder).
+- Startup refuses a human identity whose key differs from the registry key for that endpoint.
+- Ticket store: issue on the HTTP port, redeem on the stream port. CORS preflight answers only allowlisted origins.
+- `room.updated` goes to every active human member, including the sender, with no 500-delivery cap, and a `members` frame carries `changed: 'members'` and no `room_seq`.
+- Nested `withTransaction`: after-commit callbacks run once, only when the outermost transaction commits, against both the Postgres and in-memory implementations.
 - The signing seam refuses any endpoint other than the loaded identity.
 
 Integration test: open a ticket socket, post as the human, and assert exactly one `room.updated` arrives after commit. Force a rollback and assert no frame arrives.
 
 Postgres test (`*.pg.test.mjs`, behind `assert-disposable-test-db.mjs`), closing the phase 3 gap: Stop and invocation-fail run concurrently with accepting a new `room.message` in the same room. Lock order was checked against the code: accept takes the room through `UPDATE rooms` when it assigns `room_seq` (`postgres-repository.mjs:1808-1815`), while Stop and fail call `lockRoom` first (`SELECT ... FOR UPDATE`, `:1816-1821`; `room-routes.mjs:202-230`), and `cancelRoomInvocations` touches only queued and running rows (`:1761-1768`). Codex's review found no lock-order inversion. The test pins that. The plan fixes exact assertions. The invariants:
 
-- No invocation is running after Stop commits.
+- No invocation triggered before the Stop event's `room_seq` is still running after Stop commits. An invocation triggered by a message with a higher `room_seq` is a new invocation and is allowed.
+- Stop that emits no event (nothing was queued or running) holds the same invariant. The test asserts it against the room's `room_seq` at the time Stop committed.
 - `room_seq` stays gapless.
 - Stop-event and message order matches `room_seq`.
 
