@@ -2,7 +2,8 @@
 .sigil-demo/
 .superpowers/
 node_modules/
-.claude/
+.claude/*
+!.claude/skills/
 .context/
 .ijfw/
 graft/
