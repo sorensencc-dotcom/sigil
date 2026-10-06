@@ -85,3 +85,20 @@ test('a repository failure answers 503 DATABASE_UNAVAILABLE, not a stack trace',
     assert.equal(result.body.code, 'DATABASE_UNAVAILABLE');
   });
 });
+
+test('a principal without an endpoint_id gets 404, same as an unknown message', async () => {
+  const strip = ({ request_id, ...rest }) => rest;
+  const noId = await withServer({ repository: repositoryWith(ROWS), authenticate: async () => ({}) }, (port) => getJson(port, '/v1/messages/msg_nope/receipts'));
+  const real = await withServer({ repository: repositoryWith(ROWS), authenticate: async () => ({}) }, (port) => getJson(port, '/v1/messages/msg_1/receipts'));
+  assert.equal(noId.status, 404);
+  assert.equal(real.status, 404);
+  assert.deepEqual(strip(noId.body), strip(real.body));
+});
+
+test('a malformed percent escape in the message ID answers 404, not a crash', async () => {
+  await withServer({ repository: repositoryWith(ROWS), authenticate: async () => ({ endpoint_id: 'ep_sender' }) }, async (port) => {
+    const result = await getJson(port, '/v1/messages/%E0%A4%A/receipts');
+    assert.equal(result.status, 404);
+    assert.equal(result.body.code, 'MESSAGE_NOT_FOUND');
+  });
+});

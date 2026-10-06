@@ -430,18 +430,24 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     const receiptsMatch = request.method === 'GET' ? request.url.match(/^\/v1\/messages\/([^/?]+)\/receipts$/) : null;
     if (receiptsMatch) {
       if (!repository?.listReceiptsForMessage || !repository?.lookupMessageSender) return response.writeHead(503).end();
-      const messageId = decodeURIComponent(receiptsMatch[1]);
+      let messageId = null;
       let rows = null;
       try {
+        messageId = decodeURIComponent(receiptsMatch[1]);
         const sender = await repository.lookupMessageSender(messageId);
         // Same answer for a non-sender and an unknown message, so message IDs
         // cannot be probed. A forwarded federation message has no local
         // envelopes row, so its sender gets this 404 too.
-        if (sender?.endpoint_id === principal.endpoint_id) rows = await repository.listReceiptsForMessage(messageId);
+        const callerId = principal?.endpoint_id;
+        if (callerId && sender?.endpoint_id === callerId) rows = await repository.listReceiptsForMessage(messageId);
       } catch (error) {
-        logger?.error?.('receipts read failed', error);
-        response.writeHead(503, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
-        return response.end(JSON.stringify({ request_id: requestId, code: 'DATABASE_UNAVAILABLE', message: 'Receipts temporarily unavailable', details: {} }));
+        // A malformed percent escape is an unknown message ID, not a server fault.
+        if (error instanceof URIError) rows = null;
+        else {
+          logger?.error?.('receipts read failed', error);
+          response.writeHead(503, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+          return response.end(JSON.stringify({ request_id: requestId, code: 'DATABASE_UNAVAILABLE', message: 'Receipts temporarily unavailable', details: {} }));
+        }
       }
       if (!rows) {
         response.writeHead(404, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
