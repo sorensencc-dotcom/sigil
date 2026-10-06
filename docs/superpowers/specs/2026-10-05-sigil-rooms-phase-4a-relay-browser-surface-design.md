@@ -59,6 +59,8 @@ Redemption: the browser opens `/v1/stream?ticket=<t>`. The upgrade handler delet
 
 An unknown, expired, or reused ticket closes with 1008 `unauthorized`. The bearer and `sigil-bearer.` paths are unchanged for CLI and agent clients.
 
+Residual exposure: the ticket travels in the URL, and URLs reach reverse-proxy logs, access logs, browser history, and devtools. Single use and a 60-second lifetime bound the damage, because a logged ticket is already spent. As an operational constraint, the relay never logs the raw request URL or query string for `/v1/stream`, and the docs tell anyone fronting the relay with a proxy to do the same. A test asserts that the relay's own log output never contains a ticket.
+
 ## The `room.updated` frame
 
 Shape: `{type: 'room.updated', room_id, room_seq}`. It carries no message content, sender, or body.
@@ -75,12 +77,22 @@ The frame fires after commit, never inside the transaction, so it cannot announc
 
 One helper, `notifyRoomHumans(room, roomSeq)`, is the only caller of `notifyRoom`, so no commit point can omit the frame.
 
+The existing `onPersisted` hook cannot carry this frame. `acceptEnvelopeAsync` calls it at `accept-envelope.mjs:439`, inside the `withTransaction` callback, before `COMMIT` in `with-transaction.mjs`. A frame sent from there can announce a row that a failed `COMMIT` then discards. (The existing `delivered` notifications share this timing. This spec leaves them unchanged.) The plan adds an after-commit queue instead:
+
+- `withTransaction` gives the callback a way to register after-commit callbacks, `afterCommit(fn)`.
+- `notifyRoomHumans` registers on that queue and sends nothing itself while a transaction is open.
+- The queue runs only after `COMMIT` succeeds and is dropped on rollback. A throwing callback is logged and never fails the already-committed request.
+- Callers outside a transaction send immediately.
+
+A test forces `COMMIT` to fail and asserts that no frame arrives.
+
+Sockets. `createStreamServer` keeps one socket per endpoint (`clients.set(endpointId, socket)`), so a second connection evicts the first. With one human identity, a browser tab and the CLI inbox listener share an endpoint and would evict each other. Ticket sockets therefore live in a separate map, `browserClients: Map<endpoint_id, Set<socket>>`. `notifyRoom` sends to every socket in the set, and a closing socket removes only itself. Two tabs both receive frames, and a browser never evicts a bearer socket. Bearer-socket behavior and the existing frames do not change.
+
 Client contract: on a frame, call `GET /v1/rooms/{id}/messages?after_seq=<last seen>`. On reconnect, make the same fetch for each open room. Frames are hints; the client dedupes by `room_seq`.
 
-Verify during planning:
+Already verified: the history route returns `room.event` rows next to `room.message` rows. `listRoomMessages` filters on `conversation_id` and `room_seq` only, with no `message_type` filter (`postgres-repository.mjs:1830-1841`). The plan adds a test that pins this, and checks that the in-memory repository behaves the same.
 
-- Whether `persistAcceptedEnvelope` returns `room_seq` to every call site.
-- Whether the history route returns `room.event` rows next to `room.message` rows. If it does not, 4a adds them, because the timeline needs decision and Stop events.
+Verify during planning: whether `persistAcceptedEnvelope` returns `room_seq` to every call site.
 
 ## Human send route
 
@@ -90,7 +102,7 @@ Verify during planning:
 - Caller must be a human principal and a room member. The relay binds the sender from the authenticated token and ignores any sender field.
 - Response: `201 {message_id, room_seq}`. A repeated `idempotency_key` returns the original result with `200`.
 
-Signing seam: `signForEndpoint(endpoint_id)` returns a signer or throws `NO_SIGNING_KEY`. The v1 implementation holds the single identity loaded from `--room-human-identity <path>`. It refuses any other endpoint. At startup the relay checks that the identity is registered as a human endpoint. Routes call the seam and never read key material.
+Signing seam: `signForEndpoint(endpoint_id)` returns a signer or throws `NO_SIGNING_KEY`. The v1 implementation holds the single identity loaded from `--room-human-identity <path>`. It refuses any other endpoint. At startup the relay checks that the identity is registered as a human endpoint. Routes call the seam and never read key material. The route also checks that the authenticated principal's endpoint equals the loaded identity's endpoint before it asks for a signer, so the seam is never the only guard.
 
 Without `--room-human-identity`, the route answers `503`, as the router route does without `--room-system-identity`. Existing behavior is unchanged.
 
@@ -110,7 +122,7 @@ Unit tests, in the repo's `*.test.mjs` pattern:
 
 Integration test: open a ticket socket, post as the human, and assert exactly one `room.updated` arrives after commit. Force a rollback and assert no frame arrives.
 
-Postgres test (`*.pg.test.mjs`, behind `assert-disposable-test-db.mjs`), closing the phase 3 gap: Stop and invocation-fail run concurrently with accepting a new `room.message` in the same room. The plan fixes exact assertions after reading `lockRoom` and `cancelRoomInvocations`. The invariants:
+Postgres test (`*.pg.test.mjs`, behind `assert-disposable-test-db.mjs`), closing the phase 3 gap: Stop and invocation-fail run concurrently with accepting a new `room.message` in the same room. Lock order was checked against the code: accept takes the room through `UPDATE rooms` when it assigns `room_seq` (`postgres-repository.mjs:1808-1815`), while Stop and fail call `lockRoom` first (`SELECT ... FOR UPDATE`, `:1816-1821`; `room-routes.mjs:202-230`), and `cancelRoomInvocations` touches only queued and running rows (`:1761-1768`). Codex's review found no lock-order inversion. The test pins that. The plan fixes exact assertions. The invariants:
 
 - No invocation is running after Stop commits.
 - `room_seq` stays gapless.
