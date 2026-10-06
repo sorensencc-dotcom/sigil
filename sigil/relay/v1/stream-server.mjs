@@ -40,6 +40,8 @@ export function createStreamServer({ server, authenticate, tokenHashes, ticketSt
     return true;
   };
   wss.on('connection', (socket, request) => {
+    // A malformed frame makes ws emit 'error'; without a listener that throws and kills the relay.
+    socket.on('error', () => socket.terminate());
     // Never log request.url: for /v1/stream it can carry a ticket.
     const ticketParam = new URL(request.url, 'http://localhost').searchParams.get('ticket');
     // Redeem first so a ticket is spent even when the origin check then fails.

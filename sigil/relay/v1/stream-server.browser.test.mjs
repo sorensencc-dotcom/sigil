@@ -153,3 +153,16 @@ test('the stream server never logs a raw ticket', async () => {
   first.socket.close(); await r.done();
   assert.equal(JSON.stringify(lines).includes(ticket), false);
 });
+
+test('a server-side socket error terminates that socket and does not crash the relay', async () => {
+  const r = await rig();
+  const a = await r.open(`?ticket=${r.ticketStore.issue(principal).ticket}`);
+  const b = await r.open(`?ticket=${r.ticketStore.issue(principal).ticket}`);
+  // Masked text frame (zero mask) with invalid UTF-8: the server receiver emits 'error'.
+  a.socket._socket.write(Buffer.from([0x81, 0x80 | 2, 0, 0, 0, 0, 0xff, 0xfe]));
+  await settle();
+  assert.equal(r.stream.notifyRoom('ep_h', { room_id: 'room_1', room_seq: 1, changed: 'messages' }), true);
+  await settle();
+  assert.equal(b.frames.length, 1);
+  b.socket.close(); await r.done();
+});
