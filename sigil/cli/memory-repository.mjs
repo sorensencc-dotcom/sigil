@@ -7,6 +7,7 @@ import { transitionDelivery } from '../relay/v1/delivery-state.mjs';
 import { boundedDirectoryExpiry } from '../relay/v1/auth-policy.mjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { identityKeys } from './identity.mjs';
+import { withAfterCommitScope } from '../relay/v1/after-commit.mjs';
 
 const SEEDED_CAPABILITIES = new Map([
   ['sigil.core/read_shared_context', { namespace: 'sigil.core', risk_tier: 'standard' }],
@@ -99,21 +100,23 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     // exists so acceptEnvelopeAsync's repository-aware path works unchanged
     // against this repository too (design §12 dual-repository equivalence).
     async withTransaction(fn) {
-      const parent = transactionRollbackStore.getStore() ?? null;
-      const rollbacks = [];
-      return transactionRollbackStore.run(rollbacks, async () => {
-        try {
-          const result = await fn(null);
-          // Nested success: merge child undos into parent so a later parent
-          // throw still reverses the nested mutations.
-          if (parent) {
-            for (const undo of rollbacks) parent.push(undo);
+      return withAfterCommitScope(async () => {
+        const parent = transactionRollbackStore.getStore() ?? null;
+        const rollbacks = [];
+        return transactionRollbackStore.run(rollbacks, async () => {
+          try {
+            const result = await fn(null);
+            // Nested success: merge child undos into parent so a later parent
+            // throw still reverses the nested mutations.
+            if (parent) {
+              for (const undo of rollbacks) parent.push(undo);
+            }
+            return result;
+          } catch (error) {
+            for (const undo of rollbacks.reverse()) undo();
+            throw error;
           }
-          return result;
-        } catch (error) {
-          for (const undo of rollbacks.reverse()) undo();
-          throw error;
-        }
+        });
       });
     },
     async assignStreamSequence(_client, senderEndpointId, conversationId) {

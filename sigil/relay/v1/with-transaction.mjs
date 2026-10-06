@@ -1,3 +1,5 @@
+import { withAfterCommitScope } from './after-commit.mjs';
+
 /**
  * Executes a multi-step database workflow inside a single transaction
  * on a single, isolated pool connection client.
@@ -6,14 +8,7 @@
  * @param {function(import('pg').PoolClient): Promise<any>} fn - The transactional operations callback
  * @returns {Promise<any>} The result of the callback
  */
-export async function withTransaction(pool, fn, { logger = console } = {}) {
-  if (!pool || typeof pool.connect !== 'function') {
-    throw new Error('Transaction execution requires a valid pg connection pool instance.');
-  }
-  if (typeof fn !== 'function') {
-    throw new Error('Transaction execution requires a callback function.');
-  }
-
+async function runTransaction(pool, fn, { logger }) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -34,3 +29,13 @@ export async function withTransaction(pool, fn, { logger = console } = {}) {
   }
 }
 
+
+export async function withTransaction(pool, fn, { logger = console } = {}) {
+  if (!pool || typeof pool.connect !== 'function') {
+    throw new Error('Transaction execution requires a valid pg connection pool instance.');
+  }
+  if (typeof fn !== 'function') {
+    throw new Error('Transaction execution requires a callback function.');
+  }
+  return withAfterCommitScope(() => runTransaction(pool, fn, { logger }), { logger });
+}
