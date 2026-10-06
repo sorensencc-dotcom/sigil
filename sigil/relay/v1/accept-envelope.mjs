@@ -3,6 +3,7 @@ import { validateEnvelope, reject, signedBytes, checkRecipientLocality } from '.
 import { assertAgentMayPost, applyRoomDispatch } from './room-dispatch.mjs';
 import { authorizeRoomEnvelope, assertRoomTypeHasRoom, assertNotRoomConversation } from './room-policy.mjs';
 import { resolveRateLimits, resolveStreamSequence, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
+import { notifyRoomHumans } from './room-notify.mjs';
 import { writeRejectionAudit } from './rejection-audit.mjs';
 import { decideRoute, buildForwardRequest, signForwardRequest, postForward } from './federation-router.mjs';
 import { enforceCapabilityRiskGate } from './capability-risk-gate.mjs';
@@ -432,8 +433,11 @@ async function acceptWithRepository(envelope, options) {
     // directly -- kept here so repository-backed callers (postgres, memory)
     // still see the same row shape regardless of transport.
     const persisted = await repository.persistAcceptedEnvelope({ envelope, ...result, canonical_bytes: signedBytes(envelope), action_hash: result.canonical_hash, streamSeq, roomSeq, roomFanout }, client);
+    if (room && envelope.message_type === 'room.message' && !persisted?.duplicate) {
+      await notifyRoomHumans({ repository, stream: options.stream, registered: options.registered, client, roomId: envelope.conversation_id, roomSeq, changed: 'messages', logger: options.logger });
+    }
     const dispatch = roomPlan
-      ? await applyRoomDispatch({ envelope, room, plan: roomPlan, completing, repository, client, now, inboxDepthLimit: options.inboxDepthLimit ?? DEFAULT_INBOX_DEPTH_LIMIT, registered: options.registered, systemIdentity: options.systemIdentity })
+      ? await applyRoomDispatch({ envelope, room, plan: roomPlan, completing, repository, client, now, inboxDepthLimit: options.inboxDepthLimit ?? DEFAULT_INBOX_DEPTH_LIMIT, registered: options.registered, systemIdentity: options.systemIdentity, stream: options.stream })
       : null;
     const persistedWithStreamSeq = { ...persisted, streamSeq, deliveryState: repository.initialDeliveryState ?? 'delivered', ...(dispatch ? { roomDeliveries: dispatch.roomDeliveries } : {}) };
     if (options.onPersisted) await options.onPersisted({ envelope, persisted: persistedWithStreamSeq });

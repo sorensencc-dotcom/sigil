@@ -433,7 +433,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       const result = await acceptEnvelopeAsync(envelope, {
         registered: registry, request_id: requestId, now, repository, relayDomain, persist,
         federationMode, federationIdentity, fetchImpl, stream_seq: streamSequence, resendMetrics, logger,
-        onPersisted: createOnPersisted(stream, { repository, logger }), systemIdentity: roomSystemIdentity,
+        onPersisted: createOnPersisted(stream, { repository, logger }), systemIdentity: roomSystemIdentity, stream,
       });
       response.writeHead(result.status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(result.body ? JSON.stringify(result.body) : '');

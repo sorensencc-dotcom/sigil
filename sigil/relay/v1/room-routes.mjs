@@ -4,6 +4,7 @@ import { emitRoomEvent } from './room-events.mjs';
 import { promoteNextInvocation, dispatchToTarget, emitRefusal } from './room-dispatch.mjs';
 import { isAgentMember, isRouterMember } from './room-policy.mjs';
 import { clampReason } from '../../contracts/v1/room-event-schema.mjs';
+import { notifyRoomHumans } from './room-notify.mjs';
 import { sendReceiptFrame } from './receipt-notify.mjs';
 
 const MANAGER_ROLES = new Set(['owner', 'room_manager']);
@@ -105,6 +106,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     if (!targetIsAgent && responseMode !== null) return fail(response, requestId, 400, 'INVALID_REQUEST', 'response_mode applies only to agent endpoints');
     try {
       const member = await repository.addRoomMember({ conversationId: roomId, endpointId, role, responseMode, addedByHumanId: principal.human_id, now });
+      await notifyRoomHumans({ repository, stream, registered: registry, client: null, roomId, changed: 'members', logger: logger ?? console });
       return send(response, requestId, 201, { code: 'OK', member });
     } catch (error) {
       if (error.code === 'ROOM_MEMBER_EXISTS') return fail(response, requestId, 409, 'ROOM_MEMBER_EXISTS', error.message);
@@ -119,6 +121,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     if (!target) return fail(response, requestId, 404, 'ROOM_MEMBER_NOT_FOUND', 'Member not found');
     if (target.role === 'owner') return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', 'The room owner cannot be removed');
     await repository.removeRoomMember({ conversationId: roomId, endpointId: targetEndpointId, now });
+    await notifyRoomHumans({ repository, stream, registered: registry, client: null, roomId, changed: 'members', logger: logger ?? console });
     return send(response, requestId, 200, { code: 'OK', removed: true });
   }
 
@@ -184,10 +187,10 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
         }
         items.push(result.invocation);
         if (result.roomDelivery) deliveries.push(result.roomDelivery);
-        if (result.invocation.status === 'refused') await emitRefusal({ systemIdentity, repository, client, room, invocation: result.invocation, now, inboxDepthLimit, registered: registry });
+        if (result.invocation.status === 'refused') await emitRefusal({ systemIdentity, repository, client, room, invocation: result.invocation, now, inboxDepthLimit, registered: registry, stream });
         else accepted.push(endpointId);
       }
-      await emitRoomEvent({ identity: systemIdentity, repository, client, room, body: { kind: failed ? 'router_failed' : 'router_decision', endpoint_ids: accepted, ...(reason ? { reason } : {}) }, idempotencyKey: decisionKey, now, inboxDepthLimit, registered: registry });
+      await emitRoomEvent({ identity: systemIdentity, repository, client, room, body: { kind: failed ? 'router_failed' : 'router_decision', endpoint_ids: accepted, ...(reason ? { reason } : {}) }, idempotencyKey: decisionKey, now, inboxDepthLimit, registered: registry, stream });
       return { items, duplicate: false, deliveries };
     });
     if (outcome.invalid) return fail(response, requestId, 422, 'INVALID_REQUEST', 'trigger_message_id must name a human room.message without mentions');
@@ -211,7 +214,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
       // A late failure from an older bridge turn must not fail a newer invocation.
       if (expectedId !== null && running.invocation_id !== expectedId) return null;
       const invocation = await repository.finishInvocation(running.invocation_id, { status: 'failed', reason, now }, client);
-      const promoted = await promoteNextInvocation({ roomId, endpointId: principal.endpoint_id, repository, client, now, inboxDepthLimit, registered: registry, systemIdentity, room: access.room });
+      const promoted = await promoteNextInvocation({ roomId, endpointId: principal.endpoint_id, repository, client, now, inboxDepthLimit, registered: registry, systemIdentity, room: access.room, stream });
       return { invocation, promoted };
     });
     if (!outcome) return fail(response, requestId, 404, 'INVOCATION_NOT_FOUND', 'No matching running invocation for this endpoint in this room');
@@ -233,7 +236,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
       const rows = await repository.cancelRoomInvocations(roomId, { now }, client);
       if (systemIdentity && rows.length) {
         for (const invocation of rows) {
-          await emitRoomEvent({ identity: systemIdentity, repository, client, room: access.room, body: { kind: 'invocation_stopped', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: 'stopped' }, idempotencyKey: `evt_stopped_${invocation.invocation_id}`, now, inboxDepthLimit, registered: registry });
+          await emitRoomEvent({ identity: systemIdentity, repository, client, room: access.room, body: { kind: 'invocation_stopped', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: 'stopped' }, idempotencyKey: `evt_stopped_${invocation.invocation_id}`, now, inboxDepthLimit, registered: registry, stream });
         }
       }
       return rows;
