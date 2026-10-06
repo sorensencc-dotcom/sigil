@@ -23,6 +23,8 @@ Correction to the phase 3 wrap: the relay has no SSE. Its push transport is the 
 In scope:
 
 - `POST /v1/rooms/ws-ticket` and ticket redemption on the WebSocket upgrade.
+- `POST /v1/rooms/{room_id}/ack`, so a browser-only human can mark room deliveries read.
+- The `--browser-origin` allowlist and CORS on every route the browser calls.
 - A `room.updated` frame sent to human members after each room commit.
 - `POST /v1/rooms/{room_id}/messages`, with relay-side signing through a `signForEndpoint` seam.
 - The `--room-human-identity <path>` relay flag.
@@ -42,7 +44,7 @@ Out of scope, with the reason:
 | Decision | Choice | Reason |
 |---|---|---|
 | Browser WebSocket auth | Single-use ticket from `POST /v1/rooms/ws-ticket` | The existing `sigil-bearer.` subprotocol already works in a browser, but it sends the long-lived token in a header that tunnels and proxies log. Mobile and other-human phases need the ticket anyway. |
-| Pushed frame | `room.updated` with `{room_id, room_seq}`, no content | One render path for live updates, reconnects, and catch-up. A dropped frame is repaired by the next fetch. |
+| Pushed frame | `room.updated` with `{room_id, room_seq?, changed}`, no content | One render path for live updates, reconnects, and catch-up. A dropped frame is repaired by the next fetch. |
 | Scope of 4a | Push channel plus send | Gives 4b a working timeline with send and Stop on a finished relay. |
 | Human signing | One identity loaded by `--room-human-identity`, behind `signForEndpoint` | Same trust boundary as today's CLI on a single-owner localhost. The seam keeps per-human keys a later swap. |
 
@@ -55,9 +57,9 @@ Out of scope, with the reason:
 - Storage is in memory: SHA-256 of the ticket maps to `{endpoint_id, owner_id, human_id, expires_at}`. Raw tickets are never stored or logged. Entries live 60 seconds and are swept lazily.
 - At most 8 outstanding tickets per endpoint. A ninth request answers `429`.
 
-Shared store: the stream server listens on `port+1`, separate from the HTTP server that issues tickets. `createRelay` builds one ticket store and passes the same instance to both, so a ticket issued on one port redeems on the other. A test issues on the HTTP port and redeems on the stream port.
+Shared store: the stream server listens on `port+1`, separate from the HTTP server that issues tickets. `cmdRelayUp` in `sigil/cli/sigil.mjs` builds one ticket store and passes the same instance to both (`createRelayServer` and `createStreamServer` each take it as a parameter; there is no `createRelay` function), so a ticket issued on one port redeems on the other. A test issues on the HTTP port and redeems on the stream port.
 
-CORS and origins: the browser fetches its ticket from `POST /v1/rooms/ws-ticket` with its bearer token, so that route answers CORS preflight only for origins in a relay allowlist (`--browser-origin <origin>`, repeatable; default none, so no browser origin works until configured). The stream upgrade checks `Origin` against the same list. Same-origin and non-browser clients send no `Origin` and are unaffected.
+CORS and origins: browsers send `Origin` on cross-origin requests and on every WebSocket upgrade, and also on some same-origin requests (`POST`, and `fetch` with CORS mode), so a browser client cannot rely on sending none. The relay keeps an origin allowlist (`--browser-origin <origin>`, repeatable; default none, so no browser origin works until configured). CORS preflight and response headers apply to every route the browser calls: `POST /v1/rooms/ws-ticket`, `POST /v1/rooms/{room_id}/messages`, `GET /v1/rooms/{room_id}/messages` (history), the room ack route below, and the room list and member routes the 4b client uses. The stream upgrade checks `Origin` against the same list and closes 1008 on a mismatch. A request with no `Origin` header (CLI and agent clients) skips the check. The allowlist matches origins exactly (scheme, host, port) and never reflects an arbitrary `Origin` back. Where the browser gets its bearer token: from the existing human login, `POST /v1/auth/login`, which returns the token the other routes already accept. The 4b client holds it in memory only, never in `localStorage` or a URL. The plan confirms what `/v1/auth/login` returns and its lifetime before 4b depends on it, and records the answer in the 4b spec.
 
 Redemption: the browser opens `/v1/stream?ticket=<t>`. The upgrade handler deletes the ticket on first read, so a replay fails. The socket registers in `browserClients` (see Sockets below), not in the bearer `clients` map.
 
@@ -71,11 +73,13 @@ Shape: `{type: 'room.updated', room_id, room_seq?, changed: 'messages' | 'member
 
 Membership changes do not consume a `room_seq`, so a `members` frame omits `room_seq`. The client reacts to `changed`: `messages` triggers the history fetch, `members` refetches the roster. Adding the field is cheaper than emitting a `room.event` row for every join and leave.
 
-`stream.notifyRoom(endpointId, {room_id, room_seq})` in `sigil/relay/v1/stream-server.mjs` sends it, with the same `readyState` guard as `notify`. It returns false when no socket is connected.
+`stream.notifyRoom(endpointId, {room_id, room_seq, changed})` in `sigil/relay/v1/stream-server.mjs` sends it (`room_seq` is omitted for `changed: 'members'`), with the same `readyState` guard as `notify`. It returns false when no socket is connected.
 
 Recipients are every active human member of the room, including the sender, so the sender's other tabs refresh. `room.updated` does not reuse the `emitRoomEvent` fan-out. That fan-out drops a human at 500 unacked deliveries, and a browser-only human never acks, so they would go silent. The frame is a push hint that creates no delivery row and has no cap. Agents keep the existing `delivered` frames; the bridges depend on them and this spec does not change that path.
 
-Who acks: room deliveries addressed to a browser-only human stay `delivered` unless something acks them. The browser's history fetch acks every delivery for that human in the room up to the highest `room_seq` it fetched, through the existing ack route. The 4b client owns the call; the relay does not infer reads. Until the browser reads, receipts for that human show `delivered`, not `read`.
+Who acks, and why the existing ack route cannot: room deliveries start `queued` on Postgres, and the history route never moves them. Postgres refuses `queued` to `acknowledged` (`delivery-state.mjs` allows only `queued` to `delivered` or `delivery_rejected`), and history rows carry no `delivery_id` for the browser to ack. A browser-only human would otherwise never ack and the sender would never see `read`.
+
+Decision: a bulk route, `POST /v1/rooms/{room_id}/ack` with body `{up_to_room_seq}`. In one transaction it moves every delivery for the caller's endpoint on room messages with `room_seq` at or below that value to `acknowledged`, from `queued` or `delivered`. It does this through a dedicated repository method, `acknowledgeRoomDeliveries`, not by loosening `canTransition` for every caller, so the state machine stays unchanged everywhere else. Rows already `acknowledged` or later are left alone, which makes the call idempotent. The caller must be a room member (`404 ROOM_NOT_FOUND` otherwise). After the transaction commits, the route sends one `delivery.receipt` frame per row it moved, each in its own `try`, through `sendReceiptFrame`. The alternative, adding `delivery_id` to history rows and flipping `queued` to `delivered` on read, needs one ack call per row and changes the history shape the 4b client verifies against `canonical_bytes`, so it is rejected. The 4b client calls the route after each history fetch with the highest `room_seq` it rendered; the relay does not infer reads. Until it does, the sender's receipts for that human show `queued` or `delivered`, not `read`.
 
 The frame fires after commit, never inside the transaction, so it cannot announce a rolled-back row. Commit points:
 
@@ -115,7 +119,8 @@ Idempotency. A retry that builds a fresh envelope with the same key would hit a 
 
 1. Scopes the key to the room, so the same key in two rooms does not collide.
 2. Looks the key up before building an envelope and returns the stored `message_id` and `room_seq` with `200`.
-3. Catches a `23505` unique violation from a racing retry, re-reads the stored row, and answers `200` with it.
+3. Handles a racing retry that loses the insert. `acceptEnvelopeAsync` turns any error it does not define into `500 INTERNAL_ERROR` (`toResponse`, `accept-envelope.mjs:117-127`), so a raw `23505` never reaches the route. The accept pipeline therefore maps a unique violation on the idempotency key to its own typed code, `IDEMPOTENCY_RACE`, added to `statusByCode`. The send route catches that code, re-reads the stored row through the idempotency lookup, and answers `200` with the stored `message_id` and `room_seq`. `IDEMPOTENCY_RACE` is never returned to a client.
+4. The in-memory repository must reject a duplicate key the same way. Today it overwrites the earlier entry silently (`persistAcceptedEnvelope` sets the `idempotency` map without checking), so a relay without a database would accept two messages for one key. The plan makes it throw `IDEMPOTENCY_RACE` and tests both repositories.
 
 Signing seam: `signForEndpoint(endpoint_id)` returns a signer or throws `NO_SIGNING_KEY`. The v1 implementation holds the single identity loaded from `--room-human-identity <path>`. It refuses any other endpoint. At startup the relay checks that the identity file's public key matches the key the registry holds for that endpoint, the way `ROOM_SYSTEM_KEY_MISMATCH` does for the system identity (`postgres-repository.mjs:494-499`, `memory-repository.mjs:234`), and refuses to start on a mismatch. Checking `kind` alone is not enough: the registry defaults `kind` to human while Postgres rows default to agent, so a kind check can pass or fail for the wrong reason. A relay-built envelope is signed with this key, so a mismatch would fail verification at accept time. Routes call the seam and never read key material. The route also checks that the authenticated principal's endpoint equals the loaded identity's endpoint before it asks for a signer, so the seam is never the only guard.
 
@@ -123,7 +128,7 @@ Without `--room-human-identity`, the route answers `503`, as the router route do
 
 Path: the relay builds the envelope with the `LocalOutbox` pattern `emitRoomEvent` uses, then sends it through the existing accept pipeline. Room policy, `room_seq` assignment, fan-out, the agent hop budget, and the router all run as they do for CLI-posted messages. There is no second persistence path.
 
-Accept options. The send route must pass the same options as `POST /v1/envelopes`: `onPersisted`, `systemIdentity`, and the registered `stream_seq`. A shared options builder, used by both routes, keeps them in step. Without it the send route would skip the `delivered` frames, the router, or stream sequencing.
+Accept options. `acceptEnvelopeAsync` has four call sites, and each builds its own options today: `POST /v1/envelopes` (`http-server.mjs`), the new send route, the libp2p path (`p2p-data-protocol.mjs`, through `wireDataProtocol`), and AgentMail (`agentmail-adapter.mjs`). `POST /v1/envelopes` passes `registered`, `request_id`, `now`, `repository`, `relayDomain`, `persist`, `federationMode`, `federationIdentity`, `fetchImpl`, `stream_seq`, `resendMetrics`, `logger`, `onPersisted`, and `systemIdentity`. The p2p path does not pass `systemIdentity`, and AgentMail passes none of the stream or room options, so room messages accepted through them would skip routing and `room.updated`. One options builder, `buildAcceptOptions`, produces the full set, and all four call sites use it, overriding only what differs per transport (`request_id`, and for p2p the peer identity check). The plan adds a test that fails when any call site omits an option the builder sets.
 
 Verified: `acceptEnvelopeAsync` is exported and already called in-process by the AgentMail and p2p paths, so no extraction is needed. The relay-built envelope passes verification only if the identity file's key matches the registry, which the startup check enforces. Do not call the route over loopback.
 
@@ -135,7 +140,10 @@ Unit tests, in the repo's `*.test.mjs` pattern:
 - WebSocket upgrade accepts a valid ticket and rejects a replayed, expired, or unknown one with 1008.
 - `room.updated` frame shape, human-only recipients, no content.
 - Send route: validation reuse, member and human checks, `idempotency_key` replay returning `200`, two racing retries both answering `200` with one stored message, the same key in two rooms creating two messages, and `503` without the flag.
-- The send route and `POST /v1/envelopes` use the same accept options (shared builder).
+- All four accept call sites use the shared options builder, and a room message accepted over p2p or AgentMail sends `room.updated` and reaches the router.
+- `POST /v1/rooms/{room_id}/ack` moves `queued` and `delivered` deliveries to `acknowledged` up to `up_to_room_seq`, is idempotent, rejects non-members, leaves other callers' deliveries alone, and sends one receipt frame per moved row.
+- A racing retry loses the insert, gets `IDEMPOTENCY_RACE` internally, and the client sees `200` with the stored result. The in-memory repository throws on a duplicate key instead of overwriting.
+- CORS: preflight and response headers on every browser-called route for an allowlisted origin, none for another origin, and the stream upgrade rejects a bad `Origin` with 1008 while a request with no `Origin` passes.
 - Startup refuses a human identity whose key differs from the registry key for that endpoint.
 - Ticket store: issue on the HTTP port, redeem on the stream port. CORS preflight answers only allowlisted origins.
 - `room.updated` goes to every active human member, including the sender, with no 500-delivery cap, and a `members` frame carries `changed: 'members'` and no `room_seq`.
@@ -156,7 +164,8 @@ The test runs in a loop, because one pass proves little for a race.
 ## Contracts and docs
 
 - Add `ws-ticket`, the send route, and the `room.updated` frame to `relay-api.json`.
-- Document `--room-human-identity` in the `relay up` help text in `sigil/cli/sigil.mjs`.
+- Document `--room-human-identity` and `--browser-origin` in the `relay up` help text in `sigil/cli/sigil.mjs`.
+- Add `POST /v1/rooms/{room_id}/ack` to `relay-api.json`.
 - Update the parent spec's phase 4 line to point at the 4a/4b split.
 
 ## Risks
