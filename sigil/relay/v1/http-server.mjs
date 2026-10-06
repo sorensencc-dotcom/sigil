@@ -6,6 +6,7 @@ import { verifyInboundRelayRequest, relayRejectSkewPayload } from './federation-
 import { acceptDirectoryRedemption, acceptDirectoryConfirmation, acceptDirectoryRevocation } from './accept-federation-directory.mjs';
 import { transitionDelivery } from './delivery-state.mjs';
 import { toReceiptRow } from './receipt-state.mjs';
+import { sendReceiptFrame } from './receipt-notify.mjs';
 import { createBearerAuthenticator } from './transport-auth.mjs';
 import { handleRoomRoute } from './room-routes.mjs';
 import { createApprovalChallenge, coseKeyToPublicKey, parseAttestationObject, verifyPackedAttestation, verifyWebAuthnApproval, verifyWebAuthnAssertion } from './approval-ceremony.mjs';
@@ -491,45 +492,44 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'Invalid processing state', details: {} }));
       }
       if (action === 'ack' && repository?.acknowledgeDelivery) {
+        let acked;
         try {
-          const acked = await repository.acknowledgeDelivery({ deliveryId, endpointId: principal.endpoint_id, now });
-          if (stream && repository.lookupMessageSender) {
-            const messageId = acked.delivery?.message_id ?? acked.message_id;
-            const sender = await repository.lookupMessageSender(messageId);
-            if (sender) {
-              const streamSeq = typeof repository.lookupEnvelopeStreamSequence === 'function'
-                ? await repository.lookupEnvelopeStreamSequence(messageId)
-                : null;
-              stream.notifyReceipt(sender.endpoint_id, { message_id: messageId, delivery_id: deliveryId, state: 'acknowledged', at: now.toISOString(), streamSeq });
-            }
-          }
-          response.writeHead(204, { 'x-sigil-request-id': requestId });
-          return response.end();
+          acked = await repository.acknowledgeDelivery({ deliveryId, endpointId: principal.endpoint_id, now });
         } catch (error) {
           response.writeHead(409, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
           return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'DELIVERY_UNAVAILABLE', message: error.message, details: {} }));
         }
-      }
-      if (!repository?.transitionDelivery || !repository?.getDelivery) return response.writeHead(503).end();
-      try {
-        const current = await repository.getDelivery(deliveryId, principal.endpoint_id);
-        const next = transitionDelivery(current, target, { now, reason: body.reason ?? null });
-        await repository.transitionDelivery(deliveryId, principal.endpoint_id, target, { next });
-        if (stream && repository.lookupMessageSender) {
-          const sender = await repository.lookupMessageSender(current.message_id);
-          if (sender) {
-            const streamSeq = typeof repository.lookupEnvelopeStreamSequence === 'function'
-              ? await repository.lookupEnvelopeStreamSequence(current.message_id)
-              : null;
-            stream.notifyReceipt(sender.endpoint_id, { message_id: current.message_id, delivery_id: deliveryId, state: next.state, at: next.updated_at, streamSeq });
-          }
-        }
+        // The ack has committed. A failed frame must not turn it into a 409,
+        // so the frame goes out after the try above and sendReceiptFrame never throws.
+        await sendReceiptFrame({ stream, repository, logger }, {
+          message_id: acked.delivery?.message_id ?? acked.message_id,
+          delivery_id: deliveryId,
+          recipient_endpoint_id: principal.endpoint_id,
+          state: 'acknowledged',
+          at: now.toISOString(),
+        });
         response.writeHead(204, { 'x-sigil-request-id': requestId });
         return response.end();
+      }
+      if (!repository?.transitionDelivery || !repository?.getDelivery) return response.writeHead(503).end();
+      let next; let current;
+      try {
+        current = await repository.getDelivery(deliveryId, principal.endpoint_id);
+        next = transitionDelivery(current, target, { now, reason: body.reason ?? null });
+        await repository.transitionDelivery(deliveryId, principal.endpoint_id, target, { next });
       } catch (error) {
         response.writeHead(409, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'DELIVERY_UNAVAILABLE', message: error.message, details: {} }));
       }
+      await sendReceiptFrame({ stream, repository, logger }, {
+        message_id: current.message_id,
+        delivery_id: deliveryId,
+        recipient_endpoint_id: principal.endpoint_id,
+        state: next.state,
+        at: next.updated_at,
+      });
+      response.writeHead(204, { 'x-sigil-request-id': requestId });
+      return response.end();
     }
     if (request.method === 'POST' && request.url === '/v1/identities') {
       if (!principal?.human_id) { response.writeHead(403, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: 'HUMAN_CONTEXT_REQUIRED', message: 'An authenticated human context is required', details: {} })); }

@@ -102,3 +102,73 @@ test('a malformed percent escape in the message ID answers 404, not a crash', as
     assert.equal(result.body.code, 'MESSAGE_NOT_FOUND');
   });
 });
+
+function postJson(port, path, body = {}) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ port, method: 'POST', path, headers: { 'content-type': 'application/json' } }, (res) => {
+      let raw = '';
+      res.on('data', (chunk) => { raw += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode, body: raw ? JSON.parse(raw) : null }));
+    });
+    req.on('error', reject);
+    req.end(JSON.stringify(body));
+  });
+}
+
+test('ack sends a frame naming the recipient and the mapped state', async () => {
+  const frames = [];
+  const repository = {
+    async acknowledgeDelivery({ deliveryId }) { return { delivery_id: deliveryId, message_id: 'msg_1' }; },
+    async lookupMessageSender() { return { endpoint_id: 'ep_sender' }; },
+  };
+  const stream = { notifyReceipt: (endpointId, frame) => { frames.push({ endpointId, frame }); return true; } };
+  await withServer({ repository, stream, authenticate: async () => ({ endpoint_id: 'ep_recipient' }) }, async (port) => {
+    assert.equal((await postJson(port, '/v1/deliveries/del_1/ack')).status, 204);
+  });
+  assert.equal(frames.length, 1);
+  assert.equal(frames[0].endpointId, 'ep_sender');
+  assert.equal(frames[0].frame.recipient_endpoint_id, 'ep_recipient');
+  assert.equal(frames[0].frame.state, 'acknowledged');
+  assert.equal(frames[0].frame.mapped_state, 'read');
+});
+
+test('a sender lookup that throws after the ack committed still answers 204', async () => {
+  let committed = 0;
+  const repository = {
+    async acknowledgeDelivery({ deliveryId }) { committed += 1; return { delivery_id: deliveryId, message_id: 'msg_1' }; },
+    async lookupMessageSender() { throw new Error('lookup failed after commit'); },
+  };
+  const stream = { notifyReceipt: () => true };
+  await withServer({ repository, stream, authenticate: async () => ({ endpoint_id: 'ep_recipient' }) }, async (port) => {
+    assert.equal((await postJson(port, '/v1/deliveries/del_1/ack')).status, 204);
+  });
+  assert.equal(committed, 1);
+});
+
+test('a sender lookup that throws after a processing transition still answers 204', async () => {
+  const repository = {
+    async getDelivery(deliveryId, endpointId) { return { delivery_id: deliveryId, recipient_endpoint_id: endpointId, message_id: 'msg_1', state: 'acknowledged', attempts: 0 }; },
+    async transitionDelivery(_id, _endpoint, _state, { next }) { return next; },
+    async lookupMessageSender() { throw new Error('lookup failed after commit'); },
+  };
+  await withServer({ repository, stream: { notifyReceipt: () => true }, authenticate: async () => ({ endpoint_id: 'ep_recipient' }) }, async (port) => {
+    assert.equal((await postJson(port, '/v1/deliveries/del_1/processing', { state: 'processing' })).status, 204);
+  });
+});
+
+test('processing sends a frame with the next state mapped', async () => {
+  const frames = [];
+  const repository = {
+    async getDelivery(deliveryId, endpointId) { return { delivery_id: deliveryId, recipient_endpoint_id: endpointId, message_id: 'msg_1', state: 'acknowledged', attempts: 0 }; },
+    async transitionDelivery(_id, _endpoint, _state, { next }) { return next; },
+    async lookupMessageSender() { return { endpoint_id: 'ep_sender' }; },
+  };
+  const stream = { notifyReceipt: (endpointId, frame) => { frames.push(frame); return true; } };
+  await withServer({ repository, stream, authenticate: async () => ({ endpoint_id: 'ep_recipient' }) }, async (port) => {
+    assert.equal((await postJson(port, '/v1/deliveries/del_1/processing', { state: 'processing_failed', reason: 'x' })).status, 204);
+  });
+  assert.equal(frames.length, 1);
+  assert.equal(frames[0].state, 'processing_failed');
+  assert.equal(frames[0].mapped_state, 'failed');
+  assert.equal(frames[0].recipient_endpoint_id, 'ep_recipient');
+});
