@@ -9,7 +9,7 @@ A sender learns what happened to a message without asking, the way a text messag
 
 ## What already exists
 
-- The relay pushes a `delivery.receipt` frame to the sender when a delivery is accepted and when it changes state (`http-server.mjs`, `stream.notifyReceipt`). The accept-time frame hard-codes state `delivered` for both repositories (`http-server.mjs:67`). It does not read the row. Postgres inserts direct deliveries as `queued`, so on Postgres the frame already says `delivered` for a row nobody has polled. The in-memory repository inserts `delivered`, so there the frame matches the row, but the row is wrong for the same reason (see States). Ack and processing transitions send `acknowledged`, `processing`, `processed`, and so on.
+- The relay pushes a `delivery.receipt` frame to the sender when a delivery is accepted and when it changes state (`http-server.mjs`, `stream.notifyReceipt`). Since Part 1 the accept-time frame carries `persisted.deliveryState` (`http-server.mjs:69`), which `acceptEnvelopeAsync` sets from `repository.initialDeliveryState` (`accept-envelope.mjs:438`): `queued` on Postgres, `delivered` on the in-memory repository. The in-memory repository still inserts `delivered` before the recipient polls, so there the row is wrong for the reason given under States. Ack and processing transitions send `acknowledged`, `processing`, `processed`, and so on.
 - `sigil send --wait-for-receipt` (`sigil/cli/send-with-receipt.mjs`, with tests) opens the stream before sending, prints `-> <state> (<time>)` for each new state, and returns on the first terminal receipt (`acknowledged`, `processed`, `processing_failed`, `dead_letter`) or after 60 seconds.
 - The `deliveries` table stores per-recipient `state` and timestamps (`001_initial.sql`).
 
