@@ -26,16 +26,8 @@ async function seed(pool, suffix) {
   return ids;
 }
 
-test('postgres listReceiptsForMessage orders rows and initialDeliveryState is queued', { skip: !connectionString }, async (t) => {
-  assertDisposableTestDatabase(connectionString);
-  await applyMigrations(connectionString, { reset: true });
-  const pool = new pg.Pool({ connectionString });
-  t.after(() => pool.end());
-  const suffix = crypto.randomUUID().replaceAll('-', '_');
+async function seedRoomMessage(pool, repository, suffix) {
   const ids = await seed(pool, suffix);
-  const repository = new PostgresRepository({ pool });
-  assert.equal(repository.initialDeliveryState, 'queued');
-
   const conversationId = `room_${suffix}`;
   const now = new Date();
   await repository.createRoom({ conversationId, workspaceId: `ws_${ids.human}`, name: `rcpt_${suffix}`, createdByHumanId: ids.human, ownerEndpointId: ids.web, now });
@@ -53,9 +45,43 @@ test('postgres listReceiptsForMessage orders rows and initialDeliveryState is qu
     };
     return repository.persistAcceptedEnvelope({ envelope, canonical_hash: 'h', action_hash: 'h', canonical_bytes: Buffer.from('canonical'), roomSeq, roomFanout: [ids.codex, ids.claude] }, client);
   });
+  return { ids, messageId: `msg_${suffix}` };
+}
+
+test('postgres listReceiptsForMessage orders rows and initialDeliveryState is queued', { skip: !connectionString }, async (t) => {
+  assertDisposableTestDatabase(connectionString);
+  await applyMigrations(connectionString, { reset: true });
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const repository = new PostgresRepository({ pool });
+  assert.equal(repository.initialDeliveryState, 'queued');
+
+  const { ids } = await seedRoomMessage(pool, repository, suffix);
 
   const rows = await repository.listReceiptsForMessage(`msg_${suffix}`);
   assert.deepEqual(rows.map((r) => r.recipient_endpoint_id), [ids.claude, ids.codex].sort());
   assert.ok(rows.every((r) => r.state === 'queued'), 'Postgres inserts deliveries as queued');
   assert.deepEqual(await repository.listReceiptsForMessage('msg_missing'), []);
+});
+
+test('postgres listInbox flags rows it flipped from queued to delivered, once', { skip: !connectionString }, async (t) => {
+  assertDisposableTestDatabase(connectionString);
+  await applyMigrations(connectionString, { reset: true });
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const repository = new PostgresRepository({ pool });
+  const { ids, messageId } = await seedRoomMessage(pool, repository, suffix);
+
+  const first = await repository.listInbox(ids.claude);
+  assert.equal(first.length, 1);
+  assert.equal(first[0].flipped, true, 'first poll moves queued to delivered');
+  const [row] = await repository.listReceiptsForMessage(messageId).then((rows) => rows.filter((r) => r.recipient_endpoint_id === ids.claude));
+  assert.equal(row.state, 'delivered');
+  assert.ok(row.delivered_at, 'the flip stamps delivered_at');
+
+  const second = await repository.listInbox(ids.claude);
+  assert.equal(second.length, 1);
+  assert.equal(second[0].flipped, false, 'a row that is already delivered is not flagged again');
 });

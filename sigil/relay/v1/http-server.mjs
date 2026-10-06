@@ -487,8 +487,23 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         return response.end(JSON.stringify({ request_id: requestId, code: 'DATABASE_UNAVAILABLE', message: 'Inbox temporarily unavailable', details: {} }));
       }
       const nextSince = items.at(-1)?.queued_at ?? since;
+      // `flipped` is repository bookkeeping (this call moved the row from
+      // queued to delivered). It never reaches the client; it only decides
+      // which rows get a `delivered` receipt frame.
+      const flippedItems = items.filter((item) => item.flipped === true);
+      const publicItems = items.map(({ flipped, ...item }) => item);
       response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
-      return response.end(JSON.stringify({ request_id: requestId, code: 'OK', items, next_since: nextSince }));
+      response.end(JSON.stringify({ request_id: requestId, code: 'OK', items: publicItems, next_since: nextSince }));
+      for (const item of flippedItems) {
+        await sendReceiptFrame({ stream, repository, logger }, {
+          message_id: item.message_id,
+          delivery_id: item.delivery_id,
+          recipient_endpoint_id: principal.endpoint_id,
+          state: 'delivered',
+          at: now.toISOString(),
+        });
+      }
+      return;
     }
     if (request.method === 'POST' && request.url === '/v1/endpoint-acknowledgements') {
       let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413); return response.end(); }

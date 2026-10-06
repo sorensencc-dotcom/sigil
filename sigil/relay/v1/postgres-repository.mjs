@@ -413,13 +413,15 @@ export class PostgresRepository {
        advanced AS (
          UPDATE deliveries SET state = 'delivered', delivered_at = NOW(), updated_at = NOW()
          WHERE delivery_id IN (SELECT delivery_id FROM candidate) AND state = 'queued'
+         RETURNING delivery_id
        )
        SELECT c.delivery_id, c.message_id, c.recipient_endpoint_id, c.queued_at,
               e.protocol, e.message_type, e.body, e.context_refs, e.capabilities, e.correlation_id,
               e.sender_endpoint_id, e.sender_owner_id, e.recipient_endpoint_id AS env_recipient,
               e.conversation_id, e.idempotency_key, e.signature_algorithm, e.signature_key_id,
               e.signature_value, e.expires_at, e.created_at, e.stream_seq AS "streamSeq",
-              (ea.acknowledged_endpoint_id IS NULL) AS sender_unverified
+              (ea.acknowledged_endpoint_id IS NULL) AS sender_unverified,
+              (c.delivery_id IN (SELECT delivery_id FROM advanced)) AS flipped
        FROM candidate c
        JOIN envelopes e ON e.message_id = c.message_id
        LEFT JOIN endpoint_acknowledgements ea ON ea.acknowledged_endpoint_id = e.sender_endpoint_id AND ea.viewer_owner_id = $3
@@ -427,6 +429,7 @@ export class PostgresRepository {
     );
     return result.rows.map((row) => ({
       delivery_id: row.delivery_id,
+      flipped: row.flipped === true,
       message_id: row.message_id,
       queued_at: row.queued_at instanceof Date ? row.queued_at.toISOString() : row.queued_at,
       streamSeq: row.streamSeq,

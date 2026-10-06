@@ -172,3 +172,48 @@ test('processing sends a frame with the next state mapped', async () => {
   assert.equal(frames[0].mapped_state, 'failed');
   assert.equal(frames[0].recipient_endpoint_id, 'ep_recipient');
 });
+
+test('inbox sends one delivered frame per flipped row and strips the flag from the response', async () => {
+  const frames = [];
+  const repository = {
+    async listInbox() {
+      return [
+        { delivery_id: 'del_1', message_id: 'msg_1', queued_at: '2026-10-06T00:00:00.000Z', envelope: {}, flipped: true },
+        { delivery_id: 'del_2', message_id: 'msg_2', queued_at: '2026-10-06T00:00:01.000Z', envelope: {}, flipped: false },
+      ];
+    },
+    async lookupMessageSender() { return { endpoint_id: 'ep_sender' }; },
+  };
+  const stream = { notifyReceipt: (endpointId, frame) => { frames.push({ endpointId, frame }); return true; } };
+  await withServer({ repository, stream, authenticate: async () => ({ endpoint_id: 'ep_recipient' }) }, async (port) => {
+    const result = await getJson(port, '/v1/inbox');
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body.items.map((item) => item.delivery_id), ['del_1', 'del_2']);
+    assert.ok(result.body.items.every((item) => !('flipped' in item)), 'flipped must not reach the client');
+  });
+  assert.equal(frames.length, 1);
+  assert.equal(frames[0].endpointId, 'ep_sender');
+  assert.deepEqual([frames[0].frame.delivery_id, frames[0].frame.recipient_endpoint_id, frames[0].frame.state, frames[0].frame.mapped_state], ['del_1', 'ep_recipient', 'delivered', 'delivered']);
+});
+
+test('an inbox frame failure never fails the inbox response', async () => {
+  const repository = {
+    async listInbox() { return [{ delivery_id: 'del_1', message_id: 'msg_1', queued_at: '2026-10-06T00:00:00.000Z', envelope: {}, flipped: true }]; },
+    async lookupMessageSender() { throw new Error('lookup failed'); },
+  };
+  await withServer({ repository, stream: { notifyReceipt: () => true }, authenticate: async () => ({ endpoint_id: 'ep_recipient' }) }, async (port) => {
+    assert.equal((await getJson(port, '/v1/inbox')).status, 200);
+  });
+});
+
+test('the in-memory shape (no flipped field) sends no inbox frames', async () => {
+  const frames = [];
+  const repository = {
+    async listInbox() { return [{ delivery_id: 'del_1', message_id: 'msg_1', queued_at: '2026-10-06T00:00:00.000Z', envelope: {} }]; },
+    async lookupMessageSender() { return { endpoint_id: 'ep_sender' }; },
+  };
+  await withServer({ repository, stream: { notifyReceipt: (e, f) => { frames.push(f); return true; } }, authenticate: async () => ({ endpoint_id: 'ep_recipient' }) }, async (port) => {
+    await getJson(port, '/v1/inbox');
+  });
+  assert.equal(frames.length, 0);
+});
