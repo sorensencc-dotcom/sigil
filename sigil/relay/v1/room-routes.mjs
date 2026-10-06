@@ -4,6 +4,7 @@ import { emitRoomEvent } from './room-events.mjs';
 import { promoteNextInvocation, dispatchToTarget, emitRefusal } from './room-dispatch.mjs';
 import { isAgentMember, isRouterMember } from './room-policy.mjs';
 import { clampReason } from '../../contracts/v1/room-event-schema.mjs';
+import { sendReceiptFrame } from './receipt-notify.mjs';
 
 const MANAGER_ROLES = new Set(['owner', 'room_manager']);
 const GRANTABLE_ROLES = new Set(['room_manager', 'member']);
@@ -45,7 +46,7 @@ function isAgentCaller(registry, principal) {
   return registry?.get?.(principal?.endpoint_id)?.kind === 'agent';
 }
 
-export async function handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream = null, inboxDepthLimit, systemIdentity = null }) {
+export async function handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream = null, inboxDepthLimit, systemIdentity = null, logger = null }) {
   const path = parsedUrl.pathname;
   if (path !== '/v1/rooms' && !path.startsWith('/v1/rooms/')) return false;
   if (!repository || ROOM_METHODS.some((method) => typeof repository[method] !== 'function')) return fail(response, requestId, 503, 'DATABASE_UNAVAILABLE', 'Rooms are unavailable');
@@ -190,7 +191,10 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
       return { items, duplicate: false, deliveries };
     });
     if (outcome.invalid) return fail(response, requestId, 422, 'INVALID_REQUEST', 'trigger_message_id must name a human room.message without mentions');
-    for (const delivery of outcome.deliveries) stream?.notify?.(delivery.endpoint_id, delivery.delivery_id);
+    for (const delivery of outcome.deliveries) {
+      stream?.notify?.(delivery.endpoint_id, delivery.delivery_id);
+      await sendReceiptFrame({ stream, repository, logger }, { message_id: delivery.message_id, delivery_id: delivery.delivery_id, recipient_endpoint_id: delivery.endpoint_id, state: repository.initialDeliveryState ?? 'delivered', at: now.toISOString() });
+    }
     return send(response, requestId, 200, { code: 'OK', items: outcome.items, duplicate: outcome.duplicate });
   }
 
@@ -211,7 +215,10 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
       return { invocation, promoted };
     });
     if (!outcome) return fail(response, requestId, 404, 'INVOCATION_NOT_FOUND', 'No matching running invocation for this endpoint in this room');
-    if (outcome.promoted) stream?.notify?.(outcome.promoted.endpoint_id, outcome.promoted.delivery_id);
+    if (outcome.promoted) {
+      stream?.notify?.(outcome.promoted.endpoint_id, outcome.promoted.delivery_id);
+      await sendReceiptFrame({ stream, repository, logger }, { message_id: outcome.promoted.message_id, delivery_id: outcome.promoted.delivery_id, recipient_endpoint_id: outcome.promoted.endpoint_id, state: repository.initialDeliveryState ?? 'delivered', at: now.toISOString() });
+    }
     return send(response, requestId, 200, { code: 'OK', invocation: outcome.invocation });
   }
 

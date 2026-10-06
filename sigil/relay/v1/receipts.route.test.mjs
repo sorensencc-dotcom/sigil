@@ -217,3 +217,30 @@ test('the in-memory shape (no flipped field) sends no inbox frames', async () =>
   });
   assert.equal(frames.length, 0);
 });
+
+test('a forced ack failure answers 409 and sends no frame', async () => {
+  const frames = [];
+  const repository = {
+    async acknowledgeDelivery() { throw Object.assign(new Error('Delivery not found'), { code: 'DELIVERY_UNAVAILABLE' }); },
+    async lookupMessageSender() { return { endpoint_id: 'ep_sender' }; },
+  };
+  const stream = { notifyReceipt: (endpointId, frame) => { frames.push({ endpointId, frame }); return true; } };
+  await withServer({ repository, stream, authenticate: async () => ({ endpoint_id: 'ep_recipient' }) }, async (port) => {
+    assert.equal((await postJson(port, '/v1/deliveries/del_1/ack')).status, 409);
+  });
+  assert.equal(frames.length, 0);
+});
+
+test('a room.event message id answers the same 404 as an unknown message', async () => {
+  const strip = ({ request_id, ...rest }) => rest;
+  const repository = {
+    async lookupMessageSender(id) { return id === 'evt_1' ? { endpoint_id: 'ep_system' } : null; },
+    async listReceiptsForMessage() { return ROWS; },
+  };
+  const authenticate = async () => ({ endpoint_id: 'ep_recipient' });
+  const event = await withServer({ repository, authenticate }, (port) => getJson(port, '/v1/messages/evt_1/receipts'));
+  const unknown = await withServer({ repository, authenticate }, (port) => getJson(port, '/v1/messages/msg_nope/receipts'));
+  assert.equal(event.status, 404);
+  assert.equal(unknown.status, 404);
+  assert.deepEqual(strip(event.body), strip(unknown.body));
+});
