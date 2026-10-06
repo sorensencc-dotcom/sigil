@@ -9,7 +9,7 @@ A sender learns what happened to a message without asking, the way a text messag
 
 ## What already exists
 
-- The relay pushes a `delivery.receipt` frame to the sender when a delivery is accepted and when it changes state (`http-server.mjs`, `stream.notifyReceipt`). The accept-time frame is sent when the delivery row is inserted. Postgres inserts direct deliveries as `queued` and the in-memory repository inserts them as `delivered`, so the state in that frame differs by repository. Ack and processing transitions send `acknowledged`, `processing`, `processed`, and so on.
+- The relay pushes a `delivery.receipt` frame to the sender when a delivery is accepted and when it changes state (`http-server.mjs`, `stream.notifyReceipt`). The accept-time frame hard-codes state `delivered` for both repositories (`http-server.mjs:67`). It does not read the row. Postgres inserts direct deliveries as `queued`, so on Postgres the frame already says `delivered` for a row nobody has polled. The in-memory repository inserts `delivered`, so there the frame matches the row, but the row is wrong for the same reason (see States). Ack and processing transitions send `acknowledged`, `processing`, `processed`, and so on.
 - `sigil send --wait-for-receipt` (`sigil/cli/send-with-receipt.mjs`, with tests) opens the stream before sending, prints `-> <state> (<time>)` for each new state, and returns on the first terminal receipt (`acknowledged`, `processed`, `processing_failed`, `dead_letter`) or after 60 seconds.
 - The `deliveries` table stores per-recipient `state` and timestamps (`001_initial.sql`).
 
@@ -18,7 +18,7 @@ The 2026-10-06 incident was not a missing relay feature. The listener acked the 
 ## What is still missing
 
 1. **No durable read path.** `notifyReceipt` sends only if the sender has a socket at that instant. A sender that sent without the flag, or whose wait timed out, cannot find out later.
-2. **Frames do not name the recipient.** The frame carries `delivery_id` and `state` only. A room message has one delivery per member and agent, so the sender cannot tell whose state changed.
+2. **Frames do not name the recipient.** The frame carries `delivery_id` and `state` only. A room message has one delivery per recipient (see Recipient set in Part 1), so the sender cannot tell whose state changed.
 3. **`--wait-for-receipt` ends on the first terminal receipt.** In a room, the first member's ack ends the wait while the others are pending. For direct messages, a timeout also returns success silently: `finish()` resolves on the 60-second timer, so the caller sees exit 0 with only `delivered` printed.
 4. **Sockets evict each other.** `createStreamServer` keeps one socket per endpoint, and every frame goes only to the latest one. A new connection replaces the old socket in the map but never closes it, so the replaced socket stays open and keeps receiving pongs. `--wait-for-receipt` opens a bearer socket for the sender's endpoint, which takes frame delivery from a running `inbox --wait` or the listener on that endpoint. When the wait ends, `--wait-for-receipt` does not restore the listener: the listener only gets frames back if it reconnects on its own.
 5. **Hosts cannot wake on a later receipt.** After `send` returns, nothing wakes a host session when a state changes.
@@ -45,7 +45,7 @@ Out of scope, with the reason:
 | `processed` | `processed` |
 | `failed` | `delivery_rejected`, `processing_failed`, `dead_letter` |
 
-`queued` and `delivered` stay separate. A receipt that says `delivered` before the recipient ever polled tells the sender something untrue, and telling the sender the truth is the reason receipts exist. On Postgres a delivery is inserted `queued`, and `listInbox` flips it to `delivered` when the recipient polls (`postgres-repository.mjs:389`). The rule: send a `queued` frame at accept, then send a `delivered` frame when `listInbox` flips the state. The in-memory repository inserts `delivered` directly; it keeps that behavior and the plan decides whether to insert `queued` there so both repositories show the same sequence.
+`queued` and `delivered` stay separate. A receipt that says `delivered` before the recipient ever polled tells the sender something untrue, and telling the sender the truth is the reason receipts exist. On Postgres a delivery is inserted `queued`, and `listInbox` flips it to `delivered` when the recipient polls (`postgres-repository.mjs:389`). The rule: send a `queued` frame at accept, then send a `delivered` frame when `listInbox` flips the state. The in-memory store still writes `delivered` before the recipient polls, so on `sigil relay up` a sender sees `delivered` for a message nobody has picked up. This spec does not fix that. It leaves the fix to the plan, which decides whether the in-memory repository inserts `queued` and flips on poll, as Postgres will. Part 1 changes the accept-time frame to send the row's real state instead of the hard-coded `delivered`.
 
 `read` means the recipient's client picked the message up and acked it. It does not prove a person or an LLM read it. `processing_failed` can retry (`delivery-state.mjs` allows `processing_failed` to `processing`), so `failed` can be current-state rather than final. The route returns the raw state next to the mapped one.
 
