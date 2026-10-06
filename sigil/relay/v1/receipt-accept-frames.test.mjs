@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import { createOnPersisted } from './http-server.mjs';
 
 function setup(repository = null) {
-  const frames = []; const notified = [];
+  const frames = []; const notified = []; const errors = [];
   const stream = {
     notify: (endpointId, deliveryId) => { notified.push({ endpointId, deliveryId }); return true; },
     notifyReceipt: (endpointId, frame) => { frames.push({ endpointId, frame }); return true; },
   };
-  return { frames, notified, onPersisted: createOnPersisted(stream, { repository, logger: { error() {} } }) };
+  return { frames, notified, errors, onPersisted: createOnPersisted(stream, { repository, logger: { error: (...args) => errors.push(args) } }) };
 }
 
 const ENVELOPE = { sender: { endpoint_id: 'ep_sender' }, created_at: '2026-10-06T00:00:00.000Z' };
@@ -69,4 +69,24 @@ test('recipient and fan-out notify frames are unchanged', async () => {
   const { notified, onPersisted } = setup();
   await onPersisted({ envelope: { ...ENVELOPE, recipient: { endpoint_id: 'ep_r' } }, persisted: { message_id: 'msg_1', delivery_id: 'del_1', duplicate: false, fanout: [{ endpoint_id: 'ep_h2', delivery_id: 'del_h2' }] } });
   assert.deepEqual(notified, [{ endpointId: 'ep_r', deliveryId: 'msg_1' }, { endpointId: 'ep_h2', deliveryId: 'del_h2' }]);
+});
+
+const PROMOTED = {
+  envelope: { sender: { endpoint_id: 'ep_agent_a' }, created_at: ENVELOPE.created_at },
+  persisted: { message_id: 'msg_reply', duplicate: false, streamSeq: 9n, deliveryState: 'queued', roomDeliveries: [{ endpoint_id: 'ep_agent_b', delivery_id: 'del_promoted', message_id: 'msg_trigger' }] },
+};
+
+test('a promoted delivery whose trigger sender is unknown sends no frame and does not throw', async () => {
+  const { frames, errors, onPersisted } = setup({ async lookupMessageSender() { return null; } });
+  await onPersisted(PROMOTED);
+  assert.equal(frames.length, 0);
+  assert.equal(errors.length, 0);
+});
+
+test('a failing trigger sender lookup is logged once, sends no frame, and does not reject', async () => {
+  const { frames, errors, onPersisted } = setup({ async lookupMessageSender() { throw new Error('lookup failed'); } });
+  await onPersisted(PROMOTED);
+  assert.equal(frames.length, 0);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0][1].message, 'lookup failed');
 });
