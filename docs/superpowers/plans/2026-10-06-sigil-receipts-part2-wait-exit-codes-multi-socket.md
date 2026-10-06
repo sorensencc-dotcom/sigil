@@ -19,7 +19,7 @@
 - Existing direct-message tests in `sigil/cli/send-with-receipt.test.mjs` pass unchanged.
 - `--wait-for-receipt processed` is not added. The flag stays a boolean.
 - Frame contents do not change.
-- Run tests with `node --test <file>`, never bare `npm test` without a timeout wrapper. Use `npm run test:bounded` for the full suite.
+- Run tests with `timeout 60 node --test <file>`. `npm run test:bounded` kills `npm test` at 60 seconds and the full suite has taken over 10 minutes on this machine, so it cannot pass the whole suite; see Task 5 step 4.
 
 ## Scope decisions
 
@@ -315,7 +315,7 @@ git commit -m "feat(cli): exit 7 when a receipt reports processing_failed or dea
 ### Task 4: Multi-socket stream server
 
 **Files:**
-- Modify: `sigil/relay/v1/stream-server.mjs:13-61`
+- Modify: `sigil/relay/v1/stream-server.mjs:13-61` (three in-place edits to `createStreamServer`, not a rewrite)
 - Modify: `sigil/relay/v1/stream-server.test.mjs`
 
 **Interfaces:**
@@ -419,7 +419,9 @@ Expected: FAIL. `delivery.receipt reaches every open socket` fails because the s
 
 - [ ] **Step 3: Implement the multi-socket map**
 
-In `sigil/relay/v1/stream-server.mjs`, replace the body of `createStreamServer` from `const clients = new Map();` through the closing of the returned object:
+Edit `createStreamServer` in `sigil/relay/v1/stream-server.mjs` in place. Do NOT replace the function body: 4a adds ticket handling, `browserClients`, and `notifyRoom` to this same function, and a wholesale replacement would delete them if 4a lands first. Make exactly these three edits and leave everything else untouched.
+
+**Edit A.** Replace the single line `const clients = new Map();` with:
 
 ```js
   // endpoint_id -> Set<socket>, in connection order. A closing socket removes
@@ -443,24 +445,29 @@ In `sigil/relay/v1/stream-server.mjs`, replace the body of `createStreamServer` 
     sockets[sockets.length - 1].send(JSON.stringify(frame));
     return true;
   };
-  wss.on('connection', (socket, request) => {
-    const principal = authenticateRequest(request);
-    const endpointId = typeof principal === 'string' ? principal : principal?.endpoint_id;
-    if (!endpointId) return socket.close(1008, 'unauthorized');
+```
+
+**Edit B.** In the bearer branch of the `connection` handler, replace `clients.set(endpointId, socket);` with:
+
+```js
     if (!clients.has(endpointId)) clients.set(endpointId, new Set());
     clients.get(endpointId).add(socket);
-    socket.on('message', (raw) => {
-      let message; try { message = JSON.parse(raw); } catch { return; }
-      if (message?.type === 'ping') socket.send(JSON.stringify({ type: 'pong', timestamp: message.timestamp }));
-    });
+```
+
+and replace the line `socket.on('close', () => { if (clients.get(endpointId) === socket) clients.delete(endpointId); });` with:
+
+```js
     socket.on('close', () => {
       const sockets = clients.get(endpointId);
       if (!sockets) return;
       sockets.delete(socket);
       if (!sockets.size) clients.delete(endpointId);
     });
-  });
-  return {
+```
+
+**Edit C.** Replace the bodies of the four existing methods only (keep any other methods the object already has, such as `notifyRoom` and `close`):
+
+```js
     notify(endpointId, deliveryId, streamSeq = null) {
       return notifyLatest(endpointId, sequenceFrame('delivered', { delivery_id: deliveryId, streamSeq }));
     },
@@ -473,13 +480,13 @@ In `sigil/relay/v1/stream-server.mjs`, replace the body of `createStreamServer` 
     notifySequenceReset(endpointId, payload) {
       return notifyLatest(endpointId, sequenceFrame('sequence_reset', payload));
     },
-    close() { return new Promise((resolve) => wss.close(resolve)); }
-  };
 ```
+
+`room.updated` also goes to every open socket on the endpoint (spec frame table). That method (`notifyRoom`) lands in the 4a plan, Task 5, and builds on `openSockets` from Edit A; 4a Task 5 adds the test for that table row. Until 4a ships, no code in this repo emits `room.updated`, so this plan has nothing to test for it.
 
 - [ ] **Step 4: Run the stream tests and the dependent suites**
 
-Run: `timeout 120 node --test sigil/relay/v1/stream-server.test.mjs sigil/relay/v1/stream-server.stream-sequence.test.mjs sigil/relay/v1/receipt-notify.test.mjs sigil/relay/v1/receipts.route.test.mjs`
+Run: `timeout 120 node --test sigil/relay/v1/stream-server.test.mjs sigil/relay/v1/stream-server.stream-sequence.test.mjs sigil/relay/v1/receipt-notify.test.mjs sigil/relay/v1/receipts.route.test.mjs sigil/relay/v1/http-server.rooms-stream.test.mjs sigil/relay/v1/stream-receipt.stress.test.mjs`
 Expected: PASS. The old "receipt goes only to the sender endpoint" test still passes because other endpoints are separate map keys.
 
 - [ ] **Step 5: Commit**
@@ -491,10 +498,10 @@ git commit -m "feat(relay): keep every bearer socket per endpoint with per-frame
 
 ---
 
-### Task 5: Usage text, full suite, handoff note
+### Task 5: Usage text, skill and README docs, full suite
 
 **Files:**
-- Modify: `sigil/cli/sigil.mjs:87`
+- Modify: `sigil/cli/sigil.mjs:87`, `.claude/skills/sigil-consult/SKILL.md:33`, `README.md:97`
 
 **Interfaces:**
 - Consumes: exit codes from Tasks 2 and 3.
@@ -514,16 +521,40 @@ Replace the `send` line at `sigil/cli/sigil.mjs:87`:
 Run: `grep -n "Number.isInteger(error.exitCode)" sigil/cli/sigil.mjs`
 Expected: one match in the top-level `catch` near line 1778. No change needed there.
 
-- [ ] **Step 3: Run the full suite with the bounded wrapper**
+- [ ] **Step 3: Update the sigil-consult skill and the README**
 
-Run: `npm run test:bounded`
-Expected: PASS, or only the three known 30-second CLI timeouts (`agent-run-router`, `relay-up-federation`, `relay-up-request-freshness`) seen once on Linux CI. If those fail locally, rerun the single file before reporting.
+Do this in the same PR as the code, never before it: until exits `7` and `8` exist, these docs would describe behavior that is not there.
 
-- [ ] **Step 4: Commit**
+In `.claude/skills/sigil-consult/SKILL.md` (line 33), replace the sentence `It returns on the first of \`acknowledged\`, \`processed\`, \`processing_failed\`, or \`dead_letter\`, or after 60 seconds. Report what it printed to the user.` with:
+
+```
+It exits `0` on `acknowledged` or `processed`, exits `7` on `processing_failed` or `dead_letter`, and exits `8` if no terminal receipt arrives within 60 seconds. Exit `7` and exit `8` both mean the relay accepted the message: **do not resend**, because the recipient may already have it. A 60-second timeout is not success and not a failed send; it means the receipt has not arrived yet. Any other non-zero exit (usually `1`) means the send itself failed, and resending is safe. Report what it printed and the exit code to the user.
+```
+
+In the same paragraph, change `If only \`queued\` or \`delivered\` printed before the 60 seconds ran out, say so:` to `If only \`queued\` or \`delivered\` printed and the command exited \`8\`, say so:`. Today the skill treats the 60-second timeout as a normal return, which is wrong once exit `8` exists.
+
+In `README.md` (line 97), replace the comment line `# Send a signed task envelope to an agent runtime` with:
+
+```
+# Send a signed task envelope to an agent runtime.
+# With --wait-for-receipt, exit 0 = acknowledged/processed, 7 = processing_failed/dead_letter,
+# 8 = no terminal receipt within 60s. Exit 7 and 8 mean the message WAS sent: do not resend.
+```
+
+Check that `sigil-consult` is not the only consumer: `grep -rn "wait-for-receipt" --include=*.md . | grep -v node_modules` and update any other doc that says the wait "returns after 60 seconds".
+
+- [ ] **Step 4: Run the affected tests, then the full suite once**
+
+`npm run test:bounded` kills `npm test` at 60 seconds (`package.json:40`, `timeout: 60000`) and reports failure. The full suite has run over 10 minutes on this machine, so it cannot pass that wrapper, and a failure there is a timeout, not a regression. Do not use it to judge this change. Instead:
+
+1. Time the files this change touches: `timeout 120 node --test sigil/cli/send-with-receipt.test.mjs sigil/cli/send-with-receipt.exit-codes.test.mjs sigil/relay/v1/stream-server.test.mjs sigil/relay/v1/stream-server.stream-sequence.test.mjs sigil/relay/v1/receipt-notify.test.mjs sigil/relay/v1/receipts.route.test.mjs sigil/relay/v1/http-server.rooms-stream.test.mjs sigil/relay/v1/stream-receipt.stress.test.mjs`. Expected: PASS in under 60 seconds. If it takes longer, say so in the PR.
+2. Run the full suite once, alone (overlapping runs have leaked processes and deadlocked the shared Postgres here): `timeout 900 npm test`. Expected: PASS, or only the three CLI tests (`agent-run-router`, `relay-up-federation`, `relay-up-request-freshness`) that timed out once at 30 seconds on Linux CI; rerun a failing file alone before reporting.
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add sigil/cli/sigil.mjs
-git commit -m "docs(cli): document receipt-wait exit codes 7 and 8 in send usage"
+git add sigil/cli/sigil.mjs .claude/skills/sigil-consult/SKILL.md README.md
+git commit -m "docs(cli): document receipt-wait exit codes 7 and 8 in usage, skill, and README"
 ```
 
 ---
