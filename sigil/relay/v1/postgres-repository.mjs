@@ -249,6 +249,18 @@ export class PostgresRepository {
     const result = await client.query('SELECT sender_endpoint_id FROM envelopes WHERE message_id = $1', [messageId]);
     return result.rows[0] ? { endpoint_id: result.rows[0].sender_endpoint_id } : null;
   }
+  // Deliveries are inserted `queued` and flip to `delivered` when the
+  // recipient polls (listInbox). The accept-time receipt frame reads this.
+  get initialDeliveryState() { return 'queued'; }
+  // One row per delivery for a message. Ordered so two reads of the same
+  // message return the same order: `queued_at`, then recipient endpoint.
+  async listReceiptsForMessage(messageId, client = this.pool) {
+    const result = await client.query(
+      'SELECT * FROM deliveries WHERE message_id = $1 ORDER BY queued_at, recipient_endpoint_id',
+      [messageId]
+    );
+    return result.rows;
+  }
   async lookupEnvelopeStreamSequence(messageId, client = this.pool) {
     const result = await client.query('SELECT stream_seq AS "streamSeq" FROM envelopes WHERE message_id = $1', [messageId]);
     return result.rows[0]?.streamSeq ?? null;
