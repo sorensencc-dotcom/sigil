@@ -62,3 +62,16 @@ test('runDepAudit reports an unpinned version as a warning that does not flip pa
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('runDepAudit ignores the packages/ directory', () => {
+  // Built by concatenation so this file's own text holds no literal import of react.
+  const reactImportLine = "import React from '" + 'react' + "';\n";
+  const dir = makeFixture({ sourceFiles: { 'packages/web/src/a.tsx': reactImportLine } });
+  try {
+    const result = runDepAudit(dir);
+    assert.equal(result.pass, true);
+    assert.deepEqual(result.issues.filter((issue) => issue.code === 'HOISTED_DEPENDENCY_GAP'), []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

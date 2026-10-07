@@ -24,3 +24,7 @@ ijfw/
 !sigil/cli/fixtures/self-signed-key.pem
 secrets/
 .wiki-sync-receipt.json
+
+packages/*/dist/
+packages/*/test-results/
+packages/*/playwright-report/
