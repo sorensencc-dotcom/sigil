@@ -93,7 +93,9 @@ sigil relay up --port 8791 --stream-port 8793 --database-url postgres://fixture:
 sigil agent run
 sigil agent run --worker sigil/scripts/claude-worker.mjs
 
-# Send a signed task envelope to an agent runtime
+# Send a signed task envelope to an agent runtime.
+# With --wait-for-receipt, exit 0 = acknowledged/processed, 7 = processing_failed/dead_letter,
+# 8 = no terminal receipt within 60s. Exit 7 and 8 mean the message WAS sent: do not resend.
 sigil send --to ep_claude@local --to-owner usr_soren@local --message "Analyze test suite coverage" --wait-for-receipt
 
 # Inspect queued inbox messages, wait for incoming envelopes, or view local durable ledger
