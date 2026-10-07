@@ -585,6 +585,21 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       deliveries.set(deliveryId, next);
       return next;
     },
+    async acknowledgeRoomDeliveries({ conversationId, endpointId, upToRoomSeq, now = new Date() }) {
+      const moved = [];
+      for (const delivery of deliveries.values()) {
+        if (delivery.recipient_endpoint_id !== endpointId) continue;
+        if (delivery.state !== 'queued' && delivery.state !== 'delivered') continue;
+        const row = envelopes.get(delivery.message_id);
+        if (!row || row.envelope.conversation_id !== conversationId || row.roomSeq == null || BigInt(row.roomSeq) > BigInt(upToRoomSeq)) continue;
+        undoMapSet(deliveries, delivery.delivery_id);
+        delivery.state = 'acknowledged';
+        delivery.acknowledged_at = now.toISOString();
+        delivery.updated_at = now.toISOString();
+        moved.push({ delivery_id: delivery.delivery_id, message_id: delivery.message_id, sender_endpoint_id: row.envelope.sender.endpoint_id, state: 'acknowledged' });
+      }
+      return moved;
+    },
     async getDelivery(deliveryId, endpointId) {
       const current = deliveries.get(deliveryId);
       return current && current.recipient_endpoint_id === endpointId ? current : null;

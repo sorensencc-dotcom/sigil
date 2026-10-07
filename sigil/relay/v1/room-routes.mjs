@@ -10,7 +10,7 @@ import { sendReceiptFrame } from './receipt-notify.mjs';
 const MANAGER_ROLES = new Set(['owner', 'room_manager']);
 const GRANTABLE_ROLES = new Set(['room_manager', 'member']);
 const RESPONSE_MODES = new Set(['joins', 'mentions_only', 'router']);
-const ROOM_METHODS = ['createRoom', 'lookupRoom', 'listRoomsForEndpoint', 'addRoomMember', 'removeRoomMember', 'lookupRoomMember', 'listRoomMembers', 'listRoomMessages', 'listRoomInvocations', 'lookupRunningInvocation', 'finishInvocation', 'cancelRoomInvocations', 'nextQueuedInvocation', 'startInvocation', 'createRoomDelivery', 'lookupRouterDecision', 'lookupRoomMessage', 'lookupRoomEventByKey', 'lockRoom', 'createRoomInvocation', 'reserveAgentTurn', 'withTransaction'];
+const ROOM_METHODS = ['createRoom', 'lookupRoom', 'listRoomsForEndpoint', 'addRoomMember', 'removeRoomMember', 'lookupRoomMember', 'listRoomMembers', 'listRoomMessages', 'listRoomInvocations', 'lookupRunningInvocation', 'finishInvocation', 'cancelRoomInvocations', 'nextQueuedInvocation', 'startInvocation', 'createRoomDelivery', 'lookupRouterDecision', 'lookupRoomMessage', 'lookupRoomEventByKey', 'lockRoom', 'createRoomInvocation', 'reserveAgentTurn', 'withTransaction', 'acknowledgeRoomDeliveries'];
 const NAME_MAX = 80;
 const HISTORY_LIMIT_MAX = 500;
 const ROOM_SEQ_MAX = 9223372036854775807n; // envelopes.room_seq is int8
@@ -47,9 +47,22 @@ function isAgentCaller(registry, principal) {
   return registry?.get?.(principal?.endpoint_id)?.kind === 'agent';
 }
 
-export async function handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream = null, inboxDepthLimit, systemIdentity = null, logger = null }) {
+export async function handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream = null, inboxDepthLimit, systemIdentity = null, logger = null, ticketStore = null }) {
   const path = parsedUrl.pathname;
   if (path !== '/v1/rooms' && !path.startsWith('/v1/rooms/')) return false;
+  if (request.method === 'POST' && path === '/v1/rooms/ws-ticket') {
+    if (isAgentCaller(registry, principal) || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'An authenticated human context is required');
+    if (!ticketStore) return fail(response, requestId, 503, 'TICKETS_UNAVAILABLE', 'Browser tickets are not configured');
+    try {
+      const { ticket, expires_at } = ticketStore.issue({ endpoint_id: principal.endpoint_id, owner_id: principal.owner_id, human_id: principal.human_id });
+      response.setHeader('cache-control', 'no-store');
+      return send(response, requestId, 200, { code: 'OK', ticket, expires_at });
+    } catch (error) {
+      if (error.code === 'TICKET_CAP') return fail(response, requestId, 429, 'TICKET_CAP', 'Too many outstanding tickets');
+      throw error;
+    }
+  }
+
   if (!repository || ROOM_METHODS.some((method) => typeof repository[method] !== 'function')) return fail(response, requestId, 503, 'DATABASE_UNAVAILABLE', 'Rooms are unavailable');
 
   if (request.method === 'POST' && path === '/v1/rooms') {
@@ -75,13 +88,30 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     return send(response, requestId, 200, { code: 'OK', items: await repository.listRoomsForEndpoint(principal.endpoint_id) });
   }
 
-  const match = path.match(/^\/v1\/rooms\/([^/]+)\/(members|messages|invocations|stop)(?:\/([^/]+)(?:\/(remove))?)?$/);
+  const match = path.match(/^\/v1\/rooms\/([^/]+)\/(members|messages|invocations|stop|ack)(?:\/([^/]+)(?:\/(remove))?)?$/);
   if (!match) return false;
   const [, roomId, resource, segment, removeAction] = match;
   const targetEndpointId = segment;
   const action = removeAction;
   const access = await membership(repository, roomId, principal);
   if (!access) return fail(response, requestId, 404, 'ROOM_NOT_FOUND', 'Room not found');
+
+  if (request.method === 'POST' && resource === 'ack' && !segment) {
+    const body = await readJson(request, readBody);
+    let upTo;
+    try { upTo = BigInt(body?.up_to_room_seq); } catch { upTo = null; }
+    if (upTo === null || upTo < 0n || upTo > ROOM_SEQ_MAX) return fail(response, requestId, 400, 'INVALID_REQUEST', 'up_to_room_seq must be an integer from 0 to 9223372036854775807');
+    const moved = await repository.acknowledgeRoomDeliveries({ conversationId: roomId, endpointId: principal.endpoint_id, upToRoomSeq: upTo, now });
+    // The repository call committed. sendReceiptFrame isolates its own failures,
+    // so a failed sender lookup never turns a committed ack into an error.
+    for (const row of moved) {
+      await sendReceiptFrame({ stream, repository, logger }, {
+        message_id: row.message_id, delivery_id: row.delivery_id, recipient_endpoint_id: principal.endpoint_id,
+        state: 'acknowledged', at: now.toISOString(),
+      });
+    }
+    return send(response, requestId, 200, { code: 'OK', acknowledged: moved.length });
+  }
 
   if (request.method === 'GET' && resource === 'members' && !segment) {
     return send(response, requestId, 200, { code: 'OK', items: await repository.listRoomMembers(roomId) });

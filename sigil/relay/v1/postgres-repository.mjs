@@ -925,6 +925,40 @@ export class PostgresRepository {
     );
     return { message_id: result.rows[0].message_id, duplicate: false, delivery_id: row.envelope.recipient?.endpoint_id ? deliveryId : null, ...(fanout ? { fanout } : {}) };
   }
+  // Moves every queued or delivered delivery for `endpointId` on a room's
+  // messages with room_seq <= upToRoomSeq to acknowledged, writing the same
+  // delivery_acknowledgements row and audit event as acknowledgeDelivery.
+  // Returns only the rows it moved.
+  async acknowledgeRoomDeliveries({ conversationId, endpointId, upToRoomSeq, now = new Date() }) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    return this.withTransaction(async (client) => {
+      const { rows } = await client.query(
+        `UPDATE deliveries d
+            SET state = 'acknowledged', acknowledged_at = $4, updated_at = $4
+           FROM envelopes e
+          WHERE d.message_id = e.message_id
+            AND d.recipient_endpoint_id = $1
+            AND e.conversation_id = $2
+            AND e.room_seq IS NOT NULL AND e.room_seq <= $3
+            AND d.state IN ('queued', 'delivered')
+        RETURNING d.delivery_id, d.message_id, e.sender_endpoint_id`,
+        [endpointId, conversationId, String(upToRoomSeq), timestamp]
+      );
+      for (const row of rows) {
+        await client.query(
+          `INSERT INTO delivery_acknowledgements (delivery_id, endpoint_id, acknowledged_at)
+           VALUES ($1, $2, $3) ON CONFLICT (delivery_id) DO NOTHING`,
+          [row.delivery_id, endpointId, timestamp]
+        );
+        await client.query(
+          `INSERT INTO audit_events (event_id, event_type, subject_id, endpoint_id, conversation_id, payload, created_at)
+           VALUES ($1, 'delivery.acknowledged', $2, $3, $4, '{}', $5)`,
+          [`audit_${crypto.randomUUID()}`, row.delivery_id, endpointId, conversationId, timestamp]
+        );
+      }
+      return rows.map((row) => ({ delivery_id: row.delivery_id, message_id: row.message_id, sender_endpoint_id: row.sender_endpoint_id, state: 'acknowledged' }));
+    });
+  }
   async acknowledgeDelivery({ deliveryId, endpointId, now = new Date() } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     return this.withTransaction(async (client) => {
