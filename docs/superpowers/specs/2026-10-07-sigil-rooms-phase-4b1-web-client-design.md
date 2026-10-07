@@ -51,7 +51,7 @@ Out of scope, with the reason:
 
 ## Relay contract the client uses
 
-All shapes are in `sigil/contracts/v1/relay-api.json`.
+All shapes are in `sigil/contracts/v1/relay-api.json`, as amended by PR #33. The `ws-ticket`, `ack`, send, and `room.updated` entries are not on `main` until #33 merges, so the implementation branches off `main` after #33 merges. Plan step 0 verifies those four entries exist before any client code.
 
 - `GET /v1/rooms` returns `{code, items}`. Each item has `conversation_id`, `workspace_id`, `name`, `description`, `created_at`, and `max_agent_turns`. The room ID is `conversation_id`.
 - `GET /v1/rooms/{room_id}/messages?after_seq=<n>&limit=<n>` returns items with `room_seq`, `message_id`, `canonical_bytes`, and `envelope`. The list holds `room.message` and `room.event` rows.
@@ -74,7 +74,9 @@ rooms/useAck      after rendered rows change, posts the highest rendered room_se
 serve/            the sigil-rooms-web bin: static server for dist/, --relay-url, prints the --browser-origin value
 ```
 
-The token never appears in a URL. It lives in `sessionStorage`, which survives a reload and clears when the tab closes. Never `localStorage`. Script injected into the page can read `sessionStorage`; on a localhost relay serving the user's own client that risk is accepted, as in the 4a spec.
+The token never appears in a URL. It lives in `sessionStorage`, which survives a reload and clears when the tab closes. Never `localStorage`. Script injected into the page can read `sessionStorage`; on a localhost relay serving the user's own client that risk is accepted.
+
+This supersedes the 4a spec text on `main`, which says the client holds the token "in memory only". PR #33 (commit `6f652b3`) already revises that line to `sessionStorage`, following Chris's decision of 2026-10-06. The reason: an in-memory token forces a re-paste on every reload.
 
 ## Data flow
 
@@ -113,12 +115,17 @@ The ack call is fire-and-forget. A failure logs to the console and does not surf
   - Ack: forward-only and debounced.
 - **Contract test:** the TypeScript types for the routes above are checked against `sigil/contracts/v1/relay-api.json`, so a contract change fails the web package's tests instead of drifting.
 - **End-to-end test:** start an in-process relay with a memory repository, `--browser-origin`, and a human identity, then drive the built client in Playwright. Steps: paste a token, list rooms, send, see the message return through `room.updated`, and see the ack. This is the only test that covers the 4a CORS, ticket, and stream path in a real browser. The plan first checks whether the in-memory relay setup in core's tests is reusable here and falls back to a Postgres-backed relay if it is not.
-- **Isolation:** the web package has its own `npm test`. The plan verifies that core's `node --test` run and the pre-push hook do not pick up the web package's tests, and that core's `files` whitelist excludes `packages/`.
+- **Isolation and gates:** the root `package.json` has no `workspaces`, and the plan keeps it that way so core's lockfile and `npm ci` stay unchanged. The web package therefore sits outside every core gate until the plan wires it in:
+  - The local pre-push hook lives in the shared git directory (`.git/hooks/pre-push`), is not written by `sigil/scripts/install-git-hooks.mjs` (which installs only `pre-commit`), and runs the full core suite. It never runs web tests. The web package's `npm test` runs on its own.
+  - CI (`.github/workflows/ci.yml`) runs `npm ci` and `npm test` at the root only. The plan adds a CI job for the web package: `npm ci`, typecheck, Vitest, and the build, all inside `packages/sigil-rooms-web/`. A root script `test:web` runs the same steps locally.
+  - Core's `node --test` must not pick up web tests. Web test files are `*.test.ts` and `*.test.tsx` under `src/`, with no `test/` or `tests/` directory in the package. The plan verifies that `npm test` at the root discovers none of them.
+  - Core's `files` whitelist excludes `packages/`. The plan verifies it with `npm pack --dry-run`.
 
 ## Open items for the plan
 
 - Confirm the in-memory relay setup is reusable for the end-to-end test.
-- Confirm core's test glob and pre-push hook skip `packages/`.
+- Confirm the root test run discovers no web test files, and that `npm pack --dry-run` excludes `packages/`.
+- Write the web CI job and the `test:web` root script.
 - Pick the static server for `serve/` (a small Node `http` handler, not a framework).
 - Decide whether `sigil-rooms-web` takes `--relay-url` only, or also the stream port, or derives it. The relay's `--stream-port` is separate from its HTTP port.
 
