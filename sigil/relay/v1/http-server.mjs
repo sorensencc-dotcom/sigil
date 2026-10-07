@@ -94,7 +94,7 @@ export function createOnPersisted(stream, { repository = null, logger = null } =
   };
 }
 
-export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain, federationMode, federationIdentity, fetchImpl, relayRequestFreshnessMs, stream_seq, resendMetrics, logger, agentmailIngress, agentmailControl, roomSystemIdentity, buildAcceptOptions: injectedBuildAcceptOptions, allowedOrigins = [], ticketStore = null } = {}) {
+export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain, federationMode, federationIdentity, fetchImpl, relayRequestFreshnessMs, stream_seq, resendMetrics, logger, agentmailIngress, agentmailControl, roomSystemIdentity, buildAcceptOptions: injectedBuildAcceptOptions, allowedOrigins = [], ticketStore = null, humanSigner = null } = {}) {
   // B3: one clamped relay-request freshness window for this server. It bounds
   // how long a captured signed peer request stays replayable and doubles as the
   // nonce row's expiry horizon (expiresAt = signed_at + freshnessMs).
@@ -443,7 +443,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       return response.end(result.body ? JSON.stringify(result.body) : '');
     }
     try {
-      if (await handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream, inboxDepthLimit: DEFAULT_INBOX_DEPTH_LIMIT, systemIdentity: roomSystemIdentity, logger, ticketStore })) return;
+      if (await handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream, inboxDepthLimit: DEFAULT_INBOX_DEPTH_LIMIT, systemIdentity: roomSystemIdentity, logger, ticketStore, humanSigner, buildAcceptOptions })) return;
     } catch (error) {
       logger?.error?.('room route failed', error);
       if (response.headersSent) return response.end();

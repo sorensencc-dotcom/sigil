@@ -24,9 +24,8 @@ test('an explicit undefined is allowed: a relay without a system identity still 
 
 // Every acceptEnvelopeAsync call site must take its options straight from
 // buildAcceptOptions(...), inline or via a const initialised by it; a literal or a
-// ternary fallback fails. The human send route
-// (room-routes.mjs) has no acceptEnvelopeAsync call yet; add it here when it lands.
-const CALL_SITES = ['relay/v1/http-server.mjs', 'relay/v1/transport-libp2p/p2p-data-protocol.mjs', 'ingress/v1/agentmail-adapter.mjs'];
+// ternary fallback fails. The human send route (room-routes.mjs) is a call site too.
+const CALL_SITES = ['relay/v1/http-server.mjs', 'relay/v1/room-routes.mjs', 'relay/v1/transport-libp2p/p2p-data-protocol.mjs', 'ingress/v1/agentmail-adapter.mjs'];
 const root = new URL('../../', import.meta.url);
 
 for (const file of CALL_SITES) {

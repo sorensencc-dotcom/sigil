@@ -6,6 +6,9 @@ import { isAgentMember, isRouterMember } from './room-policy.mjs';
 import { clampReason } from '../../contracts/v1/room-event-schema.mjs';
 import { notifyRoomHumans } from './room-notify.mjs';
 import { sendReceiptFrame } from './receipt-notify.mjs';
+import { LocalOutbox } from '../../connectors/v1/local-outbox.mjs';
+import { acceptEnvelopeAsync } from './accept-envelope.mjs';
+import { validateRoomMessageBody } from '../../contracts/v1/room-message-schema.mjs';
 
 const MANAGER_ROLES = new Set(['owner', 'room_manager']);
 const GRANTABLE_ROLES = new Set(['room_manager', 'member']);
@@ -47,7 +50,7 @@ function isAgentCaller(registry, principal) {
   return registry?.get?.(principal?.endpoint_id)?.kind === 'agent';
 }
 
-export async function handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream = null, inboxDepthLimit, systemIdentity = null, logger = null, ticketStore = null }) {
+export async function handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream = null, inboxDepthLimit, systemIdentity = null, logger = null, ticketStore = null, humanSigner = null, buildAcceptOptions = null }) {
   const path = parsedUrl.pathname;
   if (path !== '/v1/rooms' && !path.startsWith('/v1/rooms/')) return false;
   if (request.method === 'POST' && path === '/v1/rooms/ws-ticket') {
@@ -111,6 +114,52 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
       });
     }
     return send(response, requestId, 200, { code: 'OK', acknowledged: moved.length });
+  }
+
+  if (request.method === 'POST' && resource === 'messages' && !segment) {
+    if (!humanSigner || !buildAcceptOptions) return fail(response, requestId, 503, 'ROOM_SEND_UNAVAILABLE', 'Human send is not configured (--room-human-identity)');
+    if (isAgentCaller(registry, principal) || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'An authenticated human context is required');
+    // The seam is never the only guard: only the loaded identity's endpoint may post.
+    if (principal.endpoint_id !== humanSigner.endpointId) return fail(response, requestId, 403, 'NO_SIGNING_KEY', 'This endpoint cannot post through the relay');
+    const body = await readJson(request, readBody);
+    if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.idempotency_key !== 'string' || !body.idempotency_key || body.idempotency_key.length > 128) return fail(response, requestId, 400, 'INVALID_REQUEST', 'idempotency_key is required');
+    // Only the client's text, thread, and mentions survive: idempotency_key is
+    // transport, and a client `sender` is dropped because the relay chooses it.
+    const { idempotency_key: clientKey, sender: _ignoredSender, ...messageBody } = body;
+    try { validateRoomMessageBody(messageBody); } catch (error) { return fail(response, requestId, 400, 'INVALID_ENVELOPE', error.message); }
+
+    // The key is scoped to the room, so one key in two rooms never collides.
+    const scopedKey = `room:${roomId}:${clientKey}`;
+    const stored = async () => {
+      const prior = await repository.lookupIdempotency(principal.endpoint_id, scopedKey);
+      if (!prior) return null;
+      const row = await repository.lookupRoomMessage(roomId, prior.message_id);
+      return row ? { message_id: prior.message_id, room_seq: row.room_seq } : null;
+    };
+    const replay = await stored();
+    if (replay) return send(response, requestId, 200, { code: 'OK', ...replay });
+
+    const signer = humanSigner.signForEndpoint(principal.endpoint_id);
+    const outbox = new LocalOutbox({ privateKey: signer.privateKey, endpoint: signer.endpoint });
+    const created = now instanceof Date ? now : new Date(now);
+    const { envelope } = outbox.queue({
+      protocol: 'sigil/1', message_id: `msg_${crypto.randomUUID()}`, conversation_id: roomId, message_type: 'room.message',
+      sender: { owner_id: signer.endpoint.owner_id, endpoint_id: signer.endpoint.endpoint_id, kind: signer.endpoint.kind },
+      broadcast_scope: { conversation_id: roomId }, body: messageBody, context_refs: [], capabilities: [], correlation_id: null,
+      idempotency_key: scopedKey, created_at: created.toISOString(), expires_at: new Date(created.getTime() + 24 * 3600_000).toISOString(),
+      signature: { algorithm: 'Ed25519', key_id: signer.endpoint.key_id, value: '' },
+    });
+    const result = await acceptEnvelopeAsync(envelope, buildAcceptOptions({ request_id: requestId, now }));
+    if (result.status === 409 && result.body?.code === 'DUPLICATE_MESSAGE') {
+      // A racing retry that lost the idempotency insert (Task 3 translates the
+      // repository signal to 409 DUPLICATE_MESSAGE). Re-read the key and answer
+      // 200 with the winner; if nothing is stored the 409 is a real conflict.
+      const winner = await stored();
+      if (winner) return send(response, requestId, 200, { code: 'OK', ...winner });
+    }
+    if (result.status !== 202) return send(response, requestId, result.status, result.body);
+    const row = await repository.lookupRoomMessage(roomId, envelope.message_id);
+    return send(response, requestId, result.body.duplicate ? 200 : 201, { code: 'OK', message_id: result.body.message_id, room_seq: row?.room_seq ?? null });
   }
 
   if (request.method === 'GET' && resource === 'members' && !segment) {
