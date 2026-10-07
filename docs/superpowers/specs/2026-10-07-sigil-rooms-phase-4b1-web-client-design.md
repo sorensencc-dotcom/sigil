@@ -65,7 +65,7 @@ All shapes are in `sigil/contracts/v1/relay-api.json`, as amended by PR #33. The
 ## Components
 
 ```
-api/client.ts     fetch wrapper: base URL, Bearer header, X-Sigil-Request-Id; maps an error body to ApiError{code, status, requestId}
+api/client.ts     fetch wrapper: base URL, Bearer header (only authorization and content-type are sent, because the relay CORS allows exactly those); maps an error body to ApiError{code, status, requestId}
 auth/             TokenGate (paste form) and the sessionStorage token store; a 401 UNAUTHENTICATED clears the token and returns to the gate
 live/socket.ts    ticket, connect, reconnect with exponential backoff and a new ticket per attempt; on room.updated invalidates ['room', id] (and ['rooms'] when changed is members); refetches everything on reconnect
 rooms/RoomList    useQuery(['rooms'])
@@ -127,7 +127,7 @@ The ack call is fire-and-forget. A failure logs to the console and does not surf
 - **Isolation and gates:** the root `package.json` has no `workspaces`, and the plan keeps it that way so core's lockfile and `npm ci` stay unchanged. The web package therefore sits outside every core gate until the plan wires it in:
   - The local pre-push hook lives in the shared git directory (`.git/hooks/pre-push`), is not written by `sigil/scripts/install-git-hooks.mjs` (which installs only `pre-commit`), and runs the full core suite. It never runs web tests. The web package's `npm test` runs on its own.
   - CI (`.github/workflows/ci.yml`) runs `npm ci` and `npm test` at the root only. The plan adds a CI job for the web package: `npm ci`, typecheck, Vitest, and the build, all inside `packages/sigil-rooms-web/`. A root script `test:web` runs the same steps locally.
-  - Core's `node --test` must not pick up web tests. Web test files are `*.test.ts` and `*.test.tsx` under `src/`, with no `test/` or `tests/` directory in the package. The plan verifies that `npm test` at the root discovers none of them.
+  - Core's `node --test` must not pick up web tests. Web test files are `*.spec.ts` and `*.spec.tsx` under `src/` (Node 24 `node --test` also matches `*.test.ts`), with no `test/` or `tests/` directory in the package. The plan verifies that `npm test` at the root discovers none of them.
   - Core's `files` whitelist excludes `packages/`. The plan verifies it with `npm pack --dry-run`.
 
 ## Open items for the plan
