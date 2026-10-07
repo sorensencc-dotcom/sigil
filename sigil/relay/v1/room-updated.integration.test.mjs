@@ -9,6 +9,9 @@ import { createRelayServer } from './http-server.mjs';
 import { emitRoomEvent } from './room-events.mjs';
 import { createMemoryRepository } from '../../cli/memory-repository.mjs';
 import { createIdentity } from '../../cli/identity.mjs';
+import { createAcceptOptionsBuilder } from './accept-options.mjs';
+import { createP2pHost } from './transport-libp2p/p2p-host.mjs';
+import { wireDataProtocol, sendEnvelope } from './transport-libp2p/p2p-data-protocol.mjs';
 
 const NOW = new Date('2026-10-02T12:01:00.000Z');
 
@@ -103,4 +106,32 @@ test('adding and removing a member sends a members frame without room_seq', asyn
     assert.deepEqual(byEndpoint(w.frames), ['ep_web', 'ep_web2']);
     for (const [, frame] of w.frames) assert.deepEqual(frame, { room_id: 'room_1', changed: 'members' });
   } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
+function p2pIdentity(keyPair) {
+  return {
+    keys: { publicKey: keyPair.publicKey, privateKey: keyPair.privateKey },
+    public_key_pem: keyPair.publicKey.export({ type: 'spki', format: 'pem' }),
+    private_key_pem: keyPair.privateKey.export({ type: 'pkcs8', format: 'pem' }),
+  };
+}
+
+test('a room message accepted over p2p sends room.updated to human members', async () => {
+  const w = await world();
+  const buildAcceptOptions = createAcceptOptionsBuilder({
+    registered: w.registered, request_id: undefined, now: NOW, repository: w.repository, relayDomain: undefined, persist: undefined,
+    federationMode: undefined, federationIdentity: undefined, fetchImpl: undefined, stream_seq: undefined, resendMetrics: undefined,
+    logger: undefined, onPersisted: undefined, systemIdentity: w.system, stream: w.stream,
+  });
+  const senderHost = await createP2pHost({ identity: p2pIdentity(w.keys.ep_web), listenAddrs: ['/ip4/127.0.0.1/tcp/0'], enableMdns: false });
+  const receiverHost = await createP2pHost({ identity: p2pIdentity(crypto.generateKeyPairSync('ed25519')), listenAddrs: ['/ip4/127.0.0.1/tcp/0'], enableMdns: false });
+  try {
+    wireDataProtocol(receiverHost, { registered: w.registered, buildAcceptOptions });
+    const response = await sendEnvelope(senderHost, receiverHost.getMultiaddrs()[0], roomMessage(w.keys, 'ep_web'));
+    assert.equal(response.status, 202, JSON.stringify(response.body));
+    assert.deepEqual(byEndpoint(w.frames), ['ep_web', 'ep_web2']);
+  } finally {
+    await senderHost.stop();
+    await receiverHost.stop();
+  }
 });

@@ -51,6 +51,8 @@ export const DATA_PROTOCOL = '/sigil/data/1.0.0';
 const MAX_FRAME_SIZE = 1024 * 1024; // 1 MiB, matches frame-codec default
 
 export function wireDataProtocol(node, options) {
+  const { buildAcceptOptions } = options;
+  if (typeof buildAcceptOptions !== 'function') throw new Error('wireDataProtocol requires options.buildAcceptOptions (see relay/v1/accept-options.mjs)');
   node.handle(DATA_PROTOCOL, async (rawStream, connection) => {
     const stream = messageStreamToDuplex(rawStream);
     // m8: p2p has no HTTP request header to carry a caller-supplied
@@ -58,7 +60,7 @@ export function wireDataProtocol(node, options) {
     // falls back for a request that didn't send one -- crypto.randomUUID().
     // Per-call options object (not a shared mutation of the outer `options`)
     // since multiple streams can be in flight on this handler concurrently.
-    const requestOptions = { ...options, request_id: crypto.randomUUID() };
+    const requestOptions = buildAcceptOptions({ request_id: crypto.randomUUID() });
     let responseBody;
     try {
       // one envelope per stream, per spec §8 stream framing

@@ -1,6 +1,7 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { acceptEnvelopeAsync } from './accept-envelope.mjs';
+import { createAcceptOptionsBuilder } from './accept-options.mjs';
 import { acceptFederatedEnvelope } from './accept-federated-envelope.mjs';
 import { verifyInboundRelayRequest, relayRejectSkewPayload } from './federation-relay-auth.mjs';
 import { acceptDirectoryRedemption, acceptDirectoryConfirmation, acceptDirectoryRevocation } from './accept-federation-directory.mjs';
@@ -92,13 +93,18 @@ export function createOnPersisted(stream, { repository = null, logger = null } =
   };
 }
 
-export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain, federationMode, federationIdentity, fetchImpl, relayRequestFreshnessMs, stream_seq, resendMetrics, logger, agentmailIngress, agentmailControl, roomSystemIdentity } = {}) {
+export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain, federationMode, federationIdentity, fetchImpl, relayRequestFreshnessMs, stream_seq, resendMetrics, logger, agentmailIngress, agentmailControl, roomSystemIdentity, buildAcceptOptions: injectedBuildAcceptOptions } = {}) {
   // B3: one clamped relay-request freshness window for this server. It bounds
   // how long a captured signed peer request stays replayable and doubles as the
   // nonce row's expiry horizon (expiresAt = signed_at + freshnessMs).
   const freshnessMs = resolveRelayRequestFreshnessMs(relayRequestFreshnessMs);
   const streamSequence = resolveStreamSequence(stream_seq);
   logRelayRequestFreshnessOnce(freshnessMs, federationMode);
+  const buildAcceptOptions = injectedBuildAcceptOptions ?? createAcceptOptionsBuilder({
+    registered: registry, request_id: undefined, now: undefined, repository, relayDomain, persist,
+    federationMode, federationIdentity, fetchImpl, stream_seq: streamSequence, resendMetrics, logger,
+    onPersisted: createOnPersisted(stream, { repository, logger }), systemIdentity: roomSystemIdentity, stream,
+  });
   const jwksCache = createJwksCache({ fetchImpl: oidcFetchImpl });
   const discoveryCache = createDiscoveryCache({ fetchImpl: oidcFetchImpl });
   const authenticateRequest = authenticate ?? (tokenHashes ? createBearerAuthenticator(tokenHashes, registry) : null);
@@ -430,11 +436,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     if (request.method === 'POST' && request.url === '/v1/envelopes') {
       let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       let envelope; try { envelope = JSON.parse(raw); } catch { response.writeHead(400, { 'content-type': 'application/json' }); return response.end(JSON.stringify({ request_id: requestId, code: 'INVALID_ENVELOPE', message: 'Invalid JSON', details: {} })); }
-      const result = await acceptEnvelopeAsync(envelope, {
-        registered: registry, request_id: requestId, now, repository, relayDomain, persist,
-        federationMode, federationIdentity, fetchImpl, stream_seq: streamSequence, resendMetrics, logger,
-        onPersisted: createOnPersisted(stream, { repository, logger }), systemIdentity: roomSystemIdentity, stream,
-      });
+      const result = await acceptEnvelopeAsync(envelope, buildAcceptOptions({ request_id: requestId, now }));
       response.writeHead(result.status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(result.body ? JSON.stringify(result.body) : '');
     }

@@ -10,7 +10,7 @@ import { createAgentMailControlHandler, rotateAgentMailSecrets } from './agentma
 
 function fail(code, message, details = {}) { throw Object.assign(new Error(message), { code, details }); }
 
-export async function createAgentMailDeployment({ env = process.env, mode = 'production', registry, ingress, repository, providerFactory, secretProviders = {}, providerRotation, clock = () => new Date() } = {}) {
+export async function createAgentMailDeployment({ env = process.env, mode = 'production', registry, ingress, repository, providerFactory, secretProviders = {}, providerRotation, buildAcceptOptions, clock = () => new Date() } = {}) {
   if (env.SIGIL_AGENTMAIL_ENABLE !== '1') return null;
   if (mode === 'production' && !repository?.pool && repository?.isPostgres !== true) fail('AGENTMAIL_POSTGRES_REQUIRED', 'Production AgentMail ingress requires PostgreSQL-backed control state');
   let config; let compatibility = { rawConfigUsed: false }; let providers = secretProviders;
@@ -35,7 +35,7 @@ export async function createAgentMailDeployment({ env = process.env, mode = 'pro
     compatibility,
     handle: createAgentMailControlHandler({ control, rotation, authorize: (args) => authorizeAgentMailControl({ ...args, repository }) }),
   };
-  const rawIngress = createAgentMailIngress({ config, provider, secretStore, ingress, repository, registry });
+  const rawIngress = createAgentMailIngress({ config, provider, secretStore, ingress, repository, registry, relayOptions: buildAcceptOptions ? { buildAcceptOptions } : {} });
   const agentmailIngress = {
     maxMessageBytes: rawIngress.maxMessageBytes,
     async handleWebhook(input) {

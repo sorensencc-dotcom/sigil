@@ -282,7 +282,10 @@ export function createAgentMailIngress({ config, provider, secretStore, ingress,
         senderRateLimiter,
         clock: now ? () => now : clock,
         enqueue: async (envelope) => {
-          const result = await acceptEnvelopeAsync(envelope, { repository, registered: registry, ...relayOptions });
+          const acceptOptions = relayOptions.buildAcceptOptions
+            ? relayOptions.buildAcceptOptions({ request_id: crypto.randomUUID() })
+            : { repository, registered: registry, ...relayOptions };
+          const result = await acceptEnvelopeAsync(envelope, acceptOptions);
           if (result.status >= 400) throw Object.assign(new Error(result.body?.message ?? 'Sigil relay rejected ingress envelope'), { code: result.body?.code ?? 'INGRESS_RELAY_REJECTED' });
           return result;
         },

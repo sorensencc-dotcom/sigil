@@ -25,32 +25,23 @@ function tmpCwdWithRegistry() {
 // cause the final review called out was exactly that no test compared them.
 test('wireDataProtocol options stay in parity with createRelayServer/acceptEnvelopeAsync for federationIdentity/onPersisted/stream_seq', () => {
   const sigilSource = fs.readFileSync(sigilCli, 'utf8');
-  const httpServerPath = path.resolve(path.dirname(sigilCli), '..', 'relay', 'v1', 'http-server.mjs');
-  const httpServerSource = fs.readFileSync(httpServerPath, 'utf8');
 
   const wireCallMatch = sigilSource.match(/wireDataProtocol\(p2pHost, \{([\s\S]*?)\n {4}\}\);/);
   assert.ok(wireCallMatch, 'could not locate the wireDataProtocol(p2pHost, {...}) call site in sigil.mjs -- update this test\'s regex if it moved/changed shape');
   const wireOptions = wireCallMatch[1];
-
-  // federationIdentity and stream_seq: sigil.mjs's own createRelayServer(...)
-  // call site is the parity reference -- both transports are wired in the
-  // same function and both accept these as direct CLI-derived values.
+  // Parity is structural now: wireDataProtocol and createRelayServer are both
+  // handed the one buildAcceptOptions builder, and that builder's base carries
+  // federationIdentity / onPersisted / stream_seq (accept-options.mjs rejects a
+  // base that omits any shared key).
+  assert.match(wireOptions, /\bbuildAcceptOptions\b/, 'wireDataProtocol must be handed the shared buildAcceptOptions builder');
   const httpCallMatch = sigilSource.match(/server = createRelayServer\(\{([\s\S]*?)\}\);/);
   assert.ok(httpCallMatch, 'could not locate the server = createRelayServer({...}) call site in sigil.mjs -- update this test\'s regex if it moved/changed shape');
-  for (const key of ['federationIdentity', 'stream_seq']) {
-    assert.match(httpCallMatch[1], new RegExp(`\\b${key}\\b`), `sanity check: createRelayServer's options no longer mention ${key} -- update this parity test`);
-    assert.match(wireOptions, new RegExp(`\\b${key}\\b`), `wireDataProtocol's options object is missing "${key}" (present in createRelayServer's options right below it) -- p2p-accepted envelopes will silently diverge from HTTP-accepted ones`);
-  }
-
-  // onPersisted: createRelayServer never receives it as a caller option (it
-  // builds its own `acceptEnvelopeAsync` call internally using `stream`), so
-  // the parity reference for this one is http-server.mjs's own
-  // acceptEnvelopeAsync call site, which must use the shared
-  // `createOnPersisted` factory -- the same factory wireDataProtocol's call
-  // site must be handed, so both transports drive the exact same
-  // stream.notify/notifyReceipt closure bound to the exact same `stream`.
-  assert.match(httpServerSource, /onPersisted:\s*createOnPersisted\(stream[,)]/, 'sanity check: http-server.mjs\'s acceptEnvelopeAsync call site no longer uses the shared createOnPersisted(stream) factory -- update this parity test');
-  assert.match(wireOptions, /onPersisted:\s*createOnPersisted\(stream[,)]/, 'wireDataProtocol\'s options object is missing "onPersisted: createOnPersisted(stream)" -- p2p-accepted envelopes will never notify WebSocket stream subscribers or emit delivery receipts');
+  assert.match(httpCallMatch[1], /\bbuildAcceptOptions\b/, 'createRelayServer must be handed the shared buildAcceptOptions builder');
+  const baseMatch = sigilSource.match(/createAcceptOptionsBuilder\(\{([\s\S]*?)\n  \}\);/);
+  assert.ok(baseMatch, 'could not locate the createAcceptOptionsBuilder({...}) base in sigil.mjs');
+  assert.match(baseMatch[1], /\bfederationIdentity\b/);
+  assert.match(baseMatch[1], /\bstream_seq\b/);
+  assert.match(baseMatch[1], /onPersisted:\s*createOnPersisted\(stream[,)]/);
 });
 
 // Regression for TODOS.md m7: --p2p used to hard-enable mDNS with no

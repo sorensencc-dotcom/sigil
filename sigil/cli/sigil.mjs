@@ -22,6 +22,7 @@ import { loadRegistryFile, addEndpointToRegistry, toRegistryMap, toTokenHashes }
 import { createMemoryRepository } from './memory-repository.mjs';
 import { sendWithOptionalReceiptWait } from './send-with-receipt.mjs';
 import { createRelayServer, createOnPersisted } from '../relay/v1/http-server.mjs';
+import { createAcceptOptionsBuilder } from '../relay/v1/accept-options.mjs';
 import { createStreamServer } from '../relay/v1/stream-server.mjs';
 import { RelayClient } from '../connectors/v1/relay-client.mjs';
 import { LocalOutbox } from '../connectors/v1/local-outbox.mjs';
@@ -272,6 +273,9 @@ async function cmdRelayUp(argv) {
     repository = createMemoryRepository({ registry });
   }
 
+  // AgentMail is built before `stream` and `relayLogger` exist, so it gets a
+  // late-bound handle; acceptOptionsHolder.build is set once the base is complete.
+  const acceptOptionsHolder = { build: null };
   let agentmailDeployment = null;
   if (process.env.SIGIL_AGENTMAIL_ENABLE === '1') {
     const loadAdapterModule = async (key) => {
@@ -293,6 +297,7 @@ async function cmdRelayUp(argv) {
       providerFactory: providerModule?.createAgentMailProvider,
       secretProviders: secretModule?.secretProviders ?? secretModule?.providers ?? {},
       providerRotation: rotationModule?.providerRotation,
+      buildAcceptOptions: (overrides) => acceptOptionsHolder.build(overrides),
     });
   }
 
@@ -308,6 +313,13 @@ async function cmdRelayUp(argv) {
     error: (entry) => console.error(JSON.stringify(entry)),
   });
   const relayMetrics = createRelayMetrics();
+  const buildAcceptOptions = createAcceptOptionsBuilder({
+    registered: registry, request_id: undefined, now: undefined, repository, relayDomain, persist: undefined,
+    federationMode, federationIdentity, fetchImpl: undefined, stream_seq: { enabled: streamSequenceEnabled },
+    resendMetrics: relayMetrics, logger: relayLogger,
+    onPersisted: createOnPersisted(stream, { repository, logger: relayLogger }), systemIdentity: roomSystemIdentity, stream,
+  });
+  acceptOptionsHolder.build = buildAcceptOptions;
   await new Promise((resolve) => streamHttpServer.listen(streamPort, '127.0.0.1', resolve));
   const streamAddress = streamHttpServer.address();
 
@@ -393,14 +405,7 @@ async function cmdRelayUp(argv) {
     // process's logger and metrics, never per-transport ones.
     wireDataProtocol(p2pHost, {
       registered: registry,
-      relayDomain,
-      federationMode,
-      federationIdentity,
-      repository,
-      onPersisted: createOnPersisted(stream, { repository, logger: relayLogger }),
-      stream_seq: { enabled: streamSequenceEnabled },
-      logger: relayLogger,
-      resendMetrics: relayMetrics,
+      buildAcceptOptions,
     });
     for (const addr of p2pHost.getMultiaddrs()) console.log(`sigil relay p2p listening on ${addr.toString()}`);
   }
@@ -417,7 +422,7 @@ async function cmdRelayUp(argv) {
     const addr = server?.address();
     return addr ? `http://127.0.0.1:${addr.port}` : `http://127.0.0.1:${port}`;
   };
-  server = createRelayServer({ roomSystemIdentity, registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity, relayRequestFreshnessMs, stream_seq: { enabled: streamSequenceEnabled }, logger: relayLogger, resendMetrics: relayMetrics, agentmailIngress: agentmailDeployment?.agentmailIngress, agentmailControl: agentmailDeployment?.agentmailControl });
+  server = createRelayServer({ buildAcceptOptions, roomSystemIdentity, registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity, relayRequestFreshnessMs, stream_seq: { enabled: streamSequenceEnabled }, logger: relayLogger, resendMetrics: relayMetrics, agentmailIngress: agentmailDeployment?.agentmailIngress, agentmailControl: agentmailDeployment?.agentmailControl });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();
   let federationReaperTimer;
