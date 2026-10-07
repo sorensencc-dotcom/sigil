@@ -35,7 +35,7 @@ export async function createAgentMailDeployment({ env = process.env, mode = 'pro
     compatibility,
     handle: createAgentMailControlHandler({ control, rotation, authorize: (args) => authorizeAgentMailControl({ ...args, repository }) }),
   };
-  const rawIngress = createAgentMailIngress({ config, provider, secretStore, ingress, repository, registry, relayOptions: buildAcceptOptions ? { buildAcceptOptions } : {} });
+  const rawIngress = createAgentMailIngress({ config, provider, secretStore, ingress, repository, registry, relayOptions: { buildAcceptOptions } });
   const agentmailIngress = {
     maxMessageBytes: rawIngress.maxMessageBytes,
     async handleWebhook(input) {

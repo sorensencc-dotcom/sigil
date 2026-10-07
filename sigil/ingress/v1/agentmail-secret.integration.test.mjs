@@ -27,6 +27,7 @@ test('real relay factory accepts one synthetic webhook and disabled control reje
     config: { inboxMappings: [{ providerInboxId: 'inbox_a', endpointId: 'ep_triage', webhookSecretId: 'wh_triage', workflowPolicy: ['trm'] }], senderAllowlist: ['operator@example.test'], forwardingDomain: 'agentmail.test', limits: { maxMessageBytes: 1024 * 1024, maxAttachmentBytes: 1024, maxParserSeconds: 2, maxQueueDepth: 100, senderPerMinute: 10 }, forwardingTokenRefs: {} },
     provider: { async verifyWebhook() { return { eventId: 'evt_integration', messageId: 'msg_integration', from: 'operator@example.test', authenticatedSender: true, senderAuthentication: 'synthetic-pass', alias: `triage+trm+${'A'.repeat(22)}@agentmail.test`, normalizedInstruction: 'Handle synthetic integration input', attachments: [] }; } },
     secretStore: store, ingress: { endpoint: { endpoint_id: ingressIdentity.endpoint_id, owner_id: ingressIdentity.owner_id }, ownerId: ingressIdentity.owner_id, signer: { ...identityKeys(ingressIdentity), keyId: ingressIdentity.key_id } }, repository, registry,
+    relayOptions: { buildAcceptOptions: (overrides) => ({ repository, registered: registry, ...overrides }) },
   });
   let enabled = true;
   const server = createRelayServer({ registry, repository, agentmailIngress: { maxMessageBytes: ingress.maxMessageBytes, handleWebhook: (input) => enabled ? ingress.handleWebhook(input) : Promise.resolve({ status: 503, body: { code: 'AGENTMAIL_INGRESS_DISABLED', details: {} } }) } });

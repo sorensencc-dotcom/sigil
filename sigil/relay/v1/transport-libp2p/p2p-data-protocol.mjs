@@ -72,7 +72,7 @@ export function wireDataProtocol(node, options) {
       // acceptEnvelopeAsync, look up the claimed sender's registered public
       // key and derive its expected PeerId -- reject if it doesn't match the
       // PeerId that was actually authenticated on this connection.
-      const registered = options.registered ?? options.registry;
+      const registered = requestOptions.registered;
       const senderEntry = registered?.get(envelope?.sender?.endpoint_id);
       if (!senderEntry) throw reject('UNKNOWN_ENDPOINT', 'Sender endpoint is not registered on this relay');
       const expectedPeerId = await peerIdFromPublicKey(senderEntry.public_key);

@@ -11,10 +11,11 @@ import crypto from 'node:crypto';
 import { createP2pHost } from './p2p-host.mjs';
 import { wireDataProtocol, sendEnvelope } from './p2p-data-protocol.mjs';
 
-// wireDataProtocol requires a buildAcceptOptions; these tests use a plain merge of their partial options.
-function wireWithBuilder(host, opts) { return wireDataProtocol(host, { ...opts, buildAcceptOptions: (overrides) => ({ ...opts, ...overrides }) }); }
 import { wireControlProtocol, ping } from './p2p-control-protocol.mjs';
 import { canonicalJsonBytes } from '../jcs.mjs';
+
+// wireDataProtocol requires a buildAcceptOptions; these tests use a plain merge of their partial options.
+function wireWithBuilder(host, opts) { return wireDataProtocol(host, { ...opts, buildAcceptOptions: (overrides) => ({ ...opts, ...overrides }) }); }
 
 function makeIdentity() {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');

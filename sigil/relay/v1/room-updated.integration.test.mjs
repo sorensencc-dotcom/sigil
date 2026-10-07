@@ -8,7 +8,9 @@ import { signedBytes } from './validate-envelope.mjs';
 import { createRelayServer } from './http-server.mjs';
 import { emitRoomEvent } from './room-events.mjs';
 import { createMemoryRepository } from '../../cli/memory-repository.mjs';
-import { createIdentity } from '../../cli/identity.mjs';
+import { createIdentity, identityKeys } from '../../cli/identity.mjs';
+import { createAgentMailIngress } from '../../ingress/v1/agentmail-adapter.mjs';
+import { createAgentMailSecretStore } from '../../ingress/v1/agentmail-secret-snapshot.mjs';
 import { createAcceptOptionsBuilder } from './accept-options.mjs';
 import { createP2pHost } from './transport-libp2p/p2p-host.mjs';
 import { wireDataProtocol, sendEnvelope } from './transport-libp2p/p2p-data-protocol.mjs';
@@ -116,13 +118,30 @@ function p2pIdentity(keyPair) {
   };
 }
 
-test('a room message accepted over p2p sends room.updated to human members', async () => {
-  const w = await world();
-  const buildAcceptOptions = createAcceptOptionsBuilder({
-    registered: w.registered, request_id: undefined, now: NOW, repository: w.repository, relayDomain: undefined, persist: undefined,
+function realBuilder(w, onPersisted, now = NOW) {
+  return createAcceptOptionsBuilder({
+    registered: w.registered, request_id: undefined, now: now ?? undefined, repository: w.repository, relayDomain: undefined, persist: undefined,
     federationMode: undefined, federationIdentity: undefined, fetchImpl: undefined, stream_seq: undefined, resendMetrics: undefined,
-    logger: undefined, onPersisted: undefined, systemIdentity: w.system, stream: w.stream,
+    logger: undefined, onPersisted, systemIdentity: w.system, stream: w.stream,
   });
+}
+
+async function addRouter(w) {
+  w.registered.set('ep_router', { owner_id: 'usr_chris', status: 'active', kind: 'agent', key_id: 'key_ep_router', public_key: crypto.generateKeyPairSync('ed25519').publicKey });
+  await w.repository.addRoomMember({ conversationId: 'room_1', endpointId: 'ep_router', role: 'member', responseMode: 'router', addedByHumanId: 'usr_chris', now: NOW });
+}
+
+// The router is not called directly from acceptEnvelopeAsync: an unmentioned human
+// message makes room dispatch create one delivery for the router member
+// (room-dispatch.mjs, needs systemIdentity from the shared options). One router
+// delivery is "the router invoked once" at this layer.
+const routerDeliveries = (persistedRows) => persistedRows.flatMap((p) => p.roomDeliveries ?? []).filter((d) => d.endpoint_id === 'ep_router');
+
+test('a room message accepted over p2p sends room.updated to human members and routes once', async () => {
+  const w = await world();
+  await addRouter(w);
+  const persistedRows = [];
+  const buildAcceptOptions = realBuilder(w, async ({ persisted }) => { persistedRows.push(persisted); });
   const senderHost = await createP2pHost({ identity: p2pIdentity(w.keys.ep_web), listenAddrs: ['/ip4/127.0.0.1/tcp/0'], enableMdns: false });
   const receiverHost = await createP2pHost({ identity: p2pIdentity(crypto.generateKeyPairSync('ed25519')), listenAddrs: ['/ip4/127.0.0.1/tcp/0'], enableMdns: false });
   try {
@@ -130,8 +149,35 @@ test('a room message accepted over p2p sends room.updated to human members', asy
     const response = await sendEnvelope(senderHost, receiverHost.getMultiaddrs()[0], roomMessage(w.keys, 'ep_web'));
     assert.equal(response.status, 202, JSON.stringify(response.body));
     assert.deepEqual(byEndpoint(w.frames), ['ep_web', 'ep_web2']);
+    assert.equal(routerDeliveries(persistedRows).length, 1, 'router delivery created once');
   } finally {
     await senderHost.stop();
     await receiverHost.stop();
   }
+});
+
+// AgentMail's enqueue can only build task.request envelopes from ep_ingress
+// (build-task-request.mjs), never room.message, so room.updated and router
+// delivery cannot be reached through it. Closest real behavior: the shared
+// builder's options reach acceptEnvelopeAsync (onPersisted runs once, with the
+// room stream present and silent for a non-room.message).
+test('an AgentMail-ingested envelope is accepted with the shared builder options and sends no room frame', async () => {
+  const w = await world();
+  const triage = createIdentity({ ownerId: 'usr_operator', endpointId: 'ep_triage', kind: 'agent' });
+  const ingressIdentity = createIdentity({ ownerId: 'usr_operator', endpointId: 'ep_ingress', kind: 'agent' });
+  for (const id of [triage, ingressIdentity]) w.registered.set(id.endpoint_id, { ...id, public_key: crypto.createPublicKey(id.public_key_pem), status: 'active' });
+  const persistedRows = [];
+  const buildAcceptOptions = realBuilder(w, async ({ persisted }) => { persistedRows.push(persisted); }, null); // wall clock: ingress envelopes are stamped now
+  const ingress = createAgentMailIngress({
+    config: { inboxMappings: [{ providerInboxId: 'inbox_a', endpointId: 'ep_triage', webhookSecretId: 'wh_triage', workflowPolicy: ['trm'] }], senderAllowlist: ['operator@example.test'], forwardingDomain: 'agentmail.test', limits: { maxMessageBytes: 1024 * 1024, maxAttachmentBytes: 1024, maxParserSeconds: 2, maxQueueDepth: 100, senderPerMinute: 10 }, forwardingTokenRefs: {} },
+    provider: { async verifyWebhook() { return { eventId: 'evt_room', messageId: 'msg_room', from: 'operator@example.test', authenticatedSender: true, senderAuthentication: 'synthetic-pass', alias: `triage+trm+${'A'.repeat(22)}@agentmail.test`, normalizedInstruction: 'Handle synthetic input', attachments: [] }; } },
+    secretStore: createAgentMailSecretStore({ generation: 'g1', withWebhookSecret: (_id, callback) => callback({ withValue: (fn) => fn('synthetic-webhook') }), withForwardingToken: (_alias, callback) => callback({ withValue: (fn) => fn('A'.repeat(22)) }) }),
+    ingress: { endpoint: { endpoint_id: ingressIdentity.endpoint_id, owner_id: ingressIdentity.owner_id }, ownerId: ingressIdentity.owner_id, signer: { ...identityKeys(ingressIdentity), keyId: ingressIdentity.key_id } },
+    repository: w.repository, registry: w.registered,
+    relayOptions: { buildAcceptOptions },
+  });
+  const result = await ingress.handleWebhook({ rawBody: '{}', headers: {}, inboxId: 'inbox_a' });
+  assert.equal(result.status, 202, JSON.stringify(result.body));
+  assert.equal(persistedRows.length, 1, 'shared builder onPersisted ran once');
+  assert.equal(w.frames.length, 0, 'a non-room.message sends no room.updated');
 });

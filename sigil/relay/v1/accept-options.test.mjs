@@ -22,15 +22,45 @@ test('an explicit undefined is allowed: a relay without a system identity still 
   assert.doesNotThrow(() => createAcceptOptionsBuilder({ ...base, systemIdentity: undefined }));
 });
 
-// Every acceptEnvelopeAsync call site must obtain its options from
-// buildAcceptOptions(...) and must not pass a hand-built object literal.
-// The human send route (room-routes.mjs) has no acceptEnvelopeAsync call yet;
-// add it to this list when that route lands.
-for (const file of ['relay/v1/http-server.mjs', 'relay/v1/transport-libp2p/p2p-data-protocol.mjs', 'ingress/v1/agentmail-adapter.mjs']) {
-  test(`${file} gets accept options from the shared builder`, () => {
-    const source = fs.readFileSync(new URL(`../../${file}`, import.meta.url), 'utf8');
-    assert.match(source, /acceptEnvelopeAsync\(envelope,/, 'acceptEnvelopeAsync call found');
-    assert.match(source, /buildAcceptOptions\(/, 'options come from buildAcceptOptions(...)');
-    assert.doesNotMatch(source, /acceptEnvelopeAsync\(envelope,\s*\{/, 'no hand-built options literal');
+// Every acceptEnvelopeAsync call site must take its options straight from
+// buildAcceptOptions(...), inline or via a const initialised by it; a literal or a
+// ternary fallback fails. The human send route
+// (room-routes.mjs) has no acceptEnvelopeAsync call yet; add it here when it lands.
+const CALL_SITES = ['relay/v1/http-server.mjs', 'relay/v1/transport-libp2p/p2p-data-protocol.mjs', 'ingress/v1/agentmail-adapter.mjs'];
+const root = new URL('../../', import.meta.url);
+
+for (const file of CALL_SITES) {
+  test(`${file} passes buildAcceptOptions(...) directly to acceptEnvelopeAsync`, () => {
+    const lines = fs.readFileSync(new URL(file, root), 'utf8').split('\n');
+    const calls = lines.flatMap((line, i) => (/\bawait acceptEnvelopeAsync\(/.test(line) ? [i] : []));
+    assert.ok(calls.length > 0, 'acceptEnvelopeAsync call found');
+    for (const i of calls) {
+      const window = lines.slice(i, i + 3).join('\n');
+      const arg = window.match(/acceptEnvelopeAsync\(envelope,\s*([A-Za-z_$][\w$]*)/)?.[1];
+      assert.ok(arg, `call at line ${i + 1} must pass a plain argument, not an object literal`);
+      // Either buildAcceptOptions(...) inline, or an identifier initialised directly
+      // from buildAcceptOptions(...) (a ternary or literal fallback does not match).
+      const direct = arg === 'buildAcceptOptions';
+      const viaVariable = lines.join(' ').includes(`const ${arg} = buildAcceptOptions(`);
+      assert.ok(direct || viaVariable, `call at line ${i + 1} options must come from buildAcceptOptions(...)`);
+    }
   });
 }
+
+test('no other non-test module calls acceptEnvelopeAsync', () => {
+  const allowed = new Set([...CALL_SITES, 'relay/v1/accept-envelope.mjs']);
+  const found = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === 'node_modules') continue;
+      const full = new URL(`${entry.name}${entry.isDirectory() ? '/' : ''}`, dir);
+      if (entry.isDirectory()) { walk(full); continue; }
+      if (!entry.name.endsWith('.mjs') || entry.name.includes('.test.')) continue;
+      const code = fs.readFileSync(full, 'utf8').split('\n').filter((line) => !/^\s*(\/\/|\*)/.test(line)).join('\n');
+      if (/\bacceptEnvelopeAsync\(/.test(code)) found.push(full.pathname.slice(root.pathname.length));
+    }
+  };
+  walk(root);
+  const extra = found.filter((file) => !allowed.has(file));
+  assert.deepEqual(extra, [], `new acceptEnvelopeAsync call site(s) outside the allowlist: ${extra.join(', ')}`);
+});
