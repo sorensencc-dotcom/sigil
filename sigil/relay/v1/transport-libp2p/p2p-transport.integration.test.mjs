@@ -10,8 +10,12 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { createP2pHost } from './p2p-host.mjs';
 import { wireDataProtocol, sendEnvelope } from './p2p-data-protocol.mjs';
+
 import { wireControlProtocol, ping } from './p2p-control-protocol.mjs';
 import { canonicalJsonBytes } from '../jcs.mjs';
+
+// wireDataProtocol requires a buildAcceptOptions; these tests use a plain merge of their partial options.
+function wireWithBuilder(host, opts) { return wireDataProtocol(host, { ...opts, buildAcceptOptions: (overrides) => ({ ...opts, ...overrides }) }); }
 
 function makeIdentity() {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
@@ -35,7 +39,7 @@ test('two hosts complete data delivery and a control heartbeat over the same nod
     wireControlProtocol(receiverHost);
     const registry = new Map([['ep_sender', { owner_id: 'usr_sender', endpoint_id: 'ep_sender', key_id: 'key_sender', kind: 'agent', status: 'active', public_key: senderIdentity.keys.publicKey }]]);
     const writes = [];
-    wireDataProtocol(receiverHost, { registered: registry, persist: async (row) => { writes.push(row); return { message_id: row.message_id, duplicate: false }; } });
+    wireWithBuilder(receiverHost, { registered: registry, persist: async (row) => { writes.push(row); return { message_id: row.message_id, duplicate: false }; } });
 
     const [receiverAddr] = receiverHost.getMultiaddrs();
 
@@ -80,7 +84,7 @@ test('sendEnvelope is rejected with PEER_IDENTITY_MISMATCH when the dialing peer
   try {
     const registry = new Map([['ep_sender', { owner_id: 'usr_sender', endpoint_id: 'ep_sender', key_id: 'key_sender', kind: 'agent', status: 'active', public_key: senderIdentity.keys.publicKey }]]);
     const writes = [];
-    wireDataProtocol(receiverHost, { registered: registry, persist: async (row) => { writes.push(row); return { message_id: row.message_id, duplicate: false }; } });
+    wireWithBuilder(receiverHost, { registered: registry, persist: async (row) => { writes.push(row); return { message_id: row.message_id, duplicate: false }; } });
 
     const [receiverAddr] = receiverHost.getMultiaddrs();
 

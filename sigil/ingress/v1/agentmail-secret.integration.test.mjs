@@ -27,6 +27,7 @@ test('real relay factory accepts one synthetic webhook and disabled control reje
     config: { inboxMappings: [{ providerInboxId: 'inbox_a', endpointId: 'ep_triage', webhookSecretId: 'wh_triage', workflowPolicy: ['trm'] }], senderAllowlist: ['operator@example.test'], forwardingDomain: 'agentmail.test', limits: { maxMessageBytes: 1024 * 1024, maxAttachmentBytes: 1024, maxParserSeconds: 2, maxQueueDepth: 100, senderPerMinute: 10 }, forwardingTokenRefs: {} },
     provider: { async verifyWebhook() { return { eventId: 'evt_integration', messageId: 'msg_integration', from: 'operator@example.test', authenticatedSender: true, senderAuthentication: 'synthetic-pass', alias: `triage+trm+${'A'.repeat(22)}@agentmail.test`, normalizedInstruction: 'Handle synthetic integration input', attachments: [] }; } },
     secretStore: store, ingress: { endpoint: { endpoint_id: ingressIdentity.endpoint_id, owner_id: ingressIdentity.owner_id }, ownerId: ingressIdentity.owner_id, signer: { ...identityKeys(ingressIdentity), keyId: ingressIdentity.key_id } }, repository, registry,
+    relayOptions: { buildAcceptOptions: (overrides) => ({ repository, registered: registry, ...overrides }) },
   });
   let enabled = true;
   const server = createRelayServer({ registry, repository, agentmailIngress: { maxMessageBytes: ingress.maxMessageBytes, handleWebhook: (input) => enabled ? ingress.handleWebhook(input) : Promise.resolve({ status: 503, body: { code: 'AGENTMAIL_INGRESS_DISABLED', details: {} } }) } });
@@ -38,4 +39,24 @@ test('real relay factory accepts one synthetic webhook and disabled control reje
     const rejected = await request(server.address().port, '{}');
     assert.equal(rejected.status, 503); assert.equal(rejected.body.code, 'AGENTMAIL_INGRESS_DISABLED');
   } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
+test('AgentMail enqueue takes its accept options from the injected shared builder', async () => {
+  const triage = createIdentity({ ownerId: 'usr_operator', endpointId: 'ep_triage', kind: 'agent' });
+  const ingressIdentity = createIdentity({ ownerId: 'usr_operator', endpointId: 'ep_ingress', kind: 'agent' });
+  const registry = new Map([[triage.endpoint_id, { ...triage, public_key: crypto.createPublicKey(triage.public_key_pem), status: 'active' }], [ingressIdentity.endpoint_id, { ...ingressIdentity, public_key: crypto.createPublicKey(ingressIdentity.public_key_pem), status: 'active' }]]);
+  const repository = createMemoryRepository({ registry });
+  const store = createAgentMailSecretStore(snapshot());
+  const built = []; const persisted = [];
+  const ingress = createAgentMailIngress({
+    config: { inboxMappings: [{ providerInboxId: 'inbox_a', endpointId: 'ep_triage', webhookSecretId: 'wh_triage', workflowPolicy: ['trm'] }], senderAllowlist: ['operator@example.test'], forwardingDomain: 'agentmail.test', limits: { maxMessageBytes: 1024 * 1024, maxAttachmentBytes: 1024, maxParserSeconds: 2, maxQueueDepth: 100, senderPerMinute: 10 }, forwardingTokenRefs: {} },
+    provider: { async verifyWebhook() { return { eventId: 'evt_integration', messageId: 'msg_integration', from: 'operator@example.test', authenticatedSender: true, senderAuthentication: 'synthetic-pass', alias: `triage+trm+${'A'.repeat(22)}@agentmail.test`, normalizedInstruction: 'Handle synthetic integration input', attachments: [] }; } },
+    secretStore: store, ingress: { endpoint: { endpoint_id: ingressIdentity.endpoint_id, owner_id: ingressIdentity.owner_id }, ownerId: ingressIdentity.owner_id, signer: { ...identityKeys(ingressIdentity), keyId: ingressIdentity.key_id } }, repository, registry,
+    relayOptions: { buildAcceptOptions: (overrides) => { built.push(overrides); return { repository, registered: registry, onPersisted: (row) => persisted.push(row) }; } },
+  });
+  const result = await ingress.handleWebhook({ rawBody: '{}', headers: {}, inboxId: 'inbox_a' });
+  assert.equal(result.status, 202, JSON.stringify(result.body));
+  assert.equal(built.length, 1, 'builder called once per accepted envelope');
+  assert.match(built[0].request_id, /^[0-9a-f-]{36}$/);
+  assert.equal(persisted.length, 1, 'the builder-supplied onPersisted ran, so its options reached acceptEnvelopeAsync');
 });

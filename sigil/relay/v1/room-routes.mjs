@@ -4,12 +4,16 @@ import { emitRoomEvent } from './room-events.mjs';
 import { promoteNextInvocation, dispatchToTarget, emitRefusal } from './room-dispatch.mjs';
 import { isAgentMember, isRouterMember } from './room-policy.mjs';
 import { clampReason } from '../../contracts/v1/room-event-schema.mjs';
+import { notifyRoomHumans } from './room-notify.mjs';
 import { sendReceiptFrame } from './receipt-notify.mjs';
+import { LocalOutbox } from '../../connectors/v1/local-outbox.mjs';
+import { acceptEnvelopeAsync } from './accept-envelope.mjs';
+import { validateRoomMessageBody } from '../../contracts/v1/room-message-schema.mjs';
 
 const MANAGER_ROLES = new Set(['owner', 'room_manager']);
 const GRANTABLE_ROLES = new Set(['room_manager', 'member']);
 const RESPONSE_MODES = new Set(['joins', 'mentions_only', 'router']);
-const ROOM_METHODS = ['createRoom', 'lookupRoom', 'listRoomsForEndpoint', 'addRoomMember', 'removeRoomMember', 'lookupRoomMember', 'listRoomMembers', 'listRoomMessages', 'listRoomInvocations', 'lookupRunningInvocation', 'finishInvocation', 'cancelRoomInvocations', 'nextQueuedInvocation', 'startInvocation', 'createRoomDelivery', 'lookupRouterDecision', 'lookupRoomMessage', 'lookupRoomEventByKey', 'lockRoom', 'createRoomInvocation', 'reserveAgentTurn', 'withTransaction'];
+const ROOM_METHODS = ['createRoom', 'lookupRoom', 'listRoomsForEndpoint', 'addRoomMember', 'removeRoomMember', 'lookupRoomMember', 'listRoomMembers', 'listRoomMessages', 'listRoomInvocations', 'lookupRunningInvocation', 'finishInvocation', 'cancelRoomInvocations', 'nextQueuedInvocation', 'startInvocation', 'createRoomDelivery', 'lookupRouterDecision', 'lookupRoomMessage', 'lookupRoomEventByKey', 'lockRoom', 'createRoomInvocation', 'reserveAgentTurn', 'withTransaction', 'acknowledgeRoomDeliveries'];
 const NAME_MAX = 80;
 const HISTORY_LIMIT_MAX = 500;
 const ROOM_SEQ_MAX = 9223372036854775807n; // envelopes.room_seq is int8
@@ -46,9 +50,22 @@ function isAgentCaller(registry, principal) {
   return registry?.get?.(principal?.endpoint_id)?.kind === 'agent';
 }
 
-export async function handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream = null, inboxDepthLimit, systemIdentity = null, logger = null }) {
+export async function handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream = null, inboxDepthLimit, systemIdentity = null, logger = null, ticketStore = null, humanSigner = null, buildAcceptOptions = null }) {
   const path = parsedUrl.pathname;
   if (path !== '/v1/rooms' && !path.startsWith('/v1/rooms/')) return false;
+  if (request.method === 'POST' && path === '/v1/rooms/ws-ticket') {
+    if (isAgentCaller(registry, principal) || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'An authenticated human context is required');
+    if (!ticketStore) return fail(response, requestId, 503, 'TICKETS_UNAVAILABLE', 'Browser tickets are not configured');
+    try {
+      const { ticket, expires_at } = ticketStore.issue({ endpoint_id: principal.endpoint_id, owner_id: principal.owner_id, human_id: principal.human_id });
+      response.setHeader('cache-control', 'no-store');
+      return send(response, requestId, 200, { code: 'OK', ticket, expires_at });
+    } catch (error) {
+      if (error.code === 'TICKET_CAP') return fail(response, requestId, 429, 'TICKET_CAP', 'Too many outstanding tickets');
+      throw error;
+    }
+  }
+
   if (!repository || ROOM_METHODS.some((method) => typeof repository[method] !== 'function')) return fail(response, requestId, 503, 'DATABASE_UNAVAILABLE', 'Rooms are unavailable');
 
   if (request.method === 'POST' && path === '/v1/rooms') {
@@ -74,13 +91,76 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     return send(response, requestId, 200, { code: 'OK', items: await repository.listRoomsForEndpoint(principal.endpoint_id) });
   }
 
-  const match = path.match(/^\/v1\/rooms\/([^/]+)\/(members|messages|invocations|stop)(?:\/([^/]+)(?:\/(remove))?)?$/);
+  const match = path.match(/^\/v1\/rooms\/([^/]+)\/(members|messages|invocations|stop|ack)(?:\/([^/]+)(?:\/(remove))?)?$/);
   if (!match) return false;
   const [, roomId, resource, segment, removeAction] = match;
   const targetEndpointId = segment;
   const action = removeAction;
   const access = await membership(repository, roomId, principal);
   if (!access) return fail(response, requestId, 404, 'ROOM_NOT_FOUND', 'Room not found');
+
+  if (request.method === 'POST' && resource === 'ack' && !segment) {
+    const body = await readJson(request, readBody);
+    let upTo;
+    try { upTo = BigInt(body?.up_to_room_seq); } catch { upTo = null; }
+    if (upTo === null || upTo < 0n || upTo > ROOM_SEQ_MAX) return fail(response, requestId, 400, 'INVALID_REQUEST', 'up_to_room_seq must be an integer from 0 to 9223372036854775807');
+    const moved = await repository.acknowledgeRoomDeliveries({ conversationId: roomId, endpointId: principal.endpoint_id, upToRoomSeq: upTo, now });
+    // The repository call committed. sendReceiptFrame isolates its own failures,
+    // so a failed sender lookup never turns a committed ack into an error.
+    for (const row of moved) {
+      await sendReceiptFrame({ stream, repository, logger }, {
+        message_id: row.message_id, delivery_id: row.delivery_id, recipient_endpoint_id: principal.endpoint_id,
+        state: 'acknowledged', at: now.toISOString(),
+      });
+    }
+    return send(response, requestId, 200, { code: 'OK', acknowledged: moved.length });
+  }
+
+  if (request.method === 'POST' && resource === 'messages' && !segment) {
+    if (!humanSigner || !buildAcceptOptions) return fail(response, requestId, 503, 'ROOM_SEND_UNAVAILABLE', 'Human send is not configured (--room-human-identity)');
+    if (isAgentCaller(registry, principal) || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'An authenticated human context is required');
+    // The seam is never the only guard: only the loaded identity's endpoint may post.
+    if (principal.endpoint_id !== humanSigner.endpointId) return fail(response, requestId, 403, 'NO_SIGNING_KEY', 'This endpoint cannot post through the relay');
+    const body = await readJson(request, readBody);
+    if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.idempotency_key !== 'string' || !body.idempotency_key || body.idempotency_key.length > 128) return fail(response, requestId, 400, 'INVALID_REQUEST', 'idempotency_key is required');
+    // Only the client's text, thread, and mentions survive: idempotency_key is
+    // transport, and a client `sender` is dropped because the relay chooses it.
+    const { idempotency_key: clientKey, sender: _ignoredSender, ...messageBody } = body;
+    try { validateRoomMessageBody(messageBody); } catch (error) { return fail(response, requestId, 400, 'INVALID_ENVELOPE', error.message); }
+
+    // The key is scoped to the room, so one key in two rooms never collides.
+    const scopedKey = `room:${roomId}:${clientKey}`;
+    const stored = async () => {
+      const prior = await repository.lookupIdempotency(principal.endpoint_id, scopedKey);
+      if (!prior) return null;
+      const row = await repository.lookupRoomMessage(roomId, prior.message_id);
+      return row ? { message_id: prior.message_id, room_seq: row.room_seq } : null;
+    };
+    const replay = await stored();
+    if (replay) return send(response, requestId, 200, { code: 'OK', ...replay });
+
+    const signer = humanSigner.signForEndpoint(principal.endpoint_id);
+    const outbox = new LocalOutbox({ privateKey: signer.privateKey, endpoint: signer.endpoint });
+    const created = now instanceof Date ? now : new Date(now);
+    const { envelope } = outbox.queue({
+      protocol: 'sigil/1', message_id: `msg_${crypto.randomUUID()}`, conversation_id: roomId, message_type: 'room.message',
+      sender: { owner_id: signer.endpoint.owner_id, endpoint_id: signer.endpoint.endpoint_id, kind: signer.endpoint.kind },
+      broadcast_scope: { conversation_id: roomId }, body: messageBody, context_refs: [], capabilities: [], correlation_id: null,
+      idempotency_key: scopedKey, created_at: created.toISOString(), expires_at: new Date(created.getTime() + 24 * 3600_000).toISOString(),
+      signature: { algorithm: 'Ed25519', key_id: signer.endpoint.key_id, value: '' },
+    });
+    const result = await acceptEnvelopeAsync(envelope, buildAcceptOptions({ request_id: requestId, now }));
+    if (result.status === 409 && result.body?.code === 'DUPLICATE_MESSAGE') {
+      // A racing retry that lost the idempotency insert (Task 3 translates the
+      // repository signal to 409 DUPLICATE_MESSAGE). Re-read the key and answer
+      // 200 with the winner; if nothing is stored the 409 is a real conflict.
+      const winner = await stored();
+      if (winner) return send(response, requestId, 200, { code: 'OK', ...winner });
+    }
+    if (result.status !== 202) return send(response, requestId, result.status, result.body);
+    const row = await repository.lookupRoomMessage(roomId, envelope.message_id);
+    return send(response, requestId, result.body.duplicate ? 200 : 201, { code: 'OK', message_id: result.body.message_id, room_seq: row?.room_seq ?? null });
+  }
 
   if (request.method === 'GET' && resource === 'members' && !segment) {
     return send(response, requestId, 200, { code: 'OK', items: await repository.listRoomMembers(roomId) });
@@ -105,6 +185,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     if (!targetIsAgent && responseMode !== null) return fail(response, requestId, 400, 'INVALID_REQUEST', 'response_mode applies only to agent endpoints');
     try {
       const member = await repository.addRoomMember({ conversationId: roomId, endpointId, role, responseMode, addedByHumanId: principal.human_id, now });
+      await notifyRoomHumans({ repository, stream, registered: registry, client: null, roomId, changed: 'members', logger: logger ?? console });
       return send(response, requestId, 201, { code: 'OK', member });
     } catch (error) {
       if (error.code === 'ROOM_MEMBER_EXISTS') return fail(response, requestId, 409, 'ROOM_MEMBER_EXISTS', error.message);
@@ -119,6 +200,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     if (!target) return fail(response, requestId, 404, 'ROOM_MEMBER_NOT_FOUND', 'Member not found');
     if (target.role === 'owner') return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', 'The room owner cannot be removed');
     await repository.removeRoomMember({ conversationId: roomId, endpointId: targetEndpointId, now });
+    await notifyRoomHumans({ repository, stream, registered: registry, client: null, roomId, changed: 'members', logger: logger ?? console });
     return send(response, requestId, 200, { code: 'OK', removed: true });
   }
 
@@ -184,10 +266,10 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
         }
         items.push(result.invocation);
         if (result.roomDelivery) deliveries.push(result.roomDelivery);
-        if (result.invocation.status === 'refused') await emitRefusal({ systemIdentity, repository, client, room, invocation: result.invocation, now, inboxDepthLimit, registered: registry });
+        if (result.invocation.status === 'refused') await emitRefusal({ systemIdentity, repository, client, room, invocation: result.invocation, now, inboxDepthLimit, registered: registry, stream });
         else accepted.push(endpointId);
       }
-      await emitRoomEvent({ identity: systemIdentity, repository, client, room, body: { kind: failed ? 'router_failed' : 'router_decision', endpoint_ids: accepted, ...(reason ? { reason } : {}) }, idempotencyKey: decisionKey, now, inboxDepthLimit, registered: registry });
+      await emitRoomEvent({ identity: systemIdentity, repository, client, room, body: { kind: failed ? 'router_failed' : 'router_decision', endpoint_ids: accepted, ...(reason ? { reason } : {}) }, idempotencyKey: decisionKey, now, inboxDepthLimit, registered: registry, stream });
       return { items, duplicate: false, deliveries };
     });
     if (outcome.invalid) return fail(response, requestId, 422, 'INVALID_REQUEST', 'trigger_message_id must name a human room.message without mentions');
@@ -211,7 +293,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
       // A late failure from an older bridge turn must not fail a newer invocation.
       if (expectedId !== null && running.invocation_id !== expectedId) return null;
       const invocation = await repository.finishInvocation(running.invocation_id, { status: 'failed', reason, now }, client);
-      const promoted = await promoteNextInvocation({ roomId, endpointId: principal.endpoint_id, repository, client, now, inboxDepthLimit, registered: registry, systemIdentity, room: access.room });
+      const promoted = await promoteNextInvocation({ roomId, endpointId: principal.endpoint_id, repository, client, now, inboxDepthLimit, registered: registry, systemIdentity, room: access.room, stream });
       return { invocation, promoted };
     });
     if (!outcome) return fail(response, requestId, 404, 'INVOCATION_NOT_FOUND', 'No matching running invocation for this endpoint in this room');
@@ -233,7 +315,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
       const rows = await repository.cancelRoomInvocations(roomId, { now }, client);
       if (systemIdentity && rows.length) {
         for (const invocation of rows) {
-          await emitRoomEvent({ identity: systemIdentity, repository, client, room: access.room, body: { kind: 'invocation_stopped', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: 'stopped' }, idempotencyKey: `evt_stopped_${invocation.invocation_id}`, now, inboxDepthLimit, registered: registry });
+          await emitRoomEvent({ identity: systemIdentity, repository, client, room: access.room, body: { kind: 'invocation_stopped', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: 'stopped' }, idempotencyKey: `evt_stopped_${invocation.invocation_id}`, now, inboxDepthLimit, registered: registry, stream });
         }
       }
       return rows;

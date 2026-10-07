@@ -246,6 +246,8 @@ export async function handleAgentMailWebhook({ rawBody, headers, inboxId, provid
 
 export function createAgentMailIngress({ config, provider, secretStore, ingress, repository, registry, quarantine, policy = {}, relayOptions = {} } = {}) {
   if (!config?.inboxMappings || !provider || !secretStore || !ingress || !repository) fail('AGENTMAIL_INGRESS_UNAVAILABLE', 'AgentMail ingress requires config, secret store, provider, identity, and repository');
+  const { buildAcceptOptions } = relayOptions;
+  if (typeof buildAcceptOptions !== 'function') fail('AGENTMAIL_INGRESS_UNAVAILABLE', 'AgentMail ingress requires relayOptions.buildAcceptOptions (see relay/v1/accept-options.mjs)');
   const ledger = createAgentMailLedger({ repository, maxQueueDepth: config.limits?.maxQueueDepth });
   const effectivePolicy = {
     ...policy,
@@ -282,7 +284,7 @@ export function createAgentMailIngress({ config, provider, secretStore, ingress,
         senderRateLimiter,
         clock: now ? () => now : clock,
         enqueue: async (envelope) => {
-          const result = await acceptEnvelopeAsync(envelope, { repository, registered: registry, ...relayOptions });
+          const result = await acceptEnvelopeAsync(envelope, buildAcceptOptions({ request_id: crypto.randomUUID() }));
           if (result.status >= 400) throw Object.assign(new Error(result.body?.message ?? 'Sigil relay rejected ingress envelope'), { code: result.body?.code ?? 'INGRESS_RELAY_REJECTED' });
           return result;
         },

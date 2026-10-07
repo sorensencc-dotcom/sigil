@@ -7,11 +7,12 @@ import { LocalOutbox } from '../../connectors/v1/local-outbox.mjs';
 import { identityKeys } from '../../cli/identity.mjs';
 import { validateRoomEventBody } from '../../contracts/v1/room-event-schema.mjs';
 import { signedBytes } from './validate-envelope.mjs';
+import { notifyRoomHumans } from './room-notify.mjs';
 import { deliveryBlocker, isAgentMember } from './room-policy.mjs';
 
 const EVENT_TTL_MS = 24 * 60 * 60 * 1000;
 
-export async function emitRoomEvent({ identity, repository, client, room, body, idempotencyKey, now = new Date(), inboxDepthLimit, registered }) {
+export async function emitRoomEvent({ identity, repository, client, room, body, idempotencyKey, now = new Date(), inboxDepthLimit, registered, stream = null, logger = console }) {
   validateRoomEventBody(body);
   // Serialize per room, then scope the key to the room: idempotency_keys is keyed
   // (sender endpoint, key) across all rooms, so a raw key reused in two rooms
@@ -58,5 +59,6 @@ export async function emitRoomEvent({ identity, repository, client, room, body, 
     roomSeq,
     roomFanout: fanoutIds,
   }, client);
+  await notifyRoomHumans({ repository, stream, registered, client, roomId: room.conversation_id, roomSeq, changed: 'messages', logger });
   return { message_id: envelope.message_id, fanout: persisted.fanout, duplicate: false };
 }

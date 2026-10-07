@@ -22,7 +22,10 @@ import { loadRegistryFile, addEndpointToRegistry, toRegistryMap, toTokenHashes }
 import { createMemoryRepository } from './memory-repository.mjs';
 import { sendWithOptionalReceiptWait } from './send-with-receipt.mjs';
 import { createRelayServer, createOnPersisted } from '../relay/v1/http-server.mjs';
+import { createAcceptOptionsBuilder } from '../relay/v1/accept-options.mjs';
 import { createStreamServer } from '../relay/v1/stream-server.mjs';
+import { createTicketStore } from '../relay/v1/ticket-store.mjs';
+import { createRoomHumanSigner } from '../relay/v1/room-human-signer.mjs';
 import { RelayClient } from '../connectors/v1/relay-client.mjs';
 import { LocalOutbox } from '../connectors/v1/local-outbox.mjs';
 import { loadConfigFile, resolveConfig } from './config-resolver.mjs';
@@ -50,7 +53,7 @@ Commands:
                                                             Run the agent daemon; --room-bridge answers room.message deliveries via a local CLI, or via a local Ollama router (--router-* flags: model, Ollama URL, timeout, context messages, sole-agent fallback on|off, default on)
   agentmail provision --identity path --installation-id id [--registry path] [--audit-output path]
                                                             Explicitly provision non-mailbox ep_ingress; creates no grants or inbox mapping
-  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] [--relay-request-freshness-ms N] [--room-system-identity path] [--p2p [--p2p-identity path] [--p2p-listen multiaddr] [--p2p-no-mdns]] Run a local relay; --room-system-identity is a dedicated identity file (endpoint ep_relay_system, owner relay_system) that signs room.event envelopes, without it rooms emit no events and the router route answers 503 (blocks; Ctrl+C to stop; set SIGIL_STREAM_SEQ_ENABLED=1 to stamp stream sequences)
+  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] [--relay-request-freshness-ms N] [--room-system-identity path] [--browser-origin origin]... [--room-human-identity path] [--p2p [--p2p-identity path] [--p2p-listen multiaddr] [--p2p-no-mdns]] Run a local relay; --room-system-identity is a dedicated identity file (endpoint ep_relay_system, owner relay_system) that signs room.event envelopes, without it rooms emit no events and the router route answers 503 --browser-origin is an exact origin a browser may call from (repeatable; default none); --room-human-identity is the human identity file the relay signs POST /v1/rooms/{id}/messages with (its key must match the registry key; without it the route answers 503). If you front the relay with a proxy, do not log request URLs for /v1/stream: they carry single-use tickets (blocks; Ctrl+C to stop; set SIGIL_STREAM_SEQ_ENABLED=1 to stamp stream sequences)
   relay well-known generate --identity path --domain domain --endpoint url [--ws-endpoint url] [--output path]
                                                             Emit this relay's .well-known/sigil discovery document from a designated endpoint identity
   oidc-issuer add <issuer> --client-id id [--label text] [--assurance level] [--database-url url]
@@ -183,7 +186,7 @@ export function startOidcIssuerAllowlistPolling({ repository, allowlistSet, inte
 }
 
 async function cmdRelayUp(argv) {
-  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' }, 'oidc-issuer-refresh-interval-ms': { type: 'string' }, domain: { type: 'string' }, 'federation-mode': { type: 'string' }, 'federation-identity': { type: 'string' }, 'room-system-identity': { type: 'string' }, 'relay-request-freshness-ms': { type: 'string' }, p2p: { type: 'boolean' }, 'p2p-listen': { type: 'string' }, 'p2p-identity': { type: 'string' }, 'p2p-no-mdns': { type: 'boolean' } } });
+  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' }, 'oidc-issuer-refresh-interval-ms': { type: 'string' }, domain: { type: 'string' }, 'federation-mode': { type: 'string' }, 'federation-identity': { type: 'string' }, 'room-system-identity': { type: 'string' }, 'browser-origin': { type: 'string', multiple: true }, 'room-human-identity': { type: 'string' }, 'relay-request-freshness-ms': { type: 'string' }, p2p: { type: 'boolean' }, 'p2p-listen': { type: 'string' }, 'p2p-identity': { type: 'string' }, 'p2p-no-mdns': { type: 'boolean' } } });
   const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
   const port = Number(opt(args, ['port']) ?? 0);
   const streamPort = Number(opt(args, ['stream-port']) ?? (port ? port + 1 : 0));
@@ -272,6 +275,9 @@ async function cmdRelayUp(argv) {
     repository = createMemoryRepository({ registry });
   }
 
+  // AgentMail is built before `stream` and `relayLogger` exist, so it gets a
+  // late-bound handle; acceptOptionsHolder.build is set once the base is complete.
+  const acceptOptionsHolder = { build: null };
   let agentmailDeployment = null;
   if (process.env.SIGIL_AGENTMAIL_ENABLE === '1') {
     const loadAdapterModule = async (key) => {
@@ -293,6 +299,7 @@ async function cmdRelayUp(argv) {
       providerFactory: providerModule?.createAgentMailProvider,
       secretProviders: secretModule?.secretProviders ?? secretModule?.providers ?? {},
       providerRotation: rotationModule?.providerRotation,
+      buildAcceptOptions: (overrides) => acceptOptionsHolder.build(overrides),
     });
   }
 
@@ -300,14 +307,32 @@ async function cmdRelayUp(argv) {
   // internally and doesn't accept an existing one), so push notifications
   // run on a second port, separate from the main relay HTTP port.
   const streamHttpServer = http.createServer();
-  const stream = createStreamServer({ server: streamHttpServer, tokenHashes });
   const relayLogger = Object.freeze({
     debug: (entry) => console.debug(JSON.stringify(entry)),
     info: (entry) => console.info(JSON.stringify(entry)),
     warn: (entry) => console.warn(JSON.stringify(entry)),
     error: (entry) => console.error(JSON.stringify(entry)),
   });
+  const allowedOrigins = args.values['browser-origin'] ?? [];
+  const ticketStore = createTicketStore();
+  let humanSigner = null;
+  const humanIdentityPath = opt(args, ['room-human-identity']);
+  if (humanIdentityPath) {
+    try {
+      humanSigner = createRoomHumanSigner({ identity: loadIdentity(humanIdentityPath), registry });
+    } catch (error) {
+      throw error.code ? new Error(`${error.code}: ${error.message}`) : error;
+    }
+  }
+  const stream = createStreamServer({ server: streamHttpServer, tokenHashes, ticketStore, allowedOrigins, logger: relayLogger });
   const relayMetrics = createRelayMetrics();
+  const buildAcceptOptions = createAcceptOptionsBuilder({
+    registered: registry, request_id: undefined, now: undefined, repository, relayDomain, persist: undefined,
+    federationMode, federationIdentity, fetchImpl: undefined, stream_seq: { enabled: streamSequenceEnabled },
+    resendMetrics: relayMetrics, logger: relayLogger,
+    onPersisted: createOnPersisted(stream, { repository, logger: relayLogger }), systemIdentity: roomSystemIdentity, stream,
+  });
+  acceptOptionsHolder.build = buildAcceptOptions;
   await new Promise((resolve) => streamHttpServer.listen(streamPort, '127.0.0.1', resolve));
   const streamAddress = streamHttpServer.address();
 
@@ -393,14 +418,7 @@ async function cmdRelayUp(argv) {
     // process's logger and metrics, never per-transport ones.
     wireDataProtocol(p2pHost, {
       registered: registry,
-      relayDomain,
-      federationMode,
-      federationIdentity,
-      repository,
-      onPersisted: createOnPersisted(stream, { repository, logger: relayLogger }),
-      stream_seq: { enabled: streamSequenceEnabled },
-      logger: relayLogger,
-      resendMetrics: relayMetrics,
+      buildAcceptOptions,
     });
     for (const addr of p2pHost.getMultiaddrs()) console.log(`sigil relay p2p listening on ${addr.toString()}`);
   }
@@ -417,7 +435,7 @@ async function cmdRelayUp(argv) {
     const addr = server?.address();
     return addr ? `http://127.0.0.1:${addr.port}` : `http://127.0.0.1:${port}`;
   };
-  server = createRelayServer({ roomSystemIdentity, registry, repository, tokenHashes, stream, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity, relayRequestFreshnessMs, stream_seq: { enabled: streamSequenceEnabled }, logger: relayLogger, resendMetrics: relayMetrics, agentmailIngress: agentmailDeployment?.agentmailIngress, agentmailControl: agentmailDeployment?.agentmailControl });
+  server = createRelayServer({ buildAcceptOptions, roomSystemIdentity, registry, repository, tokenHashes, stream, ticketStore, allowedOrigins, humanSigner, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity, relayRequestFreshnessMs, stream_seq: { enabled: streamSequenceEnabled }, logger: relayLogger, resendMetrics: relayMetrics, agentmailIngress: agentmailDeployment?.agentmailIngress, agentmailControl: agentmailDeployment?.agentmailControl });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();
   let federationReaperTimer;

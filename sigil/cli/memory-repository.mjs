@@ -7,6 +7,7 @@ import { transitionDelivery } from '../relay/v1/delivery-state.mjs';
 import { boundedDirectoryExpiry } from '../relay/v1/auth-policy.mjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { identityKeys } from './identity.mjs';
+import { withAfterCommitScope } from '../relay/v1/after-commit.mjs';
 
 const SEEDED_CAPABILITIES = new Map([
   ['sigil.core/read_shared_context', { namespace: 'sigil.core', risk_tier: 'standard' }],
@@ -99,21 +100,23 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     // exists so acceptEnvelopeAsync's repository-aware path works unchanged
     // against this repository too (design §12 dual-repository equivalence).
     async withTransaction(fn) {
-      const parent = transactionRollbackStore.getStore() ?? null;
-      const rollbacks = [];
-      return transactionRollbackStore.run(rollbacks, async () => {
-        try {
-          const result = await fn(null);
-          // Nested success: merge child undos into parent so a later parent
-          // throw still reverses the nested mutations.
-          if (parent) {
-            for (const undo of rollbacks) parent.push(undo);
+      return withAfterCommitScope(async () => {
+        const parent = transactionRollbackStore.getStore() ?? null;
+        const rollbacks = [];
+        return transactionRollbackStore.run(rollbacks, async () => {
+          try {
+            const result = await fn(null);
+            // Nested success: merge child undos into parent so a later parent
+            // throw still reverses the nested mutations.
+            if (parent) {
+              for (const undo of rollbacks) parent.push(undo);
+            }
+            return result;
+          } catch (error) {
+            for (const undo of rollbacks.reverse()) undo();
+            throw error;
           }
-          return result;
-        } catch (error) {
-          for (const undo of rollbacks.reverse()) undo();
-          throw error;
-        }
+        });
       });
     },
     async assignStreamSequence(_client, senderEndpointId, conversationId) {
@@ -249,11 +252,16 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       registry.set(endpoint_id, { endpoint_id, owner_id, key_id, status: 'active', public_key, origin_domain });
     },
     async persistAcceptedEnvelope(row) {
+      const idempotencyKey = `${row.envelope.sender.endpoint_id}:${row.envelope.idempotency_key}`;
+      const priorKey = idempotency.get(idempotencyKey);
+      if (priorKey && priorKey.message_id !== row.message_id) {
+        throw Object.assign(new Error('idempotency key already used by another message'), { code: 'IDEMPOTENCY_RACE' });
+      }
       const federationHop = row.federation_hop === true;
       undoMapSet(envelopes, row.message_id);
-      undoMapSet(idempotency, `${row.envelope.sender.endpoint_id}:${row.envelope.idempotency_key}`);
+      undoMapSet(idempotency, idempotencyKey);
       envelopes.set(row.message_id, { ...row, streamSeq: row.streamSeq ?? null, roomSeq: row.roomSeq ?? null, federation_hop: federationHop });
-      idempotency.set(`${row.envelope.sender.endpoint_id}:${row.envelope.idempotency_key}`, { message_id: row.message_id, canonical_hash: row.canonical_hash });
+      idempotency.set(idempotencyKey, { message_id: row.message_id, canonical_hash: row.canonical_hash });
       if (row.envelope.recipient?.endpoint_id) {
         const deliveryId = `del_${row.message_id}`;
         undoMapSet(deliveries, deliveryId);
@@ -576,6 +584,21 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       const next = transitionDelivery(current, 'acknowledged', { now });
       deliveries.set(deliveryId, next);
       return next;
+    },
+    async acknowledgeRoomDeliveries({ conversationId, endpointId, upToRoomSeq, now = new Date() }) {
+      const moved = [];
+      for (const delivery of deliveries.values()) {
+        if (delivery.recipient_endpoint_id !== endpointId) continue;
+        if (delivery.state !== 'queued' && delivery.state !== 'delivered') continue;
+        const row = envelopes.get(delivery.message_id);
+        if (!row || row.envelope.conversation_id !== conversationId || row.roomSeq == null || BigInt(row.roomSeq) > BigInt(upToRoomSeq)) continue;
+        undoMapSet(deliveries, delivery.delivery_id);
+        delivery.state = 'acknowledged';
+        delivery.acknowledged_at = now.toISOString();
+        delivery.updated_at = now.toISOString();
+        moved.push({ delivery_id: delivery.delivery_id, message_id: delivery.message_id, sender_endpoint_id: row.envelope.sender.endpoint_id, state: 'acknowledged' });
+      }
+      return moved;
     },
     async getDelivery(deliveryId, endpointId) {
       const current = deliveries.get(deliveryId);

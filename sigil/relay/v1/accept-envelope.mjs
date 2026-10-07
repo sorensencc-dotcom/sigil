@@ -3,6 +3,7 @@ import { validateEnvelope, reject, signedBytes, checkRecipientLocality } from '.
 import { assertAgentMayPost, applyRoomDispatch } from './room-dispatch.mjs';
 import { authorizeRoomEnvelope, assertRoomTypeHasRoom, assertNotRoomConversation } from './room-policy.mjs';
 import { resolveRateLimits, resolveStreamSequence, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
+import { notifyRoomHumans } from './room-notify.mjs';
 import { writeRejectionAudit } from './rejection-audit.mjs';
 import { decideRoute, buildForwardRequest, signForwardRequest, postForward } from './federation-router.mjs';
 import { enforceCapabilityRiskGate } from './capability-risk-gate.mjs';
@@ -432,8 +433,11 @@ async function acceptWithRepository(envelope, options) {
     // directly -- kept here so repository-backed callers (postgres, memory)
     // still see the same row shape regardless of transport.
     const persisted = await repository.persistAcceptedEnvelope({ envelope, ...result, canonical_bytes: signedBytes(envelope), action_hash: result.canonical_hash, streamSeq, roomSeq, roomFanout }, client);
+    if (room && envelope.message_type === 'room.message' && !persisted?.duplicate) {
+      await notifyRoomHumans({ repository, stream: options.stream, registered: options.registered, client, roomId: envelope.conversation_id, roomSeq, changed: 'messages', logger: options.logger });
+    }
     const dispatch = roomPlan
-      ? await applyRoomDispatch({ envelope, room, plan: roomPlan, completing, repository, client, now, inboxDepthLimit: options.inboxDepthLimit ?? DEFAULT_INBOX_DEPTH_LIMIT, registered: options.registered, systemIdentity: options.systemIdentity })
+      ? await applyRoomDispatch({ envelope, room, plan: roomPlan, completing, repository, client, now, inboxDepthLimit: options.inboxDepthLimit ?? DEFAULT_INBOX_DEPTH_LIMIT, registered: options.registered, systemIdentity: options.systemIdentity, stream: options.stream })
       : null;
     const persistedWithStreamSeq = { ...persisted, streamSeq, deliveryState: repository.initialDeliveryState ?? 'delivered', ...(dispatch ? { roomDeliveries: dispatch.roomDeliveries } : {}) };
     if (options.onPersisted) await options.onPersisted({ envelope, persisted: persistedWithStreamSeq });
@@ -448,6 +452,16 @@ async function acceptWithRepository(envelope, options) {
     // index's violation to the same audited rejection the app-level check
     // produces; every other unique-constraint error (idempotency_keys, etc.)
     // is left as-is.
+    // A racing retry loses the idempotency_keys insert. A raw 23505 would reach
+    // the caller as 500 INTERNAL_ERROR (toResponse), so translate it, the same
+    // way the task-id check below does: assign to `error` (do not throw inside
+    // this .catch) so the flow reaches toResponse. IDEMPOTENCY_RACE is only the
+    // repository-level signal and is NOT in statusByCode, so it is never sent to
+    // a client. The client-visible code is the existing 409 DUPLICATE_MESSAGE.
+    // The send route re-reads the key on that code and answers 200.
+    if ((error.code === '23505' && (error.table === 'idempotency_keys' || /idempotency_keys/.test(error.constraint ?? ''))) || error.code === 'IDEMPOTENCY_RACE') {
+      error = reject('DUPLICATE_MESSAGE', 'Idempotency key was used by a concurrent request');
+    }
     if (error.code === '23505' && error.constraint === 'envelopes_task_request_lookup_idx') {
       error = reject('DUPLICATE_TASK_ID', 'task_id is already claimed by another task.request in this conversation', { task_id: envelope.body?.task_id });
     }
