@@ -7,8 +7,14 @@ import { isAgentMember } from './room-policy.mjs';
 export async function notifyRoomHumans({ repository, stream, registered, client = null, roomId, roomSeq = null, changed, logger = console }) {
   if (!stream?.notifyRoom) return;
   const humans = [];
-  for (const member of await repository.listRoomMembers(roomId, client)) {
-    if (!(await isAgentMember(member, repository, client, registered))) humans.push(member.endpoint_id);
+  // A failed member read must not fail the request or roll back the commit it follows.
+  try {
+    for (const member of await repository.listRoomMembers(roomId, client)) {
+      if (!(await isAgentMember(member, repository, client, registered))) humans.push(member.endpoint_id);
+    }
+  } catch (error) {
+    logger?.error?.('room.updated member read failed', error);
+    return;
   }
   // Repositories assign room_seq as a bigint, which JSON.stringify rejects, so the frame carries a number.
   const frame = { room_id: roomId, ...(roomSeq == null ? {} : { room_seq: Number(roomSeq) }), changed };

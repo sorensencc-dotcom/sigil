@@ -66,3 +66,12 @@ test('a bigint room_seq becomes a JSON-safe number', async () => {
   await notifyRoomHumans({ ...r, client: null, roomId: 'room_1', roomSeq: 9n, changed: 'messages' });
   assert.equal(JSON.stringify(r.sent[0][1]), '{"room_id":"room_1","room_seq":9,"changed":"messages"}');
 });
+
+test('a failing member read is logged and swallowed, nothing is sent', async () => {
+  const r = rig(members);
+  r.repository.listRoomMembers = async () => { throw new Error('db down'); };
+  const logged = [];
+  await notifyRoomHumans({ ...r, client: null, roomId: 'room_1', roomSeq: 1, changed: 'messages', logger: { error: (...args) => logged.push(args) } });
+  assert.equal(logged.length, 1);
+  assert.deepEqual(r.sent, []);
+});

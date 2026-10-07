@@ -39,7 +39,7 @@ test('memory history returns both a room.message and a room.event row', async ()
 
 const connectionString = process.env.SIGIL_TEST_DATABASE_URL;
 
-test('postgres history returns a room.event row', { skip: !connectionString }, async (t) => {
+test('postgres history returns both a room.message and a room.event row', { skip: !connectionString }, async (t) => {
   assertDisposableTestDatabase(connectionString);
   await applyMigrations(connectionString, { reset: true });
   const pool = new pg.Pool({ connectionString });
@@ -62,8 +62,19 @@ test('postgres history returns a room.event row', { skip: !connectionString }, a
   await repository.ensureRoomSystemEndpoint({ identity: system, now: NOW });
   await repository.createRoom({ conversationId: roomId, workspaceId: `ws_${human}`, name: `hist_${run}`, createdByHumanId: human, ownerEndpointId: web, now: NOW });
   const room = await repository.lookupRoom(roomId);
-  const registered = new Map([[web, { owner_id: human, status: 'active', kind: 'human' }]]);
+  const keys = crypto.generateKeyPairSync('ed25519');
+  await pool.query(`INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from) VALUES ($1, $2, 'Ed25519', $3, 'active', NOW())`, [`key_${web}`, web, keys.publicKey.export({ type: 'spki', format: 'der' })]);
+  const registered = new Map([[web, { owner_id: human, status: 'active', kind: 'human', key_id: `key_${web}`, public_key: keys.publicKey }]]);
+  const envelope = {
+    protocol: 'sigil/1', message_id: `msg_${run}`, conversation_id: roomId, message_type: 'room.message',
+    sender: { endpoint_id: web, owner_id: human }, broadcast_scope: { conversation_id: roomId },
+    body: { text: 'hi' }, context_refs: [], capabilities: [], correlation_id: null, idempotency_key: `idem_${run}`,
+    created_at: '2026-10-02T12:00:00.000Z', expires_at: '2026-10-02T13:00:00.000Z',
+    signature: { algorithm: 'Ed25519', key_id: `key_${web}`, value: '' },
+  };
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), keys.privateKey).toString('base64url');
+  assert.equal((await acceptEnvelopeAsync(envelope, { repository, registered, now: NOW })).status, 202);
   await repository.withTransaction((client) => emitRoomEvent({ identity: system, repository, client, room, body: { kind: 'router_decision', endpoint_ids: [], reason: 'r' }, idempotencyKey: `evt_${run}`, now: NOW, inboxDepthLimit: 100, registered }));
   const history = await repository.listRoomMessages(roomId, 0n, 100);
-  assert.deepEqual(history.map((row) => row.envelope.message_type), ['room.event']);
+  assert.deepEqual(history.map((row) => row.envelope.message_type), ['room.message', 'room.event']);
 });
