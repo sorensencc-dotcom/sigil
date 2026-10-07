@@ -62,10 +62,8 @@ async function world(t) {
   const originalWithTransaction = repository.withTransaction.bind(repository);
   const originalAssign = repository.assignRoomSequence.bind(repository);
   const originalCancel = repository.cancelRoomInvocations.bind(repository);
-  const originalFinish = repository.finishInvocation.bind(repository);
   repository.assignRoomSequence = (client, ...rest) => { tag(client, 'seq'); return originalAssign(client, ...rest); };
   repository.cancelRoomInvocations = (roomId, opts, client) => { tag(client, 'cancel'); return originalCancel(roomId, opts, client); };
-  repository.finishInvocation = (id, opts, client) => { tag(client, 'finish'); return originalFinish(id, opts, client); };
   repository.withTransaction = async (work) => {
     let seen;
     const result = await originalWithTransaction(async (client) => { seen = client; tags.delete(client); return work(client); });
@@ -118,6 +116,10 @@ async function seedActive(w, roomId, i) {
   assert.ok(b.status === 201 || b.status === 200, `seed b: ${JSON.stringify(b)}`);
   const active = await w.repository.listRoomInvocations(roomId, { limit: 10 });
   assert.deepEqual(active.map((inv) => inv.status).sort(), ['queued', 'running'], `seed state ${JSON.stringify(active)}`);
+  // The running invocation is the one triggered by message a; fail must pick it.
+  const running = active.find((inv) => inv.status === 'running');
+  assert.equal(running.trigger_message_id, a.body.message_id, `running invocation should be a's ${JSON.stringify(active)}`);
+  return running.invocation_id;
 }
 
 // Commit order of the racing writer (Stop or fail) against the message accept,
@@ -141,19 +143,7 @@ function assertContiguous(messages, ctx) {
   assert.deepEqual(seqs, seqs.map((_, idx) => idx + 1), `room_seq not exactly 1..N ${ctx}`);
 }
 
-async function assertCommitOrder(w, roomId, rowA, rowB, ctx) {
-  // The row with the lower room_seq must have committed first. Commit
-  // timestamps need track_commit_timestamp; without it the assertion is
-  // skipped and the lock-order proof rests on invariants 1 and 3.
-  if (!(await commitOrderSupported(w.pool)) || !rowA || !rowB) return false;
-  const { rows } = await w.pool.query(`SELECT message_id, pg_xact_commit_timestamp(xmin) AS committed FROM envelopes WHERE conversation_id = $1 AND message_id = ANY($2)`, [roomId, [rowA.message_id, rowB.message_id]]);
-  const at = new Map(rows.map((r) => [r.message_id, r.committed]));
-  const [lo, hi] = BigInt(rowA.room_seq) < BigInt(rowB.room_seq) ? [rowA, rowB] : [rowB, rowA];
-  assert.ok(at.get(lo.message_id) <= at.get(hi.message_id), `commit order disagrees with room_seq ${ctx}`);
-  return true;
-}
-
-test('Stop racing room message accept keeps seq, invocations, and lock order consistent', { skip: !connectionString, timeout: 170_000 }, async (t) => {
+test('Stop racing room message accept keeps seq, invocations, and lock order consistent', { skip: !connectionString, timeout: 55_000 }, async (t) => {
   const w = await world(t);
   const orders = { 'writer-first': 0, 'message-first': 0 };
   for (let i = 0; i < ROUNDS; i += 1) {
@@ -195,7 +185,7 @@ test('Stop racing room message accept keeps seq, invocations, and lock order con
     const own = invocations.filter((inv) => inv.trigger_message_id === messageRow.message_id);
     assert.equal(own.length, 1, `raced message should create one invocation ${ctx}`);
     if (messageSeq < boundary) assert.equal(own[0].status, 'cancelled', ctx);
-    else assert.ok(['running', 'queued'].includes(own[0].status) && own[0].status === 'running', `post-stop invocation should run ${ctx}`);
+    else assert.equal(own[0].status, 'running', `post-stop invocation should run ${ctx}`);
     // 4: lower room_seq committed first.
     const order = commitOrder(w, 'cancel', ctx);
     assert.equal(order === 'message-first', messageSeq < boundary, `room_seq order disagrees with commit order (${order}) ${ctx}`);
@@ -204,12 +194,11 @@ test('Stop racing room message accept keeps seq, invocations, and lock order con
   t.diagnostic(`commit orders ${JSON.stringify(orders)}`);
 });
 
-test('Stop racing an idle room: a message that lands after Stop is not cancelled', { skip: !connectionString, timeout: 170_000 }, async (t) => {
+test('Stop racing an idle room: a message that lands after Stop is not cancelled', { skip: !connectionString, timeout: 55_000 }, async (t) => {
   const w = await world(t);
   const orders = { 'writer-first': 0, 'message-first': 0 };
   for (let i = 0; i < ROUNDS; i += 1) {
     const roomId = await freshRoom(w, 'idle', i);
-    w.commitLog.length = 0;
     w.commitLog.length = 0;
     const [stop, message] = await Promise.all(staggered(i, () => call(w.port, 'POST', `/v1/rooms/${roomId}/stop`, 'web', {}), () => postRoomMessage(w, roomId, `m${i}`)));
     const ctx = `round ${i} stop=${JSON.stringify(stop)} message=${JSON.stringify(message)} server_errors=${JSON.stringify(w.errors)}`;
@@ -240,11 +229,11 @@ test('Stop racing an idle room: a message that lands after Stop is not cancelled
   t.diagnostic(`commit orders ${JSON.stringify(orders)}`);
 });
 
-test('invocation fail racing room message accept keeps seq and promotion consistent', { skip: !connectionString, timeout: 170_000 }, async (t) => {
+test('invocation fail racing room message accept keeps seq and promotion consistent', { skip: !connectionString, timeout: 55_000 }, async (t) => {
   const w = await world(t);
   for (let i = 0; i < ROUNDS; i += 1) {
     const roomId = await freshRoom(w, 'fail', i);
-    await seedActive(w, roomId, i);
+    const runningId = await seedActive(w, roomId, i);
     w.commitLog.length = 0;
     const [fail, message] = await Promise.all(staggered(i, () => call(w.port, 'POST', `/v1/rooms/${roomId}/invocations/fail`, 'agent', { reason: 'bridge_failed' }), () => postRoomMessage(w, roomId, `m${i}`)));
     const ctx = `round ${i} fail=${JSON.stringify(fail)} message=${JSON.stringify(message)} server_errors=${JSON.stringify(w.errors)}`;
@@ -260,8 +249,9 @@ test('invocation fail racing room message accept keeps seq and promotion consist
     assert.equal(byStatus('failed').length, 1, ctx);
     assert.equal(byStatus('running').length, 1, `exactly one running invocation ${ctx}`);
     assert.equal(byStatus('queued').length, 1, `exactly one queued invocation (no lost promotion) ${ctx}`);
-    // The failed invocation was the one running at round start, never a newer one.
-    assert.ok(byStatus('failed')[0].trigger_message_id.length > 0, ctx);
+    // The failed invocation is the one that was running at round start, never b or the raced message.
+    assert.equal(fail.body.invocation.invocation_id, runningId, `fail response named the wrong invocation ${ctx}`);
+    assert.equal(byStatus('failed')[0].invocation_id, runningId, `wrong invocation failed ${ctx}`);
     const seqOfTrigger = (inv) => BigInt(messages.find((m) => m.message_id === inv.trigger_message_id).room_seq);
     // Promotion is FIFO: the running one triggered below the queued one.
     assert.ok(seqOfTrigger(byStatus('running')[0]) < seqOfTrigger(byStatus('queued')[0]), `promotion out of order ${ctx}`);
