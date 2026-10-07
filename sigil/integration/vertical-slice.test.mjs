@@ -219,7 +219,7 @@ test('FIX resend recovers one dropped message from a five-message stream', async
   const sender = { endpoint_id: 'ep_fix_sender', owner_id: 'usr_fix_sender' };
   const conversationId = 'conv_fix_vertical';
   for (let seq = 1; seq <= 5; seq += 1) {
-    await repository.persistAcceptedEnvelope({ message_id: `msg_fix_${seq}`, envelope: { message_id: `msg_fix_${seq}`, conversation_id: conversationId, message_type: 'chat.message', sender, recipient: { endpoint_id: 'ep_fix_receiver' }, body: { seq }, expires_at: '2099-01-01T00:00:00Z' }, streamSeq: BigInt(seq) });
+    await repository.persistAcceptedEnvelope({ message_id: `msg_fix_${seq}`, envelope: { message_id: `msg_fix_${seq}`, idempotency_key: `idem_fix_${seq}`, conversation_id: conversationId, message_type: 'chat.message', sender, recipient: { endpoint_id: 'ep_fix_receiver' }, body: { seq }, expires_at: '2099-01-01T00:00:00Z' }, streamSeq: BigInt(seq) });
   }
   const requests = [];
   const delivered = [];

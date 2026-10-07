@@ -217,7 +217,7 @@ Each phase ships with tests in the repo's `*.test.mjs` pattern and contract entr
 1. **Relay rooms.** Migration, room conversations, the `room.message` schema, `room_seq`, fan-out, stream notification, and the room HTTP API (create, list, members, history). `room.event` arrives with the router (phase 3), and the WebSocket ticket with the web client (phase 4).
 2. **Two bridges and the guards.** Claude and Codex bridges, session continuity, hop budget, rate limit, and Stop. Exit test: Claude and Codex hold a 6-turn exchange in one room, then the hop budget stops them.
 3. **Router.** @mention routing, the LLM router, decision events, and fallback behavior.
-4. **Local web client.** Room list, timeline, threads, roster with response modes, Stop button, and approval cards.
+4. **Local web client.** Split in two. 4a is the relay browser surface (`2026-10-05-sigil-rooms-phase-4a-relay-browser-surface-design.md`): WebSocket ticket, `room.updated` frame, human send, ack, and CORS. 4b is the React package `@sorensencc/sigil-rooms-web` (room list, timeline, threads, roster with response modes, Stop button). Approval cards are later.
 5. **More bridges.** GitHub Copilot CLI, Antigravity CLI, xAI Grok CLI, Hermes Agent, and Ironbots report posting.
 6. **Ironbots requests and Grok bots.** A request entry point and a command list for each Ironbot. Floor Warden bridge for Grok bots (Chief and Helix CI Triage). The inbound "Sigil rooms" webhook stays inbound only, and the reply route lands on the relay in this phase. Calls from Grok's cloud wait on the phase 7 tunnel.
 7. **Mobile.** PWA, tunnel, and push. The tunnel is also what lets the Floor Warden reach the phase 6 reply route from Grok's cloud. It does not pull phase 8 forward.
