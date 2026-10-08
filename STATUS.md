@@ -1,5 +1,12 @@
 # Status
 
+## Session update: 2026-10-07 verify-contract/reaper review tests
+
+- Reviewed branch `fix/verify-contract-revocation-check` around `verify-contract` revoked-key handling and `startFederationReaper().stop()` timer cleanup.
+- Added real CLI-path regression coverage for active, revoked, missing-key, and invalid-signature `verify-contract` outcomes.
+- Added focused reaper timer coverage proving `.stop()` exists and prevents later interval passes.
+- Focused evidence: `node --test --test-timeout=30000 sigil/cli/contract-signing.test.mjs` passed 5/5; `node --test --test-timeout=30000 sigil/relay/v1/federation-reaper.test.mjs` passed 19/19; `git diff --check` passed.
+
 ## Session update: 2026-09-20 libp2p final-review m7 (mDNS opt-out)
 
 - Closed 7 of 8 non-blocking findings from the libp2p transport driver's final review. m8 remains open, needing its own design decision (per-relay logger/metrics instance at the p2p call site).

@@ -16,6 +16,18 @@
 
 ---
 
+## Wrap mutation + audit-event writes in a transaction (sigil.mjs federation-directory CLI)
+
+**What:** Same fix as the item above, scoped to `sigil.mjs`'s CLI-only federation-directory commands (`sigil federation invite create/revoke|redeem`, `sigil federation link confirm/revoke`), which pair mutations on `federation_directory_invites`/`federation_directory_links` with a separately-awaited `recordAuditEvent` call: `createFederationDirectoryInvite`+audit (`sigil.mjs:1142-1161`), `revokeFederationDirectoryInvite`+audit (`:1189-1199`), `createFederationDirectoryLink`+audit (`:1321-1351`), `setFederationDirectoryLinkConfirmation`+`enqueueFederationForward`+audit (`:1472-1517`, two conditional audit types), `revokeFederationDirectoryLink`+`enqueueFederationForward`+audit (`:1550-1582`).
+
+**Why:** Same rationale as the item above — a failed audit write here leaves a directory-link state change (or a queued federation forward) uncorrelated with an audit row.
+
+**Context:** Split out of the 2026-09-21 repo-wide audit-transaction-atomicity plan (`docs/superpowers/plans/2026-09-21-repo-wide-audit-transaction-atomicity.md`) during its Codex outside-voice review — this is a separate subsystem (distinct tables from the HTTP `/v1/directory/*` routes that plan covers) with several 3-way mutation+enqueue+audit sites rather than that plan's 2-way mutation+audit sites, so it didn't fit cleanly into the same task list.
+
+**Depends on:** Nothing — can be done independently, any time.
+
+---
+
 ## Optimistic concurrency (CAS) on `resolvePeer`/peer-relay upserts
 
 **What:** Add compare-and-swap semantics (e.g. compare `updatedAt` on write, reject/retry on mismatch) to `upsertPeer` in both `createMemoryRepository` and `PostgresRepository`, so two concurrent `resolvePeer`/`rotatePeer` calls for the same domain can't silently last-write-win.
@@ -176,7 +188,7 @@ Fixed in commit on `main` following the 2026-09-20 libp2p transport driver merge
 
 ---
 
-## Flaky test: `sigil relay up --p2p logs a listen multiaddr` (`sigil/cli/relay-up-p2p.test.mjs`)
+## Flaky test: `sigil relay up --p2p logs a listen multiaddr` (`sigil/cli/relay-up-p2p.test.mjs`) — CLOSED (fixed upstream)
 
 **What:** Under the full repo `node --test` suite (many files running concurrently), this test intermittently fails with `Error: timed out waiting for a p2p listen multiaddr` (its own 5s wait). Standalone (`node --test sigil/cli/relay-up-p2p.test.mjs`), it has passed every time observed. The same full-suite CPU contention also made a new libp2p regression test (`m2` in `p2p-control-protocol.test.mjs`) fail once until its wait margin was widened to 8s.
 
@@ -189,3 +201,5 @@ Fixed in commit on `main` following the 2026-09-20 libp2p transport driver merge
 **Context:** Observed twice during the 2026-09-20 libp2p transport driver and hardening-batch push gates; both times a standalone re-run of the same test passed immediately.
 
 **Depends on:** None — widen the wait window (e.g. match the `m2` control-protocol test's 8s margin) or add a bounded retry.
+
+**Closed:** Fixed upstream in `6b1fe2e` ("test: allow slower p2p relay startup") — the wait window is now 15s (`sigil/cli/relay-up-p2p.test.mjs:83`), up from 5s. Verified present after rebasing this branch onto `origin/main` 2026-09-21.
