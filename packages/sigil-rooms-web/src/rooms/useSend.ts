@@ -14,6 +14,7 @@ function isRetryable(error: unknown): boolean {
   if (!(error instanceof ApiError)) return true;
   if (error.status === 400) return false;
   if (error.status === 403 && error.code === 'NO_SIGNING_KEY') return false;
+  if (error.code === 'ROOM_SEND_UNAVAILABLE') return false;
   return true;
 }
 
@@ -56,6 +57,8 @@ export function useSend(roomId: string) {
       }
       // The relay accepted the message. A failed refresh must never mark it failed.
       try {
+        // fetchQuery reuses an in-flight fetch for the same key; cancel it so one that started before this send committed cannot answer.
+        await queryClient.cancelQueries({ queryKey: historyKey(room) });
         // fetchQuery refreshes the cache even when no timeline is mounted.
         const rows = await queryClient.fetchQuery<HistoryItem[]>({
           queryKey: historyKey(room),

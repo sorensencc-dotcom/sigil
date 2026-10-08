@@ -64,7 +64,7 @@ The repository is verified against full v1 protocol conformance specifications:
 - `sigil/relay/v1/` — signed envelope validation, replay classification, rate limiting, capability registry, relay routes, WebAuthn approval ceremony UI (`/approve`), delivery state, and PostgreSQL repositories.
 - `sigil/connectors/v1/` — authenticated local connector, Codex/Claude adapters, context resolution, and MCP stdio bridge.
 - `sigil/scripts/` — worker subprocess adapters (`claude-worker.mjs`, `codex-cli-worker.mjs`, `ollama-worker.mjs`, `openai-worker.mjs`).
-- `packages/sigil-rooms-web/` — browser client for Sigil rooms. The browser client lives in packages/sigil-rooms-web; see its README.
+- [`packages/sigil-rooms-web/`](packages/sigil-rooms-web/README.md) — browser client for Sigil rooms.
 - `sigil/migrations/` — ordered PostgreSQL migrations `001` through `011`.
 - `sigil/scripts/live-db-tests.mjs` — sequential live database gate; suites reset the `public` schema.
 - `docs/wiki/` — user-friendly wiki, architecture overview, and operational runbooks.

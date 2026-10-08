@@ -140,3 +140,32 @@ describe('useSend', () => {
     expect(result.current.pending).toHaveLength(1);
   });
 });
+
+describe('useSend ordering and unavailable rows', () => {
+  beforeEach(() => sessionStorage.clear());
+
+  it('cancels the in-flight history fetch before the post-send refetch', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const cancel = vi.spyOn(queryClient, 'cancelQueries');
+    const fetchQuery = vi.spyOn(queryClient, 'fetchQuery');
+    const sendMessage = vi.fn(async () => ({ code: 'OK', message_id: 'm7', room_seq: '7' }));
+    const history = vi.fn(emptyHistory);
+    const wrap = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>
+        <TestAuthProvider client={{ sendMessage, history } as unknown as ApiClient}>{children}</TestAuthProvider>
+      </QueryClientProvider>
+    );
+    const { result } = renderHook(() => useSend('room_1'), { wrapper: wrap });
+    act(() => result.current.send('hi'));
+    await waitFor(() => expect(fetchQuery).toHaveBeenCalled());
+    expect(cancel).toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'messages'] });
+    expect(cancel.mock.invocationCallOrder[0]!).toBeLessThan(fetchQuery.mock.invocationCallOrder[0]!);
+  });
+
+  it('marks a 503 ROOM_SEND_UNAVAILABLE not retryable', async () => {
+    const sendMessage = vi.fn(async () => { throw new ApiError('ROOM_SEND_UNAVAILABLE', 503, 'unavailable'); });
+    const { result } = renderHook(() => useSend('room_1'), { wrapper: wrapper({ sendMessage }) });
+    act(() => result.current.send('x'));
+    await waitFor(() => expect(result.current.pending[0]).toMatchObject({ status: 'failed', retryable: false }));
+  });
+});

@@ -69,8 +69,8 @@ api/client.ts     fetch wrapper: base URL, Bearer header (only authorization and
 auth/             TokenGate (paste form) and the sessionStorage token store; a 401 UNAUTHENTICATED clears the token and returns to the gate
 live/socket.ts    ticket, connect, reconnect with exponential backoff and a new ticket per attempt; on room.updated invalidates ['room', id] (and ['rooms'] when changed is members); refetches everything on reconnect
 rooms/RoomList    useQuery(['rooms'])
-rooms/Timeline    useInfiniteQuery(['room', id, 'messages']) with after_seq = last room_seq, limit 100; each fetch repeats until a page returns fewer than 100 rows; rows merged into a Map keyed by room_seq
-rooms/Composer    useMutation; optimistic pending row; retry reuses the same idempotency_key
+rooms/Timeline    useQuery(['room', id, 'messages']) over `fetchHistory` with after_seq = last room_seq, limit 100; each fetch pages until a page returns fewer than 100 rows; rows merged into a Map keyed by room_seq
+rooms/Composer    the `useSend` hook; optimistic pending row; retry reuses the same idempotency_key
 rooms/useAck      after rendered rows change and only while document.visibilityState is 'visible', posts the highest rendered room_seq; debounced, forward-only; a hidden tab acks on its next visibility change
 serve/            the sigil-rooms-web bin: static server for dist/ with a CSP header; --relay-url and --stream-url (default: relay port + 1); fixed default port; prints the origin it bound
 ```
@@ -109,9 +109,9 @@ This supersedes the 4a spec text on `main`, which says the client holds the toke
 | Socket drop or ticket failure | "Live: off" chip. The timeline refetches on window focus and every 30 seconds while the socket is down. |
 | Network or CORS failure | Banner "Can't reach relay at `<url>`. Check `--browser-origin`." |
 | Send failure | The pending row shows "Failed, retry". Retry reuses the same `idempotency_key`. |
-| `400 INVALID_ENVELOPE` or `400 INVALID_REQUEST` (including text over the relay's limit) | The composer keeps the draft and shows the relay's `message`. No retry. |
+| `400 INVALID_ENVELOPE` or `400 INVALID_REQUEST` (including text over the relay's limit) | The composer clears its text on submit; the failed text stays in the failed row, which shows the relay's `message`. No retry. |
 
-The ack call is fire-and-forget. A failure logs to the console and does not surface, because the next fetch repeats it and the route is idempotent.
+The ack call is fire-and-forget. A failure logs to the console and does not surface, because the ack is retried when the next higher seq is reported and the route is idempotent.
 
 ## Testing
 

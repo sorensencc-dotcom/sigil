@@ -15,7 +15,14 @@ export function useLive(): 'live' | 'off' {
       getTicket: async () => (await client.wsTicket()).ticket,
       onFrame: (frame) => {
         if (frame.changed === 'members') void queryClient.invalidateQueries({ queryKey: ['rooms'] });
-        else void queryClient.invalidateQueries({ queryKey: ['room', frame.room_id, 'messages'] });
+        else {
+          const queryKey = ['room', frame.room_id, 'messages'];
+          // Cancel first so an in-flight fetch that predates this frame cannot be reused.
+          void queryClient
+            .cancelQueries({ queryKey })
+            .catch(() => {})
+            .then(() => queryClient.invalidateQueries({ queryKey }));
+        }
       },
       onStatus: setStatus,
       onReconnect: () => void queryClient.invalidateQueries(),
