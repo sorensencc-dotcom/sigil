@@ -80,7 +80,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* room */
 .room { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .timeline { flex: 1; overflow-y: auto; padding: 1rem; }
-.timeline ul { list-style: none; margin: 0 auto; padding: 0; max-width: 46rem; display: grid; gap: 0.6rem; }
+.timeline ul { list-style: none; margin: 0 auto; padding: 0; max-width: 60rem; display: grid; gap: 0.6rem; }
 .timeline li {
   max-width: 85%; justify-self: start; padding: 0.5rem 0.8rem;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
