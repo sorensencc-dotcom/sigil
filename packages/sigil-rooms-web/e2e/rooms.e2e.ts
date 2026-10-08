@@ -2,13 +2,14 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import http from 'node:http';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
-import { startRelay, type Harness } from './relayHarness';
+import { freePort, startRelay, type Harness } from './relayHarness';
 
-const WEB_PORT = 5188;
+let WEB_PORT = 0;
 let harness: Harness;
 let web: ChildProcess;
 
 test.beforeAll(async () => {
+  WEB_PORT = await freePort();
   harness = await startRelay(WEB_PORT);
   web = spawn(
     process.execPath,
@@ -89,5 +90,5 @@ test('the relay answers a preflight from an unlisted origin without CORS headers
       request.end();
     });
   expect((await preflight(harness.webOrigin))['access-control-allow-origin']).toBe(harness.webOrigin);
-  expect((await preflight('http://localhost:5188'))['access-control-allow-origin']).toBeUndefined();
+  expect((await preflight(`http://localhost:${WEB_PORT}`))['access-control-allow-origin']).toBeUndefined();
 });
