@@ -83,21 +83,40 @@ All changes are in `packages/sigil-rooms-web/`.
 
 - `api/client.ts` gains `renameRoom`, `setResponseMode`, `listMembers`, and `stopRoom`.
 - `api/types.ts` gains `Member` and widens `RoomUpdatedFrame.changed` to `'messages' | 'members' | 'room'`.
-- `live/useLive.ts` handles the frames:
+- `live/useLive.ts` dispatches on `frame.changed` with an explicit branch per value. Today it sends `members` to `['rooms']` and every other value to the history query, so a `room` frame would fall through and refetch history. The new mapping:
+  - `messages` invalidates `['room', id, 'messages']`, after cancelling in-flight fetches as today. The thread panel reads the same cache, so it refreshes with it.
+  - `members` invalidates `['room', id, 'members']`. It no longer invalidates `['rooms']`.
   - `room` invalidates `['rooms']`.
-  - `members` invalidates `['room', id, 'members']`.
-  - A reconnect refetches the roster with everything else.
+  - A reconnect refetches everything, including the roster.
 - `api/contract.spec.ts` asserts the new routes, field names, and error codes.
 
 ### Threads
 
-- Each message row gets a "Reply" action that opens `ThreadPanel` beside the timeline.
-- The panel shows the root row and every row whose `body.thread_root_id` equals the root's `message_id`, grouped from the history cache the timeline already holds.
-- The panel's composer uses `useSend` with an optional `threadRootId`, sent as `thread_root_id`.
-- The main timeline shows top-level rows only. A root with replies shows an "N replies" link that opens the panel.
+Canonical root: a row's thread root is `body.thread_root_id ?? message_id`. Every grouping, count, and send goes through one helper, `threadRootOf(row)`.
+
+- Each message row gets a "Reply" action. It opens `ThreadPanel` for `threadRootOf(row)`, never for the row's own ID, so replying to a reply opens the existing thread. The relay's router resolves threads the same way (`thread_root_id ?? trigger id`, `room-routes.mjs`).
+- The panel shows the root row and every row with `threadRootOf(row)` equal to the root ID, grouped from the history cache the timeline already holds.
+- The panel's composer calls `useSend` with the canonical root ID, sent as `thread_root_id`. A message is never sent with a reply's ID as its `thread_root_id`.
+- The main timeline shows rows with no `thread_root_id` only. A root with replies shows an "N replies" link that opens the panel.
 - One thread is open at a time. Opening another replaces it, and switching rooms closes it.
-- A reply whose root is missing from the cache (an unloaded page) shows under a placeholder root. The panel never drops it.
+- If the root is missing from the cache (an unloaded page), the panel keys the thread by the root ID and shows a placeholder root ("Original message not loaded") above the replies. It never drops a reply.
 - Agent answers land in the trigger's thread, so they appear here without extra work.
+
+Pending and failed sends:
+
+- `PendingMessage` gains `threadRootId?: string`. `send` stores it, and `retry` re-dispatches with the stored value, the stored text, and the same `idempotency_key`. A failed thread reply therefore retries into its thread and never as a top-level message.
+- `mergeRows` places a pending row in the main timeline only when it has no `threadRootId`. The panel renders pending rows whose `threadRootId` matches, including the "Failed, retry" state.
+- `RoomView`'s retry notices list failed rows from both places.
+
+Acknowledgement:
+
+The ack route moves every delivery at or below `up_to_room_seq` to `acknowledged`, and the sender then sees `read`. Thread replies are hidden from the main timeline, so the client must not report a seq it has not shown.
+
+- A row counts as seen once the user can see it: a main-timeline row, a `room.event` row, or a row in the open thread panel. A row in a closed thread is not seen. Seen is monotonic, so closing the panel unsees nothing.
+- The ack watermark is the highest seq `S` such that every history row with `room_seq <= S` is seen. When no row is unseen, it is the highest seq. `useAck` is fed this watermark and stays forward-only and debounced.
+- Example: row 1 is top-level, row 2 is a reply in thread A, row 3 is top-level. Until thread A is opened the watermark is 1. Opening thread A raises it to 3.
+- Trade-off, accepted: an unread reply holds back the read receipts for later top-level messages until its thread is opened, and the "N replies" link on the root is the cue. Marking a seq read that the user never saw would be worse. A relay-side per-thread ack or an unread badge can follow.
+- The watermark helper takes the history rows and the seen set, so it is a pure function with its own tests.
 
 ### Stop
 
@@ -138,7 +157,9 @@ All changes are in `packages/sigil-rooms-web/`.
 - **Relay:** see Relay tests.
 - **Web unit (Vitest and Testing Library):**
   - New `client` methods, including error mapping.
-  - Thread grouping with a missing root and out-of-order replies.
+  - Thread grouping with a missing root, out-of-order replies, and a reply to a reply landing in the original root's thread.
+  - Ack watermark with interleaved thread rows: rows 1 (top-level), 2 (hidden reply), 3 (top-level) report 1 until the thread opens, then 3.
+  - A failed thread reply retries with its `thread_root_id` and `idempotency_key` intact, and a pending thread reply never shows in the main timeline.
   - `ThreadPanel` sending with `thread_root_id`.
   - Stop, including the disabled state.
   - Roster edits for a manager and the read-only view for others.
