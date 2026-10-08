@@ -7,7 +7,7 @@ import { createServer } from 'node:net';
 const repoRoot = path.resolve(import.meta.dirname, '../../..');
 const sigilBin = path.join(repoRoot, 'bin/sigil.mjs');
 
-async function freePort(): Promise<number> {
+export async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const probe = createServer();
     probe.listen(0, '127.0.0.1', () => {
@@ -37,8 +37,13 @@ export async function startRelay(webPort: number): Promise<Harness> {
   const relayPort = await freePort();
   const streamPort = relayPort + 1;
   const webOrigin = `http://127.0.0.1:${webPort}`;
-  sigil(dir, ['init', 'web', '--owner', 'usr_web@local', '--kind', 'human']);
-  sigil(dir, ['init', 'claude', '--owner', 'usr_web@local', '--kind', 'agent']);
+  try {
+    sigil(dir, ['init', 'web', '--owner', 'usr_web@local', '--kind', 'human']);
+    sigil(dir, ['init', 'claude', '--owner', 'usr_web@local', '--kind', 'agent']);
+  } catch (error) {
+    rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
   const identityPath = path.join(dir, '.sigil', 'web.identity.json');
   const identity = JSON.parse(readFileSync(identityPath, 'utf8')) as { relay_token: string };
 

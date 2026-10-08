@@ -22,6 +22,7 @@ export interface ClientOptions {
 
 export interface ApiClient {
   listRooms(): Promise<Room[]>;
+  createRoom(name: string): Promise<Room>;
   history(roomId: string, afterSeq: string, limit?: number): Promise<HistoryPage>;
   sendMessage(roomId: string, text: string, idempotencyKey: string): Promise<SendResult>;
   ack(roomId: string, upToRoomSeq: string): Promise<AckResult>;
@@ -56,6 +57,9 @@ export function createClient({ baseUrl, getToken, onUnauthorized, fetchImpl = (.
   return {
     async listRooms() {
       return (await request<{ items: Room[] }>('GET', '/v1/rooms')).items;
+    },
+    async createRoom(name) {
+      return (await request<{ room: Room }>('POST', '/v1/rooms', { name })).room;
     },
     history(roomId, afterSeq, limit = 100) {
       return request<HistoryPage>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/messages?after_seq=${encodeURIComponent(afterSeq)}&limit=${limit}`);

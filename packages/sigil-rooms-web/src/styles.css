@@ -370,3 +370,9 @@ li[data-pending='failed'] .status { color: var(--danger); font-weight: 600; }
   .sidebar { width: 8.5rem; }
   .timeline li { max-width: 95%; }
 }
+
+/* ── NEW ROOM ────────────────────────────────────────────── */
+.new-room { display: grid; grid-template-columns: 1fr auto; gap: 0.35rem; margin-bottom: 0.85rem; }
+.new-room input { min-width: 0; padding: 0.45rem 0.6rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); font: inherit; }
+.new-room [role='alert'] { grid-column: 1 / -1; margin: 0; }
+.sidebar .new-room button { width: auto; }
