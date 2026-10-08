@@ -8,18 +8,19 @@ import { describeError, ErrorBanner } from './errors/ErrorBanner';
 import { Composer } from './rooms/Composer';
 import { RoomList } from './rooms/RoomList';
 import { Timeline } from './rooms/Timeline';
+import { useAck } from './rooms/useAck';
 import { useSend } from './rooms/useSend';
 
 function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
   const { pending, send, retry, sendError } = useSend(roomId);
-  const noop = useCallback(() => {}, []); // Task 7 replaces this with the ack hook.
+  const reportSeq = useAck(roomId);
   const disabledReason =
     sendError instanceof ApiError && (sendError.code === 'ROOM_SEND_UNAVAILABLE' || sendError.code === 'NO_SIGNING_KEY')
       ? describeError(sendError)
       : null;
   return (
     <>
-      <Timeline roomId={roomId} pending={pending} onVisibleSeq={noop} onGone={onGone} />
+      <Timeline roomId={roomId} pending={pending} onVisibleSeq={reportSeq} onGone={onGone} />
       {pending
         .filter((row) => row.status === 'failed' && row.retryable !== false)
         .map((row) => (
