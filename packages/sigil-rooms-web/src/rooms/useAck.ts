@@ -7,6 +7,7 @@ export function useAck(roomId: string, debounceMs = 500): (seq: string) => void 
   const wanted = useRef<bigint>(0n);
   const acked = useRef<bigint>(0n);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentRoom = useRef(roomId);
 
   const flush = useCallback(() => {
     timer.current = null;
@@ -15,8 +16,8 @@ export function useAck(roomId: string, debounceMs = 500): (seq: string) => void 
     const upTo = wanted.current;
     acked.current = upTo;
     client.ack(roomId, upTo.toString()).catch((error: unknown) => {
-      console.warn('ack failed; the next fetch repeats it', error);
-      if (acked.current === upTo) acked.current = 0n;
+      console.warn('ack failed; the next reported seq retries it', error);
+      if (currentRoom.current === roomId && acked.current === upTo) acked.current = 0n;
     });
   }, [client, roomId]);
 
@@ -26,8 +27,15 @@ export function useAck(roomId: string, debounceMs = 500): (seq: string) => void 
   }, [debounceMs, flush]);
 
   useEffect(() => {
-    wanted.current = 0n;
-    acked.current = 0n;
+    // Child effects (Timeline) may already have reported a seq before this runs, so
+    // reset only when the room actually changed.
+    if (currentRoom.current !== roomId) {
+      currentRoom.current = roomId;
+      wanted.current = 0n;
+      acked.current = 0n;
+    }
+    // A StrictMode remount cleanup clears the timer; re-arm if a seq is pending.
+    if (wanted.current > acked.current) schedule();
     const onVisible = () => {
       if (document.visibilityState === 'visible' && wanted.current > acked.current) schedule();
     };

@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { StrictMode, useEffect, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApiClient } from '../api/client';
 import { TestAuthProvider } from '../auth/AuthContext';
@@ -64,5 +64,29 @@ describe('useAck', () => {
     act(() => result.current('3'));
     await act(async () => { await vi.advanceTimersByTimeAsync(60); });
     expect(warn).toHaveBeenCalled();
+    act(() => result.current('3'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+    expect(ack).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([false, true])('acks a seq reported by a child effect before the hook effect runs (strict=%s)', async (strict) => {
+    const ack = vi.fn(async () => ({ code: 'OK', acknowledged: 1 }));
+    function Child({ report }: { report: (s: string) => void }) {
+      useEffect(() => { report('6'); }, [report]);
+      return null;
+    }
+    function Parent() {
+      const report = useAck('room_1', 50);
+      return <Child report={report} />;
+    }
+    const { render } = await import('@testing-library/react');
+    const tree = (
+      <QueryClientProvider client={new QueryClient()}>
+        <TestAuthProvider client={{ ack } as unknown as ApiClient}><Parent /></TestAuthProvider>
+      </QueryClientProvider>
+    );
+    render(strict ? <StrictMode>{tree}</StrictMode> : tree);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+    expect(ack).toHaveBeenCalledWith('room_1', '6');
   });
 });
