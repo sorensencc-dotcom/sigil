@@ -116,6 +116,19 @@ describe('useSend', () => {
     expect(result.current.sendError).toBeNull();
   });
 
+  it('clears sendError once a retry succeeds', async () => {
+    const sendMessage = vi.fn()
+      .mockRejectedValueOnce(new ApiError('NETWORK', 0, 'offline'))
+      .mockResolvedValueOnce({ code: 'OK', message_id: 'm5', room_seq: '5' });
+    const history = vi.fn(emptyHistory);
+    const { result } = renderHook(() => useSend('room_1'), { wrapper: wrapper({ sendMessage, history }) });
+    act(() => result.current.send('hi'));
+    await waitFor(() => expect(result.current.sendError).not.toBeNull());
+    act(() => result.current.retry(result.current.pending[0]!.idempotencyKey));
+    await waitFor(() => expect(result.current.pending[0]?.messageId).toBe('m5'));
+    expect(result.current.sendError).toBeNull();
+  });
+
   it('keeps pending rows per room', async () => {
     const sendMessage = vi.fn(async () => ({ code: 'OK', message_id: 'm4', room_seq: '4' }));
     const history = vi.fn(emptyHistory);

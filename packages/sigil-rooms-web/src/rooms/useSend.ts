@@ -37,6 +37,8 @@ export function useSend(roomId: string) {
 
   const dispatch = useCallback(
     async (room: string, idempotencyKey: string, text: string) => {
+      // Covers both send and retry: a stale error must not outlive a new attempt.
+      setErrorByRoom((all) => (all[room] == null ? all : { ...all, [room]: null }));
       patch(room, idempotencyKey, { status: 'sending', error: undefined, retryable: undefined });
       let messageId: string;
       try {
