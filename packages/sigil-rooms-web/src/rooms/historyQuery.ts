@@ -20,5 +20,7 @@ export async function fetchHistory(client: ApiClient, queryClient: QueryClient, 
     if (page.items.length < PAGE) break;
     after = maxSeq(page.items.map((item) => item.room_seq));
   }
-  return collected;
+  // A socket-driven refetch can overlap another read of the same rows; keep each message once.
+  const seen = new Set<string>();
+  return collected.filter((item) => !seen.has(item.message_id) && !!seen.add(item.message_id));
 }

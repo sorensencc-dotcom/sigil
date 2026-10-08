@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from './auth/AuthContext';
 import { TokenGate } from './auth/TokenGate';
 import { loadConfig, type WebConfig } from './config';
 import { describeError, ErrorBanner } from './errors/ErrorBanner';
+import { useLive } from './live/useLive';
 import { Composer } from './rooms/Composer';
 import { RoomList } from './rooms/RoomList';
 import { Timeline } from './rooms/Timeline';
@@ -38,6 +39,7 @@ function Shell() {
   const { token, login, signOut, rejected } = useAuth();
   const [roomId, setRoomId] = useState<string | null>(null);
   const queryClient = useQueryClient();
+  const live = useLive();
   const onGone = useCallback(() => {
     setRoomId(null);
     void queryClient.invalidateQueries({ queryKey: ['rooms'] });
@@ -46,7 +48,7 @@ function Shell() {
   return (
     <main>
       <header>
-        <strong>Sigil rooms</strong> <button onClick={signOut}>Sign out</button>
+        <strong>Sigil rooms</strong> <button onClick={signOut}>Sign out</button> <span>{live === 'live' ? 'Live' : 'Live: off'}</span>
       </header>
       <RoomList selectedId={roomId} onSelect={setRoomId} />
       {roomId ? <RoomView key={roomId} roomId={roomId} onGone={onGone} /> : <p>Pick a room.</p>}
