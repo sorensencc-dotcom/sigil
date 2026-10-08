@@ -41,6 +41,7 @@
     "audit:deps": "node sigil-dep-audit.mjs",
     "audit:jcs": "node sigil-jcs-audit.mjs",
     "test:live": "node sigil/scripts/live-db-tests.mjs",
+    "test:web": "npm --prefix packages/sigil-rooms-web ci && npm --prefix packages/sigil-rooms-web run typecheck && npm --prefix packages/sigil-rooms-web test && npm --prefix packages/sigil-rooms-web run build",
     "db:migrate": "node sigil/scripts/apply-migrations.mjs",
     "receipt:claude": "node sigil/scripts/live-claude-worker-receipt.mjs",
     "prepack": "node sigil-dep-audit.mjs && node sigil-jcs-audit.mjs && node --test",

@@ -65,12 +65,12 @@ All shapes are in `sigil/contracts/v1/relay-api.json`, as amended by PR #33. The
 ## Components
 
 ```
-api/client.ts     fetch wrapper: base URL, Bearer header, X-Sigil-Request-Id; maps an error body to ApiError{code, status, requestId}
+api/client.ts     fetch wrapper: base URL, Bearer header (only authorization and content-type are sent, because the relay CORS allows exactly those); maps an error body to ApiError{code, status, requestId}
 auth/             TokenGate (paste form) and the sessionStorage token store; a 401 UNAUTHENTICATED clears the token and returns to the gate
 live/socket.ts    ticket, connect, reconnect with exponential backoff and a new ticket per attempt; on room.updated invalidates ['room', id] (and ['rooms'] when changed is members); refetches everything on reconnect
 rooms/RoomList    useQuery(['rooms'])
-rooms/Timeline    useInfiniteQuery(['room', id, 'messages']) with after_seq = last room_seq, limit 100; each fetch repeats until a page returns fewer than 100 rows; rows merged into a Map keyed by room_seq
-rooms/Composer    useMutation; optimistic pending row; retry reuses the same idempotency_key
+rooms/Timeline    useQuery(['room', id, 'messages']) over `fetchHistory` with after_seq = last room_seq, limit 100; each fetch pages until a page returns fewer than 100 rows; rows merged into a Map keyed by room_seq
+rooms/Composer    the `useSend` hook; optimistic pending row; retry reuses the same idempotency_key
 rooms/useAck      after rendered rows change and only while document.visibilityState is 'visible', posts the highest rendered room_seq; debounced, forward-only; a hidden tab acks on its next visibility change
 serve/            the sigil-rooms-web bin: static server for dist/ with a CSP header; --relay-url and --stream-url (default: relay port + 1); fixed default port; prints the origin it bound
 ```
@@ -109,9 +109,9 @@ This supersedes the 4a spec text on `main`, which says the client holds the toke
 | Socket drop or ticket failure | "Live: off" chip. The timeline refetches on window focus and every 30 seconds while the socket is down. |
 | Network or CORS failure | Banner "Can't reach relay at `<url>`. Check `--browser-origin`." |
 | Send failure | The pending row shows "Failed, retry". Retry reuses the same `idempotency_key`. |
-| `400 INVALID_ENVELOPE` or `400 INVALID_REQUEST` (including text over the relay's limit) | The composer keeps the draft and shows the relay's `message`. No retry. |
+| `400 INVALID_ENVELOPE` or `400 INVALID_REQUEST` (including text over the relay's limit) | The composer clears its text on submit; the failed text stays in the failed row, which shows the relay's `message`. No retry. |
 
-The ack call is fire-and-forget. A failure logs to the console and does not surface, because the next fetch repeats it and the route is idempotent.
+The ack call is fire-and-forget. A failure logs to the console and does not surface, because the ack is retried when the next higher seq is reported and the route is idempotent.
 
 ## Testing
 
@@ -127,7 +127,7 @@ The ack call is fire-and-forget. A failure logs to the console and does not surf
 - **Isolation and gates:** the root `package.json` has no `workspaces`, and the plan keeps it that way so core's lockfile and `npm ci` stay unchanged. The web package therefore sits outside every core gate until the plan wires it in:
   - The local pre-push hook lives in the shared git directory (`.git/hooks/pre-push`), is not written by `sigil/scripts/install-git-hooks.mjs` (which installs only `pre-commit`), and runs the full core suite. It never runs web tests. The web package's `npm test` runs on its own.
   - CI (`.github/workflows/ci.yml`) runs `npm ci` and `npm test` at the root only. The plan adds a CI job for the web package: `npm ci`, typecheck, Vitest, and the build, all inside `packages/sigil-rooms-web/`. A root script `test:web` runs the same steps locally.
-  - Core's `node --test` must not pick up web tests. Web test files are `*.test.ts` and `*.test.tsx` under `src/`, with no `test/` or `tests/` directory in the package. The plan verifies that `npm test` at the root discovers none of them.
+  - Core's `node --test` must not pick up web tests. Web test files are `*.spec.ts` and `*.spec.tsx` under `src/` (Node 24 `node --test` also matches `*.test.ts`), with no `test/` or `tests/` directory in the package. The plan verifies that `npm test` at the root discovers none of them.
   - Core's `files` whitelist excludes `packages/`. The plan verifies it with `npm pack --dry-run`.
 
 ## Open items for the plan
