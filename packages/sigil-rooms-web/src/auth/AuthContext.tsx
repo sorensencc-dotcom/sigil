@@ -12,7 +12,7 @@ interface AuthValue {
   rejected: boolean;
 }
 
-const AuthContext = createContext<AuthValue | null>(null);
+export const AuthContext = createContext<AuthValue | null>(null);
 
 export function AuthProvider({ baseUrl, streamUrl, children }: { baseUrl: string; streamUrl: string; children: ReactNode }) {
   const queryClient = useQueryClient();
@@ -61,4 +61,9 @@ export function useAuth(): AuthValue {
   const value = useContext(AuthContext);
   if (!value) throw new Error('useAuth outside AuthProvider');
   return value;
+}
+
+export function TestAuthProvider({ client, children, streamUrl = 'ws://stream.test' }: { client: ApiClient; children: ReactNode; streamUrl?: string }) {
+  const value: AuthValue = { token: 'tok', login() {}, signOut() {}, client, streamUrl, rejected: false };
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
