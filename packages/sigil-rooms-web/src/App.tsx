@@ -12,6 +12,9 @@ import { Timeline } from './rooms/Timeline';
 import { useAck } from './rooms/useAck';
 import { useSend } from './rooms/useSend';
 
+const THEME_KEY = 'sigil.theme';
+const DEFAULT_THEME = 'rewrite-labs';
+
 function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
   const { pending, send, retry, sendError } = useSend(roomId);
   const reportSeq = useAck(roomId);
@@ -37,7 +40,7 @@ function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
   );
 }
 
-function Shell() {
+function Shell({ theme, onThemeChange }: { theme: string; onThemeChange: (next: string) => void }) {
   const { token, login, signOut, rejected } = useAuth();
   const [roomId, setRoomId] = useState<string | null>(null);
   const queryClient = useQueryClient();
@@ -46,12 +49,22 @@ function Shell() {
     setRoomId(null);
     void queryClient.invalidateQueries({ queryKey: ['rooms'] });
   }, [queryClient]);
-  if (!token) return <TokenGate onSubmit={login} rejected={rejected} />;
+  if (!token) return <TokenGate onSubmit={login} rejected={rejected} theme={theme} onThemeChange={onThemeChange} />;
   return (
     <main className="app">
       <header className="topbar">
         <strong className="brand">Sigil rooms</strong>
         <span className="chip" data-live={live === 'live' ? 'true' : 'false'}>{live === 'live' ? 'Live' : 'Live: off'}</span>
+        <select
+          aria-label="Theme"
+          className="theme-select"
+          value={theme}
+          onChange={(e) => onThemeChange(e.target.value)}
+        >
+          <option value="rewrite-labs">Rewrite Labs</option>
+          <option value="cast-iron-charlie">Cast Iron Charlie (Dark)</option>
+          <option value="cast-iron-charlie-light">Cast Iron Charlie (Paper)</option>
+        </select>
         <button className="ghost" onClick={signOut}>Sign out</button>
       </header>
       <div className="body">
@@ -69,6 +82,21 @@ function Shell() {
 export function App() {
   const [config, setConfig] = useState<WebConfig | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [theme, setTheme] = useState<string>(() => {
+    try {
+      return sessionStorage.getItem(THEME_KEY) || DEFAULT_THEME;
+    } catch {
+      return DEFAULT_THEME;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(THEME_KEY, theme);
+    } catch { /* ignore */ }
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+
   useEffect(() => {
     loadConfig().then(setConfig, setError);
   }, []);
@@ -89,7 +117,7 @@ export function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider baseUrl={config.relayUrl} streamUrl={config.streamUrl}>
-        <Shell />
+        <Shell theme={theme} onThemeChange={setTheme} />
       </AuthProvider>
     </QueryClientProvider>
   );
