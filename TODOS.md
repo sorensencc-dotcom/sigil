@@ -188,7 +188,7 @@ Fixed in commit on `main` following the 2026-09-20 libp2p transport driver merge
 
 ---
 
-## Flaky test: `sigil relay up --p2p logs a listen multiaddr` (`sigil/cli/relay-up-p2p.test.mjs`) — CLOSED (fixed upstream)
+## Flaky test: `sigil relay up --p2p logs a listen multiaddr` (`sigil/cli/relay-up-p2p.test.mjs`)
 
 **What:** Under the full repo `node --test` suite (many files running concurrently), this test intermittently fails with `Error: timed out waiting for a p2p listen multiaddr` (its own 5s wait). Standalone (`node --test sigil/cli/relay-up-p2p.test.mjs`), it has passed every time observed. The same full-suite CPU contention also made a new libp2p regression test (`m2` in `p2p-control-protocol.test.mjs`) fail once until its wait margin was widened to 8s.
 
@@ -202,4 +202,4 @@ Fixed in commit on `main` following the 2026-09-20 libp2p transport driver merge
 
 **Depends on:** None — widen the wait window (e.g. match the `m2` control-protocol test's 8s margin) or add a bounded retry.
 
-**Closed:** Fixed upstream in `6b1fe2e` ("test: allow slower p2p relay startup") — the wait window is now 15s (`sigil/cli/relay-up-p2p.test.mjs:83`), up from 5s. Verified present after rebasing this branch onto `origin/main` 2026-09-21.
+**Update 2026-10-07:** `6b1fe2e` widened the wait to 15s (`sigil/cli/relay-up-p2p.test.mjs:83`), but the test still times out (20s) under full-suite load via `npm run test:bounded`; it passes 4/4 standalone. Not closed.
