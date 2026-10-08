@@ -50,6 +50,17 @@ test('paste a token, list rooms, send, see it come back live, and ack', async ({
   await expect(page.getByText('hello from the browser')).toBeVisible();
   await expect(page.getByText('Sending…')).toHaveCount(0);
 
+  // Prove the room.updated path: post from Node so the browser has no pending row and no
+  // fetch of its own; with polling off while Live, only a socket frame can surface it.
+  const pushed = `pushed from node ${crypto.randomUUID()}`;
+  const response = await fetch(`${harness.relayUrl}/v1/rooms/${harness.roomId}/messages`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${harness.humanToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ text: pushed, idempotency_key: crypto.randomUUID() }),
+  });
+  expect(response.ok).toBe(true);
+  await expect(page.getByText(pushed)).toBeVisible({ timeout: 10_000 });
+
   await expect.poll(() => ackRequests.length, { timeout: 5000 }).toBeGreaterThan(0);
   expect(JSON.parse(ackRequests.at(-1)!)).toHaveProperty('up_to_room_seq');
 
