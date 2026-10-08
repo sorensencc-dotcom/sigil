@@ -45,7 +45,7 @@ test('paste a token, list rooms, send, see it come back live, and ack', async ({
     if (request.url().endsWith(`/v1/rooms/${harness.roomId}/ack`)) ackRequests.push(request.postData() ?? '');
   });
 
-  await page.getByLabel('Message').fill('hello from the browser');
+  await page.getByLabel('Message', { exact: true }).fill('hello from the browser');
   await page.getByRole('button', { name: 'Send' }).click();
   await expect(page.getByText('hello from the browser')).toBeVisible();
   await expect(page.getByText('Sending…')).toHaveCount(0);
