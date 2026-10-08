@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Added
+- Added `packages/sigil-rooms-web` (`@sorensencc/sigil-rooms-web`), a browser client for Sigil rooms with paste-token login, room list, timeline, send, ack, and live updates through `room.updated`. Start it with `node packages/sigil-rooms-web/bin/sigil-rooms-web.mjs`. Threads, Stop, and roster modes are phase 4b-2. Root `npm run test:web` runs its typecheck, tests, and build.
 - Added `GET /v1/messages/{message_id}/receipts`, a sender-only read of every recipient's receipt state, so a sender can find out after disconnecting.
 - `delivery.receipt` frames now carry `recipient_endpoint_id` and `mapped_state`. A room message sends one frame per recipient with that recipient's real delivery ID.
 - On Postgres the accept-time frame now says `queued` and a `delivered` frame follows when the recipient polls. The frame previously said `delivered` immediately.
