@@ -2,7 +2,9 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { Readable } from 'node:stream';
+import fs from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // @ts-expect-error plain .mjs without types
 import { createWebServer, defaultStreamUrl } from '../serve/server.mjs';
 
@@ -19,7 +21,8 @@ beforeEach(async () => {
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 
-afterEach(async () => { await new Promise((resolve) => server.close(resolve)); });
+afterEach(async () => {
+  vi.restoreAllMocks(); await new Promise((resolve) => server.close(resolve)); });
 
 describe('web server', () => {
   it('serves config.json with the relay and stream URLs, uncached', async () => {
@@ -61,5 +64,16 @@ describe('web server', () => {
   it('defaultStreamUrl adds one to the relay port', () => {
     expect(defaultStreamUrl('http://127.0.0.1:7777')).toBe('ws://127.0.0.1:7778');
     expect(defaultStreamUrl('https://relay.example:8443')).toBe('wss://relay.example:8444');
+  });
+
+  it('survives a file stream error and keeps serving', async () => {
+    vi.spyOn(fs, 'createReadStream').mockImplementationOnce((() => {
+      const broken = new Readable({ read() {} });
+      setImmediate(() => broken.destroy(new Error('EACCES')));
+      return broken;
+    }) as never);
+    await fetch(`${base}/assets/app.js`).then((r) => r.text()).catch(() => undefined);
+    const after = await fetch(`${base}/config.json`);
+    expect(after.status).toBe(200);
   });
 });

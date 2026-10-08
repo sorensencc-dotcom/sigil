@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import { pipeline } from 'node:stream';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -65,6 +66,8 @@ export function createWebServer({ distDir, relayUrl, streamUrl }) {
     const type = TYPES[path.extname(target)] ?? 'application/octet-stream';
     response.writeHead(200, headers({ 'content-type': type }));
     if (request.method === 'HEAD') return response.end();
-    fs.createReadStream(target).pipe(response);
+    const stream = fs.createReadStream(target);
+    stream.on('error', () => response.destroy());
+    pipeline(stream, response, () => {});
   });
 }
