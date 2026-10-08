@@ -5,6 +5,7 @@ export function Composer({ send, disabledReason }: { send: (text: string) => voi
   const disabled = disabledReason !== null;
   return (
     <form
+      className="composer"
       onSubmit={(event) => {
         event.preventDefault();
         const trimmed = text.trim();
@@ -13,7 +14,7 @@ export function Composer({ send, disabledReason }: { send: (text: string) => voi
         setText('');
       }}
     >
-      {disabledReason ? <p>{disabledReason}</p> : null}
+      {disabledReason ? <p className="reason">{disabledReason}</p> : null}
       <textarea aria-label="Message" value={text} disabled={disabled} onChange={(event) => setText(event.target.value)} />
       <button type="submit" disabled={disabled}>Send</button>
     </form>

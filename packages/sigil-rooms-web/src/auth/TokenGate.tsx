@@ -4,6 +4,7 @@ export function TokenGate({ onSubmit, rejected }: { onSubmit: (token: string) =>
   const [value, setValue] = useState('');
   return (
     <form
+      className="gate"
       onSubmit={(event) => {
         event.preventDefault();
         if (value.trim()) onSubmit(value.trim());

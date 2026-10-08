@@ -20,18 +20,20 @@ function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
       ? describeError(sendError)
       : null;
   return (
-    <>
+    <div className="room">
       <Timeline roomId={roomId} pending={pending} onVisibleSeq={reportSeq} onGone={onGone} />
-      {pending
-        .filter((row) => row.status === 'failed' && row.retryable !== false)
-        .map((row) => (
-          <button key={row.idempotencyKey} onClick={() => retry(row.idempotencyKey)}>
-            Retry: {row.text}
-          </button>
-        ))}
-      <ErrorBanner error={sendError && !disabledReason ? sendError : null} />
+      <div className="notices">
+        {pending
+          .filter((row) => row.status === 'failed' && row.retryable !== false)
+          .map((row) => (
+            <button key={row.idempotencyKey} className="retry" onClick={() => retry(row.idempotencyKey)}>
+              Retry: {row.text}
+            </button>
+          ))}
+        <ErrorBanner error={sendError && !disabledReason ? sendError : null} />
+      </div>
       <Composer send={send} disabledReason={disabledReason} />
-    </>
+    </div>
   );
 }
 
@@ -46,12 +48,20 @@ function Shell() {
   }, [queryClient]);
   if (!token) return <TokenGate onSubmit={login} rejected={rejected} />;
   return (
-    <main>
-      <header>
-        <strong>Sigil rooms</strong> <button onClick={signOut}>Sign out</button> <span>{live === 'live' ? 'Live' : 'Live: off'}</span>
+    <main className="app">
+      <header className="topbar">
+        <strong className="brand">Sigil rooms</strong>
+        <span className="chip" data-live={live === 'live' ? 'true' : 'false'}>{live === 'live' ? 'Live' : 'Live: off'}</span>
+        <button className="ghost" onClick={signOut}>Sign out</button>
       </header>
-      <RoomList selectedId={roomId} onSelect={setRoomId} />
-      {roomId ? <RoomView key={roomId} roomId={roomId} onGone={onGone} /> : <p>Pick a room.</p>}
+      <div className="body">
+        <aside className="sidebar">
+          <RoomList selectedId={roomId} onSelect={setRoomId} />
+        </aside>
+        <section className="pane">
+          {roomId ? <RoomView key={roomId} roomId={roomId} onGone={onGone} /> : <p className="empty">Pick a room.</p>}
+        </section>
+      </div>
     </main>
   );
 }
