@@ -4,16 +4,38 @@ import { ApiError } from './api/client';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { TokenGate } from './auth/TokenGate';
 import { loadConfig, type WebConfig } from './config';
-import { ErrorBanner } from './errors/ErrorBanner';
-import type { PendingMessage } from './rooms/mergeRows';
+import { describeError, ErrorBanner } from './errors/ErrorBanner';
+import { Composer } from './rooms/Composer';
 import { RoomList } from './rooms/RoomList';
 import { Timeline } from './rooms/Timeline';
+import { useSend } from './rooms/useSend';
+
+function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
+  const { pending, send, retry, sendError } = useSend(roomId);
+  const noop = useCallback(() => {}, []); // Task 7 replaces this with the ack hook.
+  const disabledReason =
+    sendError instanceof ApiError && (sendError.code === 'ROOM_SEND_UNAVAILABLE' || sendError.code === 'NO_SIGNING_KEY')
+      ? describeError(sendError)
+      : null;
+  return (
+    <>
+      <Timeline roomId={roomId} pending={pending} onVisibleSeq={noop} onGone={onGone} />
+      {pending
+        .filter((row) => row.status === 'failed' && row.retryable !== false)
+        .map((row) => (
+          <button key={row.idempotencyKey} onClick={() => retry(row.idempotencyKey)}>
+            Retry: {row.text}
+          </button>
+        ))}
+      <ErrorBanner error={sendError && !disabledReason ? sendError : null} />
+      <Composer send={send} disabledReason={disabledReason} />
+    </>
+  );
+}
 
 function Shell() {
   const { token, login, signOut, rejected } = useAuth();
   const [roomId, setRoomId] = useState<string | null>(null);
-  const [pending] = useState<PendingMessage[]>([]); // Task 6 replaces this with the composer's state
-  const noop = useCallback(() => {}, []);
   const queryClient = useQueryClient();
   const onGone = useCallback(() => {
     setRoomId(null);
@@ -26,7 +48,7 @@ function Shell() {
         <strong>Sigil rooms</strong> <button onClick={signOut}>Sign out</button>
       </header>
       <RoomList selectedId={roomId} onSelect={setRoomId} />
-      {roomId ? <Timeline roomId={roomId} pending={pending} onVisibleSeq={noop} onGone={onGone} /> : <p>Pick a room.</p>}
+      {roomId ? <RoomView key={roomId} roomId={roomId} onGone={onGone} /> : <p>Pick a room.</p>}
     </main>
   );
 }
