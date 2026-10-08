@@ -1,5 +1,17 @@
 # Status
 
+## Session update: 2026-10-08 PR #36 conflict resolution
+
+- Merged `origin/main` into `pr-36-conflict-fix` for GitHub PR #36 and resolved the only content conflict in `STATUS.md` by preserving both independent session updates.
+- Validation: `node --test --test-timeout=30000 sigil/cli/contract-signing.test.mjs` passed 5/5; `node --test --test-timeout=30000 sigil/relay/v1/federation-reaper.test.mjs` passed 19/19; direct `node --test --test-timeout=30000` passed 1610 tests, 1436 pass, 0 fail, 174 skipped; `git diff --check` passed. `npm run test:bounded` printed the same zero-fail test summary but its 60s wrapper timed out before npm returned.
+
+## Session update: 2026-10-07 verify-contract/reaper review tests
+
+- Reviewed branch `fix/verify-contract-revocation-check` around `verify-contract` revoked-key handling and `startFederationReaper().stop()` timer cleanup.
+- Added real CLI-path regression coverage for active, revoked, missing-key, and invalid-signature `verify-contract` outcomes.
+- Added focused reaper timer coverage proving `.stop()` exists and prevents later interval passes.
+- Focused evidence: `node --test --test-timeout=30000 sigil/cli/contract-signing.test.mjs` passed 5/5; `node --test --test-timeout=30000 sigil/relay/v1/federation-reaper.test.mjs` passed 19/19; `git diff --check` passed.
+
 ## Session update: 2026-10-04 sigil rooms phase 3 (router)
 
 - Phase 3 of the rooms design is built on `feat/sigil-rooms-phase-3-router`, executed task by task from `docs/superpowers/plans/2026-10-04-sigil-rooms-phase-3-router.md`. Pushed to origin on 2026-10-05 (PR opened against main); includes Tasks 9-13, the merge of origin/main with PR #22, and the final-review fix wave.

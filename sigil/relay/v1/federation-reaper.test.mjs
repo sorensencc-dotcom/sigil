@@ -571,9 +571,10 @@ test('startFederationReaper returns an unref()-d handle and logs a thrown pass w
   try {
     handle = startFederationReaper({ repository: brokenRepo, identity: makeIdentity(), originDomain: ORIGIN_DOMAIN, intervalMs: 15 });
     assert.equal(typeof handle.unref, 'function', 'handle must be a timer with .unref()');
+    assert.equal(typeof handle.stop, 'function', 'handle must expose .stop() for callers/tests');
     await new Promise((r) => setTimeout(r, 60));
   } finally {
-    if (handle) clearInterval(handle);
+    if (handle) handle.stop();
     console.error = originalError;
   }
   assert.ok(logged.length >= 1, 'expected at least one console.error from a failing pass');
@@ -622,4 +623,21 @@ test('a directory_revocation transport failure walks full 1m -> 5m -> 30m -> dea
   stored = repo.store.get('r_walk');
   assert.equal(stored.state, 'dead_letter');
   assert.equal(stored.attemptCount, 4);
+});
+
+test('startFederationReaper stop prevents later interval passes', async () => {
+  let passes = 0;
+  const repo = {
+    async withTransaction() {
+      passes += 1;
+      return [];
+    },
+  };
+  const handle = startFederationReaper({ repository: repo, identity: makeIdentity(), originDomain: ORIGIN_DOMAIN, intervalMs: 10 });
+  await new Promise((r) => setTimeout(r, 35));
+  handle.stop();
+  const stoppedAt = passes;
+  await new Promise((r) => setTimeout(r, 35));
+  assert.ok(stoppedAt >= 1, 'expected at least one pass before stop');
+  assert.equal(passes, stoppedAt);
 });
