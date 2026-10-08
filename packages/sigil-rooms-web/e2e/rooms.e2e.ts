@@ -38,7 +38,7 @@ test('paste a token, list rooms, send, see it come back live, and ack', async ({
 
   await page.getByLabel('Bearer token').fill(harness.humanToken);
   await page.getByRole('button', { name: 'Connect' }).click();
-  await page.getByRole('button', { name: 'e2e-room' }).click();
+  await page.getByRole('button', { name: 'e2e-room', exact: true }).click();
   await expect(page.getByText('Live', { exact: true })).toBeVisible();
 
   const ackRequests: string[] = [];
@@ -74,9 +74,9 @@ test('a reload keeps the session', async ({ page }) => {
   await page.goto(harness.webOrigin);
   await page.getByLabel('Bearer token').fill(harness.humanToken);
   await page.getByRole('button', { name: 'Connect' }).click();
-  await expect(page.getByRole('button', { name: 'e2e-room' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'e2e-room', exact: true })).toBeVisible();
   await page.reload();
-  await expect(page.getByRole('button', { name: 'e2e-room' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'e2e-room', exact: true })).toBeVisible();
 });
 
 test('the relay answers a preflight from an unlisted origin without CORS headers', async () => {

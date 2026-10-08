@@ -382,3 +382,9 @@ li[data-pending='failed'] .status { color: var(--danger); font-weight: 600; }
 }
 .sidebar .new-room button:hover:not(:disabled) { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
 .sidebar .new-room button:disabled { border-color: var(--border); color: var(--muted); opacity: 0.6; }
+
+/* ── PIN ─────────────────────────────────────────────────── */
+.sidebar li { display: flex; align-items: stretch; gap: 0.2rem; }
+.sidebar .room-btn { flex: 1; min-width: 0; width: auto; }
+.sidebar .pin { width: auto; flex-shrink: 0; padding: 0.5rem 0.55rem; text-align: center; color: var(--muted); }
+.sidebar .pin[aria-pressed='true'] { color: var(--accent); }
