@@ -28,7 +28,7 @@ Out of scope, with the reason:
 | Decision | Choice | Reason |
 |---|---|---|
 | Response modes | Editable by room managers | The parent spec says room managers manage response modes. A display-only roster leaves the only change path as remove and re-add, and re-adding an existing member answers `409 ROOM_MEMBER_EXISTS`. |
-| Rename | New relay route, never faked client-side | The room name lives in `conversations.name` with `UNIQUE (workspace_id, name)`. Only the relay can enforce that. |
+| Rename | New relay route, never faked client-side | The room name lives in `rooms.name` with `UNIQUE (workspace_id, name)`. Only the relay can enforce that. |
 | Rename frame | New `changed: 'room'` value | `messages` and `members` do not describe a title change, and overloading either makes clients refetch the wrong data. |
 | Rename audit row | None | See Scope. |
 | Threads | Side panel derived from the cached history | Replies are already `room.message` rows with `thread_root_id`, so no fetch route is needed. |
@@ -44,7 +44,7 @@ Both routes sit in `sigil/relay/v1/room-routes.mjs` next to the member add and r
 
 - The caller must be a room member (`404 ROOM_NOT_FOUND` otherwise), not an agent endpoint (`403 HUMAN_CONTEXT_REQUIRED`), and hold the `owner` or `room_manager` role (`403 ROUTE_NOT_AUTHORIZED`).
 - `name` follows the create rules: a string, trimmed, 1 to `NAME_MAX` characters (`400 INVALID_REQUEST`).
-- The new repository method `renameRoom({conversationId, name, now})` runs one `UPDATE conversations SET name = $2 WHERE conversation_id = $1`. A unique violation on `(workspace_id, name)` throws `ROOM_NAME_TAKEN`, which the route maps to `409`, as create does.
+- The new repository method `renameRoom({conversationId, name})` runs one `UPDATE rooms SET name = $2 WHERE conversation_id = $1`. A unique violation on `(workspace_id, name)` throws `ROOM_NAME_TAKEN`, which the route maps to `409`, as create does.
 - Renaming to the current name answers `200`, changes nothing, and sends no frame.
 - The memory repository applies the same uniqueness rule that its `createRoom` applies (`memory-repository.mjs:292`).
 - Response: `200 {code: 'OK', room}`, with the same room shape as create.
@@ -61,7 +61,7 @@ Both routes sit in `sigil/relay/v1/room-routes.mjs` next to the member add and r
 - Response: `200 {code: 'OK', member}`.
 - After commit, the route sends `room.updated` with `changed: 'members'`.
 
-Open item for the plan: when a room already has a `router` member and a manager sets a second agent to `router`, decide whether the relay refuses it. Read the router-selection code (`room-policy.mjs:99`) first and pin the behavior with a test either way.
+A second `router` is not refused. The add route does not refuse one today, and `isRouterMember` (`room-policy.mjs:99`) only tests the mode, so the set route matches add. A test pins that.
 
 ### Frame and contract
 
@@ -71,7 +71,7 @@ Open item for the plan: when a room already has a `router` member and a manager 
 
 ### Relay tests
 
-- Rename: success, no-op rename (no frame), name conflict in both repositories, non-member, agent caller, non-manager, name length bounds, and one `room.updated` frame with `changed: 'room'` after commit. A forced rollback sends none.
+- Rename: success, no-op rename (no frame), name conflict in both repositories, non-member, agent caller, non-manager, name length bounds, and one `room.updated` frame with `changed: 'room'` after the update. A rejected rename (conflict) sends none. The route runs no transaction, as create does, so there is no rollback case.
 - Response mode: success, invalid value, human target, non-member target, non-manager, and a `members` frame after commit.
 - The Postgres cases sit in a `*.pg.test.mjs` file behind `assert-disposable-test-db.mjs`.
 
@@ -141,6 +141,7 @@ The ack route moves every delivery at or below `up_to_room_seq` to `acknowledged
 ## Limits
 
 - The client learns its own endpoint ID only after its first successful send, and keeps it in `sessionStorage` (4b-1). Until then it cannot find its own roster row, so the roster panel is read-only and the rename button is hidden. Sending any message unlocks both. A `GET /v1/me` route would remove the limit and is a separate, auth-adjacent change.
+- Agents with a null response mode (phase 1 rooms) show no mode control, because the roster response does not say who is an agent. The relay accepts a mode for them, so a CLI can set one.
 - The relay stays the authority. A client that shows a control to a non-manager still gets `403 ROUTE_NOT_AUTHORIZED` and shows "Only room managers can do this".
 
 ## Error handling
