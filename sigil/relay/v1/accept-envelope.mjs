@@ -1,6 +1,9 @@
 import crypto from 'node:crypto';
 import { validateEnvelope, reject, signedBytes, checkRecipientLocality } from './validate-envelope.mjs';
+import { assertAgentMayPost, applyRoomDispatch } from './room-dispatch.mjs';
+import { authorizeRoomEnvelope, assertRoomTypeHasRoom, assertNotRoomConversation } from './room-policy.mjs';
 import { resolveRateLimits, resolveStreamSequence, DEFAULT_INBOX_DEPTH_LIMIT } from './relay-config.mjs';
+import { notifyRoomHumans } from './room-notify.mjs';
 import { writeRejectionAudit } from './rejection-audit.mjs';
 import { decideRoute, buildForwardRequest, signForwardRequest, postForward } from './federation-router.mjs';
 import { enforceCapabilityRiskGate } from './capability-risk-gate.mjs';
@@ -9,7 +12,7 @@ import { enforceCapabilityRiskGate } from './capability-risk-gate.mjs';
 // rejection worth auditing (design §9, round 3 blocker 5). A malformed-JSON
 // INVALID_ENVELOPE before signature verification has no meaningful
 // sender/conversation_id to audit against, so it's deliberately excluded.
-const AUDITED_REJECTION_CODES = new Set(['CAPABILITY_DENIED', 'REPLAY_DETECTED', 'RATE_LIMITED', 'QUOTA_EXCEEDED', 'DIRECTORY_LINK_REQUIRED', 'TASK_ASSIGNEE_MISMATCH', 'DUPLICATE_TASK_ID', 'APPROVAL_REQUIRED']);
+const AUDITED_REJECTION_CODES = new Set(['CAPABILITY_DENIED', 'REPLAY_DETECTED', 'RATE_LIMITED', 'QUOTA_EXCEEDED', 'DIRECTORY_LINK_REQUIRED', 'TASK_ASSIGNEE_MISMATCH', 'DUPLICATE_TASK_ID', 'APPROVAL_REQUIRED', 'ROOM_NOT_INVOKED']);
 
 const statusByCode = Object.freeze({
   INVALID_ENVELOPE: 400,
@@ -18,6 +21,9 @@ const statusByCode = Object.freeze({
   UNKNOWN_ENDPOINT: 401,
   ENDPOINT_REVOKED: 403,
   ROUTE_NOT_AUTHORIZED: 403,
+  ROOM_NOT_INVOKED: 403,
+  ROOM_INVOCATION_RUNNING: 409,
+  ROOM_INVOCATION_EXISTS: 409,
   CAPABILITY_DENIED: 403,
   APPROVAL_REQUIRED: 403,
   TASK_ASSIGNEE_MISMATCH: 403,
@@ -193,6 +199,16 @@ async function acceptWithRepository(envelope, options) {
         throw reject('REPLAY_DETECTED', 'message_id was already accepted under a different idempotency_key');
       }
 
+      // Rooms are relay-local (phase 1): refuse a room conversation or a
+      // room.* type before anything leaves this relay. No transaction is
+      // open here, so the lookup uses the repository's pool default. This
+      // path never verifies the envelope signature (the receiving peer
+      // does), so the answer reveals only that a room with this
+      // conversation_id exists -- never membership -- to a caller that
+      // already passed transport authentication.
+      // Runs before the approval gate: the gate commits approval consumption immediately on this no-transaction path.
+      assertNotRoomConversation(envelope, repository.lookupRoom ? await repository.lookupRoom(envelope.conversation_id) : null);
+
       // Capability/risk-tier + approval gate (closes Bypass #1: a sync-forwarded
       // envelope previously skipped this check entirely, since it only ran on
       // the route.action === 'local' branch below). Called with no `client`
@@ -255,6 +271,10 @@ async function acceptWithRepository(envelope, options) {
     // Runs before the forward/local branch so BOTH routes are gated
     // identically, on this transaction's client so approval consumption
     // commits or rolls back atomically with the rest of the accept.
+    if (route.action === 'forward') {
+      // Rooms are relay-local; refuse before the approval gate (see sync branch).
+      assertNotRoomConversation(envelope, repository.lookupRoom ? await repository.lookupRoom(envelope.conversation_id, client) : null);
+    }
     await enforceCapabilityRiskGate(envelope, repository, { client, now });
 
     // Queue-forward: enqueueForward's INSERT + audit are atomic inside this txn.
@@ -264,6 +284,12 @@ async function acceptWithRepository(envelope, options) {
       }
       return forwardEnvelope(envelope, route, options, client);
     }
+
+    // Rooms (rooms design, phase 1): look up the room here (validateEnvelope's
+    // broadcast gate needs it); membership is authorized only after
+    // validateEnvelope proves the sender's signature, so an unauthenticated
+    // caller cannot probe room membership.
+    const room = repository.lookupRoom ? await repository.lookupRoom(envelope.conversation_id, client) : null;
 
     // route.action === 'local' -> fall through to recipient/persist checks.
     // Every direct recipient must exist in the relay's endpoint directory
@@ -352,10 +378,16 @@ async function acceptWithRepository(envelope, options) {
         if (!link) throw reject('DIRECTORY_LINK_REQUIRED', 'No active directory link between sender and recipient', { sender_endpoint_id: envelope.sender.endpoint_id, recipient_endpoint_id: envelope.recipient.endpoint_id });
       }
     }
-    const result = validateEnvelope(envelope, { ...options, idempotency: new Map(), capabilityGrants });
+    const result = validateEnvelope(envelope, { ...options, idempotency: new Map(), capabilityGrants, ...(room ? { broadcastAuthorizer: () => true } : {}) });
+    assertRoomTypeHasRoom(envelope, room);
+    const roomPlan = room
+      ? await authorizeRoomEnvelope(envelope, room, repository, client, { inboxDepthLimit: options.inboxDepthLimit ?? DEFAULT_INBOX_DEPTH_LIMIT, registered: options.registered, now })
+      : null;
+    const roomFanout = roomPlan?.fanout ?? null;
     const prior = await repository.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key, client);
     if (prior && prior.canonical_hash !== result.canonical_hash) throw reject('DUPLICATE_MESSAGE', 'Idempotency key conflicts with an existing body');
     if (prior) return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: prior.message_id, duplicate: true } };
+    const completing = roomPlan ? await assertAgentMayPost(envelope, roomPlan.senderMember, repository, client) : null;
     // High-risk capability + approval gate already ran once for this
     // transaction via enforceCapabilityRiskGate above (line 247) -- it uses
     // the same sha256(signedBytes(envelope)) hash as result.canonical_hash,
@@ -395,12 +427,19 @@ async function acceptWithRepository(envelope, options) {
     const streamSeq = streamSequence.enabled && !envelope.message_type.startsWith('session.') && !envelope.message_type.startsWith('admin.')
       ? await repository.assignStreamSequence(client, envelope.sender.endpoint_id, envelope.conversation_id)
       : null;
+    const roomSeq = room ? await repository.assignRoomSequence(client, envelope.conversation_id) : null;
     // canonical_bytes/action_hash mirror what http-server.mjs's now-removed
     // persistAccepted wrapper used to attach before calling the repository
     // directly -- kept here so repository-backed callers (postgres, memory)
     // still see the same row shape regardless of transport.
-    const persisted = await repository.persistAcceptedEnvelope({ envelope, ...result, canonical_bytes: signedBytes(envelope), action_hash: result.canonical_hash, streamSeq }, client);
-    const persistedWithStreamSeq = { ...persisted, streamSeq };
+    const persisted = await repository.persistAcceptedEnvelope({ envelope, ...result, canonical_bytes: signedBytes(envelope), action_hash: result.canonical_hash, streamSeq, roomSeq, roomFanout }, client);
+    if (room && envelope.message_type === 'room.message' && !persisted?.duplicate) {
+      await notifyRoomHumans({ repository, stream: options.stream, registered: options.registered, client, roomId: envelope.conversation_id, roomSeq, changed: 'messages', logger: options.logger });
+    }
+    const dispatch = roomPlan
+      ? await applyRoomDispatch({ envelope, room, plan: roomPlan, completing, repository, client, now, inboxDepthLimit: options.inboxDepthLimit ?? DEFAULT_INBOX_DEPTH_LIMIT, registered: options.registered, systemIdentity: options.systemIdentity, stream: options.stream })
+      : null;
+    const persistedWithStreamSeq = { ...persisted, streamSeq, deliveryState: repository.initialDeliveryState ?? 'delivered', ...(dispatch ? { roomDeliveries: dispatch.roomDeliveries } : {}) };
     if (options.onPersisted) await options.onPersisted({ envelope, persisted: persistedWithStreamSeq });
     return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: persisted?.message_id ?? result.message_id, duplicate: persisted?.duplicate ?? false } };
   }).catch(async (error) => {
@@ -413,6 +452,16 @@ async function acceptWithRepository(envelope, options) {
     // index's violation to the same audited rejection the app-level check
     // produces; every other unique-constraint error (idempotency_keys, etc.)
     // is left as-is.
+    // A racing retry loses the idempotency_keys insert. A raw 23505 would reach
+    // the caller as 500 INTERNAL_ERROR (toResponse), so translate it, the same
+    // way the task-id check below does: assign to `error` (do not throw inside
+    // this .catch) so the flow reaches toResponse. IDEMPOTENCY_RACE is only the
+    // repository-level signal and is NOT in statusByCode, so it is never sent to
+    // a client. The client-visible code is the existing 409 DUPLICATE_MESSAGE.
+    // The send route re-reads the key on that code and answers 200.
+    if ((error.code === '23505' && (error.table === 'idempotency_keys' || /idempotency_keys/.test(error.constraint ?? ''))) || error.code === 'IDEMPOTENCY_RACE') {
+      error = reject('DUPLICATE_MESSAGE', 'Idempotency key was used by a concurrent request');
+    }
     if (error.code === '23505' && error.constraint === 'envelopes_task_request_lookup_idx') {
       error = reject('DUPLICATE_TASK_ID', 'task_id is already claimed by another task.request in this conversation', { task_id: envelope.body?.task_id });
     }

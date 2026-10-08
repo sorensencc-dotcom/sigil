@@ -42,3 +42,54 @@ test('acknowledge rejects unrecognized outcome with INVALID_ENVELOPE', async () 
   );
 });
 
+test('room methods call the room routes', async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push([options.method ?? 'GET', url.replace('http://relay', ''), options.body ?? null]);
+    const body = url.includes('/members') ? { items: [{ endpoint_id: 'ep_web' }] }
+      : url.includes('/messages') ? { items: [], next_after_seq: '0' }
+      : url.includes('/fail') ? { invocation: { invocation_id: 'inv_1', status: 'failed' } }
+      : { items: [{ invocation_id: 'inv_1' }] };
+    return { ok: true, status: 200, text: async () => JSON.stringify(body) };
+  };
+  const client = new RelayClient({ baseUrl: 'http://relay', token: 't', fetchImpl });
+  assert.deepEqual(await client.listRoomMembers('room_1'), [{ endpoint_id: 'ep_web' }]);
+  assert.deepEqual(await client.listRoomMessages('room_1', '5'), { items: [], next_after_seq: '0' });
+  assert.deepEqual(await client.listRoomInvocations('room_1', { endpointId: 'ep_claude', status: 'running' }), [{ invocation_id: 'inv_1' }]);
+  assert.equal((await client.failRoomInvocation('room_1', 'boom')).status, 'failed');
+  assert.deepEqual(calls.map(([m, u]) => `${m} ${u}`), [
+    'GET /v1/rooms/room_1/members',
+    'GET /v1/rooms/room_1/messages?after_seq=5&limit=500',
+    'GET /v1/rooms/room_1/invocations?endpoint_id=ep_claude&status=running',
+    'POST /v1/rooms/room_1/invocations/fail',
+  ]);
+});
+
+test('failRoomInvocation sends invocation_id in body when provided', async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push(options.body ? JSON.parse(options.body) : null);
+    return { ok: true, status: 200, text: async () => JSON.stringify({ invocation: { invocation_id: 'inv_1', status: 'failed' } }) };
+  };
+  const client = new RelayClient({ baseUrl: 'http://relay', token: 't', fetchImpl });
+  await client.failRoomInvocation('room_1', 'boom', 'inv_1');
+  assert.deepEqual(calls[0], { reason: 'boom', invocation_id: 'inv_1' });
+  assert.equal(calls.length, 1);
+  await client.failRoomInvocation('room_1', 'boom');
+  assert.deepEqual(calls[1], { reason: 'boom' });
+  assert.equal(calls.length, 2);
+});
+
+test('createRoomInvocations posts the decision body and surfaces status on errors', async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push([options.method, url, JSON.parse(options.body)]);
+    if (calls.length === 2) return { ok: false, status: 403, text: async () => JSON.stringify({ message: 'no', code: 'FORBIDDEN' }) };
+    return { ok: true, status: 200, text: async () => JSON.stringify({ items: [] }) };
+  };
+  const client = new RelayClient({ baseUrl: 'http://relay', token: 't', fetchImpl });
+  assert.deepEqual(await client.createRoomInvocations('room_1', { trigger_message_id: 'm1', invoke: ['ep_a'], reason: 'r' }), { items: [] });
+  assert.deepEqual(calls[0], ['POST', 'http://relay/v1/rooms/room_1/invocations', { trigger_message_id: 'm1', invoke: ['ep_a'], reason: 'r' }]);
+  await assert.rejects(client.createRoomInvocations('room_1', { trigger_message_id: 'm1', invoke: [], reason: 'router_unavailable', failed: true }), (e) => e.status === 403);
+  assert.equal(calls[1][2].failed, true);
+});

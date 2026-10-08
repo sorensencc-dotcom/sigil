@@ -155,3 +155,15 @@ test('accepts a bare recipient unchanged when relayDomain is not set (legacy/non
   candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
   assert.equal(validateEnvelope(candidate, options).accepted, true);
 });
+
+test('rejects a room.message with an invalid body', () => {
+  const candidate = { ...base, message_type: 'room.message', body: { text: '' }, recipient: undefined, signature: { ...base.signature }, broadcast_scope: { conversation_id: base.conversation_id } };
+  candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
+  assert.throws(() => validateEnvelope(candidate, { ...options, broadcastAuthorizer: () => true }), (error) => error.code === 'INVALID_ENVELOPE' && error.details.field === 'text');
+});
+
+test('accepts a well-formed room.message broadcast', () => {
+  const candidate = { ...base, message_type: 'room.message', body: { text: 'hello room' }, recipient: undefined, signature: { ...base.signature }, broadcast_scope: { conversation_id: base.conversation_id } };
+  candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
+  assert.equal(validateEnvelope(candidate, { ...options, broadcastAuthorizer: () => true }).accepted, true);
+});

@@ -11,7 +11,7 @@ const NODE_BUILT_INS = new Set([
   'trace_events', 'tty', 'url', 'util', 'v8', 'vm', 'wasi', 'worker_threads', 'zlib',
 ]);
 
-const EXCLUDED_DIRS = new Set(['node_modules', '.git', '.github', '.nlm_pack', '_kb-sync-staging', '_quarantine', 'dist', 'build', 'coverage']);
+const EXCLUDED_DIRS = new Set(['node_modules', '.git', '.github', '.nlm_pack', '_kb-sync-staging', '_quarantine', 'dist', 'build', 'coverage', 'CIC-GOVERNANCE']);
 
 function scanFiles(dir, fileList = []) {
   const files = fs.readdirSync(dir);

@@ -6,6 +6,8 @@ import crypto from 'node:crypto';
 import { transitionDelivery } from '../relay/v1/delivery-state.mjs';
 import { boundedDirectoryExpiry } from '../relay/v1/auth-policy.mjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { identityKeys } from './identity.mjs';
+import { withAfterCommitScope } from '../relay/v1/after-commit.mjs';
 
 const SEEDED_CAPABILITIES = new Map([
   ['sigil.core/read_shared_context', { namespace: 'sigil.core', risk_tier: 'standard' }],
@@ -66,34 +68,55 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
   const relayJobs = new Map();
   const auditEvents = [];
   const approvalDecisions = new Map(); // decision_id -> row (in-memory stand-in for approval_decisions)
+  const workspaces = new Map(); // workspace_id -> row (migration 027)
+  const rooms = new Map(); // conversation_id -> room row (migration 027)
+  const roomMembers = new Map(); // conversation_id -> Map(endpoint_id -> member row incl. removed_at)
+  const roomInvocations = new Map(); // invocation_id -> row (migration 028)
+  const roomThreads = new Map(); // JSON [room_id, thread_root_id] -> { agent_turns, updated_at } (migration 028)
   // Scoped rollback support for withTransaction (Devin review, PR #6): this
   // repo has no real transaction to roll back, so a mutation performed mid-
   // callback (e.g. consumeApprovalDecision) stayed committed even when the
   // callback later threw and the envelope was ultimately rejected -- a
   // human-approved, one-time decision was silently burned by an unrelated,
-  // retriable failure. Only consumeApprovalDecision registers an undo here;
-  // this is not a general transaction log.
+  // retriable failure. Approval consumption and the room dispatch writes
+  // (envelope, invocations, turns, deliveries) register an undo here; this is
+  // not a general transaction log. Undos run newest first, so two writes to
+  // one key restore its original value.
   const transactionRollbackStore = new AsyncLocalStorage(); // per-async-context undo stack
+  const onRollback = (undo) => { transactionRollbackStore.getStore()?.push(undo); };
+  // Registers an undo that puts `key` in `map` back to its current state.
+  const undoMapSet = (map, key) => {
+    const had = map.has(key);
+    const previous = map.get(key);
+    const previousCopy = previous && typeof previous === 'object' ? { ...previous } : previous;
+    onRollback(() => {
+      if (!had) { map.delete(key); return; }
+      if (previous && typeof previous === 'object') Object.assign(previous, previousCopy);
+      map.set(key, previous);
+    });
+  };
   return {
     // Single-process, no real client/connection -- the transaction wrapper
     // exists so acceptEnvelopeAsync's repository-aware path works unchanged
     // against this repository too (design §12 dual-repository equivalence).
     async withTransaction(fn) {
-      const parent = transactionRollbackStore.getStore() ?? null;
-      const rollbacks = [];
-      return transactionRollbackStore.run(rollbacks, async () => {
-        try {
-          const result = await fn(null);
-          // Nested success: merge child undos into parent so a later parent
-          // throw still reverses the nested mutations.
-          if (parent) {
-            for (const undo of rollbacks) parent.push(undo);
+      return withAfterCommitScope(async () => {
+        const parent = transactionRollbackStore.getStore() ?? null;
+        const rollbacks = [];
+        return transactionRollbackStore.run(rollbacks, async () => {
+          try {
+            const result = await fn(null);
+            // Nested success: merge child undos into parent so a later parent
+            // throw still reverses the nested mutations.
+            if (parent) {
+              for (const undo of rollbacks) parent.push(undo);
+            }
+            return result;
+          } catch (error) {
+            for (const undo of rollbacks.reverse()) undo();
+            throw error;
           }
-          return result;
-        } catch (error) {
-          for (const undo of rollbacks) undo();
-          throw error;
-        }
+        });
       });
     },
     async assignStreamSequence(_client, senderEndpointId, conversationId) {
@@ -201,6 +224,23 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       const endpoint = registry.get(endpointId);
       return endpoint?.status === 'active' ? endpoint : null;
     },
+    async ensureRoomSystemEndpoint({ identity }) {
+      const publicKey = identityKeys(identity).publicKey;
+      const existing = registry.get(identity.endpoint_id);
+      if (existing?.status === 'active') {
+        if (existing.owner_id !== identity.owner_id) {
+          throw Object.assign(new Error(`endpoint "${identity.endpoint_id}" is already registered to a different owner`), { code: 'ROOM_SYSTEM_OWNER_MISMATCH' });
+        }
+        const same = existing.key_id === identity.key_id
+          && existing.public_key?.export({ type: 'spki', format: 'der' }).equals(publicKey.export({ type: 'spki', format: 'der' }));
+        if (same) return;
+        throw Object.assign(new Error(`endpoint "${identity.endpoint_id}" is already registered with a different key`), { code: 'ROOM_SYSTEM_KEY_MISMATCH' });
+      }
+      registry.set(identity.endpoint_id, {
+        endpoint_id: identity.endpoint_id, owner_id: identity.owner_id, key_id: identity.key_id, status: 'active', kind: 'system',
+        public_key: publicKey,
+      });
+    },
     // Federated-inbound shadow registration (design R10). A foreign sender
     // (endpoint homed on another relay) is not in this relay's registry, so
     // an accepted federated envelope would have nothing to hang its FK chain
@@ -212,11 +252,19 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       registry.set(endpoint_id, { endpoint_id, owner_id, key_id, status: 'active', public_key, origin_domain });
     },
     async persistAcceptedEnvelope(row) {
+      const idempotencyKey = `${row.envelope.sender.endpoint_id}:${row.envelope.idempotency_key}`;
+      const priorKey = idempotency.get(idempotencyKey);
+      if (priorKey && priorKey.message_id !== row.message_id) {
+        throw Object.assign(new Error('idempotency key already used by another message'), { code: 'IDEMPOTENCY_RACE' });
+      }
       const federationHop = row.federation_hop === true;
-      envelopes.set(row.message_id, { ...row, streamSeq: row.streamSeq ?? null, federation_hop: federationHop });
-      idempotency.set(`${row.envelope.sender.endpoint_id}:${row.envelope.idempotency_key}`, { message_id: row.message_id, canonical_hash: row.canonical_hash });
+      undoMapSet(envelopes, row.message_id);
+      undoMapSet(idempotency, idempotencyKey);
+      envelopes.set(row.message_id, { ...row, streamSeq: row.streamSeq ?? null, roomSeq: row.roomSeq ?? null, federation_hop: federationHop });
+      idempotency.set(idempotencyKey, { message_id: row.message_id, canonical_hash: row.canonical_hash });
       if (row.envelope.recipient?.endpoint_id) {
         const deliveryId = `del_${row.message_id}`;
+        undoMapSet(deliveries, deliveryId);
         deliveries.set(deliveryId, {
           delivery_id: deliveryId,
           message_id: row.message_id,
@@ -227,7 +275,171 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
           federation_hop: federationHop
         });
       }
+      if (Array.isArray(row.roomFanout)) {
+        const fanout = row.roomFanout.map((endpointId) => {
+          const deliveryId = `del_${row.message_id}_${endpointId}`;
+          undoMapSet(deliveries, deliveryId);
+          deliveries.set(deliveryId, { delivery_id: deliveryId, message_id: row.message_id, recipient_endpoint_id: endpointId, state: 'delivered', queued_at: new Date().toISOString(), attempts: 0, federation_hop: false });
+          return { endpoint_id: endpointId, delivery_id: deliveryId };
+        });
+        return { message_id: row.message_id, duplicate: false, fanout };
+      }
       return { message_id: row.message_id, duplicate: false };
+    },
+    async createRoom({ conversationId, workspaceId, name, description = null, createdByHumanId, ownerEndpointId, now = new Date() }) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      if ([...rooms.values()].some((room) => room.workspace_id === workspaceId && room.name === name)) {
+        throw Object.assign(new Error('A room with this name already exists in the workspace'), { code: 'ROOM_NAME_TAKEN' });
+      }
+      if (!workspaces.has(workspaceId)) workspaces.set(workspaceId, { workspace_id: workspaceId, name: workspaceId, created_by: createdByHumanId, created_at: timestamp });
+      const room = { conversation_id: conversationId, workspace_id: workspaceId, name, description, created_at: timestamp, max_agent_turns: 6 };
+      rooms.set(conversationId, { ...room, next_room_seq: 1n, archived_at: null });
+      roomMembers.set(conversationId, new Map([[ownerEndpointId, { endpoint_id: ownerEndpointId, role: 'owner', response_mode: null, added_by: createdByHumanId, added_at: timestamp, removed_at: null }]]));
+      return room;
+    },
+    async lookupRoom(conversationId) {
+      const room = rooms.get(conversationId);
+      if (!room) return null;
+      const { next_room_seq: _seq, archived_at: _archived, ...visible } = room;
+      return visible;
+    },
+    async listRoomsForEndpoint(endpointId) {
+      return [...rooms.keys()]
+        .filter((conversationId) => roomMembers.get(conversationId)?.get(endpointId)?.removed_at === null)
+        .map((conversationId) => { const { next_room_seq: _seq, archived_at: _archived, ...visible } = rooms.get(conversationId); return visible; });
+    },
+    async addRoomMember({ conversationId, endpointId, role, responseMode = null, addedByHumanId, now = new Date() }) {
+      const members = roomMembers.get(conversationId);
+      if (!members) throw Object.assign(new Error('Room not found'), { code: 'ROOM_NOT_FOUND' });
+      if (members.get(endpointId)?.removed_at === null) throw Object.assign(new Error('Endpoint is already a room member'), { code: 'ROOM_MEMBER_EXISTS' });
+      const member = { endpoint_id: endpointId, role, response_mode: responseMode, added_by: addedByHumanId, added_at: (now instanceof Date ? now : new Date(now)).toISOString(), removed_at: null };
+      members.set(endpointId, member);
+      return { endpoint_id: member.endpoint_id, role: member.role, response_mode: member.response_mode, added_at: member.added_at };
+    },
+    async removeRoomMember({ conversationId, endpointId, now = new Date() }) {
+      const member = roomMembers.get(conversationId)?.get(endpointId);
+      if (!member || member.removed_at !== null) return false;
+      member.removed_at = (now instanceof Date ? now : new Date(now)).toISOString();
+      return true;
+    },
+    async lookupRoomMember(conversationId, endpointId) {
+      const member = roomMembers.get(conversationId)?.get(endpointId);
+      if (!member || member.removed_at !== null) return null;
+      return { endpoint_id: member.endpoint_id, role: member.role, response_mode: member.response_mode, added_at: member.added_at };
+    },
+    async listRoomMembers(conversationId) {
+      return [...(roomMembers.get(conversationId)?.values() ?? [])]
+        .filter((member) => member.removed_at === null)
+        .sort((a, b) => a.added_at.localeCompare(b.added_at))
+        .map((member) => ({ endpoint_id: member.endpoint_id, role: member.role, response_mode: member.response_mode, added_at: member.added_at }));
+    },
+    // Not undone by withTransaction: a rejected accept can leave a gap in the
+    // memory repo's room_seq. Postgres assigns inside the accept transaction,
+    // so its sequence stays gapless.
+    async assignRoomSequence(_client, conversationId) {
+      const room = rooms.get(conversationId);
+      const assigned = room.next_room_seq;
+      room.next_room_seq = assigned + 1n;
+      return assigned;
+    },
+    async listRoomMessages(conversationId, afterSeq = 0n, limit = 100) {
+      return [...envelopes.values()]
+        .filter((row) => row.envelope.conversation_id === conversationId && row.roomSeq != null && row.roomSeq > BigInt(afterSeq))
+        .sort((a, b) => (a.roomSeq < b.roomSeq ? -1 : a.roomSeq > b.roomSeq ? 1 : 0))
+        .slice(0, limit)
+        .map((row) => ({ room_seq: String(row.roomSeq), message_id: row.message_id, canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'), envelope: row.envelope }));
+    },
+    // Serialization is a Postgres concern; the memory repo has no concurrent transactions.
+    async lockRoom() {},
+    async lookupRoomEventByKey(conversationId, idempotencyKey) {
+      const row = [...envelopes.values()].find((r) => r.envelope.conversation_id === conversationId && r.envelope.message_type === 'room.event' && r.envelope.idempotency_key === idempotencyKey);
+      return row ? { message_id: row.message_id } : null;
+    },
+    async lookupRouterDecision(triggerMessageId) {
+      return [...roomInvocations.values()].filter((r) => r.trigger_message_id === triggerMessageId && r.decided_by === 'router').map((r) => ({ ...r }));
+    },
+    async lookupRoomMessage(conversationId, messageId) {
+      const row = envelopes.get(messageId);
+      if (!row || row.envelope.conversation_id !== conversationId) return null;
+      return { room_seq: row.roomSeq == null ? null : String(row.roomSeq), message_id: row.message_id, envelope: row.envelope };
+    },
+    async createRoomInvocation({ invocationId, roomId, workspaceId: _workspaceId, triggerMessageId, threadRootId, endpointId, decidedBy, reason = null, status, deliveryId = null, now = new Date() }) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      const rows = [...roomInvocations.values()];
+      if (rows.some((row) => row.trigger_message_id === triggerMessageId && row.endpoint_id === endpointId)) {
+        throw Object.assign(new Error('This message already invoked this agent'), { code: 'ROOM_INVOCATION_EXISTS' });
+      }
+      if (status === 'running' && rows.some((row) => row.room_id === roomId && row.endpoint_id === endpointId && row.status === 'running')) {
+        throw Object.assign(new Error('The agent already has a running invocation in this room'), { code: 'ROOM_INVOCATION_RUNNING' });
+      }
+      const row = {
+        invocation_id: invocationId, room_id: roomId, trigger_message_id: triggerMessageId, thread_root_id: threadRootId, endpoint_id: endpointId,
+        decided_by: decidedBy, reason, status, delivery_id: deliveryId, reply_message_id: null, created_at: timestamp,
+        started_at: status === 'running' ? timestamp : null, finished_at: status === 'refused' ? timestamp : null,
+      };
+      undoMapSet(roomInvocations, invocationId);
+      roomInvocations.set(invocationId, row);
+      return { ...row };
+    },
+    async lookupRunningInvocation(roomId, endpointId) {
+      const row = [...roomInvocations.values()].find((r) => r.room_id === roomId && r.endpoint_id === endpointId && r.status === 'running');
+      return row ? { ...row } : null;
+    },
+    async nextQueuedInvocation(roomId, endpointId) {
+      const row = [...roomInvocations.values()]
+        .filter((r) => r.room_id === roomId && r.endpoint_id === endpointId && r.status === 'queued')
+        .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.invocation_id.localeCompare(b.invocation_id))[0];
+      return row ? { ...row } : null;
+    },
+    async startInvocation(invocationId, { deliveryId, now = new Date() }) {
+      const row = roomInvocations.get(invocationId);
+      if (!row || row.status !== 'queued') return null;
+      undoMapSet(roomInvocations, invocationId);
+      Object.assign(row, { status: 'running', delivery_id: deliveryId, started_at: (now instanceof Date ? now : new Date(now)).toISOString() });
+      return { ...row };
+    },
+    async finishInvocation(invocationId, { status, reason = null, replyMessageId = null, now = new Date() }) {
+      const row = roomInvocations.get(invocationId);
+      if (!row || (row.status !== 'queued' && row.status !== 'running')) return null;
+      undoMapSet(roomInvocations, invocationId);
+      Object.assign(row, { status, reason: reason ?? row.reason, reply_message_id: replyMessageId, finished_at: (now instanceof Date ? now : new Date(now)).toISOString() });
+      return { ...row };
+    },
+    async cancelRoomInvocations(roomId, { now = new Date() } = {}) {
+      const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      const cancelled = [];
+      for (const row of roomInvocations.values()) {
+        if (row.room_id !== roomId || (row.status !== 'queued' && row.status !== 'running')) continue;
+        undoMapSet(roomInvocations, row.invocation_id);
+        Object.assign(row, { status: 'cancelled', reason: 'stopped', finished_at: timestamp });
+        cancelled.push({ ...row });
+      }
+      return cancelled;
+    },
+    async listRoomInvocations(roomId, { endpointId = null, status = null, limit = 100 } = {}) {
+      return [...roomInvocations.values()]
+        .filter((r) => r.room_id === roomId && (!endpointId || r.endpoint_id === endpointId) && (!status || r.status === status))
+        .sort((a, b) => b.created_at.localeCompare(a.created_at) || b.invocation_id.localeCompare(a.invocation_id))
+        .slice(0, limit)
+        .map((r) => ({ ...r }));
+    },
+    async reserveAgentTurn(roomId, threadRootId, maxTurns, { now = new Date() } = {}) {
+      const key = JSON.stringify([roomId, threadRootId]);
+      const current = roomThreads.get(key)?.agent_turns ?? 0;
+      if (current >= maxTurns) return { allowed: false, agent_turns: current };
+      undoMapSet(roomThreads, key);
+      roomThreads.set(key, { agent_turns: current + 1, updated_at: (now instanceof Date ? now : new Date(now)).toISOString() });
+      return { allowed: true, agent_turns: current + 1 };
+    },
+    async resetAgentTurns(roomId, threadRootId, { now = new Date() } = {}) {
+      undoMapSet(roomThreads, JSON.stringify([roomId, threadRootId]));
+      roomThreads.set(JSON.stringify([roomId, threadRootId]), { agent_turns: 0, updated_at: (now instanceof Date ? now : new Date(now)).toISOString() });
+    },
+    async createRoomDelivery({ messageId, endpointId, now = new Date() }) {
+      const deliveryId = `del_${messageId}_${endpointId}`;
+      undoMapSet(deliveries, deliveryId);
+      deliveries.set(deliveryId, { delivery_id: deliveryId, message_id: messageId, recipient_endpoint_id: endpointId, state: 'delivered', queued_at: (now instanceof Date ? now : new Date(now)).toISOString(), attempts: 0, federation_hop: false });
+      return deliveryId;
     },
     async listInbox(endpointId, since = '', viewerOwnerId = null) {
       return [...deliveries.values()]
@@ -373,6 +585,21 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       deliveries.set(deliveryId, next);
       return next;
     },
+    async acknowledgeRoomDeliveries({ conversationId, endpointId, upToRoomSeq, now = new Date() }) {
+      const moved = [];
+      for (const delivery of deliveries.values()) {
+        if (delivery.recipient_endpoint_id !== endpointId) continue;
+        if (delivery.state !== 'queued' && delivery.state !== 'delivered') continue;
+        const row = envelopes.get(delivery.message_id);
+        if (!row || row.envelope.conversation_id !== conversationId || row.roomSeq == null || BigInt(row.roomSeq) > BigInt(upToRoomSeq)) continue;
+        undoMapSet(deliveries, delivery.delivery_id);
+        delivery.state = 'acknowledged';
+        delivery.acknowledged_at = now.toISOString();
+        delivery.updated_at = now.toISOString();
+        moved.push({ delivery_id: delivery.delivery_id, message_id: delivery.message_id, sender_endpoint_id: row.envelope.sender.endpoint_id, state: 'acknowledged' });
+      }
+      return moved;
+    },
     async getDelivery(deliveryId, endpointId) {
       const current = deliveries.get(deliveryId);
       return current && current.recipient_endpoint_id === endpointId ? current : null;
@@ -388,6 +615,20 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     async lookupMessageSender(messageId) {
       const row = envelopes.get(messageId);
       return row ? { endpoint_id: row.envelope.sender.endpoint_id } : null;
+    },
+    // What a freshly inserted delivery's state is. The accept-time receipt
+    // frame reads it so the sender sees the row's real state. This store
+    // inserts `delivered` directly and its `listInbox` has no queued-to-delivered flip.
+    initialDeliveryState: 'delivered',
+    async listReceiptsForMessage(messageId) {
+      return [...deliveries.values()]
+        .filter((d) => d.message_id === messageId)
+        .sort((a, b) => {
+          if (a.queued_at !== b.queued_at) return a.queued_at < b.queued_at ? -1 : 1;
+          if (a.recipient_endpoint_id === b.recipient_endpoint_id) return 0;
+          return a.recipient_endpoint_id < b.recipient_endpoint_id ? -1 : 1;
+        })
+        .map((d) => ({ ...d }));
     },
     async lookupEnvelopeStreamSequence(messageId) {
       return envelopes.get(messageId)?.streamSeq ?? null;
@@ -454,7 +695,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       });
       if (!decision) return null;
       decision.status = 'consumed';
-      transactionRollbackStore.getStore()?.push(() => { decision.status = 'approved'; });
+      onRollback(() => { decision.status = 'approved'; });
       return decision;
     },
     async createHumanSession({ sessionId, humanId, authenticationMethod, assurance, deviceContext = {}, issuedAt = new Date(), expiresAt, now = new Date() }) {

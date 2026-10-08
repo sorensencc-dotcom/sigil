@@ -498,3 +498,29 @@ test('inbound federated envelope audit receives the open transaction client', as
   assert.ok(inboundAcceptedCall);
   assert.notEqual(inboundAcceptedCall.client, undefined);
 });
+
+// Rooms phase 1: rooms are relay-local. A federated (always direct) envelope
+// must never land in a room conversation: the direct persist path would
+// otherwise enroll sender and recipient into the room roster.
+test('rooms: a federated direct envelope into a room conversation is refused and the roster is unchanged', async () => {
+  const world = worldWithRecipient();
+  await seedSelfPairLink(world);
+  await world.repo.createRoom({ conversationId: 'conv_1', workspaceId: 'ws_usr_chris', name: 'build', createdByHumanId: 'usr_chris@primary.example', ownerEndpointId: `ep_claude@${RELAY}`, now: SERVER_NOW });
+  const before = await world.repo.listRoomMembers('conv_1');
+  const { body, headers } = forwardPayload(world);
+  const r = await acceptFederatedEnvelope(body, headers, opts9(world));
+  assert.equal(r.status, 403);
+  assert.equal(r.body.code, 'ROUTE_NOT_AUTHORIZED');
+  assert.deepEqual(await world.repo.listRoomMembers('conv_1'), before);
+  assert.equal((await world.repo.listInbox(`ep_claude@${RELAY}`, '')).length, 0);
+  assert.deepEqual(await world.repo.listRoomMessages('conv_1', 0n, 100), []);
+});
+test('rooms: a federated room.* message type is refused', async () => {
+  const world = worldWithRecipient();
+  await seedSelfPairLink(world);
+  const { body, headers } = forwardPayload(world, { message_type: 'room.message', body: { text: 'hi' } });
+  const r = await acceptFederatedEnvelope(body, headers, opts9(world));
+  assert.equal(r.status, 400);
+  assert.equal(r.body.code, 'INVALID_ENVELOPE');
+  assert.equal((await world.repo.listInbox(`ep_claude@${RELAY}`, '')).length, 0);
+});

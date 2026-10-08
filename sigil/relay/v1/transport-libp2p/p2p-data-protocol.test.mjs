@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { createP2pHost } from './p2p-host.mjs';
 import { wireDataProtocol, sendEnvelope } from './p2p-data-protocol.mjs';
+
 import { canonicalJsonBytes } from '../jcs.mjs';
+
+// wireDataProtocol requires a buildAcceptOptions; these tests use a plain merge of their partial options.
+function wireWithBuilder(host, opts) { return wireDataProtocol(host, { ...opts, buildAcceptOptions: (overrides) => ({ ...opts, ...overrides }) }); }
 
 function makeIdentity() {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
@@ -32,7 +36,7 @@ test('inbound envelope over /sigil/data/1.0.0 reaches acceptEnvelopeAsync and re
       ['ep_sender', { owner_id: 'usr_sender', endpoint_id: 'ep_sender', key_id: 'key_sender', kind: 'agent', status: 'active', public_key: senderIdentity.keys.publicKey }]
     ]);
     const writes = [];
-    wireDataProtocol(receiverHost, {
+    wireWithBuilder(receiverHost, {
       registry,
       registered: registry,
       relayDomain: undefined,
@@ -73,7 +77,7 @@ test('m8: a p2p-accepted envelope gets a generated request_id and is visible to 
       ['ep_sender', { owner_id: 'usr_sender', endpoint_id: 'ep_sender', key_id: 'key_sender', kind: 'agent', status: 'active', public_key: senderIdentity.keys.publicKey }]
     ]);
     const logEntries = [];
-    wireDataProtocol(receiverHost, {
+    wireWithBuilder(receiverHost, {
       registry,
       registered: registry,
       relayDomain: undefined,
@@ -126,7 +130,7 @@ test('m5: an unexpected (non-reject()) error thrown before acceptEnvelopeAsync i
     // responses are a separate, HTTP-transport-shared concern (see the
     // TODOS.md entry this test's finding was split from).
     const registered = { get: () => { throw new Error('internal connection string: postgres://sensitive-detail'); } };
-    wireDataProtocol(receiverHost, {
+    wireWithBuilder(receiverHost, {
       registered,
       relayDomain: undefined,
       federationMode: undefined,

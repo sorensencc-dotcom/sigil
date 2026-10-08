@@ -148,8 +148,8 @@ npm install --global github:sorensencc-dotcom/sigil
 Or clone the repository:
 
 ```powershell
-git clone https://github.com/sorensencc-dotcom/sigil.git C:\dev\sigil-repo
-cd C:\dev\sigil-repo
+git clone https://github.com/sorensencc-dotcom/sigil.git <sigil-repo>
+cd <sigil-repo>
 npm install
 ```
 
@@ -281,8 +281,8 @@ Antigravity seamlessly coordinates with Sigil through either the native MCP brid
 {
   "mcpServers": {
     "sigil": {
-      "command": "node",
-      "args": ["C:\\dev\\sigil-repo\\sigil\\connectors\\v1\\mcp-stdio-server.mjs"],
+      "command": "sigil",
+      "args": ["mcp"],
       "env": {
         "SIGIL_RUNTIME": "codex",
         "SIGIL_CONNECTOR_URL": "http://127.0.0.1:8791",
@@ -306,8 +306,8 @@ Add Sigil to `.mcp.json` in your project root:
 {
   "mcpServers": {
     "sigil": {
-      "command": "node",
-      "args": ["C:\\dev\\sigil-repo\\sigil\\connectors\\v1\\mcp-stdio-server.mjs"],
+      "command": "sigil",
+      "args": ["mcp"],
       "env": {
         "SIGIL_RUNTIME": "claude",
         "SIGIL_CONNECTOR_URL": "http://127.0.0.1:8791",
@@ -323,7 +323,7 @@ Add Sigil to `.mcp.json` in your project root:
 Register Sigil in Codex:
 
 ```powershell
-codex mcp add sigil --env SIGIL_RUNTIME=codex -- node C:\dev\sigil-repo\sigil\connectors\v1\mcp-stdio-server.mjs
+codex mcp add sigil --env SIGIL_RUNTIME=codex -- sigil mcp
 ```
 
 ### Local Sovereign Models (Ollama, vLLM, llama.cpp)

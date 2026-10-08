@@ -180,7 +180,8 @@ test('queue mode with live database', { skip: !connectionString }, async (t) => 
       });
 
       // The error propagates out as a server fault (no specific HTTP mapping for INJECTED_FAILURE)
-      assert.equal(result.status, 400, 'unexpected error returns a non-2xx status');
+      assert.equal(result.status, 500, 'unexpected error returns INTERNAL_ERROR (500)');
+      assert.equal(result.body?.code, 'INTERNAL_ERROR');
       assert.equal(enqueueCallCount, 1, 'enqueue was attempted exactly once');
 
       // capturedClient must be a real pg client (has a query method), not null or the pool.
@@ -269,4 +270,26 @@ test('queue mode: a high-risk capability WITH a matching approval decision, cons
   assert.equal(enqueueCalls.length, 1);
   assert.equal(consumeCalls.length, 1);
   assert.deepEqual(consumeCalls[0].client, { id: 'client-1' }, 'the queue-forward path must consume the approval decision on the accept transaction client');
+});
+
+test('queue mode: an envelope whose conversation is a local room is refused before it is enqueued', async () => {
+  const enqueueCalls = [];
+  const lookupClients = [];
+  const repository = {
+    async withTransaction(fn) { return fn({ id: 'client-1' }); },
+    async lookupAcceptedMessageId() { return null; },
+    async getPeerByDomain(domain) { return domain === 'b.example' ? { domain: 'b.example', relayUrl: 'https://relay.b.example', wsUrl: null, keys: [], trustMode: 'pinned' } : null; },
+    async lookupRoom(conversationId, client) { lookupClients.push(client); return { conversation_id: conversationId }; },
+    async enqueueFederationForward(args) { enqueueCalls.push(args); return { row: { id: 'job_1' }, inserted: true }; },
+    async recordAuditEvent() {},
+  };
+  const result = await acceptEnvelopeAsync(makeEnvelope(), {
+    ...baseOptions(),
+    repository,
+    registered: new Map([['ep_codex@a.example', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_codex', public_key: senderKeys.publicKey }]]),
+  });
+  assert.equal(result.status, 403);
+  assert.equal(result.body.code, 'ROUTE_NOT_AUTHORIZED');
+  assert.equal(enqueueCalls.length, 0, 'a room envelope must never be enqueued for federation forward');
+  assert.deepEqual(lookupClients, [{ id: 'client-1' }], 'the room lookup runs on the transaction client');
 });

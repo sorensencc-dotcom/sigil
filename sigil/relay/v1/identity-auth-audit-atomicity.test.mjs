@@ -161,7 +161,7 @@ test('createCapabilityGrantWithAudit commits the grant and audit together, and r
   const humanId = await seedHuman(pool, suffix);
   await seedEndpoint(pool, { endpointId: `ep_${suffix}`, humanId });
   const repository = new PostgresRepository({ pool });
-  const grantFields = { grantId: `grant_${suffix}`, capability: 'sigil.task/submit', scope: 'sigil.task/submit', grantedTo: `ep_${suffix}`, grantedBy: humanId, expiresAt: new Date(Date.now() + 3600_000) };
+  const grantFields = { grantId: `grant_${suffix}`, capability: 'sigil.task/submit', scope: 'sigil.task/submit', grantedTo: `ep_${suffix}`, grantedBy: humanId, expiresAt: new Date(Date.now() + 2 * 3600_000) };
 
   const failing = new PostgresRepository({ pool: withAuditFailureInjected(pool) });
   await assert.rejects(() => failing.createCapabilityGrantWithAudit({ ...grantFields, actorHumanId: humanId }));
@@ -182,7 +182,7 @@ test('revokeCapabilityGrantWithAudit commits the revoke, revocation record, and 
   const humanId = await seedHuman(pool, suffix);
   await seedEndpoint(pool, { endpointId: `ep_${suffix}`, humanId });
   const repository = new PostgresRepository({ pool });
-  const grant = await repository.createCapabilityGrant({ grantId: `grant_${suffix}`, capability: 'sigil.task/submit', scope: 'sigil.task/submit', grantedTo: `ep_${suffix}`, grantedBy: humanId, expiresAt: new Date(Date.now() + 3600_000) });
+  const grant = await repository.createCapabilityGrant({ grantId: `grant_${suffix}`, capability: 'sigil.task/submit', scope: 'sigil.task/submit', grantedTo: `ep_${suffix}`, grantedBy: humanId, expiresAt: new Date(Date.now() + 2 * 3600_000) });
 
   const failing = new PostgresRepository({ pool: withAuditFailureInjected(pool) });
   await assert.rejects(() => failing.revokeCapabilityGrantWithAudit(grant.grant_id, { revokedBy: humanId, reason: 'test', actorHumanId: humanId }));
@@ -235,6 +235,7 @@ test('linkAccountWithAudit commits the link and the audit row together, and roll
   const suffix = crypto.randomUUID().replaceAll('-', '_');
   const humanId = await seedHuman(pool, suffix);
   const repository = new PostgresRepository({ pool });
+  await repository.createOidcIdentity({ issuer: 'https://idp.example', subject: `sub_${suffix}`, humanId });
   const issuedAt = new Date(); const expiresAt = new Date(issuedAt.getTime() + 60_000);
   const linkFields = { linkId: `link_${suffix}`, humanId, issuer: 'https://idp.example', subject: `sub_${suffix}`, nonceHash: `nonce_${suffix}`, stateHash: `state_${suffix}`, issuedAt, expiresAt };
 
@@ -259,7 +260,7 @@ test('issueEndpointTokenWithAudit commits the token and the audit row together, 
   const humanId = await seedHuman(pool, suffix);
   await seedEndpoint(pool, { endpointId: `ep_${suffix}`, humanId });
   const repository = new PostgresRepository({ pool });
-  const expiresAt = new Date(Date.now() + 3600_000);
+  const expiresAt = new Date(Date.now() + 2 * 3600_000);
 
   const failing = new PostgresRepository({ pool: withAuditFailureInjected(pool) });
   await assert.rejects(() => failing.issueEndpointTokenWithAudit({ tokenId: `tok_${suffix}`, endpointId: `ep_${suffix}`, expiresAt, actorHumanId: humanId }));
@@ -284,7 +285,7 @@ test('createDirectoryInviteWithAudit commits the invite and the audit row togeth
   const humanId = await seedHuman(pool, suffix);
   await seedEndpoint(pool, { endpointId: `ep_${suffix}`, humanId });
   const repository = new PostgresRepository({ pool });
-  const expiresAt = new Date(Date.now() + 3600_000);
+  const expiresAt = new Date(Date.now() + 2 * 3600_000);
 
   const failing = new PostgresRepository({ pool: withAuditFailureInjected(pool) });
   await assert.rejects(() => failing.createDirectoryInviteWithAudit({ issuerEndpointId: `ep_${suffix}`, issuerHumanId: humanId, expiresAt, homeRelay: 'local', actorHumanId: humanId }));
@@ -310,7 +311,7 @@ test('redeemDirectoryInviteWithAudit commits the link and the audit row together
   await seedEndpoint(pool, { endpointId: `ep_issuer_${suffix}`, humanId: issuerHumanId });
   await seedEndpoint(pool, { endpointId: `ep_redeemer_${suffix}`, humanId: redeemerHumanId });
   const repository = new PostgresRepository({ pool });
-  const invite = await repository.createDirectoryInvite({ issuerEndpointId: `ep_issuer_${suffix}`, issuerHumanId, expiresAt: new Date(Date.now() + 3600_000), homeRelay: 'local' });
+  const invite = await repository.createDirectoryInvite({ issuerEndpointId: `ep_issuer_${suffix}`, issuerHumanId, expiresAt: new Date(Date.now() + 2 * 3600_000), homeRelay: 'local' });
 
   const failing = new PostgresRepository({ pool: withAuditFailureInjected(pool) });
   await assert.rejects(() => failing.redeemDirectoryInviteWithAudit({ code: invite.code, redeemerEndpointId: `ep_redeemer_${suffix}`, redeemerHumanId, homeRelay: 'local', actorHumanId: redeemerHumanId }));
@@ -332,8 +333,9 @@ test('createDirectoryMatchRequestWithAudit commits the match request and the aud
   const suffix = crypto.randomUUID().replaceAll('-', '_');
   const humanId = await seedHuman(pool, suffix);
   await seedEndpoint(pool, { endpointId: `ep_${suffix}`, humanId });
+  await pool.query(`INSERT INTO oidc_issuer_allowlist (issuer, display_label, enabled, added_at) VALUES ($1, 'Example', TRUE, NOW())`, ['https://idp.example']);
   const repository = new PostgresRepository({ pool });
-  const expiresAt = new Date(Date.now() + 3600_000);
+  const expiresAt = new Date(Date.now() + 2 * 3600_000);
 
   const failing = new PostgresRepository({ pool: withAuditFailureInjected(pool) });
   await assert.rejects(() => failing.createDirectoryMatchRequestWithAudit({ issuerEndpointId: `ep_${suffix}`, issuerHumanId: humanId, issuer: 'https://idp.example', matchTarget: `target_${suffix}`, expiresAt, homeRelay: 'local', actorHumanId: humanId }));
@@ -357,8 +359,9 @@ test('nominateDirectoryLinkEndpointWithAudit commits the link and the audit row 
   const nominatedHumanId = await seedHuman(pool, `${suffix}_n`);
   await seedEndpoint(pool, { endpointId: `ep_issuer_${suffix}`, humanId: issuerHumanId });
   await seedEndpoint(pool, { endpointId: `ep_nominated_${suffix}`, humanId: nominatedHumanId });
+  await pool.query(`INSERT INTO oidc_issuer_allowlist (issuer, display_label, enabled, added_at) VALUES ($1, 'Example', TRUE, NOW())`, ['https://idp.example']);
   const repository = new PostgresRepository({ pool });
-  const match = await repository.createDirectoryMatchRequest({ issuerEndpointId: `ep_issuer_${suffix}`, issuerHumanId, issuer: 'https://idp.example', matchTarget: `target_${suffix}`, expiresAt: new Date(Date.now() + 3600_000), homeRelay: 'local' });
+  const match = await repository.createDirectoryMatchRequest({ issuerEndpointId: `ep_issuer_${suffix}`, issuerHumanId, issuer: 'https://idp.example', matchTarget: `target_${suffix}`, expiresAt: new Date(Date.now() + 2 * 3600_000), homeRelay: 'local' });
   await repository.claimDirectoryMatch({ issuer: 'https://idp.example', matchTarget: `target_${suffix}`, matchedHumanId: nominatedHumanId });
 
   const failing = new PostgresRepository({ pool: withAuditFailureInjected(pool) });
@@ -382,7 +385,7 @@ test('confirmDirectoryLinkWithAudit commits the confirmation and the audit row t
   await seedEndpoint(pool, { endpointId: `ep_issuer_${suffix}`, humanId: issuerHumanId });
   await seedEndpoint(pool, { endpointId: `ep_redeemer_${suffix}`, humanId: redeemerHumanId });
   const repository = new PostgresRepository({ pool });
-  const invite = await repository.createDirectoryInvite({ issuerEndpointId: `ep_issuer_${suffix}`, issuerHumanId, expiresAt: new Date(Date.now() + 3600_000), homeRelay: 'local' });
+  const invite = await repository.createDirectoryInvite({ issuerEndpointId: `ep_issuer_${suffix}`, issuerHumanId, expiresAt: new Date(Date.now() + 2 * 3600_000), homeRelay: 'local' });
   const redeemed = await repository.redeemDirectoryInvite({ code: invite.code, redeemerEndpointId: `ep_redeemer_${suffix}`, redeemerHumanId, homeRelay: 'local' });
 
   const failing = new PostgresRepository({ pool: withAuditFailureInjected(pool) });
@@ -392,17 +395,18 @@ test('confirmDirectoryLinkWithAudit commits the confirmation and the audit row t
   const noAudit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type IN ('directory_link.confirmed', 'directory_link.activated')`);
   assert.equal(Number(noAudit.rows[0].count), 0);
 
-  // First confirmation -- stays 'pending', emits directory_link.confirmed.
-  const confirmed = await repository.confirmDirectoryLinkWithAudit({ linkId: redeemed.link_id, confirmingHumanId: issuerHumanId, actorHumanId: issuerHumanId });
-  assert.equal(confirmed.status, 'pending');
-  const confirmedAudit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'directory_link.confirmed'`);
-  assert.equal(Number(confirmedAudit.rows[0].count), 1);
-
-  // Second confirmation (the other party) -- flips to 'active', emits directory_link.activated.
-  const activated = await repository.confirmDirectoryLinkWithAudit({ linkId: redeemed.link_id, confirmingHumanId: redeemerHumanId, actorHumanId: redeemerHumanId });
+  // Redeem already confirmed the redeemer side, so the issuer's confirmation
+  // flips the link to 'active' and emits directory_link.activated.
+  const activated = await repository.confirmDirectoryLinkWithAudit({ linkId: redeemed.link_id, confirmingHumanId: issuerHumanId, actorHumanId: issuerHumanId });
   assert.equal(activated.status, 'active');
   const activatedAudit = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'directory_link.activated'`);
   assert.equal(Number(activatedAudit.rows[0].count), 1);
+
+  // Redeemer re-confirm is a no-op (already confirmed at redeem) — stays active, no second audit.
+  const replay = await repository.confirmDirectoryLinkWithAudit({ linkId: redeemed.link_id, confirmingHumanId: redeemerHumanId, actorHumanId: redeemerHumanId });
+  assert.equal(replay.status, 'active');
+  const activatedAuditAfter = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'directory_link.activated'`);
+  assert.equal(Number(activatedAuditAfter.rows[0].count), 1);
 });
 
 test('revokeDirectoryLinkWithAudit commits the revoke and the audit row together, rolls both back on audit failure, and stays idempotent on replay', { skip: !connectionString }, async (t) => {
@@ -415,7 +419,7 @@ test('revokeDirectoryLinkWithAudit commits the revoke and the audit row together
   await seedEndpoint(pool, { endpointId: `ep_issuer_${suffix}`, humanId: issuerHumanId });
   await seedEndpoint(pool, { endpointId: `ep_redeemer_${suffix}`, humanId: redeemerHumanId });
   const repository = new PostgresRepository({ pool });
-  const invite = await repository.createDirectoryInvite({ issuerEndpointId: `ep_issuer_${suffix}`, issuerHumanId, expiresAt: new Date(Date.now() + 3600_000), homeRelay: 'local' });
+  const invite = await repository.createDirectoryInvite({ issuerEndpointId: `ep_issuer_${suffix}`, issuerHumanId, expiresAt: new Date(Date.now() + 2 * 3600_000), homeRelay: 'local' });
   const redeemed = await repository.redeemDirectoryInvite({ code: invite.code, redeemerEndpointId: `ep_redeemer_${suffix}`, redeemerHumanId, homeRelay: 'local' });
 
   const failing = new PostgresRepository({ pool: withAuditFailureInjected(pool) });
@@ -434,4 +438,41 @@ test('revokeDirectoryLinkWithAudit commits the revoke and the audit row together
   assert.equal(replay.duplicate, true);
   const auditAfterReplay = await pool.query(`SELECT count(*) FROM audit_events WHERE event_type = 'directory_link.revoked'`);
   assert.equal(Number(auditAfterReplay.rows[0].count), 1);
+});
+
+test('revokeCapabilityGrantWithAudit lets an agent revoke its own grant, attributed to its endpoint with no human actor', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  await freshSchema(pool);
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const humanId = await seedHuman(pool, suffix);
+  const endpointId = `ep_${suffix}`;
+  await seedEndpoint(pool, { endpointId, humanId });
+  const repository = new PostgresRepository({ pool });
+  const grant = await repository.createCapabilityGrant({ grantId: `grant_${suffix}`, capability: 'sigil.task/submit', scope: 'sigil.task/submit', grantedTo: endpointId, grantedBy: humanId, expiresAt: new Date(Date.now() + 2 * 3600_000) });
+
+  const revoked = await repository.revokeCapabilityGrantWithAudit(grant.grant_id, { revokedBy: null, revokedByEndpoint: endpointId, reason: null, actorHumanId: null, endpointId });
+  assert.equal(revoked.duplicate, false);
+  assert.ok(revoked.revoked_at);
+  const revocation = await pool.query('SELECT revoked_by, revoked_by_endpoint, reason FROM capability_revocations WHERE capability_grant_id = $1', [grant.grant_id]);
+  assert.deepEqual(revocation.rows, [{ revoked_by: null, revoked_by_endpoint: endpointId, reason: '' }]);
+  const audit = await pool.query(`SELECT actor_human_id, endpoint_id FROM audit_events WHERE event_type = 'capability_grant.revoked' AND object_id = $1`, [grant.grant_id]);
+  assert.deepEqual(audit.rows, [{ actor_human_id: null, endpoint_id: endpointId }]);
+});
+
+test('capability_revocations rejects a row that names neither a human nor an endpoint', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  await freshSchema(pool);
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const humanId = await seedHuman(pool, suffix);
+  const endpointId = `ep_${suffix}`;
+  await seedEndpoint(pool, { endpointId, humanId });
+  const repository = new PostgresRepository({ pool });
+  const grant = await repository.createCapabilityGrant({ grantId: `grant_${suffix}`, capability: 'sigil.task/submit', scope: 'sigil.task/submit', grantedTo: endpointId, grantedBy: humanId, expiresAt: new Date(Date.now() + 2 * 3600_000) });
+
+  await assert.rejects(
+    () => pool.query(`INSERT INTO capability_revocations (revocation_id, capability_grant_id, revoked_by, revoked_by_endpoint, reason, created_at) VALUES ($1, $2, NULL, NULL, '', NOW())`, [`revocation_${suffix}`, grant.grant_id]),
+    /capability_revocations_actor_check/
+  );
 });

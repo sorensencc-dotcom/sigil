@@ -2,7 +2,8 @@
 .sigil-demo/
 .superpowers/
 node_modules/
-.claude/
+.claude/*
+!.claude/skills/
 .context/
 .ijfw/
 graft/
@@ -22,3 +23,4 @@ ijfw/
 !sigil/cli/fixtures/self-signed-cert.pem
 !sigil/cli/fixtures/self-signed-key.pem
 secrets/
+.wiki-sync-receipt.json

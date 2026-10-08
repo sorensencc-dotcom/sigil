@@ -3,6 +3,7 @@ import { canonicalJsonBytes } from './jcs.mjs';
 import { validateTaskRequestBody } from '../../contracts/v1/task-request-schema.mjs';
 import { validateTaskResultBody } from '../../contracts/v1/task-result-schema.mjs';
 import { validateSessionResendRequestBody } from '../../contracts/v1/session-resend-request-schema.mjs';
+import { validateRoomMessageBody } from '../../contracts/v1/room-message-schema.mjs';
 import { isAncestorScope } from './scope.mjs';
 import { parseFederatedId, isLocalDomain } from './federated-id.mjs';
 
@@ -116,6 +117,7 @@ export function validateEnvelope(envelope, { now = new Date(), registered = new 
   if (envelope.message_type === 'task.request') validateTaskRequestBody(envelope.body);
   if (envelope.message_type === 'task.result') validateTaskResultBody(envelope.body);
   if (envelope.message_type === 'session.resend_request') validateSessionResendRequestBody(envelope.body);
+  if (envelope.message_type === 'room.message') validateRoomMessageBody(envelope.body);
   const capabilityGrants = Array.isArray(capabilityGrants_) ? capabilityGrants_ : [];
   for (const capability of envelope.capabilities) {
     if (!capabilityIsCovered(capability, envelope, capabilityGrants)) throw reject('CAPABILITY_DENIED', `No active grant covers capability: ${capability}`, { capability });

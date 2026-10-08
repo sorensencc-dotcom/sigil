@@ -99,3 +99,72 @@ test('reconnect recovers missed notification through inbox reconciliation', asyn
   await stream.close();
   await new Promise((resolve) => httpServer.close(resolve));
 });
+
+async function twoSocketRig() {
+  const httpServer = http.createServer();
+  const stream = createStreamServer({ server: httpServer, authenticate: (request) => request.headers['x-endpoint-id'] });
+  await new Promise((resolve) => httpServer.listen(0, resolve));
+  const url = `ws://127.0.0.1:${httpServer.address().port}/v1/stream`;
+  const connect = async () => {
+    const socket = new WebSocket(url, { headers: { 'x-endpoint-id': 'ep_a' } });
+    const frames = [];
+    socket.on('message', (data) => {
+      const frame = JSON.parse(data);
+      if (frame.type !== 'pong') frames.push(frame);
+    });
+    await new Promise((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); });
+    return { socket, frames };
+  };
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+  const done = async (...sockets) => {
+    for (const { socket } of sockets) socket.close();
+    await stream.close();
+    await new Promise((resolve) => httpServer.close(resolve));
+  };
+  return { stream, connect, settle, done };
+}
+
+test('delivery.receipt reaches every open socket on the endpoint', async () => {
+  const { stream, connect, settle, done } = await twoSocketRig();
+  const first = await connect();
+  const second = await connect();
+  assert.equal(stream.notifyReceipt('ep_a', { message_id: 'm1', state: 'delivered' }), true);
+  await settle();
+  assert.equal(first.frames.length, 1);
+  assert.equal(second.frames.length, 1);
+  await done(first, second);
+});
+
+for (const [method, args, type] of [
+  ['notify', ['del_1', '5'], 'delivered'],
+  ['notifyResend', [{ conversation_id: 'c1' }], 'resend'],
+  ['notifySequenceReset', [{ conversation_id: 'c1' }], 'sequence_reset'],
+]) {
+  test(`${type} reaches only the latest socket, and closing it promotes the previous one`, async () => {
+    const { stream, connect, settle, done } = await twoSocketRig();
+    const first = await connect();
+    const second = await connect();
+    assert.equal(stream[method]('ep_a', ...args), true);
+    await settle();
+    assert.equal(first.frames.length, 0, 'older socket gets no single-target frame');
+    assert.equal(second.frames.length, 1);
+    assert.equal(second.frames[0].type, type);
+
+    second.socket.close();
+    await settle();
+    assert.equal(stream[method]('ep_a', ...args), true);
+    await settle();
+    assert.equal(first.frames.length, 1, 'previous socket promoted after latest closes');
+    assert.equal(first.frames[0].type, type);
+    await done(first);
+  });
+}
+
+test('an endpoint with no open socket returns false from every notify method', async () => {
+  const { stream, done } = await twoSocketRig();
+  assert.equal(stream.notify('ep_a', 'd', null), false);
+  assert.equal(stream.notifyReceipt('ep_a', { message_id: 'm' }), false);
+  assert.equal(stream.notifyResend('ep_a', {}), false);
+  assert.equal(stream.notifySequenceReset('ep_a', {}), false);
+  await done();
+});

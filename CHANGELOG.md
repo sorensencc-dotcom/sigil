@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Added
+- Added `GET /v1/messages/{message_id}/receipts`, a sender-only read of every recipient's receipt state, so a sender can find out after disconnecting.
+- `delivery.receipt` frames now carry `recipient_endpoint_id` and `mapped_state`. A room message sends one frame per recipient with that recipient's real delivery ID.
+- On Postgres the accept-time frame now says `queued` and a `delivered` frame follows when the recipient polls. The frame previously said `delivered` immediately.
 - Added libp2p transport driver (`sigil/relay/v1/transport-libp2p/`) as an
   opt-in peer-to-peer alternative to the HTTP/WebSocket relay transport,
   enabled via `sigil relay up --p2p` (`--p2p-identity`, `--p2p-listen`).
