@@ -37,13 +37,13 @@ export function useSend(roomId: string) {
   }, []);
 
   const dispatch = useCallback(
-    async (room: string, idempotencyKey: string, text: string) => {
+    async (room: string, idempotencyKey: string, text: string, threadRootId?: string) => {
       // Covers both send and retry: a stale error must not outlive a new attempt.
       setErrorByRoom((all) => (all[room] == null ? all : { ...all, [room]: null }));
       patch(room, idempotencyKey, { status: 'sending', error: undefined, retryable: undefined });
       let messageId: string;
       try {
-        const result = await client.sendMessage(room, text, idempotencyKey);
+        const result = await client.sendMessage(room, text, idempotencyKey, threadRootId);
         messageId = result.message_id;
         patch(room, idempotencyKey, { messageId });
       } catch (error) {
@@ -77,11 +77,14 @@ export function useSend(roomId: string) {
   );
 
   const send = useCallback(
-    (text: string) => {
+    (text: string, threadRootId?: string) => {
       const idempotencyKey = crypto.randomUUID();
       setErrorByRoom((all) => ({ ...all, [roomId]: null }));
-      setRowsByRoom((all) => ({ ...all, [roomId]: [...(all[roomId] ?? []), { idempotencyKey, text, status: 'sending' }] }));
-      void dispatch(roomId, idempotencyKey, text);
+      setRowsByRoom((all) => ({
+        ...all,
+        [roomId]: [...(all[roomId] ?? []), { idempotencyKey, text, status: 'sending', ...(threadRootId ? { threadRootId } : {}) }],
+      }));
+      void dispatch(roomId, idempotencyKey, text, threadRootId);
     },
     [dispatch, roomId],
   );
@@ -89,7 +92,7 @@ export function useSend(roomId: string) {
   const retry = useCallback(
     (idempotencyKey: string) => {
       const row = pendingRef.current.find((candidate) => candidate.idempotencyKey === idempotencyKey);
-      if (row && row.status === 'failed') void dispatch(roomId, idempotencyKey, row.text);
+      if (row && row.status === 'failed') void dispatch(roomId, idempotencyKey, row.text, row.threadRootId);
     },
     [dispatch, roomId],
   );

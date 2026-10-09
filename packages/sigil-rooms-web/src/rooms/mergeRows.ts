@@ -8,6 +8,7 @@ export interface PendingMessage {
   error?: string;
   messageId?: string;
   retryable?: boolean;
+  threadRootId?: string;
 }
 
 export interface Row {
