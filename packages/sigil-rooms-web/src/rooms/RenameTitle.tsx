@@ -70,10 +70,10 @@ export function RenameTitle({ roomId, name, canRename, onGone }: { roomId: strin
         value={draft}
         maxLength={80}
         onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={(event) => { if (event.key === 'Escape') setEditing(false); }}
+        onKeyDown={(event) => { if (event.key === 'Escape' && !rename.isPending) setEditing(false); }}
       />
       <button type="submit" disabled={rename.isPending || !draft.trim()}>Save</button>
-      <button type="button" className="ghost" onClick={() => setEditing(false)}>Cancel</button>
+      <button type="button" className="ghost" disabled={rename.isPending} onClick={() => setEditing(false)}>Cancel</button>
       {tooLong ? <p role="alert">Room names are 1-80 characters</p> : null}
       <ErrorBanner error={rename.error} />
     </form>

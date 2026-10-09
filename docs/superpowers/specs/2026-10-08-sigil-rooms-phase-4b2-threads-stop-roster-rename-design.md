@@ -118,6 +118,7 @@ The ack route moves every delivery at or below `up_to_room_seq` to `acknowledged
 - The ack watermark is the highest seq `S` such that every history row with `room_seq <= S` is seen. When no row is unseen, it is the highest seq. A watermark of 0 (the first row is an unseen reply) means no ack call. `useAck` is fed this watermark and stays forward-only and debounced.
 - Example: row 1 is top-level, row 2 is a reply in thread A, row 3 is top-level. Until thread A is opened the watermark is 1. Opening thread A raises it to 3.
 - Trade-off, accepted: an unread reply holds back the read receipts for later top-level messages until its thread is opened, and the "N replies" link on the root is the cue. Marking a seq read that the user never saw would be worse. A relay-side per-thread ack or an unread badge can follow.
+- A reply whose root is missing from the loaded history is an orphan. It shows in the main timeline as a top-level row, so it stays visible and openable and the watermark is not capped by a row the user cannot reach.
 - The watermark helper takes the history rows and the seen set, so it is a pure function with its own tests.
 
 ### Stop

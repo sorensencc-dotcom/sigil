@@ -1,16 +1,20 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../auth/AuthContext';
+import { ApiError } from '../api/client';
 import type { Member, ResponseMode } from '../api/types';
 import { ErrorBanner } from '../errors/ErrorBanner';
 import { membersKey } from './useMembers';
 
 const MODES: ResponseMode[] = ['joins', 'mentions_only', 'router'];
 
-export function RosterPanel({ roomId, members, manager }: { roomId: string; members: Member[]; manager: boolean }) {
+export function RosterPanel({ roomId, members, manager, onGone }: { roomId: string; members: Member[]; manager: boolean; onGone: () => void }) {
   const { client } = useAuth();
   const queryClient = useQueryClient();
   const setMode = useMutation({
     mutationFn: ({ endpointId, mode }: { endpointId: string; mode: ResponseMode }) => client.setResponseMode(roomId, endpointId, mode),
+    onError: (error) => {
+      if (error instanceof ApiError && error.code === 'ROOM_NOT_FOUND') onGone();
+    },
     // Refetch on success and on failure: a refusal means the roster the user sees is stale.
     onSettled: () => queryClient.invalidateQueries({ queryKey: membersKey(roomId) }),
   });

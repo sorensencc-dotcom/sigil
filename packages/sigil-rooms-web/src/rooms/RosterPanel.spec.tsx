@@ -14,21 +14,21 @@ const members: Member[] = [
 
 describe('RosterPanel', () => {
   it('shows role and mode badges and no controls for a non-manager', () => {
-    renderWithClient(<RosterPanel roomId="room_1" members={members} manager={false} />, {});
+    renderWithClient(<RosterPanel roomId="room_1" members={members} manager={false} onGone={() => {}} />, {});
     expect(screen.getByText('ep_claude')).toBeInTheDocument();
     expect(screen.getByText('joins')).toBeInTheDocument();
     expect(screen.queryByRole('combobox')).toBeNull();
   });
 
   it('gives a manager a mode select on agent rows only', () => {
-    renderWithClient(<RosterPanel roomId="room_1" members={members} manager />, {});
+    renderWithClient(<RosterPanel roomId="room_1" members={members} manager onGone={() => {}} />, {});
     expect(screen.getAllByRole('combobox')).toHaveLength(1);
     expect(screen.getByLabelText('Response mode for ep_claude')).toHaveValue('joins');
   });
 
   it('changes the mode and refetches the roster', async () => {
     const setResponseMode = vi.fn(async () => ({ ...members[1]!, response_mode: 'mentions_only' as const }));
-    const { queryClient } = renderWithClient(<RosterPanel roomId="room_1" members={members} manager />, { setResponseMode });
+    const { queryClient } = renderWithClient(<RosterPanel roomId="room_1" members={members} manager onGone={() => {}} />, { setResponseMode });
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
     await userEvent.selectOptions(screen.getByLabelText('Response mode for ep_claude'), 'mentions_only');
     await vi.waitFor(() => expect(setResponseMode).toHaveBeenCalledWith('room_1', 'ep_claude', 'mentions_only'));
@@ -37,10 +37,18 @@ describe('RosterPanel', () => {
 
   it('shows the relay refusal and refetches when the caller is not a manager', async () => {
     const setResponseMode = vi.fn(async () => { throw new ApiError('ROUTE_NOT_AUTHORIZED', 403, 'no'); });
-    const { queryClient } = renderWithClient(<RosterPanel roomId="room_1" members={members} manager />, { setResponseMode });
+    const { queryClient } = renderWithClient(<RosterPanel roomId="room_1" members={members} manager onGone={() => {}} />, { setResponseMode });
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
     await userEvent.selectOptions(screen.getByLabelText('Response mode for ep_claude'), 'router');
     expect(await screen.findByRole('alert')).toHaveTextContent('Only room managers can do this');
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'members'] });
+  });
+
+  it('returns to the list when the room is gone', async () => {
+    const onGone = vi.fn();
+    const setResponseMode = vi.fn(async () => { throw new ApiError('ROOM_NOT_FOUND', 404, 'gone'); });
+    renderWithClient(<RosterPanel roomId="room_1" members={members} manager onGone={onGone} />, { setResponseMode });
+    await userEvent.selectOptions(screen.getByLabelText('Response mode for ep_claude'), 'router');
+    await vi.waitFor(() => expect(onGone).toHaveBeenCalledOnce());
   });
 });
