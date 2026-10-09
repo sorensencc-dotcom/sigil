@@ -1,12 +1,14 @@
-import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ApiError } from './api/client';
 import { AuthProvider, useAuth } from './auth/AuthContext';
+import { getSender } from './auth/tokenStore';
 import { TokenGate } from './auth/TokenGate';
 import { loadConfig, type WebConfig } from './config';
 import { describeError, ErrorBanner } from './errors/ErrorBanner';
 import { useLive } from './live/useLive';
 import { Composer } from './rooms/Composer';
+import { RoomHeader } from './rooms/RoomHeader';
 import { RoomList } from './rooms/RoomList';
 import { ThreadPanel } from './rooms/ThreadPanel';
 import { Timeline } from './rooms/Timeline';
@@ -17,6 +19,9 @@ const THEME_KEY = 'sigil.theme';
 const DEFAULT_THEME = 'rewrite-labs';
 
 function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
+  const { client } = useAuth();
+  const rooms = useQuery({ queryKey: ['rooms'], queryFn: () => client.listRooms() });
+  const roomName = rooms.data?.find((room) => room.conversation_id === roomId)?.name ?? roomId;
   const { pending, send, retry, sendError } = useSend(roomId);
   const reportSeq = useAck(roomId);
   // RoomView is keyed by room, so the open thread resets when the room changes.
@@ -27,6 +32,7 @@ function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
       : null;
   return (
     <div className="room">
+      <RoomHeader roomId={roomId} name={roomName} sender={getSender()} onGone={onGone} />
       <div className="room-body">
         <div className="room-main">
           <Timeline roomId={roomId} pending={pending} onVisibleSeq={reportSeq} onGone={onGone} openThreadRoot={openThread} onOpenThread={setOpenThread} />
@@ -44,6 +50,7 @@ function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
         </div>
         {openThread ? (
           <ThreadPanel
+            key={openThread}
             roomId={roomId}
             rootId={openThread}
             pending={pending}

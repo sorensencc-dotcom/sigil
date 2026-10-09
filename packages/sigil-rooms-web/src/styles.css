@@ -400,3 +400,14 @@ li[data-pending='failed'] .status { color: var(--danger); font-weight: 600; }
 .thread-rows li[data-mine='true'] { background: var(--mine); border-color: var(--mine-border); }
 .thread-rows li[data-pending='failed'] { border-color: var(--danger); }
 .row-actions { display: flex; gap: 0.5rem; margin-top: 0.4rem; }
+
+/* ROOM HEADER */
+.room-header { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; padding: 0.75rem 1.25rem; border-bottom: 1px solid var(--border); }
+.room-title { margin: 0; font-size: 1.1rem; display: flex; align-items: center; gap: 0.4rem; }
+.room-actions { display: flex; gap: 0.5rem; margin-left: auto; }
+.room-header .danger { border-color: var(--danger); color: var(--danger); }
+.rename { display: flex; align-items: center; gap: 0.5rem; }
+.roster { flex-basis: 100%; }
+.roster ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.4rem; }
+.roster li { display: flex; align-items: center; gap: 0.6rem; }
+.badge { padding: 0.05rem 0.5rem; border: 1px solid var(--border-strong); border-radius: var(--radius); color: var(--muted); font-size: 0.8rem; }
