@@ -1,6 +1,10 @@
 import readline from 'node:readline';
 import { createCodexHostRuntime, createClaudeHostRuntime } from './host-runtimes.mjs';
 import { createClaudeProcessTask } from './claude-process-adapter.mjs';
+import { loadIdentity, identityKeys } from '../../cli/identity.mjs';
+import { RelayClient } from './relay-client.mjs';
+import { LocalOutbox } from './local-outbox.mjs';
+import { createRoomsRuntime } from './rooms-mcp-tools.mjs';
 
 const TOOLS = [
   ['sigil_send_task', 'Send a signed task through Sigil.', 'sendTask'],
@@ -8,7 +12,10 @@ const TOOLS = [
   ['sigil_get_result', 'Read a task result from Sigil.', 'getResult'],
   ['sigil_ack_delivery', 'Acknowledge or report an outcome for a delivered item.', 'ackDelivery'],
   ['sigil_request_approval', 'Request human approval for an action.', 'requestApproval'],
-  ['sigil_resolve_context', 'Resolve an authorized integrity-checked context reference.', 'resolveContext']
+  ['sigil_resolve_context', 'Resolve an authorized integrity-checked context reference.', 'resolveContext'],
+  ['sigil_list_rooms', 'List rooms visible to this endpoint.', 'listRooms'],
+  ['sigil_read_room', 'Read room history after a room_seq watermark.', 'readRoom'],
+  ['sigil_post_message', 'Post a signed room.message as this endpoint.', 'postMessage']
 ];
 
 const TOOL_SCHEMAS = Object.freeze({
@@ -20,7 +27,9 @@ const TOOL_SCHEMAS = Object.freeze({
       reason: { type: 'string' }
     },
     required: ['delivery_id']
-  }
+  },
+  sigil_read_room: { type: 'object', properties: { room_id: { type: 'string' }, after_seq: { type: 'string' }, limit: { type: 'integer', maximum: 100 } }, required: ['room_id'] },
+  sigil_post_message: { type: 'object', properties: { room_id: { type: 'string' }, text: { type: 'string', maxLength: 16000 }, thread_root_id: { type: 'string' }, mentions: { type: 'array', items: { type: 'string' } }, idempotency_key: { type: 'string' } }, required: ['room_id', 'text'] }
 });
 
 function reply(id, result) { process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id, result })}\n`); }
@@ -51,6 +60,14 @@ export function startMcpStdioServer(runtime, input = process.stdin) {
   return rl;
 }
 
+function roomsRuntimeFromEnvironment(env, common) {
+  if (!env.SIGIL_ROOMS_IDENTITY) return {};
+  const identity = loadIdentity(env.SIGIL_ROOMS_IDENTITY);
+  const relay = new RelayClient({ baseUrl: common.baseUrl, token: common.token });
+  const outbox = new LocalOutbox({ privateKey: identityKeys(identity).privateKey, endpoint: { owner_id: identity.owner_id, endpoint_id: identity.endpoint_id, key_id: identity.key_id, kind: identity.kind } });
+  return createRoomsRuntime({ relay, outbox });
+}
+
 export function runtimeFromEnvironment(env = process.env, overrides = {}) {
   const common = { baseUrl: env.SIGIL_CONNECTOR_URL, token: env.SIGIL_CONNECTOR_TOKEN, packagePermissions: (env.SIGIL_PACKAGE_PERMISSIONS ?? '').split(',').filter(Boolean), connectorGrants: (env.SIGIL_CONNECTOR_GRANTS ?? '').split(',').filter(Boolean) };
   if (!common.baseUrl || !common.token) throw new Error('SIGIL_CONNECTOR_URL and SIGIL_CONNECTOR_TOKEN are required');
@@ -58,9 +75,9 @@ export function runtimeFromEnvironment(env = process.env, overrides = {}) {
     const processTask = overrides.processTask ?? (env.SIGIL_CLAUDE_PROCESS_COMMAND ? createClaudeProcessTask({ command: env.SIGIL_CLAUDE_PROCESS_COMMAND, args: env.SIGIL_CLAUDE_PROCESS_ARGS ? JSON.parse(env.SIGIL_CLAUDE_PROCESS_ARGS) : [] }) : async () => {
       throw Object.assign(new Error('Claude task processing is not configured; set SIGIL_CLAUDE_PROCESS_COMMAND'), { code: 'PROCESSING_UNAVAILABLE' });
     });
-    return createClaudeHostRuntime({ ...common, ...overrides, processTask });
+    return { ...createClaudeHostRuntime({ ...common, ...overrides, processTask }), ...roomsRuntimeFromEnvironment(env, common) };
   }
-  return createCodexHostRuntime({ ...common, ...overrides });
+  return { ...createCodexHostRuntime({ ...common, ...overrides }), ...roomsRuntimeFromEnvironment(env, common) };
 }
 
 if (process.argv[1]?.endsWith('mcp-stdio-server.mjs')) startMcpStdioServer(runtimeFromEnvironment());
