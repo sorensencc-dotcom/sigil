@@ -222,6 +222,23 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     }
   }
 
+  if (request.method === 'POST' && resource === 'members' && segment && action === 'response-mode') {
+    if (isAgentCaller(registry, principal)) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'Agents cannot manage room members');
+    if (!MANAGER_ROLES.has(access.member.role)) return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', 'Only room managers can change response modes');
+    const body = await readJson(request, readBody);
+    const responseMode = body?.response_mode;
+    if (!RESPONSE_MODES.has(responseMode)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'response_mode must be joins, mentions_only, or router');
+    const target = await repository.lookupRoomMember(roomId, targetEndpointId);
+    if (!target) return fail(response, requestId, 404, 'ROOM_MEMBER_NOT_FOUND', 'Member not found');
+    // Same agent rule as room dispatch: a phase 1 agent can have a null mode, so response_mode alone is not enough.
+    const targetIsAgent = await repository.withTransaction((client) => isAgentMember(target, repository, client, registry));
+    if (!targetIsAgent) return fail(response, requestId, 400, 'INVALID_REQUEST', 'response_mode applies only to agent endpoints');
+    const member = await repository.setRoomMemberResponseMode({ conversationId: roomId, endpointId: targetEndpointId, responseMode });
+    if (!member) return fail(response, requestId, 404, 'ROOM_MEMBER_NOT_FOUND', 'Member not found');
+    await notifyRoomHumans({ repository, stream, registered: registry, client: null, roomId, changed: 'members', logger: logger ?? console });
+    return send(response, requestId, 200, { code: 'OK', member });
+  }
+
   if (request.method === 'GET' && resource === 'messages' && !segment) {
     const afterRaw = parsedUrl.searchParams.get('after_seq') ?? '0';
     const limitRaw = parsedUrl.searchParams.get('limit') ?? '100';

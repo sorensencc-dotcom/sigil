@@ -45,7 +45,7 @@ test('error responses have stable machine-readable shape', () => {
 test('every rooms route declares DATABASE_UNAVAILABLE and every room error code is a contract error', () => {
   const states = JSON.parse(fs.readFileSync(new URL('./errors-and-states.json', import.meta.url)));
   const rooms = api.routes.filter((route) => route.path === '/v1/rooms' || route.path.startsWith('/v1/rooms/'));
-  assert.equal(rooms.length, 14);
+  assert.equal(rooms.length, 15);
   for (const route of rooms) {
     // ws-ticket is served before the repository check and never touches the database.
     if (route.path === '/v1/rooms/ws-ticket') continue;
@@ -116,4 +116,13 @@ test('relay API lists the rename route and the room frame value', () => {
   for (const code of ['HUMAN_CONTEXT_REQUIRED', 'ROUTE_NOT_AUTHORIZED', 'INVALID_REQUEST', 'ROOM_NAME_TAKEN', 'ROOM_NOT_FOUND']) assert.ok(route.errors.includes(code), code);
   const frame = api.stream_frames.find((item) => item.type === 'room.updated');
   assert.deepEqual(frame.changed_values, ['messages', 'members', 'room']);
+});
+
+test('relay API lists the response-mode route', () => {
+  const route = api.routes.find((item) => item.path === '/v1/rooms/{room_id}/members/{endpoint_id}/response-mode');
+  assert.equal(route.method, 'POST');
+  assert.equal(route.success, 200);
+  assert.deepEqual(route.request_fields, ['response_mode']);
+  assert.deepEqual(route.response_fields, ['code', 'member']);
+  for (const code of ['HUMAN_CONTEXT_REQUIRED', 'ROUTE_NOT_AUTHORIZED', 'INVALID_REQUEST', 'ROOM_MEMBER_NOT_FOUND', 'ROOM_NOT_FOUND']) assert.ok(route.errors.includes(code), code);
 });

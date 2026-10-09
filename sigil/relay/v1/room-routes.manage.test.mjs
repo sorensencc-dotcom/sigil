@@ -104,3 +104,59 @@ test('rename: non-members get 404, agent callers 403, and bad names 400', async 
     assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/rename`, 'Bearer web', { name: 'x'.repeat(80) })).status, 200);
   });
 });
+
+const modePath = (roomId, endpointId) => `/v1/rooms/${roomId}/members/${endpointId}/response-mode`;
+
+test('response mode: the owner changes an agent mode and humans get a members frame', async () => {
+  await withRoom(async ({ port, roomId, frames }) => {
+    const changed = await call(port, 'POST', modePath(roomId, 'ep_claude'), 'Bearer web', { response_mode: 'mentions_only' });
+    assert.equal(changed.status, 200);
+    assert.equal(changed.body.member.endpoint_id, 'ep_claude');
+    assert.equal(changed.body.member.response_mode, 'mentions_only');
+    const members = (await call(port, 'GET', `/v1/rooms/${roomId}/members`, 'Bearer web')).body.items;
+    assert.equal(members.find((m) => m.endpoint_id === 'ep_claude').response_mode, 'mentions_only');
+    assert.deepEqual(frames.map(([id]) => id).sort(), ['ep_alice', 'ep_mgr', 'ep_web']);
+    assert.deepEqual(frames[0][1], { room_id: roomId, changed: 'members' });
+  });
+});
+
+test('response mode: managers only, humans only as callers, valid modes only', async () => {
+  await withRoom(async ({ port, roomId }) => {
+    assert.equal((await call(port, 'POST', modePath(roomId, 'ep_claude'), 'Bearer mgr', { response_mode: 'router' })).status, 200);
+    const member = await call(port, 'POST', modePath(roomId, 'ep_claude'), 'Bearer alice', { response_mode: 'joins' });
+    assert.equal(member.status, 403);
+    assert.equal(member.body.code, 'ROUTE_NOT_AUTHORIZED');
+    const agent = await call(port, 'POST', modePath(roomId, 'ep_claude'), 'Bearer claude', { response_mode: 'joins' });
+    assert.equal(agent.status, 403);
+    assert.equal(agent.body.code, 'HUMAN_CONTEXT_REQUIRED');
+    assert.equal((await call(port, 'POST', modePath(roomId, 'ep_claude'), 'Bearer stranger', { response_mode: 'joins' })).status, 404);
+    for (const response_mode of ['always', '', null, 7, undefined]) {
+      const bad = await call(port, 'POST', modePath(roomId, 'ep_claude'), 'Bearer web', { response_mode });
+      assert.equal(bad.status, 400, `mode ${JSON.stringify(response_mode)}`);
+      assert.equal(bad.body.code, 'INVALID_REQUEST');
+    }
+  });
+});
+
+test('response mode: human targets answer 400 and non-members 404', async () => {
+  await withRoom(async ({ port, roomId }) => {
+    const human = await call(port, 'POST', modePath(roomId, 'ep_alice'), 'Bearer web', { response_mode: 'joins' });
+    assert.equal(human.status, 400);
+    assert.equal(human.body.code, 'INVALID_REQUEST');
+    const owner = await call(port, 'POST', modePath(roomId, 'ep_web'), 'Bearer web', { response_mode: 'joins' });
+    assert.equal(owner.status, 400);
+    const missing = await call(port, 'POST', modePath(roomId, 'ep_codex'), 'Bearer web', { response_mode: 'joins' });
+    assert.equal(missing.status, 404);
+    assert.equal(missing.body.code, 'ROOM_MEMBER_NOT_FOUND');
+  });
+});
+
+test('response mode: a phase 1 agent with a null mode can be given one, and a second router is allowed like on add', async () => {
+  await withRoom(async ({ port, roomId, repository }) => {
+    await repository.addRoomMember({ conversationId: roomId, endpointId: 'ep_codex', role: 'member', responseMode: null, addedByHumanId: 'usr_chris' });
+    assert.equal((await call(port, 'POST', modePath(roomId, 'ep_codex'), 'Bearer web', { response_mode: 'router' })).status, 200);
+    assert.equal((await call(port, 'POST', modePath(roomId, 'ep_claude'), 'Bearer web', { response_mode: 'router' })).status, 200);
+    const routers = (await call(port, 'GET', `/v1/rooms/${roomId}/members`, 'Bearer web')).body.items.filter((m) => m.response_mode === 'router');
+    assert.deepEqual(routers.map((m) => m.endpoint_id).sort(), ['ep_claude', 'ep_codex']);
+  });
+});
