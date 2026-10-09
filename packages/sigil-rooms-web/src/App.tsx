@@ -26,6 +26,12 @@ function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
   const reportSeq = useAck(roomId);
   // RoomView is keyed by room, so the open thread resets when the room changes.
   const [openThread, setOpenThread] = useState<string | null>(null);
+  // Roots of every thread opened in this room: their replies count as read even after the panel closes.
+  const [seenRoots, setSeenRoots] = useState<ReadonlySet<string>>(() => new Set());
+  const openThreadRoot = useCallback((rootId: string) => {
+    setOpenThread(rootId);
+    setSeenRoots((prev) => (prev.has(rootId) ? prev : new Set(prev).add(rootId)));
+  }, []);
   const disabledReason =
     sendError instanceof ApiError && (sendError.code === 'ROOM_SEND_UNAVAILABLE' || sendError.code === 'NO_SIGNING_KEY')
       ? describeError(sendError)
@@ -35,7 +41,7 @@ function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
       <RoomHeader roomId={roomId} name={roomName} sender={getSender()} onGone={onGone} />
       <div className="room-body">
         <div className="room-main">
-          <Timeline roomId={roomId} pending={pending} onVisibleSeq={reportSeq} onGone={onGone} openThreadRoot={openThread} onOpenThread={setOpenThread} />
+          <Timeline roomId={roomId} pending={pending} onVisibleSeq={reportSeq} onGone={onGone} seenThreadRoots={seenRoots} onOpenThread={openThreadRoot} />
           <div className="notices">
             {pending
               .filter((row) => row.status === 'failed' && row.retryable !== false)

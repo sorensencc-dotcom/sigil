@@ -111,7 +111,16 @@ describe('Timeline threads', () => {
     await waitFor(() => expect(closed).toHaveBeenLastCalledWith('1'));
     first.unmount();
     const open = vi.fn();
-    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={open} onGone={() => {}} openThreadRoot="m1" />, { history });
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={open} onGone={() => {}} seenThreadRoots={new Set(['m1'])} />, { history });
     await waitFor(() => expect(open).toHaveBeenLastCalledWith('3'));
+  });
+
+  it('shows a reply whose root is not loaded in the main timeline and does not stall the ack', async () => {
+    const orphans = [msg(1, 'm1', 'first'), reply(2, 'o2', 'orphan reply', 'gone'), msg(3, 'm3', 'last')];
+    const orphanHistory = vi.fn(async () => ({ code: 'OK', items: orphans, next_after_seq: '3' }));
+    const onVisibleSeq = vi.fn();
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={onVisibleSeq} onGone={() => {}} />, { history: orphanHistory });
+    expect(await screen.findByText('orphan reply')).toBeInTheDocument();
+    await waitFor(() => expect(onVisibleSeq).toHaveBeenLastCalledWith('3'));
   });
 });

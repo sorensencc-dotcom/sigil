@@ -7,29 +7,31 @@ import { RowView } from './RowView';
 import { ackWatermark, isTopLevel, replyCounts, rowsById, threadRootOf } from './threads';
 import { useHistory } from './useHistory';
 
+const NO_ROOTS: ReadonlySet<string> = new Set();
+
 export function Timeline({
   roomId,
   pending,
   onVisibleSeq,
   onGone,
-  openThreadRoot = null,
+  seenThreadRoots = NO_ROOTS,
   onOpenThread = () => {},
 }: {
   roomId: string;
   pending: PendingMessage[];
   onVisibleSeq: (seq: string) => void;
   onGone: () => void;
-  openThreadRoot?: string | null;
+  seenThreadRoots?: ReadonlySet<string>;
   onOpenThread?: (rootId: string) => void;
 }) {
   const { items, isLoading, error } = useHistory(roomId);
   const byId = useMemo(() => rowsById(items), [items]);
   const counts = useMemo(() => replyCounts(items, byId), [items, byId]);
   const rows = useMemo(
-    () => mergeRows(items.filter(isTopLevel), pending.filter((message) => !message.threadRootId)),
-    [items, pending],
+    () => mergeRows(items.filter((item) => isTopLevel(item, byId)), pending.filter((message) => !message.threadRootId)),
+    [items, byId, pending],
   );
-  const watermark = useMemo(() => ackWatermark(items, openThreadRoot, byId), [items, openThreadRoot, byId]);
+  const watermark = useMemo(() => ackWatermark(items, seenThreadRoots, byId), [items, seenThreadRoots, byId]);
 
   const scroller = useRef<HTMLElement>(null);
   useEffect(() => {

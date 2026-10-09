@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HistoryItem } from '../api/types';
-import { ackWatermark, isTopLevel, replyCounts, rowsById, threadReplies, threadRootOf } from './threads';
+import { ackWatermark, isReply, isTopLevel, replyCounts, rowsById, threadReplies, threadRootOf } from './threads';
 
 function row(seq: number, id: string, opts: { root?: string; type?: string } = {}): HistoryItem {
   const type = opts.type ?? 'room.message';
@@ -45,11 +45,23 @@ describe('threadRootOf', () => {
   });
 });
 
-describe('isTopLevel', () => {
-  it('is false only for a message that names a thread root', () => {
-    expect(isTopLevel(row(1, 'a'))).toBe(true);
-    expect(isTopLevel(row(2, 'b', { root: 'a' }))).toBe(false);
-    expect(isTopLevel(row(3, 'e', { type: 'room.event' }))).toBe(true);
+describe('isReply and isTopLevel', () => {
+  it('isReply is true only for a message that names a thread root', () => {
+    expect(isReply(row(1, 'a'))).toBe(false);
+    expect(isReply(row(2, 'b', { root: 'a' }))).toBe(true);
+    expect(isReply(row(3, 'e', { type: 'room.event' }))).toBe(false);
+  });
+
+  it('hides a reply whose root is loaded', () => {
+    const items = [row(1, 'a'), row(2, 'b', { root: 'a' }), row(3, 'e', { type: 'room.event' })];
+    const byId = rowsById(items);
+    expect(items.map((i) => isTopLevel(i, byId))).toEqual([true, false, true]);
+  });
+
+  it('keeps a reply top-level when its canonical root is not loaded', () => {
+    const items = [row(1, 'orphan', { root: 'gone' }), row(2, 'child', { root: 'orphan' })];
+    const byId = rowsById(items);
+    expect(items.map((i) => isTopLevel(i, byId))).toEqual([true, true]);
   });
 });
 
@@ -78,34 +90,46 @@ describe('replyCounts and threadReplies', () => {
 });
 
 describe('ackWatermark', () => {
+  const none = new Set<string>();
   const items = [row(1, 'm1'), row(2, 'r2', { root: 'm1' }), row(3, 'm3')];
   const byId = rowsById(items);
 
-  it('stops before an unseen reply in a closed thread', () => {
-    expect(ackWatermark(items, null, byId)).toBe('1');
+  it('stops before an unseen reply in a never-opened thread', () => {
+    expect(ackWatermark(items, none, byId)).toBe('1');
   });
 
-  it('reaches the highest seq once the thread is open', () => {
-    expect(ackWatermark(items, 'm1', byId)).toBe('3');
+  it('reaches the highest seq once the thread has been opened', () => {
+    expect(ackWatermark(items, new Set(['m1']), byId)).toBe('3');
+  });
+
+  it('keeps advancing after the thread is closed when new rows arrive', () => {
+    const seen = new Set(['m1']);
+    const more = [...items, row(4, 'm4')];
+    expect(ackWatermark(more, seen, rowsById(more))).toBe('4');
+  });
+
+  it('stalls at the row before the first reply of a thread that was never opened', () => {
+    const two = [row(1, 'a'), row(2, 'ra', { root: 'a' }), row(3, 'b'), row(4, 'rb', { root: 'b' }), row(5, 'c')];
+    expect(ackWatermark(two, new Set(['a']), rowsById(two))).toBe('3');
   });
 
   it('is the highest seq when every row is top-level, events included', () => {
     const flat = [row(1, 'a'), row(2, 'e', { type: 'room.event' }), row(3, 'b')];
-    expect(ackWatermark(flat, null, rowsById(flat))).toBe('3');
+    expect(ackWatermark(flat, none, rowsById(flat))).toBe('3');
   });
 
-  it('is 0 when the first row is an unseen reply', () => {
-    const hidden = [row(1, 'r', { root: 'gone' }), row(2, 'm')];
-    expect(ackWatermark(hidden, null, rowsById(hidden))).toBe('0');
+  it('does not stall on a reply whose root is not loaded', () => {
+    const orphan = [row(1, 'r', { root: 'gone' }), row(2, 'm')];
+    expect(ackWatermark(orphan, none, rowsById(orphan))).toBe('2');
   });
 
-  it('counts a depth-2 reply as seen when its canonical root is open', () => {
+  it('counts a depth-2 reply as seen when its canonical root was opened', () => {
     const nested = [row(1, 'a'), row(2, 'b', { root: 'a' }), row(3, 'c', { root: 'b' })];
-    expect(ackWatermark(nested, 'a', rowsById(nested))).toBe('3');
-    expect(ackWatermark(nested, null, rowsById(nested))).toBe('1');
+    expect(ackWatermark(nested, new Set(['a']), rowsById(nested))).toBe('3');
+    expect(ackWatermark(nested, none, rowsById(nested))).toBe('1');
   });
 
   it('is 0 for no rows', () => {
-    expect(ackWatermark([], null, new Map())).toBe('0');
+    expect(ackWatermark([], none, new Map())).toBe('0');
   });
 });

@@ -5,9 +5,15 @@ export function rowsById(items: HistoryItem[]): Map<string, HistoryItem> {
   return new Map(items.map((item) => [item.message_id, item]));
 }
 
-// A reply names a thread root; an event or a message with no thread_root_id sits in the main timeline.
-export function isTopLevel(item: HistoryItem): boolean {
-  return !(item.envelope.message_type === 'room.message' && item.envelope.body.thread_root_id);
+// A reply is a room.message that names a thread root.
+export function isReply(item: HistoryItem): boolean {
+  return item.envelope.message_type === 'room.message' && Boolean(item.envelope.body.thread_root_id);
+}
+
+// Main-timeline rows: events, plain messages, and replies whose canonical root is not loaded
+// (no root row exists to open them from, so hiding them would drop them).
+export function isTopLevel(item: HistoryItem, byId: Map<string, HistoryItem>): boolean {
+  return !isReply(item) || !byId.has(threadRootOf(item, byId));
 }
 
 // body.thread_root_id ?? message_id, followed through the cache. The relay does not normalize
@@ -34,7 +40,7 @@ function bySeq(a: HistoryItem, b: HistoryItem): number {
 export function replyCounts(items: HistoryItem[], byId: Map<string, HistoryItem>): Map<string, number> {
   const counts = new Map<string, number>();
   for (const item of items) {
-    if (isTopLevel(item)) continue;
+    if (!isReply(item)) continue;
     const root = threadRootOf(item, byId);
     counts.set(root, (counts.get(root) ?? 0) + 1);
   }
@@ -43,17 +49,17 @@ export function replyCounts(items: HistoryItem[], byId: Map<string, HistoryItem>
 
 export function threadReplies(items: HistoryItem[], byId: Map<string, HistoryItem>, rootId: string): HistoryItem[] {
   return items
-    .filter((item) => !isTopLevel(item) && threadRootOf(item, byId) === rootId)
+    .filter((item) => isReply(item) && threadRootOf(item, byId) === rootId)
     .sort(bySeq);
 }
 
 // The ack route marks every delivery at or below the seq as read, so the client reports only a seq
 // it has shown: the highest S such that every row at or below S is in the main timeline, an event,
-// or in the open thread. useAck is forward-only, so closing a thread never lowers a reported seq.
-export function ackWatermark(items: HistoryItem[], openRootId: string | null, byId: Map<string, HistoryItem>): string {
+// or in a thread the user has opened. seenRoots only grows, so closing a thread keeps its rows seen.
+export function ackWatermark(items: HistoryItem[], seenRoots: ReadonlySet<string>, byId: Map<string, HistoryItem>): string {
   let watermark = 0n;
   for (const item of [...items].sort(bySeq)) {
-    const seen = isTopLevel(item) || (openRootId !== null && threadRootOf(item, byId) === openRootId);
+    const seen = isTopLevel(item, byId) || seenRoots.has(threadRootOf(item, byId));
     if (!seen) break;
     watermark = toSeq(item.room_seq);
   }
