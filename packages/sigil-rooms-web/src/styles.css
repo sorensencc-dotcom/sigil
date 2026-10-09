@@ -388,3 +388,15 @@ li[data-pending='failed'] .status { color: var(--danger); font-weight: 600; }
 .sidebar .room-btn { flex: 1; min-width: 0; width: auto; }
 .sidebar .pin { width: auto; flex-shrink: 0; padding: 0.5rem 0.55rem; text-align: center; color: var(--muted); }
 .sidebar .pin[aria-pressed='true'] { color: var(--accent); }
+
+/* THREADS */
+.room-body { display: flex; flex: 1; min-height: 0; }
+.room-main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.thread { display: flex; flex-direction: column; width: 24rem; max-width: 40%; border-left: 1px solid var(--border); background: var(--surface-subtle); min-height: 0; }
+.thread-head { display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 1rem; border-bottom: 1px solid var(--border); }
+.thread-rows { flex: 1; overflow-y: auto; list-style: none; margin: 0; padding: 1rem; display: grid; gap: 0.75rem; align-content: start; }
+.thread-rows li { padding: 0.65rem 0.95rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.thread-rows li[data-root='true'] { border-color: var(--border-strong); }
+.thread-rows li[data-mine='true'] { background: var(--mine); border-color: var(--mine-border); }
+.thread-rows li[data-pending='failed'] { border-color: var(--danger); }
+.row-actions { display: flex; gap: 0.5rem; margin-top: 0.4rem; }

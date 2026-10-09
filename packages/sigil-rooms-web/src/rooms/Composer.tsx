@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-export function Composer({ send, disabledReason }: { send: (text: string) => void; disabledReason: string | null }) {
+export function Composer({ send, disabledReason, label = 'Message' }: { send: (text: string) => void; disabledReason: string | null; label?: string }) {
   const [text, setText] = useState('');
   const disabled = disabledReason !== null;
   return (
@@ -15,7 +15,7 @@ export function Composer({ send, disabledReason }: { send: (text: string) => voi
       }}
     >
       {disabledReason ? <p className="reason">{disabledReason}</p> : null}
-      <textarea aria-label="Message" value={text} disabled={disabled} onChange={(event) => setText(event.target.value)} />
+      <textarea aria-label={label} value={text} disabled={disabled} onChange={(event) => setText(event.target.value)} />
       <button type="submit" disabled={disabled}>Send</button>
     </form>
   );
