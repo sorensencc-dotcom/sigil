@@ -24,6 +24,8 @@ export function useSend(roomId: string) {
   // Rows and errors are stored per room, so switching rooms never shows another room's rows.
   const [rowsByRoom, setRowsByRoom] = useState<Record<string, PendingMessage[]>>({});
   const [errorByRoom, setErrorByRoom] = useState<Record<string, unknown>>({});
+  // sessionStorage is not reactive: bump this so the caller re-renders once the sender is learned.
+  const [, setSenderLearned] = useState(false);
   const pending = rowsByRoom[roomId] ?? NONE;
   const sendError = errorByRoom[roomId] ?? null;
   const pendingRef = useRef(pending);
@@ -67,7 +69,10 @@ export function useSend(roomId: string) {
         });
         if (!getSender()) {
           const mine = rows.find((row) => row.message_id === messageId);
-          if (mine) setSender(mine.envelope.sender.endpoint_id);
+          if (mine) {
+            setSender(mine.envelope.sender.endpoint_id);
+            setSenderLearned(true);
+          }
         }
       } catch {
         // The row keeps its messageId and drops out of the merge once a later refresh includes it.
