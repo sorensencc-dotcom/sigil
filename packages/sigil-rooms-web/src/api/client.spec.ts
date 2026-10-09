@@ -64,3 +64,29 @@ describe('api client', () => {
     expect(calls[3]![1].method).toBe('POST');
   });
 });
+
+describe('api client: room management', () => {
+  it('builds the members, rename, response-mode, stop, and threaded send requests', async () => {
+    const calls: Array<[string, RequestInit]> = [];
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push([url, init]);
+      return jsonResponse(200, { code: 'OK', items: [], room: { conversation_id: 'room_1' }, member: { endpoint_id: 'ep_claude' }, cancelled: 2, message_id: 'm', room_seq: '1' });
+    });
+    const { client } = make(fetchImpl as unknown as typeof fetch);
+    await client.listMembers('room_1');
+    await client.renameRoom('room_1', 'new name');
+    await client.setResponseMode('room_1', 'ep_claude', 'mentions_only');
+    expect(await client.stopRoom('room_1')).toEqual({ code: 'OK', cancelled: 2 });
+    await client.sendMessage('room_1', 'hi', 'key-1', 'msg_root');
+    await client.sendMessage('room_1', 'top', 'key-2');
+    expect(calls[0]![0]).toBe('http://relay.test/v1/rooms/room_1/members');
+    expect(calls[0]![1].method).toBe('GET');
+    expect(calls[1]![0]).toBe('http://relay.test/v1/rooms/room_1/rename');
+    expect(JSON.parse(String(calls[1]![1].body))).toEqual({ name: 'new name' });
+    expect(calls[2]![0]).toBe('http://relay.test/v1/rooms/room_1/members/ep_claude/response-mode');
+    expect(JSON.parse(String(calls[2]![1].body))).toEqual({ response_mode: 'mentions_only' });
+    expect(calls[3]![0]).toBe('http://relay.test/v1/rooms/room_1/stop');
+    expect(JSON.parse(String(calls[4]![1].body))).toEqual({ text: 'hi', idempotency_key: 'key-1', thread_root_id: 'msg_root' });
+    expect(JSON.parse(String(calls[5]![1].body))).toEqual({ text: 'top', idempotency_key: 'key-2' });
+  });
+});

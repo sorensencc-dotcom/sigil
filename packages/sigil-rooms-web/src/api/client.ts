@@ -1,4 +1,4 @@
-import type { AckResult, HistoryPage, Room, SendResult, TicketResult } from './types';
+import type { AckResult, HistoryPage, Member, ResponseMode, Room, SendResult, StopResult, TicketResult } from './types';
 
 export class ApiError extends Error {
   readonly code: string;
@@ -24,7 +24,11 @@ export interface ApiClient {
   listRooms(): Promise<Room[]>;
   createRoom(name: string): Promise<Room>;
   history(roomId: string, afterSeq: string, limit?: number): Promise<HistoryPage>;
-  sendMessage(roomId: string, text: string, idempotencyKey: string): Promise<SendResult>;
+  sendMessage(roomId: string, text: string, idempotencyKey: string, threadRootId?: string): Promise<SendResult>;
+  listMembers(roomId: string): Promise<Member[]>;
+  renameRoom(roomId: string, name: string): Promise<Room>;
+  setResponseMode(roomId: string, endpointId: string, mode: ResponseMode): Promise<Member>;
+  stopRoom(roomId: string): Promise<StopResult>;
   ack(roomId: string, upToRoomSeq: string): Promise<AckResult>;
   wsTicket(): Promise<TicketResult>;
 }
@@ -64,8 +68,25 @@ export function createClient({ baseUrl, getToken, onUnauthorized, fetchImpl = (.
     history(roomId, afterSeq, limit = 100) {
       return request<HistoryPage>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/messages?after_seq=${encodeURIComponent(afterSeq)}&limit=${limit}`);
     },
-    sendMessage(roomId, text, idempotencyKey) {
-      return request<SendResult>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/messages`, { text, idempotency_key: idempotencyKey });
+    sendMessage(roomId, text, idempotencyKey, threadRootId) {
+      return request<SendResult>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/messages`, {
+        text,
+        idempotency_key: idempotencyKey,
+        ...(threadRootId ? { thread_root_id: threadRootId } : {}),
+      });
+    },
+    async listMembers(roomId) {
+      return (await request<{ items: Member[] }>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/members`)).items;
+    },
+    async renameRoom(roomId, name) {
+      return (await request<{ room: Room }>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/rename`, { name })).room;
+    },
+    async setResponseMode(roomId, endpointId, mode) {
+      return (await request<{ member: Member }>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/members/${encodeURIComponent(endpointId)}/response-mode`, { response_mode: mode })).member;
+    },
+    async stopRoom(roomId) {
+      const { code, cancelled } = await request<StopResult>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/stop`);
+      return { code, cancelled };
     },
     ack(roomId, upToRoomSeq) {
       return request<AckResult>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/ack`, { up_to_room_seq: upToRoomSeq });

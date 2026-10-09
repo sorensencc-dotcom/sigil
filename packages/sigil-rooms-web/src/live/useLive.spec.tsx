@@ -59,11 +59,21 @@ describe('useLive', () => {
     await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'messages'] }));
   });
 
-  it('invalidates the room list on a members frame', async () => {
+  it('invalidates the room list and the roster on a members frame', async () => {
     const { spy } = setup();
     await waitFor(() => expect(sockets.length).toBe(1));
     sockets[0]!.onFrame({ type: 'room.updated', room_id: 'room_1', changed: 'members' });
     expect(spy).toHaveBeenCalledWith({ queryKey: ['rooms'] });
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'members'] });
+  });
+
+  it('invalidates only the room list on a room frame', async () => {
+    const { spy } = setup();
+    await waitFor(() => expect(sockets.length).toBe(1));
+    sockets[0]!.onFrame({ type: 'room.updated', room_id: 'room_1', changed: 'room' });
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['rooms'] });
+    expect(spy).not.toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'messages'] });
+    expect(spy).not.toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'members'] });
   });
 
   it('invalidates everything after a reconnect and reports status', async () => {

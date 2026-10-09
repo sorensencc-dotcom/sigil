@@ -7,6 +7,7 @@ export function describeError(error: unknown): string {
     case 'ROOM_SEND_UNAVAILABLE': return 'Sending is not configured. Start the relay with --room-human-identity.';
     case 'NO_SIGNING_KEY': return 'This token\'s endpoint is not the identity loaded with --room-human-identity.';
     case 'ROOM_NAME_TAKEN': return 'A room with that name already exists';
+    case 'ROUTE_NOT_AUTHORIZED': return 'Only room managers can do this';
     case 'DATABASE_UNAVAILABLE': return 'Rooms are unavailable (DATABASE_UNAVAILABLE)';
     case 'NETWORK': return error.message;
     default: return error.message || error.code;

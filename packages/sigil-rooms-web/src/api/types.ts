@@ -11,7 +11,7 @@ export interface RoomEnvelope {
   message_id: string;
   message_type: string;
   sender: { endpoint_id: string; owner_id: string };
-  body: { text?: string; kind?: string; reason?: string; endpoint_ids?: string[] };
+  body: { text?: string; kind?: string; reason?: string; endpoint_ids?: string[]; thread_root_id?: string };
   created_at: string;
 }
 
@@ -49,5 +49,19 @@ export interface RoomUpdatedFrame {
   type: 'room.updated';
   room_id: string;
   room_seq?: string | number;
-  changed: 'messages' | 'members';
+  changed: 'messages' | 'members' | 'room';
+}
+
+export type ResponseMode = 'joins' | 'mentions_only' | 'router';
+
+export interface Member {
+  endpoint_id: string;
+  role: 'owner' | 'room_manager' | 'member';
+  response_mode: ResponseMode | null;
+  added_at: string;
+}
+
+export interface StopResult {
+  code: string;
+  cancelled: number;
 }
