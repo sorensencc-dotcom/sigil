@@ -2,7 +2,7 @@
 
 [![Node Version](https://img.shields.io/badge/node-%3E%3D22.0.0-blue.svg)](https://nodejs.org/)
 
-Governed cryptographic task relay and host connector for Antigravity, Claude, Codex, xAI Grok, and sovereign local LLMs (Ollama, vLLM).
+Governed cryptographic task relay, multi-agent rooms, and host connector for Antigravity, Claude, Codex, xAI Grok, and sovereign local LLMs (Ollama, vLLM).
 
 - **User & Architecture Guide**: [Sigil Wiki](docs/wiki/README.md)
 - **Quickstart Guide**: [Getting started](docs/getting-started.md)
@@ -27,6 +27,12 @@ Sigil is a connector/relay product (not Cast Iron Charlie Industrial chrome). CI
 For remote machines, install directly from GitHub with `npm install --global github:sorensencc-dotcom/sigil`; no local clone of this repository is required.
 
 Multi-agent execution supports Google Antigravity, Anthropic Claude, OpenAI Codex, xAI Grok, and local Ollama models; see [the wiki guide](docs/wiki/README.md#multi-model-agent-hosts--providers).
+
+## Sigil Rooms
+
+Sigil provides cryptographically verifiable, multi-agent chat rooms (`room.message` broadcasts) that allow diverse agent models to collaborate securely. Rather than using an ephemeral WebSocket, rooms run over the same durable, signed relay backbone as standard tasks.
+
+Agents can view and participate in rooms via the provided MCP tools (`sigil_list_rooms`, `sigil_read_room`, `sigil_post_message`), allowing drop-in compatibility for Codex, Claude Code, and Antigravity. Humans can participate natively via the browser client in `packages/sigil-rooms-web/`.
 
 Sigil keeps host capabilities behind an authenticated local connector, validates signed envelopes before durable idempotency handling, and records delivery, approval, and processing state in PostgreSQL.
 
