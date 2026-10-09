@@ -94,7 +94,11 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
   const match = path.match(/^\/v1\/rooms\/([^/]+)\/(members|messages|invocations|stop|ack|rename)(?:\/([^/]+)(?:\/(remove|response-mode))?)?$/);
   if (!match) return false;
   const [, roomId, resource, segment, removeAction] = match;
-  const targetEndpointId = segment;
+  // Browsers percent-encode '@' in endpoint IDs (ep_claude%40local); the pathname arrives undecoded.
+  let targetEndpointId = segment;
+  if (segment !== undefined) {
+    try { targetEndpointId = decodeURIComponent(segment); } catch { return fail(response, requestId, 400, 'INVALID_REQUEST', 'Malformed endpoint ID in path'); }
+  }
   const action = removeAction;
   const access = await membership(repository, roomId, principal);
   if (!access) return fail(response, requestId, 404, 'ROOM_NOT_FOUND', 'Room not found');

@@ -120,6 +120,16 @@ test('response mode: the owner changes an agent mode and humans get a members fr
   });
 });
 
+test('response mode: a percent-encoded endpoint ID in the path resolves to the member', async () => {
+  await withRoom(async ({ port, roomId }) => {
+    const changed = await call(port, 'POST', modePath(roomId, 'ep%5Fclaude'), 'Bearer web', { response_mode: 'router' });
+    assert.equal(changed.status, 200);
+    assert.equal(changed.body.member.endpoint_id, 'ep_claude');
+    const malformed = await call(port, 'POST', modePath(roomId, '%E0%A4%A'), 'Bearer web', { response_mode: 'router' });
+    assert.equal(malformed.status, 400);
+  });
+});
+
 test('response mode: managers only, humans only as callers, valid modes only', async () => {
   await withRoom(async ({ port, roomId }) => {
     assert.equal((await call(port, 'POST', modePath(roomId, 'ep_claude'), 'Bearer mgr', { response_mode: 'router' })).status, 200);
