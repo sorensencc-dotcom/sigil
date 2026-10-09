@@ -13,7 +13,7 @@ import { validateRoomMessageBody } from '../../contracts/v1/room-message-schema.
 const MANAGER_ROLES = new Set(['owner', 'room_manager']);
 const GRANTABLE_ROLES = new Set(['room_manager', 'member']);
 const RESPONSE_MODES = new Set(['joins', 'mentions_only', 'router']);
-const ROOM_METHODS = ['createRoom', 'lookupRoom', 'listRoomsForEndpoint', 'addRoomMember', 'removeRoomMember', 'lookupRoomMember', 'listRoomMembers', 'listRoomMessages', 'listRoomInvocations', 'lookupRunningInvocation', 'finishInvocation', 'cancelRoomInvocations', 'nextQueuedInvocation', 'startInvocation', 'createRoomDelivery', 'lookupRouterDecision', 'lookupRoomMessage', 'lookupRoomEventByKey', 'lockRoom', 'createRoomInvocation', 'reserveAgentTurn', 'withTransaction', 'acknowledgeRoomDeliveries'];
+const ROOM_METHODS = ['createRoom', 'lookupRoom', 'listRoomsForEndpoint', 'addRoomMember', 'removeRoomMember', 'lookupRoomMember', 'listRoomMembers', 'listRoomMessages', 'listRoomInvocations', 'lookupRunningInvocation', 'finishInvocation', 'cancelRoomInvocations', 'nextQueuedInvocation', 'startInvocation', 'createRoomDelivery', 'lookupRouterDecision', 'lookupRoomMessage', 'lookupRoomEventByKey', 'lockRoom', 'createRoomInvocation', 'reserveAgentTurn', 'withTransaction', 'acknowledgeRoomDeliveries', 'renameRoom', 'setRoomMemberResponseMode'];
 const NAME_MAX = 80;
 const HISTORY_LIMIT_MAX = 500;
 const ROOM_SEQ_MAX = 9223372036854775807n; // envelopes.room_seq is int8
@@ -91,7 +91,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     return send(response, requestId, 200, { code: 'OK', items: await repository.listRoomsForEndpoint(principal.endpoint_id) });
   }
 
-  const match = path.match(/^\/v1\/rooms\/([^/]+)\/(members|messages|invocations|stop|ack)(?:\/([^/]+)(?:\/(remove))?)?$/);
+  const match = path.match(/^\/v1\/rooms\/([^/]+)\/(members|messages|invocations|stop|ack|rename)(?:\/([^/]+)(?:\/(remove|response-mode))?)?$/);
   if (!match) return false;
   const [, roomId, resource, segment, removeAction] = match;
   const targetEndpointId = segment;
@@ -202,6 +202,24 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     await repository.removeRoomMember({ conversationId: roomId, endpointId: targetEndpointId, now });
     await notifyRoomHumans({ repository, stream, registered: registry, client: null, roomId, changed: 'members', logger: logger ?? console });
     return send(response, requestId, 200, { code: 'OK', removed: true });
+  }
+
+  if (request.method === 'POST' && resource === 'rename' && !segment) {
+    if (isAgentCaller(registry, principal) || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'An authenticated human context is required');
+    if (!MANAGER_ROLES.has(access.member.role)) return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', 'Only room managers can rename the room');
+    const body = await readJson(request, readBody);
+    const name = typeof body?.name === 'string' ? body.name.trim() : '';
+    if (!name || name.length > NAME_MAX) return fail(response, requestId, 400, 'INVALID_REQUEST', `name must be 1-${NAME_MAX} characters`);
+    if (name === access.room.name) return send(response, requestId, 200, { code: 'OK', room: access.room });
+    try {
+      const room = await repository.renameRoom({ conversationId: roomId, name });
+      await notifyRoomHumans({ repository, stream, registered: registry, client: null, roomId, changed: 'room', logger: logger ?? console });
+      return send(response, requestId, 200, { code: 'OK', room });
+    } catch (error) {
+      if (error.code === 'ROOM_NAME_TAKEN') return fail(response, requestId, 409, 'ROOM_NAME_TAKEN', error.message);
+      if (error.code === 'ROOM_NOT_FOUND') return fail(response, requestId, 404, 'ROOM_NOT_FOUND', 'Room not found');
+      throw error;
+    }
   }
 
   if (request.method === 'GET' && resource === 'messages' && !segment) {
