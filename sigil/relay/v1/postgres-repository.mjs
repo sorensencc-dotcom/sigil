@@ -114,6 +114,11 @@ function relayJobToFederationOutboxRecord(row) {
   return { ...record, state: jobStateToFederationState[state] ?? state };
 }
 
+function roomNameConflict(error) {
+  if (error.code !== '23505' || error.constraint !== 'rooms_workspace_id_name_key') return null;
+  return Object.assign(new Error('A room with this name already exists in the workspace'), { code: 'ROOM_NAME_TAKEN' });
+}
+
 function roomRow(row) {
   return {
     conversation_id: row.conversation_id,
@@ -1697,10 +1702,7 @@ export class PostgresRepository {
         return roomRow(result.rows[0]);
       });
     } catch (error) {
-      if (error.code === '23505' && error.constraint === 'rooms_workspace_id_name_key') {
-        throw Object.assign(new Error('A room with this name already exists in the workspace'), { code: 'ROOM_NAME_TAKEN' });
-      }
-      throw error;
+      throw roomNameConflict(error) ?? error;
     }
   }
   async lookupRoom(conversationId, client = this.pool) {
@@ -1754,10 +1756,7 @@ export class PostgresRepository {
       if (!result.rows[0]) throw Object.assign(new Error('Room not found'), { code: 'ROOM_NOT_FOUND' });
       return roomRow(result.rows[0]);
     } catch (error) {
-      if (error.code === '23505' && error.constraint === 'rooms_workspace_id_name_key') {
-        throw Object.assign(new Error('A room with this name already exists in the workspace'), { code: 'ROOM_NAME_TAKEN' });
-      }
-      throw error;
+      throw roomNameConflict(error) ?? error;
     }
   }
   async setRoomMemberResponseMode({ conversationId, endpointId, responseMode }, client = this.pool) {

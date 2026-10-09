@@ -88,4 +88,20 @@ describe('RenameTitle', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('1-80');
     expect(renameRoom).not.toHaveBeenCalled();
   });
+
+  it('ignores Escape and Cancel while the rename is pending so a later conflict stays visible', async () => {
+    let reject!: (error: Error) => void;
+    const renameRoom = vi.fn(() => new Promise<never>((_, rej) => { reject = rej; }));
+    renderWithClient(<RenameTitle roomId="room_1" name="build" canRename onGone={() => {}} />, { renameRoom });
+    await userEvent.click(screen.getByRole('button', { name: 'Rename room' }));
+    const input = screen.getByLabelText('Room name');
+    await userEvent.clear(input);
+    await userEvent.type(input, 'ops');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await userEvent.keyboard('{Escape}');
+    expect(screen.getByLabelText('Room name')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    reject(new ApiError('ROOM_NAME_TAKEN', 409, 'x'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('already exists');
+  });
 });

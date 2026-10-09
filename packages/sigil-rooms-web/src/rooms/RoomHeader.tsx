@@ -27,7 +27,7 @@ export function RoomHeader({ roomId, name, sender, onGone }: { roomId: string; n
         <button type="button" className="danger" disabled={stop.isPending} onClick={() => stop.mutate()}>Stop</button>
       </div>
       <ErrorBanner error={stop.error} />
-      {showRoster ? <RosterPanel roomId={roomId} members={members.data ?? []} manager={manager} /> : null}
+      {showRoster ? <RosterPanel roomId={roomId} members={members.data ?? []} manager={manager} onGone={onGone} /> : null}
     </header>
   );
 }
