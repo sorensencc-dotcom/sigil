@@ -1744,6 +1744,31 @@ export class PostgresRepository {
     );
     return result.rowCount > 0;
   }
+  async renameRoom({ conversationId, name }, client = this.pool) {
+    try {
+      const result = await client.query(
+        `UPDATE rooms SET name = $2 WHERE conversation_id = $1
+         RETURNING conversation_id, workspace_id, name, description, created_at, max_agent_turns`,
+        [conversationId, name],
+      );
+      if (!result.rows[0]) throw Object.assign(new Error('Room not found'), { code: 'ROOM_NOT_FOUND' });
+      return roomRow(result.rows[0]);
+    } catch (error) {
+      if (error.code === '23505' && error.constraint === 'rooms_workspace_id_name_key') {
+        throw Object.assign(new Error('A room with this name already exists in the workspace'), { code: 'ROOM_NAME_TAKEN' });
+      }
+      throw error;
+    }
+  }
+  async setRoomMemberResponseMode({ conversationId, endpointId, responseMode }, client = this.pool) {
+    const result = await client.query(
+      `UPDATE conversation_members SET response_mode = $3
+        WHERE conversation_id = $1 AND endpoint_id = $2 AND removed_at IS NULL
+       RETURNING endpoint_id, role, response_mode, added_at`,
+      [conversationId, endpointId, responseMode],
+    );
+    return result.rows[0] ? memberRow(result.rows[0]) : null;
+  }
   async lookupRoomMember(conversationId, endpointId, client = this.pool) {
     const result = await client.query(
       `SELECT endpoint_id, role, response_mode, added_at FROM conversation_members

@@ -2,46 +2,36 @@ import { useEffect, useMemo, useRef } from 'react';
 import { ApiError } from '../api/client';
 import { ErrorBanner } from '../errors/ErrorBanner';
 import { getSender } from '../auth/tokenStore';
-import { mergeRows, type PendingMessage, type Row } from './mergeRows';
-import { maxSeq } from './seq';
+import { mergeRows, type PendingMessage } from './mergeRows';
+import { RowView } from './RowView';
+import { ackWatermark, isTopLevel, replyCounts, rowsById, threadRootOf } from './threads';
 import { useHistory } from './useHistory';
 
-function Stamp({ at }: { at: string }) {
-  const date = new Date(at);
-  if (Number.isNaN(date.getTime())) return null;
-  return <time dateTime={at}>{date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>;
-}
+const NO_ROOTS: ReadonlySet<string> = new Set();
 
-function RowView({ row, sender }: { row: Row; sender: string | null }) {
-  if (row.pending) {
-    return (
-      <li data-mine="true" data-pending={row.pending.status}>
-        <span className="text">{row.pending.text}</span>
-        <em className="status">{row.pending.status === 'failed' ? `Failed: ${row.pending.error ?? 'send error'}` : 'Sending…'}</em>
-      </li>
-    );
-  }
-  const envelope = row.item!.envelope;
-  if (envelope.message_type === 'room.event') {
-    const { kind, reason } = envelope.body;
-    return <li data-kind="event"><em>{kind}{reason ? `: ${reason}` : ''}</em></li>;
-  }
-  const mine = sender !== null && envelope.sender.endpoint_id === sender;
-  return (
-    <li data-mine={mine ? 'true' : undefined}>
-      <div className="meta">
-        <small className="sender">{envelope.sender.endpoint_id}</small>
-        <Stamp at={envelope.created_at} />
-      </div>
-      <span className="text">{envelope.body.text}</span>
-    </li>
-  );
-}
-
-export function Timeline({ roomId, pending, onVisibleSeq, onGone }: { roomId: string; pending: PendingMessage[]; onVisibleSeq: (seq: string) => void; onGone: () => void }) {
+export function Timeline({
+  roomId,
+  pending,
+  onVisibleSeq,
+  onGone,
+  seenThreadRoots = NO_ROOTS,
+  onOpenThread = () => {},
+}: {
+  roomId: string;
+  pending: PendingMessage[];
+  onVisibleSeq: (seq: string) => void;
+  onGone: () => void;
+  seenThreadRoots?: ReadonlySet<string>;
+  onOpenThread?: (rootId: string) => void;
+}) {
   const { items, isLoading, error } = useHistory(roomId);
-  const rows = useMemo(() => mergeRows(items, pending), [items, pending]);
-  const highest = useMemo(() => maxSeq(items.map((item) => item.room_seq)), [items]);
+  const byId = useMemo(() => rowsById(items), [items]);
+  const counts = useMemo(() => replyCounts(items, byId), [items, byId]);
+  const rows = useMemo(
+    () => mergeRows(items.filter((item) => isTopLevel(item, byId)), pending.filter((message) => !message.threadRootId)),
+    [items, byId, pending],
+  );
+  const watermark = useMemo(() => ackWatermark(items, seenThreadRoots, byId), [items, seenThreadRoots, byId]);
 
   const scroller = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -50,8 +40,8 @@ export function Timeline({ roomId, pending, onVisibleSeq, onGone }: { roomId: st
   }, [rows.length]);
 
   useEffect(() => {
-    if (highest !== '0') onVisibleSeq(highest);
-  }, [highest, onVisibleSeq]);
+    if (watermark !== '0') onVisibleSeq(watermark);
+  }, [watermark, onVisibleSeq]);
 
   useEffect(() => {
     if (error instanceof ApiError && error.code === 'ROOM_NOT_FOUND') onGone();
@@ -65,7 +55,13 @@ export function Timeline({ roomId, pending, onVisibleSeq, onGone }: { roomId: st
       {error ? <ErrorBanner error={error} /> : null}
       <ul>
         {rows.map((row) => (
-          <RowView key={row.key} row={row} sender={sender} />
+          <RowView
+            key={row.key}
+            row={row}
+            sender={sender}
+            replies={row.item ? counts.get(row.item.message_id) ?? 0 : 0}
+            onReply={row.item && row.item.envelope.message_type === 'room.message' ? () => onOpenThread(threadRootOf(row.item!, byId)) : undefined}
+          />
         ))}
       </ul>
     </section>

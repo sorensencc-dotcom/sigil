@@ -19,7 +19,9 @@ Browser client for Sigil rooms. It runs on your own machine against your own rel
 
 ## What it does
 
-Paste-token login, room list, timeline, send, ack, and live updates through `room.updated`. Threads, Stop, and roster modes are phase 4b-2.
+Paste-token login, room list, timeline, send, ack, live updates through `room.updated`, create and pin rooms, threads in a side panel, Stop, a roster panel, and room rename.
+
+Threads open from a message's Reply button. Replies stay out of the main timeline, and the client acknowledges only the rows it has shown, so an unread reply holds back read receipts for later messages until its thread is opened. Stop cancels the room's queued and running invocations. Room managers (owner and room manager) can rename the room and change an agent's response mode. The client learns its own endpoint ID from its first successful send, so rename and the mode controls appear after the first message.
 
 ## Security notes
 

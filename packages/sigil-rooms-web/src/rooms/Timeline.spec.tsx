@@ -1,4 +1,5 @@
 import { screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../api/client';
 import type { HistoryItem } from '../api/types';
@@ -68,5 +69,58 @@ describe('Timeline', () => {
     const history = vi.fn(async () => { throw new ApiError('ROOM_NOT_FOUND', 404, 'Room not found'); });
     renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={onGone} />, { history });
     await waitFor(() => expect(onGone).toHaveBeenCalledTimes(1));
+  });
+});
+
+function reply(seq: number, id: string, text: string, root: string): HistoryItem {
+  const item = msg(seq, id, text);
+  item.envelope.body = { text, thread_root_id: root };
+  return item;
+}
+
+describe('Timeline threads', () => {
+  const rows = [msg(1, 'm1', 'root text'), reply(2, 'r2', 'reply text', 'm1'), msg(3, 'm3', 'later top-level')];
+  const history = vi.fn(async () => ({ code: 'OK', items: rows, next_after_seq: '3' }));
+
+  it('hides replies from the main timeline and shows a reply count on the root', async () => {
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { history });
+    expect(await screen.findByText('root text')).toBeInTheDocument();
+    expect(screen.queryByText('reply text')).toBeNull();
+    expect(screen.getByRole('button', { name: '1 reply' })).toBeInTheDocument();
+  });
+
+  it('opens the thread for the canonical root when Reply is clicked', async () => {
+    const onOpenThread = vi.fn();
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} onOpenThread={onOpenThread} />, { history });
+    await screen.findByText('root text');
+    await userEvent.click(screen.getAllByRole('button', { name: 'Reply' })[0]!);
+    expect(onOpenThread).toHaveBeenCalledWith('m1');
+  });
+
+  it('keeps pending thread replies out of the main timeline', async () => {
+    const pending = [{ idempotencyKey: 'k', text: 'draft reply', status: 'sending' as const, threadRootId: 'm1' }];
+    renderWithClient(<Timeline roomId="room_1" pending={pending} onVisibleSeq={() => {}} onGone={() => {}} />, { history });
+    await screen.findByText('root text');
+    expect(screen.queryByText('draft reply')).toBeNull();
+  });
+
+  it('acks only up to the row before an unseen reply, and up to the highest row once its thread is open', async () => {
+    const closed = vi.fn();
+    const first = renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={closed} onGone={() => {}} />, { history });
+    await screen.findByText('root text');
+    await waitFor(() => expect(closed).toHaveBeenLastCalledWith('1'));
+    first.unmount();
+    const open = vi.fn();
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={open} onGone={() => {}} seenThreadRoots={new Set(['m1'])} />, { history });
+    await waitFor(() => expect(open).toHaveBeenLastCalledWith('3'));
+  });
+
+  it('shows a reply whose root is not loaded in the main timeline and does not stall the ack', async () => {
+    const orphans = [msg(1, 'm1', 'first'), reply(2, 'o2', 'orphan reply', 'gone'), msg(3, 'm3', 'last')];
+    const orphanHistory = vi.fn(async () => ({ code: 'OK', items: orphans, next_after_seq: '3' }));
+    const onVisibleSeq = vi.fn();
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={onVisibleSeq} onGone={() => {}} />, { history: orphanHistory });
+    expect(await screen.findByText('orphan reply')).toBeInTheDocument();
+    await waitFor(() => expect(onVisibleSeq).toHaveBeenLastCalledWith('3'));
   });
 });

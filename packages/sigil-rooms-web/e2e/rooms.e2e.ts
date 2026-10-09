@@ -92,3 +92,60 @@ test('the relay answers a preflight from an unlisted origin without CORS headers
   expect((await preflight(harness.webOrigin))['access-control-allow-origin']).toBe(harness.webOrigin);
   expect((await preflight(`http://localhost:${WEB_PORT}`))['access-control-allow-origin']).toBeUndefined();
 });
+
+test('rename, thread reply, Stop, and a response-mode change', async ({ page }) => {
+  await page.goto(harness.webOrigin);
+  await page.getByLabel('Bearer token').fill(harness.humanToken);
+  await page.getByRole('button', { name: 'Connect' }).click();
+
+  // A fresh room keeps the shared e2e-room name intact for the other tests.
+  await page.getByLabel('New room name').fill('manage-me');
+  await page.getByRole('button', { name: 'Create' }).click();
+  await expect(page.getByRole('heading', { name: 'manage-me' })).toBeVisible();
+
+  // The first send teaches the client its own endpoint ID, which unlocks rename and the mode controls.
+  await page.getByLabel('Message', { exact: true }).fill('thread root');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await expect(page.getByText('thread root')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Rename room' })).toBeVisible();
+
+  // Thread: the reply shows in the panel and not in the main timeline.
+  await page.getByRole('button', { name: 'Reply', exact: true }).click();
+  const thread = page.getByRole('complementary', { name: 'Thread' });
+  await thread.getByLabel('Reply in thread').fill('a threaded reply');
+  await thread.getByRole('button', { name: 'Send' }).click();
+  await expect(thread.getByText('a threaded reply')).toBeVisible();
+  await expect(page.getByLabel('Messages').getByText('a threaded reply')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '1 reply' })).toBeVisible();
+  await thread.getByRole('button', { name: 'Close' }).click();
+
+  // Stop with nothing running answers 200 and leaves the button usable.
+  await page.getByRole('button', { name: 'Stop' }).click();
+  await expect(page.getByRole('button', { name: 'Stop' })).toBeEnabled();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+
+  // Response mode: add the agent from Node, then change its mode in the roster.
+  const roomsResponse = await fetch(`${harness.relayUrl}/v1/rooms`, { headers: { authorization: `Bearer ${harness.humanToken}` } });
+  const { items } = (await roomsResponse.json()) as { items: Array<{ conversation_id: string; name: string }> };
+  const roomId = items.find((room) => room.name === 'manage-me')!.conversation_id;
+  const added = await fetch(`${harness.relayUrl}/v1/rooms/${roomId}/members`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${harness.humanToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ endpoint_id: harness.agentEndpointId, response_mode: 'joins' }),
+  });
+  expect(added.status).toBe(201);
+  await page.getByRole('button', { name: 'Roster' }).click();
+  const select = page.getByLabel(`Response mode for ${harness.agentEndpointId}`);
+  await expect(select).toHaveValue('joins');
+  await select.selectOption('mentions_only');
+  await expect(select).toHaveValue('mentions_only');
+  const members = (await (await fetch(`${harness.relayUrl}/v1/rooms/${roomId}/members`, { headers: { authorization: `Bearer ${harness.humanToken}` } })).json()) as { items: Array<{ endpoint_id: string; response_mode: string | null }> };
+  expect(members.items.find((member) => member.endpoint_id === harness.agentEndpointId)?.response_mode).toBe('mentions_only');
+
+  // Rename: the sidebar follows.
+  await page.getByRole('button', { name: 'Rename room' }).click();
+  await page.getByLabel('Room name', { exact: true }).fill('renamed-room');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByRole('button', { name: 'renamed-room', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'renamed-room' })).toBeVisible();
+});

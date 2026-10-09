@@ -1,13 +1,16 @@
-import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ApiError } from './api/client';
 import { AuthProvider, useAuth } from './auth/AuthContext';
+import { getSender } from './auth/tokenStore';
 import { TokenGate } from './auth/TokenGate';
 import { loadConfig, type WebConfig } from './config';
 import { describeError, ErrorBanner } from './errors/ErrorBanner';
 import { useLive } from './live/useLive';
 import { Composer } from './rooms/Composer';
+import { RoomHeader } from './rooms/RoomHeader';
 import { RoomList } from './rooms/RoomList';
+import { ThreadPanel } from './rooms/ThreadPanel';
 import { Timeline } from './rooms/Timeline';
 import { useAck } from './rooms/useAck';
 import { useSend } from './rooms/useSend';
@@ -16,26 +19,53 @@ const THEME_KEY = 'sigil.theme';
 const DEFAULT_THEME = 'rewrite-labs';
 
 function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
+  const { client } = useAuth();
+  const rooms = useQuery({ queryKey: ['rooms'], queryFn: () => client.listRooms() });
+  const roomName = rooms.data?.find((room) => room.conversation_id === roomId)?.name ?? roomId;
   const { pending, send, retry, sendError } = useSend(roomId);
   const reportSeq = useAck(roomId);
+  // RoomView is keyed by room, so the open thread resets when the room changes.
+  const [openThread, setOpenThread] = useState<string | null>(null);
+  // Roots of every thread opened in this room: their replies count as read even after the panel closes.
+  const [seenRoots, setSeenRoots] = useState<ReadonlySet<string>>(() => new Set());
+  const openThreadRoot = useCallback((rootId: string) => {
+    setOpenThread(rootId);
+    setSeenRoots((prev) => (prev.has(rootId) ? prev : new Set(prev).add(rootId)));
+  }, []);
   const disabledReason =
     sendError instanceof ApiError && (sendError.code === 'ROOM_SEND_UNAVAILABLE' || sendError.code === 'NO_SIGNING_KEY')
       ? describeError(sendError)
       : null;
   return (
     <div className="room">
-      <Timeline roomId={roomId} pending={pending} onVisibleSeq={reportSeq} onGone={onGone} />
-      <div className="notices">
-        {pending
-          .filter((row) => row.status === 'failed' && row.retryable !== false)
-          .map((row) => (
-            <button key={row.idempotencyKey} className="retry" onClick={() => retry(row.idempotencyKey)}>
-              Retry: {row.text}
-            </button>
-          ))}
-        <ErrorBanner error={sendError && !disabledReason ? sendError : null} />
+      <RoomHeader roomId={roomId} name={roomName} sender={getSender()} onGone={onGone} />
+      <div className="room-body">
+        <div className="room-main">
+          <Timeline roomId={roomId} pending={pending} onVisibleSeq={reportSeq} onGone={onGone} seenThreadRoots={seenRoots} onOpenThread={openThreadRoot} />
+          <div className="notices">
+            {pending
+              .filter((row) => row.status === 'failed' && row.retryable !== false)
+              .map((row) => (
+                <button key={row.idempotencyKey} className="retry" onClick={() => retry(row.idempotencyKey)}>
+                  Retry{row.threadRootId ? ' (thread)' : ''}: {row.text}
+                </button>
+              ))}
+            <ErrorBanner error={sendError && !disabledReason ? sendError : null} />
+          </div>
+          <Composer send={(text) => send(text)} disabledReason={disabledReason} />
+        </div>
+        {openThread ? (
+          <ThreadPanel
+            key={openThread}
+            roomId={roomId}
+            rootId={openThread}
+            pending={pending}
+            onSend={(text) => send(text, openThread)}
+            onClose={() => setOpenThread(null)}
+            disabledReason={disabledReason}
+          />
+        ) : null}
       </div>
-      <Composer send={send} disabledReason={disabledReason} />
     </div>
   );
 }
