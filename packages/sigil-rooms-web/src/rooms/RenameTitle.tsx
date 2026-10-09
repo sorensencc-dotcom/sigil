@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
 import { ErrorBanner } from '../errors/ErrorBanner';
@@ -10,6 +10,15 @@ export function RenameTitle({ roomId, name, canRename, onGone }: { roomId: strin
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(name);
+  const [tooLong, setTooLong] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const renameButtonRef = useRef<HTMLButtonElement>(null);
+  const wasEditing = useRef(false);
+  useEffect(() => {
+    if (editing) inputRef.current?.focus();
+    else if (wasEditing.current) renameButtonRef.current?.focus();
+    wasEditing.current = editing;
+  }, [editing]);
   const rename = useMutation({
     mutationFn: (next: string) => client.renameRoom(roomId, next),
     onSuccess: async () => {
@@ -30,10 +39,11 @@ export function RenameTitle({ roomId, name, canRename, onGone }: { roomId: strin
         {name}
         {canRename ? (
           <button
+            ref={renameButtonRef}
             type="button"
             className="ghost"
             aria-label="Rename room"
-            onClick={() => { setDraft(name); rename.reset(); setEditing(true); }}
+            onClick={() => { setDraft(name); setTooLong(false); rename.reset(); setEditing(true); }}
           >
             ✎
           </button>
@@ -48,13 +58,23 @@ export function RenameTitle({ roomId, name, canRename, onGone }: { roomId: strin
         event.preventDefault();
         const trimmed = draft.trim();
         if (!trimmed || rename.isPending) return;
+        if (trimmed.length > 80) { setTooLong(true); return; }
+        setTooLong(false);
         if (trimmed === name) { setEditing(false); return; }
         rename.mutate(trimmed);
       }}
     >
-      <input aria-label="Room name" value={draft} onChange={(event) => setDraft(event.target.value)} />
+      <input
+        ref={inputRef}
+        aria-label="Room name"
+        value={draft}
+        maxLength={80}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => { if (event.key === 'Escape') setEditing(false); }}
+      />
       <button type="submit" disabled={rename.isPending || !draft.trim()}>Save</button>
       <button type="button" className="ghost" onClick={() => setEditing(false)}>Cancel</button>
+      {tooLong ? <p role="alert">Room names are 1-80 characters</p> : null}
       <ErrorBanner error={rename.error} />
     </form>
   );
