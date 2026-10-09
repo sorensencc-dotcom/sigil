@@ -322,6 +322,22 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       member.removed_at = (now instanceof Date ? now : new Date(now)).toISOString();
       return true;
     },
+    async renameRoom({ conversationId, name }) {
+      const room = rooms.get(conversationId);
+      if (!room) throw Object.assign(new Error('Room not found'), { code: 'ROOM_NOT_FOUND' });
+      if ([...rooms.values()].some((other) => other.conversation_id !== conversationId && other.workspace_id === room.workspace_id && other.name === name)) {
+        throw Object.assign(new Error('A room with this name already exists in the workspace'), { code: 'ROOM_NAME_TAKEN' });
+      }
+      room.name = name;
+      const { next_room_seq: _seq, archived_at: _archived, ...visible } = room;
+      return visible;
+    },
+    async setRoomMemberResponseMode({ conversationId, endpointId, responseMode }) {
+      const member = roomMembers.get(conversationId)?.get(endpointId);
+      if (!member || member.removed_at !== null) return null;
+      member.response_mode = responseMode;
+      return { endpoint_id: member.endpoint_id, role: member.role, response_mode: member.response_mode, added_at: member.added_at };
+    },
     async lookupRoomMember(conversationId, endpointId) {
       const member = roomMembers.get(conversationId)?.get(endpointId);
       if (!member || member.removed_at !== null) return null;
