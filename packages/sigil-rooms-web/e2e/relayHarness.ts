@@ -29,6 +29,7 @@ export interface Harness {
   webOrigin: string;
   humanToken: string;
   roomId: string;
+  agentEndpointId: string;
   stop(): Promise<void>;
 }
 
@@ -46,6 +47,7 @@ export async function startRelay(webPort: number): Promise<Harness> {
   }
   const identityPath = path.join(dir, '.sigil', 'web.identity.json');
   const identity = JSON.parse(readFileSync(identityPath, 'utf8')) as { relay_token: string };
+  const agentIdentity = JSON.parse(readFileSync(path.join(dir, '.sigil', 'claude.identity.json'), 'utf8')) as { endpoint_id: string };
 
   const child: ChildProcess = spawn(
     process.execPath,
@@ -83,6 +85,7 @@ export async function startRelay(webPort: number): Promise<Harness> {
     webOrigin,
     humanToken: identity.relay_token,
     roomId: room.conversation_id,
+    agentEndpointId: agentIdentity.endpoint_id,
     async stop() {
       child.kill();
       try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
