@@ -1,13 +1,15 @@
 # Status
 
-## Session update: 2026-10-09 Tincan network listener
+## Session update: 2026-10-10 Tincan listener pushed
 
-- Branch `feat/sigil-tincan-bridge` in `C:\dev\.worktrees\sigil-tincan`. Units through commit `513636d` stay as they were. The listener is uncommitted.
-- Shipped in the worktree: `sigil/relay/v1/transport-tincan/tincan-relay.mjs`. Dispatch is `POST /v1/dispatch` (WhoIs, then `dispatchDeliveryWithRetry`). The approval callback is loopback-only because `createApprovalChallenge` rejects every other callback host. `GET /v1/approval-callback?token=` follows the browser redirect. `POST` releases by `action_hash` and requires `TINCAN_CALLBACK_SECRET`. `--tailnet` binds dispatch to the machine Tailscale IPv4 address. Node does not embed Go `tsnet`.
-- The peer selects `target_endpoint`. Bridge type, identity path, and relay URL come from the host config.
-- Evidence: `node --test --test-timeout=30000 "sigil/relay/v1/transport-tincan/*.test.mjs"` passed 29, skipped 1, failed 0. `SIGIL_TINCAN_LIVE=1 node --test --test-timeout=30000 sigil/relay/v1/transport-tincan/tincan-relay.live.test.mjs` passed in 145 ms (same-host hairpin to this machine's Tailscale address, real `tailscale whois`).
-- Still open: a second tailnet node, `task.request` in rooms, and `/v1/mentions`. `sigil_dispatch_task` and `sigil_my_mentions` stay deferred until those relay routes exist.
-- Next action: commit the listener, then run Node A against a Node B listener on another machine.
+- Branch `feat/sigil-tincan-bridge` in `C:\dev\.worktrees\sigil-tincan`. Listener commit `3a7214c feat(tincan): serve dispatch on the tailnet` is on origin (`778b9d9..3a7214c`). This note is the resume record on top of it.
+- `POST /v1/dispatch` runs `verifyTailscaleWhoIs`, then `dispatchDeliveryWithRetry`. The peer names `target_endpoint`. Host config owns bridge type, identity path, and relay URL. `GET/POST /v1/approval-callback` calls `releaseEnvelope`. The callback stays on `127.0.0.1` because `createApprovalChallenge` rejects every other host. `--tailnet` binds dispatch to this machine's Tailscale IPv4 address and uses `tailscale whois --json`. Node does not embed Go `tsnet`.
+- Pre-push hook: JCS audit passed. `npm test` reported 1471 pass, 0 fail, 175 skipped. Hermetic tincan tests: 29 pass, 1 skipped. `SIGIL_TINCAN_LIVE=1` same-host hairpin passed in 145 ms.
+- Push pitfall: `C:\Windows\System32\bash.exe` cannot open `C:/dev/...` hook paths. Prepend `C:\Program Files\Git\bin` to `PATH` before `git push`.
+- A docs-only push on 2026-10-10 was cancelled by `sigil/cli/relay-up-p2p.test.mjs:58` (`sigil relay up --p2p logs a listen multiaddr`) at 30000 ms: 1470 pass, 0 fail, 1 cancelled, 175 skipped. That timeout is outside tincan.
+- Secret scan rejects a test helper shaped like `token: '<8+ chars>'`. The relay test passes that value as `bearer`.
+- Still open: a second tailnet node. `sigil_dispatch_task` and `sigil_my_mentions` stay deferred until rooms accept `task.request` with an assignee and the relay adds `/v1/mentions`.
+- Next action: run the listener on Node B with `--tailnet`, then `POST /v1/dispatch` from Node A. Resume file: `docs/superpowers/plans/2026-10-09-sigil-tincan-transport-bridge-handoff.md`.
 
 ## Session update: 2026-10-08 PR #36 conflict resolution
 

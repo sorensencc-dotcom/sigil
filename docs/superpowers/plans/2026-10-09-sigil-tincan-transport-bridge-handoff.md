@@ -1,10 +1,10 @@
 # Sigil Tincan Transport Bridge - Handoff Document
 
-**Date:** 2026-10-09  
+**Date:** 2026-10-09, updated 2026-10-10  
 **Branch:** `feat/sigil-tincan-bridge`  
 **Worktree Location:** `C:\dev\.worktrees\sigil-tincan`  
-**Latest Commit:** `513636d feat(tincan): complete transport bridge units`  
-**Uncommitted:** network listener on top of that commit (`tincan-relay.mjs` and its tests)
+**Listener:** `3a7214c feat(tincan): serve dispatch on the tailnet` is already on `origin/feat/sigil-tincan-bridge`. This file is the resume record on top of that commit.  
+**Worktree state:** clean aside from untracked `.ignore`, `.kb_cache/`, and `codex_prompt.txt`
 
 ## 1. Overview
 The **Sigil Tincan Transport Bridge** aims to solve multi-host agent execution by routing Sigil room messages over a private Tailscale (`tsnet`) mesh, rather than relying on active background polling loops. 
@@ -46,11 +46,8 @@ As documented in the plan, several pieces were deliberately deferred until prere
 - **Second tailnet node:** The live check posts to this same host's Tailscale address (hairpin). A second machine is still required to prove Node A enqueueing a message that wakes Node B.
 
 ## 4. Concrete Next Steps
-For the engineer picking up this work:
+Start here. Steps that already passed stay as evidence, not as work.
 
-1. **Commit the listener** on `feat/sigil-tincan-bridge`. The new files are `tincan-relay.mjs`, `tincan-relay.test.mjs`, and `tincan-relay.live.test.mjs`, plus small edits to `held-queue.mjs` and `wake-dispatcher.mjs`.
-2. **Run the hermetic suite:** `node --test --test-timeout=30000 "sigil/relay/v1/transport-tincan/*.test.mjs"`. On 2026-10-09 this reported 29 pass, 1 skipped (the live test), 0 fail.
-3. **Run the same-host tailnet check:** `SIGIL_TINCAN_LIVE=1 node --test --test-timeout=30000 sigil/relay/v1/transport-tincan/tincan-relay.live.test.mjs`. On 2026-10-09 this passed in 145 ms: a POST to this host's Tailscale IPv4 address passed real WhoIs and the wake dispatcher recorded the Codex CLI args.
-4. **Start the listener:** set `TINCAN_CALLBACK_SECRET` and `TINCAN_RELAY_TOKEN`, then run `node sigil/relay/v1/transport-tincan/tincan-relay.mjs --config <file> --tailnet`. The config JSON has `allowlist` (node key to `permitted_endpoints` and `allowed_host_roles`) and `endpoints` (`bridge_type`, `identity_path`, `relay_url`).
-5. **Two-node proof:** run that listener on Node B and POST `/v1/dispatch` from Node A. Confirm Node B spawns `sigil agent run --room-bridge <type>`.
-6. **Relay route enhancements:** add `task.request` inside rooms, with an assignee field, and add `/v1/mentions`, before implementing `sigil_dispatch_task` and `sigil_my_mentions`.
+1. **Two-node proof.** On Node B set `TINCAN_CALLBACK_SECRET` and `TINCAN_RELAY_TOKEN`, then run `node sigil/relay/v1/transport-tincan/tincan-relay.mjs --config <file> --tailnet` from `C:\dev\.worktrees\sigil-tincan`. The config JSON has `allowlist` (node key to `permitted_endpoints` and `allowed_host_roles`) and `endpoints` (`bridge_type`, `identity_path`, `relay_url`). Allowlist Node A's Tailscale node key. From Node A, `POST /v1/dispatch` with `delivery.conversation_id`, `delivery.invocation_id`, and `target_endpoint`. Confirm Node B spawns `sigil agent run --room-bridge` and the response is `DELIVERED`.
+2. **Relay routes, after that proof.** Add `task.request` inside rooms, with an assignee field, and add `/v1/mentions`, before implementing `sigil_dispatch_task` and `sigil_my_mentions`.
+3. **Already verified on 2026-10-09 and 2026-10-10.** Hermetic `node --test --test-timeout=30000 "sigil/relay/v1/transport-tincan/*.test.mjs"`: 29 pass, 1 skipped, 0 fail. `SIGIL_TINCAN_LIVE=1` hairpin to this host's Tailscale address: pass in 145 ms. Pre-push `npm test` for `3a7214c`: 1471 pass, 0 fail, 175 skipped. A later docs push was cancelled once by `sigil/cli/relay-up-p2p.test.mjs:58` at 30000 ms (0 fail, 1 cancelled). That timeout is outside tincan. Push with Git bash on `PATH`. `C:\Windows\System32\bash.exe` cannot open the hook file.
