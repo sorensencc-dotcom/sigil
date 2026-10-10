@@ -1,4 +1,4 @@
-const BRIDGES = new Set(['claude', 'codex', 'router']);
+export const BRIDGES = new Set(['claude', 'codex', 'router']);
 
 export function createWakeDispatcher({ spawnFn, checkRunningFn }) {
   return {
