@@ -52,6 +52,14 @@ function isAgentCaller(registry, principal) {
 
 export async function handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream = null, inboxDepthLimit, systemIdentity = null, logger = null, ticketStore = null, humanSigner = null, buildAcceptOptions = null }) {
   const path = parsedUrl.pathname;
+  if (request.method === 'GET' && path === '/v1/mentions') {
+    if (!principal?.endpoint_id) return fail(response, requestId, 401, 'UNAUTHENTICATED', 'Authentication required');
+    if (typeof repository?.listMentionsForEndpoint !== 'function') return fail(response, requestId, 503, 'DATABASE_UNAVAILABLE', 'Mentions are unavailable');
+    const requested = Number(parsedUrl.searchParams.get('limit') ?? 50);
+    const limit = Number.isFinite(requested) ? requested : 50;
+    const items = await repository.listMentionsForEndpoint(principal.endpoint_id, limit);
+    return send(response, requestId, 200, { code: 'OK', items });
+  }
   if (path !== '/v1/rooms' && !path.startsWith('/v1/rooms/')) return false;
   if (request.method === 'POST' && path === '/v1/rooms/ws-ticket') {
     if (isAgentCaller(registry, principal) || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'An authenticated human context is required');

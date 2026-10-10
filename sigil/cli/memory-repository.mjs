@@ -207,7 +207,11 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     async lookupTaskRequest(taskId, conversationId) {
       for (const row of envelopes.values()) {
         if (row.envelope.conversation_id === conversationId && row.envelope.message_type === 'task.request' && row.envelope.body?.task_id === taskId) {
-          return { message_id: row.envelope.message_id, recipientEndpointId: row.envelope.recipient?.endpoint_id ?? null };
+          const assignee = row.envelope.body?.assignee;
+          return {
+            message_id: row.envelope.message_id,
+            recipientEndpointId: row.envelope.recipient?.endpoint_id ?? (typeof assignee === 'string' ? assignee : null),
+          };
         }
       }
       return null;
@@ -348,6 +352,25 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
         .sort((a, b) => (a.roomSeq < b.roomSeq ? -1 : a.roomSeq > b.roomSeq ? 1 : 0))
         .slice(0, limit)
         .map((row) => ({ room_seq: String(row.roomSeq), message_id: row.message_id, canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'), envelope: row.envelope }));
+    },
+    async listMentionsForEndpoint(endpointId, limit = 50) {
+      const cap = Math.min(Math.max(Number(limit) || 50, 1), 100);
+      const memberOf = new Set();
+      for (const [conversationId, members] of roomMembers) {
+        const member = members.get(endpointId);
+        if (member && member.removed_at === null) memberOf.add(conversationId);
+      }
+      return [...envelopes.values()]
+        .filter((row) => memberOf.has(row.envelope.conversation_id) && row.envelope.message_type === 'room.message' && Array.isArray(row.envelope.body?.mentions) && row.envelope.body.mentions.includes(endpointId))
+        .sort((a, b) => (a.roomSeq > b.roomSeq ? -1 : a.roomSeq < b.roomSeq ? 1 : 0))
+        .slice(0, cap)
+        .map((row) => ({
+          conversation_id: row.envelope.conversation_id,
+          message_id: row.message_id,
+          room_seq: row.roomSeq == null ? null : String(row.roomSeq),
+          sender_endpoint_id: row.envelope.sender.endpoint_id,
+          text: row.envelope.body.text,
+        }));
     },
     // Serialization is a Postgres concern; the memory repo has no concurrent transactions.
     async lockRoom() {},

@@ -1,11 +1,8 @@
 import { reject } from './validate-envelope.mjs';
 
-// Message types a room accepts in phase 1. task.request / task.result are
-// deliberately excluded: a broadcast task.request has no single assignee, so
-// the task.result assignee binding in accept-envelope.mjs would let any room
-// member post a result for any room task. Phase 3 re-adds them together with
-// an explicit assignee field.
-export const ROOM_MESSAGE_TYPES = new Set(['room.message']);
+// Room task.request is a broadcast, so the assignee lives on the body. accept-envelope
+// binds task.result to body.assignee when the envelope has no recipient.
+export const ROOM_MESSAGE_TYPES = new Set(['room.message', 'task.request', 'task.result']);
 
 export function assertRoomTypeHasRoom(envelope, room) {
   if (!room && envelope.message_type.startsWith('room.')) {
@@ -44,6 +41,14 @@ export async function authorizeRoomEnvelope(envelope, room, repository, client, 
   const others = [];
   for (const member of await repository.listRoomMembers(room.conversation_id, client)) {
     if (member.endpoint_id !== envelope.sender.endpoint_id) others.push({ ...member, is_agent: await isAgentMember(member, repository, client, registered) });
+  }
+  if (envelope.message_type === 'task.request') {
+    const assignee = envelope.body?.assignee;
+    if (typeof assignee !== 'string' || !assignee) {
+      throw reject('INVALID_ENVELOPE', 'Room task.request requires body.assignee', { ...details, field: 'assignee' });
+    }
+    const known = assignee === envelope.sender.endpoint_id || others.some((member) => member.endpoint_id === assignee);
+    if (!known) throw reject('ROUTE_NOT_AUTHORIZED', 'task.request assignee is not a room member', { ...details, assignee });
   }
   const humans = others.filter((member) => !member.is_agent);
   const fanout = [];

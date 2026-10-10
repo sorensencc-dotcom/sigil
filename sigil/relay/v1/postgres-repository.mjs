@@ -226,7 +226,7 @@ export class PostgresRepository {
   }
   async lookupTaskRequest(taskId, conversationId, client = this.pool) {
     const result = await client.query(
-      `SELECT message_id, recipient_endpoint_id AS "recipientEndpointId" FROM envelopes WHERE conversation_id = $1 AND message_type = 'task.request' AND body->>'task_id' = $2 AND envelope_status = 'accepted' LIMIT 1`,
+      `SELECT message_id, COALESCE(recipient_endpoint_id, body->>'assignee') AS "recipientEndpointId" FROM envelopes WHERE conversation_id = $1 AND message_type = 'task.request' AND body->>'task_id' = $2 AND envelope_status = 'accepted' LIMIT 1`,
       [conversationId, taskId]
     );
     return result.rows[0] ?? null;
@@ -1888,6 +1888,20 @@ export class PostgresRepository {
       [conversationId, String(afterSeq), limit],
     );
     return result.rows.map(roomMessageRow);
+  }
+  async listMentionsForEndpoint(endpointId, limit = 50, client = this.pool) {
+    const cap = Math.min(Math.max(Number(limit) || 50, 1), 100);
+    const result = await client.query(
+      `SELECT e.conversation_id, e.message_id, e.room_seq::text AS room_seq, e.sender_endpoint_id, e.body->>'text' AS text
+         FROM envelopes e
+         JOIN conversation_members m
+           ON m.conversation_id = e.conversation_id AND m.endpoint_id = $1 AND m.removed_at IS NULL
+        WHERE e.envelope_status = 'accepted' AND e.message_type = 'room.message' AND e.body->'mentions' ? $1
+        ORDER BY e.room_seq DESC
+        LIMIT $2`,
+      [endpointId, cap],
+    );
+    return result.rows;
   }
   async lookupRoomMessage(conversationId, messageId, client = this.pool) {
     const result = await client.query(

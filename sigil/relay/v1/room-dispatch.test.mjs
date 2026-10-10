@@ -53,6 +53,28 @@ test('a human message reaches humans only; a mention starts a running invocation
   assert.equal(inv.status, 'running');
   assert.equal(inv.thread_root_id, root.message_id);
   assert.equal((await w.repository.listInbox('ep_codex')).length, 0);
+  const mentions = await w.repository.listMentionsForEndpoint('ep_claude');
+  assert.deepEqual(mentions.map((item) => item.message_id), [root.message_id]);
+  assert.deepEqual(await w.repository.listMentionsForEndpoint('ep_codex'), []);
+});
+
+test('a room task.request names an assignee and only that assignee can file the result', async () => {
+  const w = world();
+  await room(w.repository);
+  const request = post(w, 'ep_web', { task_id: 'task_1', instruction: 'review the diff', assignee: 'ep_codex' }, { message_type: 'task.request' });
+  const { result, persisted } = await accept(w, request);
+  assert.equal(result.status, 202);
+  assert.deepEqual(persisted.roomDeliveries.map((d) => d.endpoint_id), ['ep_codex']);
+  const [inv] = await w.repository.listRoomInvocations('room_1');
+  assert.equal(inv.decided_by, 'assignee');
+  assert.equal(inv.endpoint_id, 'ep_codex');
+  assert.equal(inv.status, 'running');
+
+  const humanResult = await accept(w, post(w, 'ep_web', { task_id: 'task_1', status: 'completed', summary: 'done' }, { message_type: 'task.result' }));
+  assert.equal(humanResult.result.body.code, 'TASK_ASSIGNEE_MISMATCH');
+
+  const filed = await accept(w, post(w, 'ep_codex', { task_id: 'task_1', status: 'completed', summary: 'done', thread_root_id: request.message_id }, { message_type: 'task.result' }));
+  assert.equal(filed.result.status, 202);
 });
 
 test('an agent without a running invocation cannot post', async () => {
@@ -159,14 +181,20 @@ test('mentions of non-members, humans, and the sender invoke nothing', async () 
   assert.deepEqual(await w.repository.listRoomInvocations('room_1'), []);
 });
 
-test('an invoked agent still cannot post task.request into a room (phase 3 adds assignees)', async () => {
+test('an invoked agent posts a room task.request only with an assignee and inside its thread', async () => {
   const w = world();
   await room(w.repository);
   const root = post(w, 'ep_web', { text: '@ep_claude', mentions: ['ep_claude'] });
   await accept(w, root);
-  const { result } = await accept(w, post(w, 'ep_claude', { task_id: 'task_1', instruction: 'x' }, { message_type: 'task.request' }));
-  assert.equal(result.status, 403);
-  assert.equal(result.body.code, 'ROUTE_NOT_AUTHORIZED');
+  const missing = await accept(w, post(w, 'ep_claude', { task_id: 'task_1', instruction: 'x', thread_root_id: root.message_id }, { message_type: 'task.request' }));
+  assert.equal(missing.result.status, 400);
+  assert.equal(missing.result.body.code, 'INVALID_ENVELOPE');
+  const offThread = await accept(w, post(w, 'ep_claude', { task_id: 'task_1', instruction: 'x', assignee: 'ep_codex' }, { message_type: 'task.request' }));
+  assert.equal(offThread.result.body.code, 'ROUTE_NOT_AUTHORIZED');
+  const filed = await accept(w, post(w, 'ep_claude', { task_id: 'task_1', instruction: 'x', assignee: 'ep_codex', thread_root_id: root.message_id }, { message_type: 'task.request' }));
+  assert.equal(filed.result.status, 202);
+  const assigned = (await w.repository.listRoomInvocations('room_1')).find((row) => row.decided_by === 'assignee');
+  assert.equal(assigned.endpoint_id, 'ep_codex');
 });
 
 test('a retried agent reply is a duplicate, not ROOM_NOT_INVOKED', async () => {
