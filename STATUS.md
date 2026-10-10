@@ -8,8 +8,9 @@
 - Push pitfall: `C:\Windows\System32\bash.exe` cannot open `C:/dev/...` hook paths. Prepend `C:\Program Files\Git\bin` to `PATH` before `git push`.
 - A docs-only push on 2026-10-10 was cancelled by `sigil/cli/relay-up-p2p.test.mjs:58` (`sigil relay up --p2p logs a listen multiaddr`) at 30000 ms: 1470 pass, 0 fail, 1 cancelled, 175 skipped. That timeout is outside tincan.
 - Secret scan rejects a test helper shaped like `token: '<8+ chars>'`. The relay test passes that value as `bearer`.
-- Still open: a second tailnet node. `sigil_dispatch_task` and `sigil_my_mentions` stay deferred until rooms accept `task.request` with an assignee and the relay adds `/v1/mentions`.
-- Next action: run the listener on Node B with `--tailnet`, then `POST /v1/dispatch` from Node A. Resume file: `docs/superpowers/plans/2026-10-09-sigil-tincan-transport-bridge-handoff.md`.
+- Two-node proof, 2026-10-10: Node B `laptop-66oogh2m` (`100.109.165.118`) ran `tincan-relay.mjs --config %TEMP%\tincan-two-node-config.json --tailnet` from `C:\Users\soren\$root` (clone of `feat/sigil-tincan-bridge`). Node A `win-dta4v21lkvr` (`100.80.111.33`) posted `/v1/dispatch` for `ep_codex`. Response HTTP 200 `{"status":"DELIVERED","node":"win-dta4v21lkvr.tailb2474f.ts.net.","alreadyRunning":false,"endpointId":"ep_codex","pid":23332}`. The `node` value is WhoIs of the caller. `pid` 23332 is the process the laptop relay spawned. That path runs `node sigil/cli/sigil.mjs agent run --room-bridge codex`. The laptop firewall rule `tincan-dispatch-proof` allows inbound TCP 8794. The spawned agent uses `proof-identity.json` and `http://127.0.0.1:8791`, so the process can exit after spawn. `DELIVERED` means the spawn returned a pid.
+- `sigil_dispatch_task` and `sigil_my_mentions` stay deferred until rooms accept `task.request` with an assignee and the relay adds `/v1/mentions`.
+- Next action: add room `task.request` with an assignee, then `/v1/mentions`. Resume file: `docs/superpowers/plans/2026-10-09-sigil-tincan-transport-bridge-handoff.md`.
 
 ## Session update: 2026-10-08 PR #36 conflict resolution
 
