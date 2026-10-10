@@ -13,6 +13,8 @@ const ALLOWLIST = [
   /not-for-clients/,
   /<local-dev-password>/,
   /sigil:sigil_password@(localhost|127\.0\.0\.1)/,
+  /postgres:(supersecret|\[REDACTED_PASSWORD\])@localhost/,
+  /:\/\/(user:pass@host|\$\{user\}:\[REDACTED_PASSWORD\]@\$\{host\})/,
 ];
 
 function stagedFiles() {

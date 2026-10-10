@@ -14,4 +14,5 @@ paths = [
   '''docs/wiki/README\.md''',
   '''sigil/cli/fixtures/self-signed-cert\.pem''',
   '''sigil/cli/fixtures/self-signed-key\.pem''',
+  '''sigil/connectors/v1/mods/sigil-gate-mod-v2\.test\.mjs''',
 ]
