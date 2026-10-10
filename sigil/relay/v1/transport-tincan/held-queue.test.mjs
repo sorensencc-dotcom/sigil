@@ -22,6 +22,13 @@ test('holdForApproval submits action_hash and callback_url only', async () => {
   assert.equal(submitted.token, 'tok');
 });
 
+test('callbackUrl may be resolved when the hold is submitted', async () => {
+  let seen;
+  const queue = createHeldQueue({ callbackUrl: () => 'http://127.0.0.1:8795/v1/approval-callback', submitChallengeFn: async (body) => { seen = body.callback_url; return { challenge_id: 'ch_1' }; } });
+  await queue.holdForApproval(envelope(), 'tok');
+  assert.equal(seen, 'http://127.0.0.1:8795/v1/approval-callback');
+});
+
 test('held envelope is frozen and releases byte-identical', async () => {
   const queue = createHeldQueue({ callbackUrl: 'http://127.0.0.1:8795/cb', submitChallengeFn: async () => ({ challenge_id: 'ch_1' }) });
   const { actionHash } = await queue.holdForApproval(envelope(), 'tok');

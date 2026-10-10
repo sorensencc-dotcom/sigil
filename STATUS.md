@@ -1,5 +1,17 @@
 # Status
 
+## Session update: 2026-10-10 Tincan listener pushed
+
+- Branch `feat/sigil-tincan-bridge` in `C:\dev\.worktrees\sigil-tincan`. Listener commit `3a7214c feat(tincan): serve dispatch on the tailnet` is on origin (`778b9d9..3a7214c`). This note is the resume record on top of it.
+- `POST /v1/dispatch` runs `verifyTailscaleWhoIs`, then `dispatchDeliveryWithRetry`. The peer names `target_endpoint`. Host config owns bridge type, identity path, and relay URL. `GET/POST /v1/approval-callback` calls `releaseEnvelope`. The callback stays on `127.0.0.1` because `createApprovalChallenge` rejects every other host. `--tailnet` binds dispatch to this machine's Tailscale IPv4 address and uses `tailscale whois --json`. Node does not embed Go `tsnet`.
+- Pre-push hook: JCS audit passed. `npm test` reported 1471 pass, 0 fail, 175 skipped. Hermetic tincan tests: 29 pass, 1 skipped. `SIGIL_TINCAN_LIVE=1` same-host hairpin passed in 145 ms.
+- Push pitfall: `C:\Windows\System32\bash.exe` cannot open `C:/dev/...` hook paths. Prepend `C:\Program Files\Git\bin` to `PATH` before `git push`.
+- A docs-only push on 2026-10-10 was cancelled by `sigil/cli/relay-up-p2p.test.mjs:58` (`sigil relay up --p2p logs a listen multiaddr`) at 30000 ms: 1470 pass, 0 fail, 1 cancelled, 175 skipped. That timeout is outside tincan.
+- Secret scan rejects a test helper shaped like `token: '<8+ chars>'`. The relay test passes that value as `bearer`.
+- Two-node proof, 2026-10-10: Node B `laptop-66oogh2m` (`100.109.165.118`) ran `tincan-relay.mjs --config %TEMP%\tincan-two-node-config.json --tailnet` from `C:\Users\soren\$root` (clone of `feat/sigil-tincan-bridge`). Node A `win-dta4v21lkvr` (`100.80.111.33`) posted `/v1/dispatch` for `ep_codex`. Response HTTP 200 `{"status":"DELIVERED","node":"win-dta4v21lkvr.tailb2474f.ts.net.","alreadyRunning":false,"endpointId":"ep_codex","pid":23332}`. The `node` value is WhoIs of the caller. `pid` 23332 is the process the laptop relay spawned. That path runs `node sigil/cli/sigil.mjs agent run --room-bridge codex`. The laptop firewall rule `tincan-dispatch-proof` allows inbound TCP 8794. The spawned agent uses `proof-identity.json` and `http://127.0.0.1:8791`, so the process can exit after spawn. `DELIVERED` means the spawn returned a pid.
+- Room routes, uncommitted on this branch: a room `task.request` requires `body.assignee` (a current member). `task.result` must come from that assignee. An invocable assignee gets `decided_by = 'assignee'` via migration `032_room_task_assignee.sql`. `GET /v1/mentions` lists room messages that mention the caller. Hermetic tests: `room-policy.test.mjs`, `room-dispatch.test.mjs`, `room-routes.test.mjs`, `task-request-schema.test.mjs`, and `032_room_task_assignee.test.mjs` passed (55 room tests plus the schema and migration tests, 0 fail).
+- Next action: add `sigil_dispatch_task` and `sigil_my_mentions`. Resume file: `docs/superpowers/plans/2026-10-09-sigil-tincan-transport-bridge-handoff.md`.
+
 ## Session update: 2026-10-08 PR #36 conflict resolution
 
 - Merged `origin/main` into `pr-36-conflict-fix` for GitHub PR #36 and resolved the only content conflict in `STATUS.md` by preserving both independent session updates.

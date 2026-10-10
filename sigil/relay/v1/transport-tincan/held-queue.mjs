@@ -20,7 +20,8 @@ export function createHeldQueue({ callbackUrl, submitChallengeFn }) {
       const frozen = deepFreeze(structuredClone(envelope));
       const actionHash = canonicalEnvelopeHash(frozen);
       held.set(actionHash, frozen);
-      const challenge = await submitChallengeFn({ action_hash: actionHash, callback_url: callbackUrl }, token);
+      const resolvedCallback = typeof callbackUrl === 'function' ? callbackUrl() : callbackUrl;
+      const challenge = await submitChallengeFn({ action_hash: actionHash, callback_url: resolvedCallback }, token);
       return { actionHash, challengeId: challenge.challenge_id };
     },
     releaseEnvelope(actionHash) {

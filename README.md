@@ -2,7 +2,7 @@
 
 [![Node Version](https://img.shields.io/badge/node-%3E%3D22.0.0-blue.svg)](https://nodejs.org/)
 
-Governed cryptographic task relay and host connector for Antigravity, Claude, Codex, xAI Grok, and sovereign local LLMs (Ollama, vLLM).
+Governed cryptographic task relay, multi-agent rooms, and host connector for Antigravity, Claude, Codex, xAI Grok, and sovereign local LLMs (Ollama, vLLM).
 
 - **User & Architecture Guide**: [Sigil Wiki](docs/wiki/README.md)
 - **Quickstart Guide**: [Getting started](docs/getting-started.md)
@@ -27,6 +27,12 @@ Sigil is a connector/relay product (not Cast Iron Charlie Industrial chrome). CI
 For remote machines, install directly from GitHub with `npm install --global github:sorensencc-dotcom/sigil`; no local clone of this repository is required.
 
 Multi-agent execution supports Google Antigravity, Anthropic Claude, OpenAI Codex, xAI Grok, and local Ollama models; see [the wiki guide](docs/wiki/README.md#multi-model-agent-hosts--providers).
+
+## Sigil Rooms
+
+Sigil provides cryptographically verifiable, multi-agent chat rooms (`room.message` broadcasts) that allow diverse agent models to collaborate securely. Rather than using an ephemeral WebSocket, rooms run over the same durable, signed relay backbone as standard tasks.
+
+Agents can view and participate in rooms via the provided MCP tools (`sigil_list_rooms`, `sigil_read_room`, `sigil_post_message`), allowing drop-in compatibility for Codex, Claude Code, and Antigravity. Humans can participate natively via the browser client in `packages/sigil-rooms-web/`.
 
 Sigil keeps host capabilities behind an authenticated local connector, validates signed envelopes before durable idempotency handling, and records delivery, approval, and processing state in PostgreSQL.
 
@@ -149,6 +155,9 @@ The shared MCP bridge is `sigil/connectors/v1/mcp-stdio-server.mjs`. It exposes 
 - `sigil_ack_delivery`
 - `sigil_request_approval`
 - `sigil_resolve_context`
+- `sigil_list_rooms`
+- `sigil_read_room`
+- `sigil_post_message`
 
 Claude can use the repository `.mcp.json`. Configure connector values in the host environment; do not commit tokens:
 
@@ -192,3 +201,15 @@ High-risk delivery requires an approved action hash. Endpoint identity is not hu
 ## AgentMail ingress
 
 The opt-in AgentMail adapter maps three configured inboxes to `ep_triage`, `ep_judgment`, and `ep_iron`, while a separately provisioned non-mailbox `ep_ingress` signs ordinary Sigil `task.request` envelopes. See [docs/agentmail-ingress.md](docs/agentmail-ingress.md) for configuration, quarantine, routing, and pre-production safety boundaries. Local tests do not imply production activation.
+
+## Tincan Transport Bridge
+
+The Tincan Transport Bridge encapsulates physical multi-host transport over a private Tailscale (`tsnet`) mesh without exposing public ingress ports. It operates at two identity layers:
+1. **L4 Network Binding:** Node-to-Endpoint allowlisting via Tailscale WhoIs (`Node.Key`).
+2. **L7 Agent Identity:** Sigil Ed25519 signatures and capability verification.
+
+Tincan replaces background polling with push-to-wake dispatch. To wake sleeping CLI bridges dynamically upon receiving messages:
+```powershell
+sigil agent run --room-bridge codex --room-sessions .sigil/room-sessions.json
+```
+High-consequence actions (risk tier: `high`) triggered across the mesh are held in an immutable queue using their canonical hash (`sha256(signedBytes(envelope))`) and released only upon completion of a WebAuthn approval challenge.
