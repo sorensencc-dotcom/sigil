@@ -15,7 +15,9 @@ const TOOLS = [
   ['sigil_resolve_context', 'Resolve an authorized integrity-checked context reference.', 'resolveContext'],
   ['sigil_list_rooms', 'List rooms visible to this endpoint.', 'listRooms'],
   ['sigil_read_room', 'Read room history after a room_seq watermark.', 'readRoom'],
-  ['sigil_post_message', 'Post a signed room.message as this endpoint.', 'postMessage']
+  ['sigil_post_message', 'Post a signed room.message as this endpoint.', 'postMessage'],
+  ['sigil_dispatch_task', 'Post a signed room task.request bound to an assignee.', 'dispatchTask'],
+  ['sigil_my_mentions', 'List room messages that mention this endpoint.', 'myMentions']
 ];
 
 const TOOL_SCHEMAS = Object.freeze({
@@ -29,7 +31,9 @@ const TOOL_SCHEMAS = Object.freeze({
     required: ['delivery_id']
   },
   sigil_read_room: { type: 'object', properties: { room_id: { type: 'string' }, after_seq: { type: 'string' }, limit: { type: 'integer', maximum: 100 } }, required: ['room_id'] },
-  sigil_post_message: { type: 'object', properties: { room_id: { type: 'string' }, text: { type: 'string', maxLength: 16000 }, thread_root_id: { type: 'string' }, mentions: { type: 'array', items: { type: 'string' } }, idempotency_key: { type: 'string' } }, required: ['room_id', 'text'] }
+  sigil_post_message: { type: 'object', properties: { room_id: { type: 'string' }, text: { type: 'string', maxLength: 16000 }, thread_root_id: { type: 'string' }, mentions: { type: 'array', items: { type: 'string' } }, idempotency_key: { type: 'string' } }, required: ['room_id', 'text'] },
+  sigil_dispatch_task: { type: 'object', properties: { room_id: { type: 'string' }, task_id: { type: 'string' }, instruction: { type: 'string' }, assignee: { type: 'string' }, thread_root_id: { type: 'string' }, idempotency_key: { type: 'string' }, success_criteria: { type: 'array', items: { type: 'string' } }, dependencies: { type: 'array', items: { type: 'string' } }, deadline: { type: 'string' } }, required: ['room_id', 'task_id', 'instruction', 'assignee'] },
+  sigil_my_mentions: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 100 } } }
 });
 
 function reply(id, result) { process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id, result })}\n`); }
