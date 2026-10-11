@@ -18,6 +18,7 @@ for (const [name, body] of [
   ['non-array success_criteria', { task_id: 'task_1', instruction: 'x', success_criteria: 'not-array' }],
   ['non-array dependencies', { task_id: 'task_1', instruction: 'x', dependencies: 'not-array' }],
   ['non-ISO deadline', { task_id: 'task_1', instruction: 'x', deadline: 'not-a-date' }],
+  ['empty assignee', { task_id: 'task_1', instruction: 'x', assignee: '' }],
 ]) {
   test(`rejects ${name}`, () => {
     assert.throws(() => validateTaskRequestBody(body), (error) => error.code === 'INVALID_ENVELOPE');

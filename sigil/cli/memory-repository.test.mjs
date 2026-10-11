@@ -38,6 +38,50 @@ test('memory relay lookupTaskRequest finds an accepted task.request by conversat
   assert.equal(await repository.lookupTaskRequest('task_missing', 'conv_1'), null);
 });
 
+test('memory relay lookupTaskRequest prefers the direct recipient over body.assignee', async () => {
+  const repository = createMemoryRepository();
+  await repository.persistAcceptedEnvelope({
+    message_id: 'msg_req_direct', canonical_hash: 'sha256:direct',
+    envelope: {
+      message_id: 'msg_req_direct', sender: { endpoint_id: 'ep_web' }, recipient: { endpoint_id: 'ep_codex' },
+      message_type: 'task.request', conversation_id: 'conv_1', body: { task_id: 'task_direct', assignee: 'ep_other' }, idempotency_key: 'send_direct',
+    },
+  });
+  assert.deepEqual(await repository.lookupTaskRequest('task_direct', 'conv_1'), { message_id: 'msg_req_direct', recipientEndpointId: 'ep_codex' });
+});
+
+test('memory relay lookupTaskRequest uses body.assignee when the task.request has no recipient', async () => {
+  const repository = createMemoryRepository();
+  await repository.persistAcceptedEnvelope({
+    message_id: 'msg_req_room', canonical_hash: 'sha256:room',
+    envelope: {
+      message_id: 'msg_req_room', sender: { endpoint_id: 'ep_web' },
+      message_type: 'task.request', conversation_id: 'room_1', body: { task_id: 'task_room', assignee: 'ep_codex' }, idempotency_key: 'send_room',
+    },
+  });
+  assert.deepEqual(await repository.lookupTaskRequest('task_room', 'room_1'), { message_id: 'msg_req_room', recipientEndpointId: 'ep_codex' });
+});
+
+test('memory relay lookupTaskRequest leaves a broadcast task.request unbound when assignee is missing or not a string', async () => {
+  const repository = createMemoryRepository();
+  await repository.persistAcceptedEnvelope({
+    message_id: 'msg_req_open', canonical_hash: 'sha256:open',
+    envelope: {
+      message_id: 'msg_req_open', sender: { endpoint_id: 'ep_web' },
+      message_type: 'task.request', conversation_id: 'room_1', body: { task_id: 'task_open' }, idempotency_key: 'send_open',
+    },
+  });
+  await repository.persistAcceptedEnvelope({
+    message_id: 'msg_req_bad', canonical_hash: 'sha256:bad',
+    envelope: {
+      message_id: 'msg_req_bad', sender: { endpoint_id: 'ep_web' },
+      message_type: 'task.request', conversation_id: 'room_1', body: { task_id: 'task_bad', assignee: 12 }, idempotency_key: 'send_bad',
+    },
+  });
+  assert.deepEqual(await repository.lookupTaskRequest('task_open', 'room_1'), { message_id: 'msg_req_open', recipientEndpointId: null });
+  assert.deepEqual(await repository.lookupTaskRequest('task_bad', 'room_1'), { message_id: 'msg_req_bad', recipientEndpointId: null });
+});
+
 test('memory relay lookupIdempotency returns the stored canonical hash for a prior acceptance', async () => {
   const repository = createMemoryRepository();
   await repository.persistAcceptedEnvelope({

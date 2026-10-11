@@ -10,7 +10,10 @@ test('stdio MCP handler exposes approved tools and dispatches connector calls', 
     await handler({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
     await handler({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'sigil_send_task', arguments: { value: 'ok' } } });
   } finally { process.stdout.write = original; }
-  assert.equal(writes[0].result.tools.length, 9); assert.equal(JSON.parse(writes[1].result.content[0].text).accepted, 'ok');
+  assert.equal(writes[0].result.tools.length, 11);
+  assert.ok(writes[0].result.tools.some((tool) => tool.name === 'sigil_dispatch_task' && tool.inputSchema.required.includes('assignee')));
+  assert.ok(writes[0].result.tools.some((tool) => tool.name === 'sigil_my_mentions'));
+  assert.equal(JSON.parse(writes[1].result.content[0].text).accepted, 'ok');
 });
 
 test('stdio MCP handler routes room tools to the runtime', async () => {
@@ -20,16 +23,22 @@ test('stdio MCP handler routes room tools to the runtime', async () => {
     listRooms: async () => [{ conversation_id: 'room_1' }],
     readRoom: async (args) => ({ items: [], echoed: args.room_id }),
     postMessage: async (args) => ({ code: 'OK', text: args.text }),
+    dispatchTask: async (args) => ({ code: 'OK', assignee: args.assignee }),
+    myMentions: async () => [{ message_id: 'msg_1' }],
   });
   const original = process.stdout.write; process.stdout.write = (value) => { writes.push(JSON.parse(value)); return true; };
   try {
     await handler({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'sigil_list_rooms', arguments: {} } });
     await handler({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'sigil_read_room', arguments: { room_id: 'room_1' } } });
     await handler({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'sigil_post_message', arguments: { room_id: 'room_1', text: 'hi' } } });
+    await handler({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'sigil_dispatch_task', arguments: { room_id: 'room_1', task_id: 'task_1', instruction: 'review', assignee: 'ep_codex' } } });
+    await handler({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'sigil_my_mentions', arguments: {} } });
   } finally { process.stdout.write = original; }
   assert.equal(JSON.parse(writes[0].result.content[0].text)[0].conversation_id, 'room_1');
   assert.equal(JSON.parse(writes[1].result.content[0].text).echoed, 'room_1');
   assert.equal(JSON.parse(writes[2].result.content[0].text).text, 'hi');
+  assert.equal(JSON.parse(writes[3].result.content[0].text).assignee, 'ep_codex');
+  assert.equal(JSON.parse(writes[4].result.content[0].text)[0].message_id, 'msg_1');
 });
 
 test('stdio MCP handler rejects unavailable runtime operations', async () => {

@@ -29,13 +29,29 @@ for (const [name, envelope] of [
   ['a broadcast scope naming another conversation', { ...base, broadcast_scope: { conversation_id: 'room_2' } }],
   ['a non-member sender', { ...base, sender: { endpoint_id: 'ep_stranger' } }],
   ['a message type not allowed in rooms', { ...base, message_type: 'chat.message' }],
-  ['a task.request in a room (no assignee binding in phase 1)', { ...base, message_type: 'task.request' }],
-  ['a task.result in a room (no assignee binding in phase 1)', { ...base, message_type: 'task.result' }],
+  ['a task.request assigned to a non-member', { ...base, message_type: 'task.request', body: { task_id: 'task_1', instruction: 'review', assignee: 'ep_stranger' } }],
 ]) {
   test(`rejects ${name}`, async () => {
     await assert.rejects(authorizeRoomEnvelope(envelope, room, repository, null), { code: 'ROUTE_NOT_AUTHORIZED' });
   });
 }
+
+test('a task.request with no assignee is rejected', async () => {
+  await assert.rejects(
+    authorizeRoomEnvelope({ ...base, message_type: 'task.request', body: { task_id: 'task_1', instruction: 'review' } }, room, repository, null),
+    { code: 'INVALID_ENVELOPE' },
+  );
+});
+
+test('a task.request assigned to a member is allowed', async () => {
+  const plan = await authorizeRoomEnvelope({ ...base, message_type: 'task.request', body: { task_id: 'task_1', instruction: 'review', assignee: 'ep_claude' } }, room, repository, null, { inboxDepthLimit: 10 });
+  assert.deepEqual(plan.fanout, ['ep_web2']);
+});
+
+test('a task.result from a member is allowed', async () => {
+  const plan = await authorizeRoomEnvelope({ ...base, message_type: 'task.result', body: { task_id: 'task_1', status: 'completed', summary: 'done' } }, room, repository, null, { inboxDepthLimit: 10 });
+  assert.deepEqual(plan.fanout, ['ep_web2']);
+});
 
 test('room.* message types are rejected outside a room', () => {
   assert.throws(() => assertRoomTypeHasRoom({ message_type: 'room.message' }, null), { code: 'INVALID_ENVELOPE' });

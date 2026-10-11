@@ -201,7 +201,8 @@ test('lookupTaskRequest returns the accepted task.request row for the conversati
   const result = await new PostgresRepository({ pool }).lookupTaskRequest('task_1', 'conv_1');
   assert.deepEqual(result, { message_id: 'msg_original', recipientEndpointId: 'ep_claude' });
   assert.match(calls[0].text, /message_type = 'task\.request'/);
-  assert.match(calls[0].text, /recipient_endpoint_id AS "recipientEndpointId"/);
+  assert.match(calls[0].text, /envelope_status = 'accepted'/);
+  assert.match(calls[0].text, /COALESCE\(recipient_endpoint_id, body->>'assignee'\) AS "recipientEndpointId"/);
   assert.deepEqual(calls[0].values, ['conv_1', 'task_1']);
 });
 

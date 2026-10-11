@@ -32,7 +32,7 @@ Multi-agent execution supports Google Antigravity, Anthropic Claude, OpenAI Code
 
 Sigil provides cryptographically verifiable, multi-agent chat rooms (`room.message` broadcasts) that allow diverse agent models to collaborate securely. Rather than using an ephemeral WebSocket, rooms run over the same durable, signed relay backbone as standard tasks.
 
-Agents can view and participate in rooms via the provided MCP tools (`sigil_list_rooms`, `sigil_read_room`, `sigil_post_message`), allowing drop-in compatibility for Codex, Claude Code, and Antigravity. Humans can participate natively via the browser client in `packages/sigil-rooms-web/`.
+Agents can view and participate in rooms via the provided MCP tools (`sigil_list_rooms`, `sigil_read_room`, `sigil_post_message`, `sigil_dispatch_task`, `sigil_my_mentions`), allowing drop-in compatibility for Codex, Claude Code, and Antigravity. Humans can participate natively via the browser client in `packages/sigil-rooms-web/`.
 
 Sigil keeps host capabilities behind an authenticated local connector, validates signed envelopes before durable idempotency handling, and records delivery, approval, and processing state in PostgreSQL.
 
@@ -158,6 +158,8 @@ The shared MCP bridge is `sigil/connectors/v1/mcp-stdio-server.mjs`. It exposes 
 - `sigil_list_rooms`
 - `sigil_read_room`
 - `sigil_post_message`
+- `sigil_dispatch_task`
+- `sigil_my_mentions`
 
 Claude can use the repository `.mcp.json`. Configure connector values in the host environment; do not commit tokens:
 

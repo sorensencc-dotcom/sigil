@@ -98,6 +98,13 @@ export async function applyRoomDispatch({ envelope, room, plan, completing, repo
     if (roomDelivery) roomDeliveries.push(roomDelivery);
     if (invocation.status === 'refused') await emitRefusal({ systemIdentity, repository, client, room, invocation, now, inboxDepthLimit, registered, stream });
   }
+  const assignee = envelope.message_type === 'task.request' && typeof envelope.body?.assignee === 'string' ? envelope.body.assignee : null;
+  if (assignee && agentIds.has(assignee) && !targets.includes(assignee)) {
+    const { invocation, roomDelivery } = await dispatchToTarget({ room, triggerMessageId: envelope.message_id, threadRootId, endpointId: assignee, decidedBy: 'assignee', repository, client, now, inboxDepthLimit, registered });
+    invocations.push(invocation);
+    if (roomDelivery) roomDeliveries.push(roomDelivery);
+    if (invocation.status === 'refused') await emitRefusal({ systemIdentity, repository, client, room, invocation, now, inboxDepthLimit, registered, stream });
+  }
   const routerDeliveries = [];
   const humanSender = !memberIsAgent(plan.senderMember);
   // Any mention keeps the message off the router: the invocations route answers

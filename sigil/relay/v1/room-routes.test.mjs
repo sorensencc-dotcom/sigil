@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createRelayServer } from './http-server.mjs';
+import { handleRoomRoute } from './room-routes.mjs';
 import { createMemoryRepository } from '../../cli/memory-repository.mjs';
 import { createIdentity } from '../../cli/identity.mjs';
 
@@ -39,6 +40,24 @@ async function withServer(fn) {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try { await fn(server.address().port, repository); } finally { await new Promise((resolve) => server.close(resolve)); }
 }
+
+test('GET /v1/mentions lists mentions of the caller', async () => {
+  const items = [{ conversation_id: 'room_1', message_id: 'msg_1', room_seq: '1', sender_endpoint_id: 'ep_web', text: 'hi' }];
+  let seen = null;
+  const response = { status: 0, payload: null, setHeader() {}, writeHead(status) { this.status = status; }, end(text) { this.payload = text ? JSON.parse(text) : null; } };
+  const handled = await handleRoomRoute({
+    request: { method: 'GET' },
+    response,
+    parsedUrl: new URL('http://relay.test/v1/mentions?limit=10'),
+    principal: { endpoint_id: 'ep_claude' },
+    repository: { async listMentionsForEndpoint(endpointId, limit) { seen = { endpointId, limit }; return items; } },
+    requestId: 'req_mentions',
+  });
+  assert.equal(handled, true);
+  assert.equal(response.status, 200);
+  assert.deepEqual(seen, { endpointId: 'ep_claude', limit: 10 });
+  assert.deepEqual(response.payload.items, items);
+});
 
 test('create, list, add member, read history, remove member', async () => {
   await withServer(async (port) => {
