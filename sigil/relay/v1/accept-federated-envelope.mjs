@@ -149,9 +149,12 @@ export async function acceptFederatedEnvelope(body, headers, options) {
     }
     // 6 (trimmed validation): synthetic single-entry registry for the sender.
     const syntheticRegistered = new Map([[envelope.sender.endpoint_id, {
-      endpoint_id: envelope.sender.endpoint_id, owner_id: envelope.sender.owner_id,
-      key_id: envelope.signature.key_id, status: 'active',
-      public_key: crypto.createPublicKey({ key: Buffer.from(senderKey.publicKey, 'base64url'), format: 'der', type: 'spki' }),
+      endpoint_id: envelope.sender.endpoint_id, owner_id: envelope.sender.owner_id, kind: 'agent', status: 'active',
+      keys: new Map([[envelope.signature.key_id, {
+        key_id: envelope.signature.key_id,
+        public_key: crypto.createPublicKey({ key: Buffer.from(senderKey.publicKey, 'base64url'), format: 'der', type: 'spki' }),
+        status: 'active', valid_from: new Date(0).toISOString(), valid_until: null,
+      }]]),
     }]]);
     // Deviation from task-3-brief.md (documented in task-3-report.md): the
     // scope-based capability_grants check inside validateEnvelope is a

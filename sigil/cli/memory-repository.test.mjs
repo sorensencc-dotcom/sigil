@@ -392,3 +392,35 @@ test('memory lookupTrustedEndpoint normalizes a top-level-key registry row and s
   assert.equal(await repo.lookupTrustedEndpoint('nope'), null);
   assert.equal((await repo.lookupRecipientEndpoint('ep_t')).kind, 'human');
 });
+
+async function signedFrom(senderId, ownerId, keyId, privateKey) {
+  const fs = await import('node:fs');
+  const { signedBytes } = await import('../relay/v1/validate-envelope.mjs');
+  const fixture = JSON.parse(fs.readFileSync(new URL('../contracts/v1/envelope.example.json', import.meta.url)));
+  const env = { ...fixture, sender: { ...fixture.sender, endpoint_id: senderId, owner_id: ownerId }, created_at: '2026-08-12T12:00:00.000Z', expires_at: '2026-08-13T00:00:00.000Z' };
+  env.signature = { algorithm: 'Ed25519', key_id: keyId, value: '' };
+  env.signature.value = crypto.sign(null, signedBytes(env), privateKey).toString('base64url');
+  return env;
+}
+
+test('memory registerFederatedSender entry passes validateEnvelope', async () => {
+  const { validateEnvelope } = await import('../relay/v1/validate-envelope.mjs');
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const registry = new Map();
+  const repo = createMemoryRepository({ registry });
+  await repo.registerFederatedSender({ endpoint_id: 'ep_fed@peer.example', owner_id: 'usr_fed@peer.example', key_id: 'key_fed', public_key: publicKey, origin_domain: 'peer.example' });
+  const env = await signedFrom('ep_fed@peer.example', 'usr_fed@peer.example', 'key_fed', privateKey);
+  assert.equal(validateEnvelope(env, { now: new Date('2026-08-12T12:01:00Z'), registered: registry }).accepted, true);
+});
+
+test('memory ensureRoomSystemEndpoint entry passes validateEnvelope', async () => {
+  const { validateEnvelope } = await import('../relay/v1/validate-envelope.mjs');
+  const { createIdentity } = await import('./identity.mjs');
+  const registry = new Map();
+  const repo = createMemoryRepository({ registry });
+  const identity = createIdentity({ ownerId: 'usr_sys', endpointId: 'ep_room_system', kind: 'system' });
+  await repo.ensureRoomSystemEndpoint({ identity });
+  const privateKey = crypto.createPrivateKey(identity.private_key_pem);
+  const env = await signedFrom('ep_room_system', 'usr_sys', identity.key_id, privateKey);
+  assert.equal(validateEnvelope(env, { now: new Date('2026-08-12T12:01:00Z'), registered: registry }).accepted, true);
+});

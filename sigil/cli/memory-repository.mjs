@@ -249,6 +249,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       registry.set(identity.endpoint_id, {
         endpoint_id: identity.endpoint_id, owner_id: identity.owner_id, key_id: identity.key_id, status: 'active', kind: 'system',
         public_key: publicKey,
+        keys: new Map([[identity.key_id, { key_id: identity.key_id, public_key: publicKey, status: 'active', valid_from: new Date(0).toISOString(), valid_until: null }]]),
       });
     },
     // Federated-inbound shadow registration (design R10). A foreign sender
@@ -259,7 +260,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     // marks it as a shadow row. No-op if the endpoint is already present.
     async registerFederatedSender({ endpoint_id, owner_id, key_id, public_key, origin_domain }) {
       if (registry.has(endpoint_id)) return;
-      registry.set(endpoint_id, { endpoint_id, owner_id, key_id, status: 'active', public_key, origin_domain });
+      registry.set(endpoint_id, { endpoint_id, owner_id, key_id, kind: 'agent', status: 'active', public_key, origin_domain, keys: new Map([[key_id, { key_id, public_key, status: 'active', valid_from: new Date(0).toISOString(), valid_until: null }]]) });
     },
     async persistAcceptedEnvelope(row) {
       const idempotencyKey = `${row.envelope.sender.endpoint_id}:${row.envelope.idempotency_key}`;
