@@ -58,7 +58,7 @@ test('postgres history returns both a room.message and a room.event row', { skip
     await pool.end();
   });
   await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW())`, [human]);
-  await pool.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at) VALUES ($1, $2, 'web', $3, 'web', 'active', NOW())`, [web, human, `install_${web}`]);
+  await pool.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at) VALUES ($1, $2, 'web', 'human', $3, 'web', 'active', NOW())`, [web, human, `install_${web}`]);
   const repository = new PostgresRepository({ pool });
   const system = createIdentity({ ownerId: ROOM_SYSTEM_OWNER_ID, endpointId: ROOM_SYSTEM_ENDPOINT_ID, kind: 'system' });
   await repository.ensureRoomSystemEndpoint({ identity: system, now: NOW });

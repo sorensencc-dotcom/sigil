@@ -44,9 +44,9 @@ async function bootstrapLiveRelay(t) {
 
   await pool.query(`
     INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.a}', 'active', NOW()), ('${ids.b}', 'active', NOW());
-    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-      VALUES ('${ids.epA}', '${ids.a}', 'claude', 'install_a_${suffix}', 'A', 'active', NOW()),
-             ('${ids.epB}', '${ids.b}', 'codex', 'install_b_${suffix}', 'B', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+      VALUES ('${ids.epA}', '${ids.a}', 'claude', 'agent', 'install_a_${suffix}', 'A', 'active', NOW()),
+             ('${ids.epB}', '${ids.b}', 'codex', 'agent', 'install_b_${suffix}', 'B', 'active', NOW());
     INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
       VALUES ('${keyIdA}', '${ids.epA}', 'Ed25519', decode('${derHex(keyA.publicKey)}', 'hex'), 'active', NOW() - interval '1 minute'),
              ('key_b_${suffix}', '${ids.epB}', 'Ed25519', decode('${derHex(keyB.publicKey)}', 'hex'), 'active', NOW() - interval '1 minute');

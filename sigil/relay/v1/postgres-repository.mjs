@@ -68,6 +68,7 @@ function rowToFederationDirectoryLink(row) {
   };
 }
 
+const ENDPOINT_KINDS = new Set(['human', 'agent', 'system']);
 const federationStateToJobState = {
   forwarded: 'done',
   forward_rejected: 'rejected',
@@ -485,10 +486,11 @@ export class PostgresRepository {
       return result.rows[0];
     });
   }
-  async createEndpointWithAudit({ endpointId, ownerId, installationId, runtime, displayName, keyId, publicKey, now = new Date() } = {}) {
+  async createEndpointWithAudit({ endpointId, ownerId, installationId, runtime, displayName, keyId, publicKey, kind, now = new Date() } = {}) {
+    if (!ENDPOINT_KINDS.has(kind)) throw Object.assign(new Error('kind must be human, agent, or system'), { code: 'INVALID_KIND' });
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     return this.withTransaction(async (client) => { try {
-      const endpoint = await client.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at) VALUES ($1,$2,$3,$4,$5,'active',$6) RETURNING *`, [endpointId, ownerId, runtime, installationId, displayName, timestamp]);
+      const endpoint = await client.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at) VALUES ($1,$2,$3,$4,$5,$6,'active',$7) RETURNING *`, [endpointId, ownerId, runtime, kind, installationId, displayName, timestamp]);
       await client.query(`INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from) VALUES ($1,$2,'Ed25519',$3,'active',$4)`, [keyId, endpointId, publicKey, timestamp]);
       await client.query(`INSERT INTO audit_events (event_id,event_type,subject_id,actor_id,object_type,object_id,outcome,created_at) VALUES ($1,'endpoint.created',$2,$3,'endpoint',$2,'success',$4)`, [`audit_${crypto.randomUUID()}`, endpointId, ownerId, timestamp]);
       return endpoint.rows[0];
@@ -502,8 +504,8 @@ export class PostgresRepository {
     await this.withTransaction(async (client) => {
       await client.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', $2) ON CONFLICT (human_id) DO NOTHING`, [identity.owner_id, timestamp]);
       await client.query(
-        `INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-         VALUES ($1, $2, 'relay', 'relay_system', 'Relay system', 'active', $3) ON CONFLICT (endpoint_id) DO NOTHING`,
+        `INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+         VALUES ($1, $2, 'relay', 'system', 'relay_system', 'Relay system', 'active', $3) ON CONFLICT (endpoint_id) DO NOTHING`,
         [identity.endpoint_id, identity.owner_id, timestamp],
       );
       // Same reason as the key check below: a pre-existing endpoint row owned by
@@ -833,8 +835,8 @@ export class PostgresRepository {
       [owner_id, now]
     );
     await client.query(
-      `INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, origin_domain, created_at)
-       VALUES ($1, $2, 'federated', $3, $1, 'active', $3, $4)
+      `INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, origin_domain, created_at)
+       VALUES ($1, $2, 'federated', 'agent', $3, $1, 'active', $3, $4)
        ON CONFLICT (endpoint_id) DO NOTHING`,
       [endpoint_id, owner_id, origin_domain, now]
     );

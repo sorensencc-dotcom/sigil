@@ -37,7 +37,7 @@ test('two identical concurrent sends against postgres answer 2xx and store one m
   const identity = createIdentity({ ownerId: human, endpointId, kind: 'human' });
   const publicKey = crypto.createPublicKey(identity.public_key_pem);
   await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW())`, [human]);
-  await pool.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at) VALUES ($1, $2, 'web', $3, 'web', 'active', NOW())`, [endpointId, human, `install_${endpointId}`]);
+  await pool.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at) VALUES ($1, $2, 'web', 'human', $3, 'web', 'active', NOW())`, [endpointId, human, `install_${endpointId}`]);
   await pool.query(`INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from) VALUES ($1, $2, 'Ed25519', $3, 'active', NOW())`, [identity.key_id, endpointId, Buffer.from(publicKey.export({ format: 'jwk' }).x, 'base64url')]);
   const repository = new PostgresRepository({ pool });
   const roomId = `room_${suffix}`;

@@ -26,7 +26,7 @@ async function bootstrap(t) {
   const endpointId = `ep_${suffix}`;
   await pool.query(`
     INSERT INTO humans (human_id, status, created_at) VALUES ('${humanId}', 'active', NOW());
-    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at) VALUES ('${endpointId}', '${humanId}', 'claude', 'install_${suffix}', 'A', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at) VALUES ('${endpointId}', '${humanId}', 'claude', 'agent', 'install_${suffix}', 'A', 'active', NOW());
   `);
   const repository = new PostgresRepository({ pool });
   const now = new Date('2026-08-22T00:00:00Z');
@@ -52,7 +52,7 @@ test('success path: fixture issuer allow-listed, pending match request gets clai
   const requesterHuman = `usr_req_${crypto.randomUUID().replaceAll('-', '_')}`;
   const requesterEndpoint = `ep_req_${crypto.randomUUID().replaceAll('-', '_')}`;
   await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW())`, [requesterHuman]);
-  await pool.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at) VALUES ($1, $2, 'claude', $3, 'R', 'active', NOW())`, [requesterEndpoint, requesterHuman, `install_${requesterEndpoint}`]);
+  await pool.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at) VALUES ($1, $2, 'claude', 'agent', $3, 'R', 'active', NOW())`, [requesterEndpoint, requesterHuman, `install_${requesterEndpoint}`]);
   await repository.createDirectoryMatchRequest({ issuerEndpointId: requesterEndpoint, issuerHumanId: requesterHuman, issuer: FIXTURE_ISSUER, matchTarget: 'a@example.com', expiresAt: new Date(now.getTime() + 3_600_000), homeRelay: 'relay.local', now });
 
   const token = signMockIdToken({ subject: 'sub_1', email: 'a@example.com', now });

@@ -30,9 +30,9 @@ test('migration and repository persist an envelope in live PostgreSQL', { skip: 
 
   await pool.query(`
     INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'active', NOW());
-    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-      VALUES ('${ids.codex}', '${ids.human}', 'codex', 'install_codex_${suffix}', 'Codex', 'active', NOW()),
-             ('${ids.claude}', '${ids.human}', 'claude', 'install_claude_${suffix}', 'Claude', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+      VALUES ('${ids.codex}', '${ids.human}', 'codex', 'agent', 'install_codex_${suffix}', 'Codex', 'active', NOW()),
+             ('${ids.claude}', '${ids.human}', 'claude', 'agent', 'install_claude_${suffix}', 'Claude', 'active', NOW());
     INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
       VALUES ('${ids.key}', '${ids.codex}', 'Ed25519', decode('00', 'hex'), 'active', NOW());
     INSERT INTO conversations (conversation_id, kind, created_by, created_at)
@@ -130,9 +130,9 @@ test('concurrent duplicate envelope submissions race safely to exactly one accep
   }
   await pool.query(`
     INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'active', NOW());
-    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-      VALUES ('${ids.codex}', '${ids.human}', 'codex', 'install_codex_${suffix}', 'Codex', 'active', NOW()),
-             ('${ids.claude}', '${ids.human}', 'claude', 'install_claude_${suffix}', 'Claude', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+      VALUES ('${ids.codex}', '${ids.human}', 'codex', 'agent', 'install_codex_${suffix}', 'Codex', 'active', NOW()),
+             ('${ids.claude}', '${ids.human}', 'claude', 'agent', 'install_claude_${suffix}', 'Claude', 'active', NOW());
     INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
       VALUES ('${ids.key}', '${ids.codex}', 'Ed25519', decode('00', 'hex'), 'active', NOW());
     INSERT INTO conversations (conversation_id, kind, created_by, created_at)
@@ -184,9 +184,9 @@ test('the DB-level unique index rejects a second task.request reusing an in-use 
   }
   await pool.query(`
     INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'active', NOW());
-    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-      VALUES ('${ids.codex}', '${ids.human}', 'codex', 'install_codex_${suffix}', 'Codex', 'active', NOW()),
-             ('${ids.claude}', '${ids.human}', 'claude', 'install_claude_${suffix}', 'Claude', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+      VALUES ('${ids.codex}', '${ids.human}', 'codex', 'agent', 'install_codex_${suffix}', 'Codex', 'active', NOW()),
+             ('${ids.claude}', '${ids.human}', 'claude', 'agent', 'install_claude_${suffix}', 'Claude', 'active', NOW());
     INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
       VALUES ('${ids.key}', '${ids.codex}', 'Ed25519', decode('00', 'hex'), 'active', NOW());
     INSERT INTO conversations (conversation_id, kind, created_by, created_at)
@@ -312,9 +312,9 @@ test('a genuine concurrent task_id race is translated to an audited DUPLICATE_TA
   const reviewerKeys = crypto.generateKeyPairSync('ed25519');
   await pool.query(`
     INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'active', NOW());
-    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-      VALUES ('${ids.claude}', '${ids.human}', 'claude', 'install_claude_${suffix}', 'Claude', 'active', NOW()),
-             ('${ids.reviewer}', '${ids.human}', 'claude', 'install_reviewer_${suffix}', 'Reviewer', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+      VALUES ('${ids.claude}', '${ids.human}', 'claude', 'agent', 'install_claude_${suffix}', 'Claude', 'active', NOW()),
+             ('${ids.reviewer}', '${ids.human}', 'claude', 'agent', 'install_reviewer_${suffix}', 'Reviewer', 'active', NOW());
     INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
       VALUES ('${ids.key}', '${ids.claude}', 'Ed25519', decode('00', 'hex'), 'active', NOW()),
              ('${ids.keyReviewer}', '${ids.reviewer}', 'Ed25519', decode('00', 'hex'), 'active', NOW());
@@ -386,10 +386,10 @@ test('concurrent duplicate ack requests race safely to exactly one acknowledgeme
   }
   await pool.query(`
     INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'active', NOW());
-    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-      VALUES ('${ids.codex}', '${ids.human}', 'codex', 'install_codex_${suffix}', 'Codex', 'active', NOW()),
-             ('${ids.claude}', '${ids.human}', 'claude', 'install_claude_${suffix}', 'Claude', 'active', NOW()),
-             ('${ids.other}', '${ids.human}', 'claude', 'install_other_${suffix}', 'Other', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+      VALUES ('${ids.codex}', '${ids.human}', 'codex', 'agent', 'install_codex_${suffix}', 'Codex', 'active', NOW()),
+             ('${ids.claude}', '${ids.human}', 'claude', 'agent', 'install_claude_${suffix}', 'Claude', 'active', NOW()),
+             ('${ids.other}', '${ids.human}', 'claude', 'agent', 'install_other_${suffix}', 'Other', 'active', NOW());
     INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
       VALUES ('${ids.key}', '${ids.codex}', 'Ed25519', decode('00', 'hex'), 'active', NOW());
     INSERT INTO conversations (conversation_id, kind, created_by, created_at)
@@ -448,8 +448,8 @@ test('consumeApprovalDecision matches, is single-use, and respects expiry agains
   }
   await pool.query(`
     INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'active', NOW());
-    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-      VALUES ('${ids.endpoint}', '${ids.human}', 'claude', 'install_${suffix}', 'Claude', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+      VALUES ('${ids.endpoint}', '${ids.human}', 'claude', 'agent', 'install_${suffix}', 'Claude', 'active', NOW());
     INSERT INTO human_credentials (credential_id, human_id, type, public_key, status, valid_from, created_at)
       VALUES ('cred_${suffix}', '${ids.human}', 'webauthn', decode('00', 'hex'), 'active', NOW(), NOW());
     INSERT INTO approval_decisions (decision_id, human_id, credential_id, endpoint_id, action_hash, action_hash_algorithm, target, scope, contract_version, nonce, status, created_at, expires_at)
@@ -486,8 +486,8 @@ test('consumeApprovalDecision claims exactly one decision when duplicates exist 
   }
   await pool.query(`
     INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'active', NOW());
-    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-      VALUES ('${ids.endpoint}', '${ids.human}', 'claude', 'install_${suffix}', 'Claude', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+      VALUES ('${ids.endpoint}', '${ids.human}', 'claude', 'agent', 'install_${suffix}', 'Claude', 'active', NOW());
     INSERT INTO human_credentials (credential_id, human_id, type, public_key, status, valid_from, created_at)
       VALUES ('cred_${suffix}', '${ids.human}', 'webauthn', decode('00', 'hex'), 'active', NOW(), NOW());
     INSERT INTO approval_decisions (decision_id, human_id, credential_id, endpoint_id, action_hash, action_hash_algorithm, target, scope, contract_version, nonce, status, created_at, expires_at)
@@ -522,8 +522,8 @@ test('consumeApprovalDecision ignores a decision whose approving human or creden
   }
   await pool.query(`
     INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'revoked', NOW());
-    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-      VALUES ('${ids.endpoint}', '${ids.human}', 'claude', 'install_${suffix}', 'Claude', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+      VALUES ('${ids.endpoint}', '${ids.human}', 'claude', 'agent', 'install_${suffix}', 'Claude', 'active', NOW());
     INSERT INTO human_credentials (credential_id, human_id, type, public_key, status, valid_from, created_at)
       VALUES ('cred_${suffix}', '${ids.human}', 'webauthn', decode('00', 'hex'), 'active', NOW(), NOW());
     INSERT INTO approval_decisions (decision_id, human_id, credential_id, endpoint_id, action_hash, action_hash_algorithm, target, scope, contract_version, nonce, status, created_at, expires_at)
@@ -557,8 +557,8 @@ test('consumeApprovalDecision matches a decision stored with the documented sha2
   }
   await pool.query(`
     INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'active', NOW());
-    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-      VALUES ('${ids.endpoint}', '${ids.human}', 'claude', 'install_${suffix}', 'Claude', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+      VALUES ('${ids.endpoint}', '${ids.human}', 'claude', 'agent', 'install_${suffix}', 'Claude', 'active', NOW());
     INSERT INTO human_credentials (credential_id, human_id, type, public_key, status, valid_from, created_at)
       VALUES ('cred_${suffix}', '${ids.human}', 'webauthn', decode('00', 'hex'), 'active', NOW(), NOW());
     INSERT INTO approval_decisions (decision_id, human_id, credential_id, endpoint_id, action_hash, action_hash_algorithm, target, scope, contract_version, nonce, status, created_at, expires_at)
@@ -589,8 +589,8 @@ test('a high-risk capability envelope is rejected without a decision, accepted o
   const keys = crypto.generateKeyPairSync('ed25519');
   await pool.query(`
     INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'active', NOW());
-    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-      VALUES ('${ids.endpoint}', '${ids.human}', 'claude', 'install_${suffix}', 'Claude', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+      VALUES ('${ids.endpoint}', '${ids.human}', 'claude', 'agent', 'install_${suffix}', 'Claude', 'active', NOW());
     INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
       VALUES ('${ids.key}', '${ids.endpoint}', 'Ed25519', decode('00', 'hex'), 'active', NOW());
     INSERT INTO conversations (conversation_id, kind, created_by, created_at)

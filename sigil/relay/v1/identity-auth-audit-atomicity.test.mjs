@@ -25,8 +25,8 @@ async function seedHuman(pool, suffix) {
 
 async function seedEndpoint(pool, { endpointId, humanId, displayName }) {
   await pool.query(
-    `INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-     VALUES ($1, $2, 'codex', $3, $4, 'active', NOW())`,
+    `INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+     VALUES ($1, $2, 'codex', 'agent', $3, $4, 'active', NOW())`,
     [endpointId, humanId, `install_${endpointId}`, displayName || `Codex_${endpointId}`]
   );
 }

@@ -27,7 +27,7 @@ async function seedStream(pool) {
     conversationId: `conv_${suffix}`,
   };
   await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', now()), ($2, 'active', now())`, [ids.senderOwnerId, ids.recipientOwnerId]);
-  await pool.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at) VALUES ($3, $1, 'test', $3, 'sender', 'active', now()), ($4, $2, 'test', $4, 'recipient', 'active', now())`, [ids.senderOwnerId, ids.recipientOwnerId, ids.senderEndpointId, ids.recipientEndpointId]);
+  await pool.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at) VALUES ($3, $1, 'test', 'agent', $3, 'sender', 'active', now()), ($4, $2, 'test', 'agent', $4, 'recipient', 'active', now())`, [ids.senderOwnerId, ids.recipientOwnerId, ids.senderEndpointId, ids.recipientEndpointId]);
   await pool.query(`INSERT INTO conversations (conversation_id, kind, created_by, created_at) VALUES ($2, 'direct', $1, now())`, [ids.senderOwnerId, ids.conversationId]);
   await pool.query(`INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from) VALUES ($2, $1, 'Ed25519', 'fixture-public-key', 'active', now())`, [ids.senderEndpointId, ids.keyId]);
   return ids;

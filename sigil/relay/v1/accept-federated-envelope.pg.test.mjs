@@ -57,8 +57,8 @@ test('federated envelope with an unregistered foreign sender is accepted and sha
   // Recipient identity is real; the sender is deliberately absent.
   await pool.query(`
     INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.owner}', 'active', NOW());
-    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-      VALUES ('${ids.recipient}', '${ids.owner}', 'claude', 'install_claude_${suffix}', 'Claude', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+      VALUES ('${ids.recipient}', '${ids.owner}', 'claude', 'agent', 'install_claude_${suffix}', 'Claude', 'active', NOW());
     INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
       VALUES ('${ids.recipientKey}', '${ids.recipient}', 'Ed25519', decode('00', 'hex'), 'active', NOW());
   `);
@@ -166,9 +166,9 @@ test('federated envelope whose signature.key_id collides with a local endpoint k
   // key_id but with a foreign sender endpoint id.
   await pool.query(`
     INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.owner}', 'active', NOW());
-    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-      VALUES ('${ids.recipient}', '${ids.owner}', 'claude', 'install_claude_${suffix}', 'Claude', 'active', NOW()),
-             ('${ids.localEndpoint}', '${ids.owner}', 'claude', 'install_victim_${suffix}', 'Victim', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+      VALUES ('${ids.recipient}', '${ids.owner}', 'claude', 'agent', 'install_claude_${suffix}', 'Claude', 'active', NOW()),
+             ('${ids.localEndpoint}', '${ids.owner}', 'claude', 'agent', 'install_victim_${suffix}', 'Victim', 'active', NOW());
     INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
       VALUES ('${ids.recipientKey}', '${ids.recipient}', 'Ed25519', decode('00', 'hex'), 'active', NOW()),
              ('${ids.collidingKey}', '${ids.localEndpoint}', 'Ed25519', decode('00', 'hex'), 'active', NOW());
@@ -257,8 +257,8 @@ test('federated direct envelope into a local room → 403 ROUTE_NOT_AUTHORIZED, 
   const senderPub = senderKeys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url');
   await pool.query(`
     INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.owner}', 'active', NOW());
-    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-      VALUES ('${ids.recipient}', '${ids.owner}', 'claude', 'install_claude_${suffix}', 'Claude', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+      VALUES ('${ids.recipient}', '${ids.owner}', 'claude', 'agent', 'install_claude_${suffix}', 'Claude', 'active', NOW());
     INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
       VALUES ('${ids.recipientKey}', '${ids.recipient}', 'Ed25519', decode('00', 'hex'), 'active', NOW());
   `);

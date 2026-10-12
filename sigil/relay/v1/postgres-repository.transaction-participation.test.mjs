@@ -51,7 +51,7 @@ test('claimDirectoryMatch runs on a caller-supplied client without opening its o
   const ids = { a: `usr_a_${suffix}`, b: `usr_b_${suffix}`, epA: `ep_a_${suffix}` };
   await pool.query(`
     INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.a}', 'active', NOW()), ('${ids.b}', 'active', NOW());
-    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at) VALUES ('${ids.epA}', '${ids.a}', 'claude', 'install_a', 'A', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at) VALUES ('${ids.epA}', '${ids.a}', 'claude', 'agent', 'install_a', 'A', 'active', NOW());
     INSERT INTO oidc_issuer_allowlist (issuer, display_label, enabled, added_at) VALUES ('https://accounts.example.com', 'Example', TRUE, NOW());
   `);
   const now = new Date('2026-08-22T00:00:00Z');

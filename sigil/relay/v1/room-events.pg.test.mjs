@@ -46,8 +46,8 @@ test('postgres emitRoomEvent persists with a room_seq and a repeat key writes no
   await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW())`, [human]);
   for (const [endpointId, runtime] of [[web, 'web'], [claude, 'claude']]) {
     await pool.query(
-      `INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-       VALUES ($1, $2, $3, $4, $3, 'active', NOW())`,
+      `INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+       VALUES ($1, $2, $3, CASE $3 WHEN 'relay' THEN 'system' WHEN 'human' THEN 'human' WHEN 'web' THEN 'human' ELSE 'agent' END, $4, $3, 'active', NOW())`,
       [endpointId, human, runtime, `install_${endpointId}`],
     );
   }

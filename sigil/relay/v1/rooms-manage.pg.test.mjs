@@ -13,8 +13,8 @@ async function seed(pool, suffix) {
   await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW())`, [ids.human]);
   for (const [endpointId, runtime] of [[ids.web, 'web'], [ids.claude, 'claude']]) {
     await pool.query(
-      `INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-       VALUES ($1, $2, $3, $4, $3, 'active', NOW())`,
+      `INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+       VALUES ($1, $2, $3, CASE $3 WHEN 'relay' THEN 'system' WHEN 'human' THEN 'human' WHEN 'web' THEN 'human' ELSE 'agent' END, $4, $3, 'active', NOW())`,
       [endpointId, ids.human, runtime, `install_${endpointId}`],
     );
   }

@@ -10,7 +10,7 @@ test('bearer authenticator resolves hashed endpoint token without exposing token
 });
 
 test('bearer authenticator resolves owner_id/human_id from the registry when given', () => {
-  const registry = new Map([['ep_claude', { owner_id: 'usr_soren', endpoint_id: 'ep_claude', status: 'active' }]]);
+  const registry = new Map([['ep_claude', { owner_id: 'usr_soren', endpoint_id: 'ep_claude', status: 'active', kind: 'human' }]]);
   const authenticate = createBearerAuthenticator(new Map([[hashBearerToken('secret_1'), 'ep_claude']]), registry);
   assert.deepEqual(
     authenticate({ headers: { authorization: 'Bearer secret_1' } }),
@@ -31,4 +31,14 @@ test('only human-kind endpoints get human_id', () => {
   const agent = auth({ headers: { authorization: 'Bearer a' } });
   assert.equal(agent.human_id, undefined);
   assert.equal(agent.owner_id, 'usr_chris');
+});
+
+test('human_id is granted only when registry kind is exactly human', () => {
+  for (const [kind, expectHuman] of [['human', true], ['agent', false], ['system', false], [undefined, false]]) {
+    const registry = new Map([['ep_x', { owner_id: 'usr_chris', kind }]]);
+    const auth = createBearerAuthenticator(new Map([[hashBearerToken('t'), 'ep_x']]), registry);
+    const principal = auth({ headers: { authorization: 'Bearer t' } });
+    assert.equal(principal.owner_id, 'usr_chris', `kind=${kind}`);
+    assert.equal(principal.human_id, expectHuman ? 'usr_chris' : undefined, `kind=${kind}`);
+  }
 });

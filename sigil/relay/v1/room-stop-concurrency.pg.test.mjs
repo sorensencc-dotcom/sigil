@@ -49,7 +49,7 @@ async function world(t) {
   const system = createIdentity({ ownerId: ROOM_SYSTEM_OWNER_ID, endpointId: ROOM_SYSTEM_ENDPOINT_ID, kind: 'system' });
   await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW())`, [human]);
   for (const [identity, runtime] of [[web, 'web'], [agent, 'claude']]) {
-    await pool.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at) VALUES ($1, $2, $3, $4, $3, 'active', NOW())`, [identity.endpoint_id, human, runtime, `install_${identity.endpoint_id}`]);
+    await pool.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at) VALUES ($1, $2, $3, CASE $3 WHEN 'relay' THEN 'system' WHEN 'human' THEN 'human' WHEN 'web' THEN 'human' ELSE 'agent' END, $4, $3, 'active', NOW())`, [identity.endpoint_id, human, runtime, `install_${identity.endpoint_id}`]);
     await pool.query(`INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from) VALUES ($1, $2, 'Ed25519', $3, 'active', NOW())`, [identity.key_id, identity.endpoint_id, Buffer.from(crypto.createPublicKey(identity.public_key_pem).export({ format: 'jwk' }).x, 'base64url')]);
   }
   const repository = new PostgresRepository({ pool });

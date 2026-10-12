@@ -30,8 +30,8 @@ test('postgres accept path: a lost idempotency-key race answers 409 DUPLICATE_ME
     const keyId = `key_${name}_${suffix}`;
     const keys = crypto.generateKeyPairSync('ed25519');
     await pool.query(
-      `INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-       VALUES ($1, $2, $3, $4, $3, 'active', NOW())`,
+      `INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+       VALUES ($1, $2, $3, CASE $3 WHEN 'relay' THEN 'system' WHEN 'human' THEN 'human' WHEN 'web' THEN 'human' ELSE 'agent' END, $4, $3, 'active', NOW())`,
       [endpointId, human, name, `install_${endpointId}`],
     );
     await pool.query(

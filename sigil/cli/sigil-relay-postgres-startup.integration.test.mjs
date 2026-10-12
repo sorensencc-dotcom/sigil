@@ -73,8 +73,8 @@ test('sigil relay up auto-migrates fresh database and registers endpoints', { sk
   for (const ep of registryData.endpoints) {
     await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW()) ON CONFLICT (human_id) DO NOTHING`, [ep.owner_id]);
     await pool.query(`
-      INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-      VALUES ($1, $2, $3, $4, $5, 'active', NOW())
+      INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+      VALUES ($1, $2, $3, CASE $3 WHEN 'relay' THEN 'system' WHEN 'human' THEN 'human' WHEN 'web' THEN 'human' ELSE 'agent' END, $4, $5, 'active', NOW())
       ON CONFLICT (endpoint_id) DO UPDATE SET status = 'active'
     `, [ep.endpoint_id, ep.owner_id, ep.kind ?? 'agent', `install_${ep.endpoint_id}`, ep.endpoint_id]);
     if (ep.public_key_pem) {

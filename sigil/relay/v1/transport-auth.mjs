@@ -28,9 +28,8 @@ export function createBearerAuthenticator(tokenHashes, registry) {
     if (!endpoint?.owner_id) return { endpoint_id: endpointId };
     // human_id proves a human is calling; agent endpoints act for their owner
     // but are not the owner (rooms design: agents act under their own identity).
-    return endpoint.kind === 'agent'
-      ? { endpoint_id: endpointId, owner_id: endpoint.owner_id }
-      : { endpoint_id: endpointId, owner_id: endpoint.owner_id, human_id: endpoint.owner_id };
+    const principal = { endpoint_id: endpointId, owner_id: endpoint.owner_id };
+    return endpoint.kind === 'human' ? { ...principal, human_id: endpoint.owner_id } : principal;
   };
 }
 
