@@ -39,6 +39,10 @@ test('human add provisions a human, prints ids, and publishes human.provisioned'
   const row = (await pool.query('SELECT owner_id, kind, display_name FROM endpoints WHERE endpoint_id = $1', [endpointId])).rows[0];
   assert.deepEqual({ ...row }, { owner_id: humanId, kind: 'human', display_name: 'Carol' });
   assert.equal((await pool.query('SELECT count(*)::int AS n FROM human_signing_keys')).rows[0].n, 1);
+  const attr = (await pool.query(`SELECT kind, value_or_ciphertext FROM human_attributes WHERE human_id = $1`, [humanId])).rows;
+  assert.equal(attr.length, 1);
+  assert.equal(attr[0].kind, 'name');
+  assert.equal(attr[0].value_or_ciphertext.toString('utf8'), 'Carol');
 
   const payload = await Promise.race([received, new Promise((_, reject) => setTimeout(() => reject(new Error('no sigil_admin notification')), 5000))]);
   assert.deepEqual(JSON.parse(payload), { type: 'human.provisioned', human_id: humanId, endpoint_id: endpointId, room_ids: [] });

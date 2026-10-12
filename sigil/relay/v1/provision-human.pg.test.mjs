@@ -101,13 +101,25 @@ test('an outer rollback leaves no human, endpoint, or key rows', { skip }, async
   }
 });
 
-test('a missing wrap key rejects WRAP_KEY_UNAVAILABLE before any insert', { skip }, async (t) => {
-  const pool = await freshPool(t);
+test('a missing wrap key rejects WRAP_KEY_UNAVAILABLE before any query', async () => {
+  const client = { query: async () => { throw new Error('query must not run'); } };
   await assert.rejects(
-    withTransaction(pool, (client) => provisionHumanTx(client, {})),
+    provisionHumanTx(client, {}),
     (error) => error.code === 'WRAP_KEY_UNAVAILABLE',
   );
-  assert.equal((await pool.query('SELECT count(*)::int AS n FROM humans')).rows[0].n, 0);
+});
+
+test('an attribute without a value rejects INVALID_ATTRIBUTE and stores nothing', { skip }, async (t) => {
+  const pool = await freshPool(t);
+  for (const value of [undefined, null]) {
+    await assert.rejects(
+      withTransaction(pool, (client) => provisionHumanTx(client, { wrapKey, attributes: [{ kind: 'email', value }] })),
+      (error) => error.code === 'INVALID_ATTRIBUTE',
+    );
+  }
+  for (const table of ['humans', 'human_attributes']) {
+    assert.equal((await pool.query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n, 0, table);
+  }
 });
 
 test('without a displayName the display name is the endpoint id', { skip }, async (t) => {

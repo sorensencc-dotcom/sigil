@@ -4,6 +4,9 @@ import { wrapPrivateKey } from './key-wrap.mjs';
 const hex = (prefix) => `${prefix}${crypto.randomBytes(16).toString('hex')}`;
 
 async function insertHumanAttribute(client, humanId, attr, ts) {
+  if (attr.value === null || attr.value === undefined) {
+    throw Object.assign(new Error(`attribute ${attr.kind ?? 'name'} requires a value`), { code: 'INVALID_ATTRIBUTE' });
+  }
   // Provisioning never vouches for an attribute, whatever the caller passes.
   await client.query(
     `INSERT INTO human_attributes (attribute_id, human_id, kind, value_or_ciphertext, verification_state, source, observed_at, created_at)
