@@ -32,11 +32,12 @@ function call(port, method, path, authorization, body) {
   });
 }
 
-async function withWorld(fn, { signer = true, spy = false } = {}) {
+async function withWorld(fn, { signer = true, spy = false, custody = null } = {}) {
   const human = createIdentity({ ownerId: 'usr_chris', endpointId: 'ep_web', kind: 'human' });
+  const web2 = createIdentity({ ownerId: 'usr_chris', endpointId: 'ep_web2', kind: 'human' });
   const registry = new Map([
     ['ep_web', withKeys({ owner_id: 'usr_chris', status: 'active', kind: 'human', key_id: human.key_id, public_key: crypto.createPublicKey(human.public_key_pem) })],
-    ['ep_web2', { owner_id: 'usr_chris', status: 'active', kind: 'human' }],
+    ['ep_web2', withKeys({ owner_id: 'usr_chris', status: 'active', kind: 'human', key_id: web2.key_id, public_key: crypto.createPublicKey(web2.public_key_pem) })],
     ['ep_claude', { owner_id: 'usr_chris', status: 'active', kind: 'agent' }],
     ['ep_stranger', { owner_id: 'usr_other', status: 'active', kind: 'human' }],
   ]);
@@ -51,14 +52,18 @@ async function withWorld(fn, { signer = true, spy = false } = {}) {
   const frames = [];
   const stream = { notify() {}, notifyReceipt() {}, notifyRoom: (id, frame) => { frames.push([id, frame]); return true; } };
   const calls = [];
-  let humanSigner = signer ? createRoomHumanSigner({ identity: human, registry }) : null;
-  if (humanSigner && spy) {
+  let humanSigner = signer ? createRoomHumanSigner({ identity: human, repository }) : null;
+  if (humanSigner && custody) {
     const real = humanSigner;
-    humanSigner = { ...real, signForEndpoint: (id) => { calls.push(id); return real.signForEndpoint(id); } };
+    humanSigner = { ...real, signForEndpoint: async (id) => (id === 'ep_web2' ? custody({ web2, human }) : real.signForEndpoint(id)) };
+  }
+  if (humanSigner && spy) {
+    const inner = humanSigner;
+    humanSigner = { ...inner, signForEndpoint: (id) => { calls.push(id); return inner.signForEndpoint(id); } };
   }
   const server = createRelayServer({ registry, repository, stream, now: () => NOW, roomSystemIdentity: systemIdentity, ...(humanSigner ? { humanSigner } : {}), authenticate: async (request) => principals[request.headers.authorization] ?? null });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  try { await fn({ port: server.address().port, repository, registry, frames, calls, human }); } finally { await new Promise((resolve) => server.close(resolve)); }
+  try { await fn({ port: server.address().port, repository, registry, frames, calls, human, web2 }); } finally { await new Promise((resolve) => server.close(resolve)); }
 }
 
 const send = (w, room, body, auth = 'Bearer web') => call(w.port, 'POST', `/v1/rooms/${room}/messages`, auth, body);
@@ -144,21 +149,61 @@ test('a non-member gets 404 and an agent gets 403 HUMAN_CONTEXT_REQUIRED', async
   });
 });
 
-test('a human endpoint that is not the loaded identity gets 403 and the signer is never called', async () => {
+const web2Key = ({ web2 }) => {
+  return { privateKey: crypto.createPrivateKey(web2.private_key_pem), endpoint: { owner_id: 'usr_chris', endpoint_id: 'ep_web2', key_id: web2.key_id, kind: 'human' } };
+};
+
+test('a human endpoint that is not the operator reaches the signer and posts as itself', async () => {
+  await withWorld(async (w) => {
+    const res = await send(w, 'room_1', { text: 'from two', idempotency_key: 'k' }, 'Bearer web2');
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    assert.deepEqual(w.calls, ['ep_web2']);
+    const row = await w.repository.lookupRoomMessage('room_1', res.body.message_id);
+    assert.equal(row.envelope.sender.endpoint_id, 'ep_web2');
+    assert.equal(crypto.verify(null, signedBytes(row.envelope), w.registry.get('ep_web2').keys.get(w.web2.key_id).public_key, Buffer.from(row.envelope.signature.value, 'base64url')), true);
+  }, { spy: true, custody: web2Key });
+});
+
+test('an endpoint with no custodial key gets 403 NO_SIGNING_KEY', async () => {
   await withWorld(async (w) => {
     const res = await send(w, 'room_1', { text: 'x', idempotency_key: 'k' }, 'Bearer web2');
     assert.equal(res.status, 403);
     assert.equal(res.body.code, 'NO_SIGNING_KEY');
-    assert.deepEqual(w.calls, []);
+    assert.deepEqual(w.calls, ['ep_web2']);
   }, { spy: true });
 });
 
-test('no humanSigner answers 503', async () => {
+test('no humanSigner answers 503 NO_OPERATOR_IDENTITY and signs nothing', async () => {
   await withWorld(async (w) => {
     const res = await send(w, 'room_1', { text: 'x', idempotency_key: 'k' });
     assert.equal(res.status, 503);
-    assert.equal(res.body.code, 'ROOM_SEND_UNAVAILABLE');
-  }, { signer: false });
+    assert.equal(res.body.code, 'NO_OPERATOR_IDENTITY');
+    assert.deepEqual(w.calls, []);
+  }, { signer: false, spy: true });
+});
+
+test('KEY_MISMATCH and WRAP_KEY_UNAVAILABLE from the signer answer 503 with the same code', async () => {
+  for (const code of ['KEY_MISMATCH', 'WRAP_KEY_UNAVAILABLE']) {
+    await withWorld(async (w) => {
+      const res = await send(w, 'room_1', { text: 'x', idempotency_key: 'k' }, 'Bearer web2');
+      assert.equal(res.status, 503);
+      assert.equal(res.body.code, code);
+      assert.equal(/PRIVATE|BEGIN/.test(JSON.stringify(res.body)), false);
+    }, { custody: () => { throw Object.assign(new Error('internal detail ep_web2'), { code }); } });
+  }
+});
+
+test('an envelope-layer UNKNOWN_ENDPOINT or INVALID_SIGNATURE answers 500 INTERNAL', async () => {
+  await withWorld(async (w) => {
+    const res = await send(w, 'room_1', { text: 'x', idempotency_key: 'k1' }, 'Bearer web2');
+    assert.equal(res.status, 500, JSON.stringify(res.body));
+    assert.equal(res.body.code, 'INTERNAL');
+  }, { custody: ({ human }) => ({ privateKey: crypto.createPrivateKey(human.private_key_pem), endpoint: { owner_id: 'usr_chris', endpoint_id: 'ep_web2', key_id: human.key_id, kind: 'human' } }) });
+  await withWorld(async (w) => {
+    const res = await send(w, 'room_1', { text: 'x', idempotency_key: 'k2' }, 'Bearer web2');
+    assert.equal(res.status, 500, JSON.stringify(res.body));
+    assert.equal(res.body.code, 'INTERNAL');
+  }, { custody: ({ web2 }) => ({ privateKey: crypto.createPrivateKey(web2.private_key_pem), endpoint: { owner_id: 'usr_chris', endpoint_id: 'ep_ghost', key_id: web2.key_id, kind: 'human' } }) });
 });
 
 test('a post sends one room.updated per human member and a rolled-back accept sends none', async () => {

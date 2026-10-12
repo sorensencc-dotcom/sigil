@@ -296,6 +296,10 @@ export class PostgresRepository {
       keys: new Map(k.rows.map((r) => [r.key_id, { ...r, public_key: crypto.createPublicKey({ key: r.public_key, format: 'der', type: 'spki' }) }])),
     };
   }
+  async loadWrappedSigningKey(keyId, client = this.pool) {
+    const result = await client.query('SELECT wrapped_private_key FROM human_signing_keys WHERE key_id = $1', [keyId]);
+    return result.rows[0]?.wrapped_private_key ?? null;
+  }
   // No `client = this.pool` default here, unlike the other lookups above --
   // design §3 requires this one to always run on the transaction's client
   // since it takes a row lock; a lock taken on a throwaway pool connection

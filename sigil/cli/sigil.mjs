@@ -27,6 +27,7 @@ import { createStreamServer } from '../relay/v1/stream-server.mjs';
 import { createTicketStore } from '../relay/v1/ticket-store.mjs';
 import { seedRegistry } from './registry-seed.mjs';
 import { createRoomHumanSigner } from '../relay/v1/room-human-signer.mjs';
+import { loadWrapKey } from '../relay/v1/key-wrap.mjs';
 import { RelayClient } from '../connectors/v1/relay-client.mjs';
 import { LocalOutbox } from '../connectors/v1/local-outbox.mjs';
 import { loadConfigFile, resolveConfig } from './config-resolver.mjs';
@@ -55,7 +56,7 @@ Commands:
                                                             Run the agent daemon; --room-bridge answers room.message deliveries via a local CLI, or via a local Ollama router (--router-* flags: model, Ollama URL, timeout, context messages, sole-agent fallback on|off, default on)
   agentmail provision --identity path --installation-id id [--registry path] [--audit-output path]
                                                             Explicitly provision non-mailbox ep_ingress; creates no grants or inbox mapping
-  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] [--relay-request-freshness-ms N] [--room-system-identity path] [--browser-origin origin]... [--room-human-identity path] [--public-origin origin] [--room-key-wrap-key path] [--reconcile-kind endpoint_id=kind]... [--p2p [--p2p-identity path] [--p2p-listen multiaddr] [--p2p-no-mdns]] Run a local relay; --room-system-identity is a dedicated identity file (endpoint ep_relay_system, owner relay_system) that signs room.event envelopes, without it rooms emit no events and the router route answers 503 --browser-origin is an exact origin a browser may call from (repeatable; default none); --room-human-identity is the human identity file the relay signs POST /v1/rooms/{id}/messages with (its key must match the registry key; without it the route answers 503). If you front the relay with a proxy, do not log request URLs for /v1/stream: they carry single-use tickets (blocks; Ctrl+C to stop; set SIGIL_STREAM_SEQ_ENABLED=1 to stamp stream sequences)
+  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] [--relay-request-freshness-ms N] [--room-system-identity path] [--browser-origin origin]... [--room-human-identity path] [--public-origin origin] [--room-key-wrap-key env_var] [--reconcile-kind endpoint_id=kind]... [--p2p [--p2p-identity path] [--p2p-listen multiaddr] [--p2p-no-mdns]] Run a local relay; --room-system-identity is a dedicated identity file (endpoint ep_relay_system, owner relay_system) that signs room.event envelopes, without it rooms emit no events and the router route answers 503 --browser-origin is an exact origin a browser may call from (repeatable; default none); --room-human-identity is the human identity file the relay signs POST /v1/rooms/{id}/messages with (its key must match the registry key; without it the route answers 503). If you front the relay with a proxy, do not log request URLs for /v1/stream: they carry single-use tickets (blocks; Ctrl+C to stop; set SIGIL_STREAM_SEQ_ENABLED=1 to stamp stream sequences)
   relay well-known generate --identity path --domain domain --endpoint url [--ws-endpoint url] [--output path]
                                                             Emit this relay's .well-known/sigil discovery document from a designated endpoint identity
   oidc-issuer add <issuer> --client-id id [--label text] [--assurance level] [--database-url url]
@@ -317,7 +318,9 @@ async function cmdRelayUp(argv) {
   const humanIdentityPath = opt(args, ['room-human-identity']);
   if (humanIdentityPath) {
     try {
-      humanSigner = createRoomHumanSigner({ identity: loadIdentity(humanIdentityPath), registry });
+      const wrapKeyRef = opt(args, ['room-key-wrap-key']);
+      humanSigner = createRoomHumanSigner({ identity: loadIdentity(humanIdentityPath), repository, wrapKey: wrapKeyRef ? loadWrapKey(wrapKeyRef) : undefined });
+      await humanSigner.verifyOperator();
     } catch (error) {
       throw error.code ? new Error(`${error.code}: ${error.message}`) : error;
     }

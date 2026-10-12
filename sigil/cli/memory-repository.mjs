@@ -234,6 +234,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       if (!row || row.origin_domain) return null;
       return row.keys instanceof Map ? { ...row, kind: row.kind ?? 'human' } : entryFromRegistryRow(row);
     },
+    async loadWrappedSigningKey() { return null; },
     async ensureRoomSystemEndpoint({ identity }) {
       const publicKey = identityKeys(identity).publicKey;
       const existing = registry.get(identity.endpoint_id);

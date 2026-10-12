@@ -133,10 +133,9 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
   }
 
   if (request.method === 'POST' && resource === 'messages' && !segment) {
-    if (!humanSigner || !buildAcceptOptions) return fail(response, requestId, 503, 'ROOM_SEND_UNAVAILABLE', 'Human send is not configured (--room-human-identity)');
+    if (!humanSigner) return fail(response, requestId, 503, 'NO_OPERATOR_IDENTITY', 'Human send is not configured (--room-human-identity)');
+    if (!buildAcceptOptions) return fail(response, requestId, 503, 'ROOM_SEND_UNAVAILABLE', 'Human send is not available');
     if ((await isAgentCaller(repository, registry, principal)) || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'An authenticated human context is required');
-    // The seam is never the only guard: only the loaded identity's endpoint may post.
-    if (principal.endpoint_id !== humanSigner.endpointId) return fail(response, requestId, 403, 'NO_SIGNING_KEY', 'This endpoint cannot post through the relay');
     const body = await readJson(request, readBody);
     if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.idempotency_key !== 'string' || !body.idempotency_key || body.idempotency_key.length > 128) return fail(response, requestId, 400, 'INVALID_REQUEST', 'idempotency_key is required');
     // Only the client's text, thread, and mentions survive: idempotency_key is
@@ -155,7 +154,14 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     const replay = await stored();
     if (replay) return send(response, requestId, 200, { code: 'OK', ...replay });
 
-    const signer = humanSigner.signForEndpoint(principal.endpoint_id);
+    let signer;
+    try {
+      signer = await humanSigner.signForEndpoint(principal.endpoint_id);
+    } catch (error) {
+      if (error.code === 'NO_SIGNING_KEY') return fail(response, requestId, 403, 'NO_SIGNING_KEY', 'This endpoint cannot post through the relay');
+      if (error.code === 'KEY_MISMATCH' || error.code === 'WRAP_KEY_UNAVAILABLE') return fail(response, requestId, 503, error.code, 'Relay signing is unavailable for this endpoint');
+      throw error;
+    }
     const outbox = new LocalOutbox({ privateKey: signer.privateKey, endpoint: signer.endpoint });
     const created = now instanceof Date ? now : new Date(now);
     const { envelope } = outbox.queue({
@@ -173,6 +179,8 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
       const winner = await stored();
       if (winner) return send(response, requestId, 200, { code: 'OK', ...winner });
     }
+    // The relay signed with a key its own registry rejects: a relay fault, not the caller's.
+    if (result.status === 401 && (result.body?.code === 'UNKNOWN_ENDPOINT' || result.body?.code === 'INVALID_SIGNATURE')) return fail(response, requestId, 500, 'INTERNAL', 'Relay failed to sign the message');
     if (result.status !== 202) return send(response, requestId, result.status, result.body);
     const row = await repository.lookupRoomMessage(roomId, envelope.message_id);
     return send(response, requestId, result.body.duplicate ? 200 : 201, { code: 'OK', message_id: result.body.message_id, room_seq: row?.room_seq ?? null });
