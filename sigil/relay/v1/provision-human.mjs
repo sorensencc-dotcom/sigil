@@ -45,11 +45,15 @@ export async function provisionHumanTx(client, { displayName, attributes = [], w
   return { human_id: humanId, endpoint_id: endpointId, key_id: keyId };
 }
 
-export async function lockManagerRows(client, humanId, roomIds) {
+// Locks the human's active rows and, when given, the target endpoint's row in
+// the same rooms (removed or not, since a restore updates it) in one sorted
+// statement, so two actors adding each other cannot lock in opposite orders.
+export async function lockManagerRows(client, humanId, roomIds, targetEndpointId = null) {
   const { rows } = await client.query(
-    `SELECT m.* FROM conversation_members m JOIN endpoints e ON e.endpoint_id = m.endpoint_id
-      WHERE e.owner_id = $1 AND m.conversation_id = ANY($2) AND m.removed_at IS NULL
-      ORDER BY m.conversation_id, m.endpoint_id FOR UPDATE OF m`, [humanId, roomIds]);
+    `SELECT m.*, e.owner_id FROM conversation_members m JOIN endpoints e ON e.endpoint_id = m.endpoint_id
+      WHERE m.conversation_id = ANY($2)
+        AND ((e.owner_id = $1 AND m.removed_at IS NULL) OR m.endpoint_id = $3)
+      ORDER BY m.conversation_id, m.endpoint_id FOR UPDATE OF m`, [humanId, roomIds, targetEndpointId]);
   return rows;
 }
 
@@ -63,8 +67,8 @@ export async function addHumanToRoomsTx(client, { endpointId, memberships, actor
     if (!GRANTABLE.has(role)) throw Object.assign(new Error('role must be member or room_manager'), { code: 'INVALID_ROLE' });
   }
   const roomIds = [...new Set(memberships.map((m) => m.roomId))].sort();
-  const locked = await lockManagerRows(client, actorHumanId, roomIds);
-  const managed = new Set(locked.filter((r) => MANAGER.has(r.role)).map((r) => r.conversation_id));
+  const locked = await lockManagerRows(client, actorHumanId, roomIds, endpointId);
+  const managed = new Set(locked.filter((r) => r.owner_id === actorHumanId && r.removed_at === null && MANAGER.has(r.role)).map((r) => r.conversation_id));
   const missing = roomIds.filter((id) => !managed.has(id));
   if (missing.length) throw Object.assign(new Error(`actor does not manage: ${missing.join(', ')}`), { code: 'ROUTE_NOT_AUTHORIZED', rooms: missing });
   const target = await repository.lookupTrustedEndpoint(endpointId, client);

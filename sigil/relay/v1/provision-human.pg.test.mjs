@@ -274,3 +274,31 @@ test('lockManagerRows returns only active rows in the named rooms, ordered', { s
   const rows = await withTransaction(pool, (client) => lockManagerRows(client, actor.human_id, ['room_b', 'room_a', 'room_c']));
   assert.deepEqual(rows.map((r) => r.conversation_id), ['room_a', 'room_b']);
 });
+
+test('two managers adding each other concurrently complete without a cross-actor deadlock', { skip }, async (t) => {
+  const { pool, repository, actor } = await setupRooms(t, ['room_a']);
+  const other = await withTransaction(pool, (client) => provisionHumanTx(client, { displayName: 'Other', wrapKey, now: NOW }));
+  await pool.query(`INSERT INTO conversation_members (conversation_id, endpoint_id, role, added_by, added_at) VALUES ('room_a', $1, 'room_manager', $2, $3)`, [other.endpoint_id, actor.human_id, NOW]);
+
+  // Hold every writer at the insert step until both have arrived (or 400ms), so a
+  // lock-order inversion between the two actors' row locks is forced, not left to timing.
+  let arrived = 0;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const timer = setTimeout(release, 400);
+  t.after(() => clearTimeout(timer));
+  const gated = {
+    lookupTrustedEndpoint: (...args) => repository.lookupTrustedEndpoint(...args),
+    addRoomMember: async (...args) => {
+      arrived += 1;
+      if (arrived === 2) release();
+      await gate;
+      return repository.addRoomMember(...args);
+    },
+  };
+  const add = (actorSide, targetSide) => withTransaction(pool, (client) => addHumanToRoomsTx(client, {
+    endpointId: targetSide.endpoint_id, memberships: [{ roomId: 'room_a', role: 'member' }], actorHumanId: actorSide.human_id, repository: gated, now: NOW,
+  }));
+  const results = await Promise.allSettled([add(actor, other), add(other, actor)]);
+  assert.deepEqual(results.map((r) => r.status), ['fulfilled', 'fulfilled'], JSON.stringify(results.map((r) => r.reason?.code)));
+});

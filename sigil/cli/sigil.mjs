@@ -72,7 +72,7 @@ Commands:
   peer get <domain> [--database-url url]                   Show one pinned peer relay
   peer remove <domain> [--database-url url]                Unpin a peer relay
   peer rotate <domain> --confirm [--database-url url]      Force-overwrite a pinned peer's key set, bypassing the TOFU mismatch check
-  human add --name <name> [--database-url url] [--room-key-wrap-key env_var]   Provision a human with a relay-custodial signing key
+  human add --name <name> [--room <room_id>:<member|room_manager>]... [--identity path] [--database-url url] [--room-key-wrap-key env_var]   Provision a human with a relay-custodial signing key; with --room the --identity operator must own or manage each room
   human add-to-room --human <human_id> --room <room_id>:<member|room_manager>... [--identity path] [--database-url url]   Add a provisioned human to rooms; the --identity operator must own or manage each room
   endpoint revoke <endpoint_id> [--database-url url]       Revoke an endpoint and retire all of its signing keys
   federation outbox list [--database-url url]              List queue-mode federation forward jobs: state counts, then one row per job (no envelope bodies)

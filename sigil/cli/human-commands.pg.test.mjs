@@ -61,14 +61,6 @@ test('human add without a wrap key fails and writes nothing', { skip: !connectio
   assert.equal((await pool.query('SELECT count(*)::int AS n FROM humans')).rows[0].n, 0);
 });
 
-test('human add no longer accepts --room', { skip: !connectionString }, async (t) => {
-  const pool = await freshPool(t);
-  await assert.rejects(
-    run(process.execPath, [cli, 'human', 'add', '--name', 'Eve', '--room', 'room_x:member', '--database-url', connectionString, '--room-key-wrap-key', 'SIGIL_WRAP_KEY_TEST'], { env }),
-    (error) => /--room/.test(error.stderr),
-  );
-  assert.equal((await pool.query('SELECT count(*)::int AS n FROM humans')).rows[0].n, 0);
-});
 
 async function provision(name) {
   const { stdout } = await run(process.execPath, [cli, 'human', 'add', '--name', name, '--database-url', connectionString, '--room-key-wrap-key', 'SIGIL_WRAP_KEY_TEST'], { env });
@@ -128,4 +120,35 @@ test('human add-to-room fails for an operator who does not manage the room, and 
     run(process.execPath, [cli, 'human', 'add-to-room', '--human', 'hum_missing', '--room', 'room_a:member', '--identity', identityFor(t, owner), '--database-url', connectionString], { env }),
     (error) => /HUMAN_NOT_FOUND/.test(error.stderr),
   );
+});
+
+test('human add --room provisions and adds to rooms in one command as the operator', { skip: !connectionString }, async (t) => {
+  const pool = await freshPool(t);
+  const operator = await provision('Operator');
+  await seedRoom(pool, 'room_a', operator);
+  await seedRoom(pool, 'room_b', operator);
+  const { stdout } = await run(process.execPath, [cli, 'human', 'add', '--name', 'Newbie', '--room', 'room_a:member', '--room', 'room_b:room_manager', '--identity', identityFor(t, operator), '--database-url', connectionString, '--room-key-wrap-key', 'SIGIL_WRAP_KEY_TEST'], { env });
+  const endpointId = /endpoint_id: (ep_[0-9a-f]{32})/.exec(stdout)[1];
+  const rows = (await pool.query('SELECT conversation_id, role, added_by FROM conversation_members WHERE endpoint_id = $1 ORDER BY conversation_id', [endpointId])).rows;
+  assert.deepEqual(rows.map((r) => ({ ...r })), [
+    { conversation_id: 'room_a', role: 'member', added_by: operator.humanId },
+    { conversation_id: 'room_b', role: 'room_manager', added_by: operator.humanId }]);
+});
+
+test('human add --room by a non-manager fails ROUTE_NOT_AUTHORIZED and rolls back the human', { skip: !connectionString }, async (t) => {
+  const pool = await freshPool(t);
+  const owner = await provision('Owner');
+  const outsider = await provision('Outsider');
+  await seedRoom(pool, 'room_a', owner);
+  const before = {
+    humans: (await pool.query('SELECT count(*)::int AS n FROM humans')).rows[0].n,
+    endpoints: (await pool.query('SELECT count(*)::int AS n FROM endpoints')).rows[0].n,
+  };
+  await assert.rejects(
+    run(process.execPath, [cli, 'human', 'add', '--name', 'Rejected', '--room', 'room_a:member', '--identity', identityFor(t, outsider), '--database-url', connectionString, '--room-key-wrap-key', 'SIGIL_WRAP_KEY_TEST'], { env }),
+    (error) => /does not manage: room_a/.test(error.stderr),
+  );
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM humans')).rows[0].n, before.humans);
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM endpoints')).rows[0].n, before.endpoints);
+  assert.equal((await pool.query(`SELECT count(*)::int AS n FROM endpoints WHERE display_name = 'Rejected'`)).rows[0].n, 0);
 });
