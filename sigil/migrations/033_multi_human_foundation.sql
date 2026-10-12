@@ -8,7 +8,7 @@ ALTER TABLE endpoints ADD CONSTRAINT endpoints_kind_check CHECK (kind IN ('human
 ALTER TABLE endpoints ADD COLUMN suspended_by_human_id TEXT NULL REFERENCES humans(human_id);
 
 -- Shadow (federated) endpoints: keep only the newest active key.
-UPDATE endpoint_keys k SET status = 'retired', valid_until = NOW()
+UPDATE endpoint_keys k SET status = 'retired', valid_until = GREATEST(NOW(), k.valid_from)
  WHERE k.status = 'active'
    AND EXISTS (SELECT 1 FROM endpoints e WHERE e.endpoint_id = k.endpoint_id AND e.origin_domain IS NOT NULL)
    AND EXISTS (SELECT 1 FROM endpoint_keys n WHERE n.endpoint_id = k.endpoint_id AND n.status = 'active'
