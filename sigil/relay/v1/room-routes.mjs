@@ -56,6 +56,15 @@ async function isAgentCaller(repository, registry, principal) {
 
 export async function handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream = null, inboxDepthLimit, systemIdentity = null, logger = null, ticketStore = null, humanSigner = null, buildAcceptOptions = null }) {
   const path = parsedUrl.pathname;
+  // notifyRoomHumans needs a real client: with client null its member read
+  // throws in Postgres mode and no room.updated frame goes out.
+  const notifyRoomChange = async (roomId, changed) => {
+    try {
+      await repository.withTransaction((client) => notifyRoomHumans({ repository, stream, registered: registry, client, roomId, changed, logger: logger ?? console }));
+    } catch (error) {
+      (logger ?? console)?.error?.('room.updated notify failed', error);
+    }
+  };
   if (request.method === 'GET' && path === '/v1/mentions') {
     if (!principal?.endpoint_id) return fail(response, requestId, 401, 'UNAUTHENTICATED', 'Authentication required');
     if (typeof repository?.listMentionsForEndpoint !== 'function') return fail(response, requestId, 503, 'DATABASE_UNAVAILABLE', 'Mentions are unavailable');
@@ -210,7 +219,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     if (!targetIsAgent && responseMode !== null) return fail(response, requestId, 400, 'INVALID_REQUEST', 'response_mode applies only to agent endpoints');
     try {
       const member = await repository.addRoomMember({ conversationId: roomId, endpointId, role, responseMode, addedByHumanId: principal.human_id, now });
-      await notifyRoomHumans({ repository, stream, registered: registry, client: null, roomId, changed: 'members', logger: logger ?? console });
+      await notifyRoomChange(roomId, 'members');
       return send(response, requestId, 201, { code: 'OK', member });
     } catch (error) {
       if (error.code === 'ROOM_MEMBER_EXISTS') return fail(response, requestId, 409, 'ROOM_MEMBER_EXISTS', error.message);
@@ -225,7 +234,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     if (!target) return fail(response, requestId, 404, 'ROOM_MEMBER_NOT_FOUND', 'Member not found');
     if (target.role === 'owner') return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', 'The room owner cannot be removed');
     await repository.removeRoomMember({ conversationId: roomId, endpointId: targetEndpointId, now });
-    await notifyRoomHumans({ repository, stream, registered: registry, client: null, roomId, changed: 'members', logger: logger ?? console });
+    await notifyRoomChange(roomId, 'members');
     return send(response, requestId, 200, { code: 'OK', removed: true });
   }
 
@@ -238,7 +247,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     if (name === access.room.name) return send(response, requestId, 200, { code: 'OK', room: access.room });
     try {
       const room = await repository.renameRoom({ conversationId: roomId, name });
-      await notifyRoomHumans({ repository, stream, registered: registry, client: null, roomId, changed: 'room', logger: logger ?? console });
+      await notifyRoomChange(roomId, 'room');
       return send(response, requestId, 200, { code: 'OK', room });
     } catch (error) {
       if (error.code === 'ROOM_NAME_TAKEN') return fail(response, requestId, 409, 'ROOM_NAME_TAKEN', error.message);
@@ -260,7 +269,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     if (!targetIsAgent) return fail(response, requestId, 400, 'INVALID_REQUEST', 'response_mode applies only to agent endpoints');
     const member = await repository.setRoomMemberResponseMode({ conversationId: roomId, endpointId: targetEndpointId, responseMode });
     if (!member) return fail(response, requestId, 404, 'ROOM_MEMBER_NOT_FOUND', 'Member not found');
-    await notifyRoomHumans({ repository, stream, registered: registry, client: null, roomId, changed: 'members', logger: logger ?? console });
+    await notifyRoomChange(roomId, 'members');
     return send(response, requestId, 200, { code: 'OK', member });
   }
 

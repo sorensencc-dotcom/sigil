@@ -1,6 +1,7 @@
 import { parseArgs } from 'node:util';
 import { loadWrapKey } from '../relay/v1/key-wrap.mjs';
 import { provisionHumanTx, addHumanToRoomsTx } from '../relay/v1/provision-human.mjs';
+import { publishAdmin } from '../relay/v1/admin-notify.mjs';
 import { loadIdentity } from './identity.mjs';
 import { loadConfigFile, resolveConfig } from './config-resolver.mjs';
 
@@ -22,8 +23,6 @@ function resolveActorHumanId(values, usage) {
   if (!identityPath) throw new Error(`${usage} (or set SIGIL_IDENTITY / default_identity in .sigil/config.json)`);
   return loadIdentity(identityPath).owner_id;
 }
-
-const publishAdmin = (client, payload) => client.query("SELECT pg_notify('sigil_admin', $1)", [JSON.stringify(payload)]);
 
 export async function cmdHumanAdd(argv) {
   const { values } = parseArgs({

@@ -25,6 +25,7 @@ import { createRelayServer, createOnPersisted } from '../relay/v1/http-server.mj
 import { createAcceptOptionsBuilder } from '../relay/v1/accept-options.mjs';
 import { createStreamServer } from '../relay/v1/stream-server.mjs';
 import { createTicketStore } from '../relay/v1/ticket-store.mjs';
+import { createBearerAuthenticator } from '../relay/v1/transport-auth.mjs';
 import { seedRegistry } from './registry-seed.mjs';
 import { createRoomHumanSigner } from '../relay/v1/room-human-signer.mjs';
 import { loadWrapKey } from '../relay/v1/key-wrap.mjs';
@@ -256,12 +257,13 @@ async function cmdRelayUp(argv) {
   const registry = toRegistryMap(data);
   const tokenHashes = toTokenHashes(data);
   let repository;
+  let pool = null;
   if (databaseUrl) {
     const { applyMigrations } = await import('../scripts/apply-migrations.mjs');
     await applyMigrations(databaseUrl);
     const { PostgresRepository } = await import('../relay/v1/postgres-repository.mjs');
     const { default: pg } = await import('pg');
-    const pool = new pg.Pool({ connectionString: databaseUrl });
+    pool = new pg.Pool({ connectionString: databaseUrl });
     repository = new PostgresRepository({ pool });
 
     if (enableMockOidc) {
@@ -325,7 +327,21 @@ async function cmdRelayUp(argv) {
       throw error.code ? new Error(`${error.code}: ${error.message}`) : error;
     }
   }
-  const stream = createStreamServer({ server: streamHttpServer, tokenHashes, ticketStore, allowedOrigins, logger: relayLogger });
+  // Postgres mode: owner, kind, and liveness come from Postgres through a 5 s
+  // cache that sigil_admin notifications clear. Memory mode reads the registry.
+  const bearerAuth = createBearerAuthenticator(tokenHashes, registry, { repository: pool ? repository : null });
+  const stream = createStreamServer({ server: streamHttpServer, authenticate: bearerAuth, ticketStore, allowedOrigins, logger: relayLogger, repository });
+  let adminListener = null;
+  if (pool) {
+    const { startAdminListener, createAdminMessageHandler } = await import('../relay/v1/admin-notify.mjs');
+    adminListener = await startAdminListener({
+      pool,
+      onMessage: createAdminMessageHandler({ auth: bearerAuth, stream, repository, logger: relayLogger }),
+      // Notifications sent while the listener was down are lost, so drop every cached entry.
+      onReconnect: () => bearerAuth.clearAll(),
+      logger: relayLogger,
+    });
+  }
   const relayMetrics = createRelayMetrics();
   const buildAcceptOptions = createAcceptOptionsBuilder({
     registered: registry, request_id: undefined, now: undefined, repository, relayDomain, persist: undefined,
@@ -436,7 +452,7 @@ async function cmdRelayUp(argv) {
     const addr = server?.address();
     return addr ? `http://127.0.0.1:${addr.port}` : `http://127.0.0.1:${port}`;
   };
-  server = createRelayServer({ buildAcceptOptions, roomSystemIdentity, registry, repository, tokenHashes, stream, ticketStore, allowedOrigins, humanSigner, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity, relayRequestFreshnessMs, stream_seq: { enabled: streamSequenceEnabled }, logger: relayLogger, resendMetrics: relayMetrics, agentmailIngress: agentmailDeployment?.agentmailIngress, agentmailControl: agentmailDeployment?.agentmailControl });
+  server = createRelayServer({ buildAcceptOptions, roomSystemIdentity, registry, repository, authenticate: bearerAuth, stream, ticketStore, allowedOrigins, humanSigner, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity, relayRequestFreshnessMs, stream_seq: { enabled: streamSequenceEnabled }, logger: relayLogger, resendMetrics: relayMetrics, agentmailIngress: agentmailDeployment?.agentmailIngress, agentmailControl: agentmailDeployment?.agentmailControl });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();
   let federationReaperTimer;
@@ -456,6 +472,7 @@ async function cmdRelayUp(argv) {
   await new Promise((resolve) => {
     const shutdown = async () => {
       agentmailDeployment?.close();
+      await adminListener?.close();
       if (p2pHost) await p2pHost.stop();
       await new Promise((done) => server.close(() => done()));
       await new Promise((done) => streamHttpServer.close(() => done()));
@@ -1684,9 +1701,6 @@ async function cmdFederationLinkRevoke(rest) {
 
 // `sigil endpoint revoke <endpoint_id>`: revokes the endpoint, retires its keys,
 // and tells running relays over pg NOTIFY so open streams drop.
-async function publishAdminNotification(client, payload) {
-  await client.query("SELECT pg_notify('sigil_admin', $1)", [JSON.stringify(payload)]);
-}
 
 async function cmdEndpoint(argv) {
   const [action, ...rest] = argv;
@@ -1696,10 +1710,11 @@ async function cmdEndpoint(argv) {
   const endpointId = args.positionals[0];
   if (!endpointId) throw new Error(usageLine);
   await withRepository(args, 'sigil endpoint revoke requires --database-url (or SIGIL_DATABASE_URL)', async (repository) => {
+    const { publishAdmin } = await import('../relay/v1/admin-notify.mjs');
     try {
       await repository.withTransaction(async (client) => {
         await repository.revokeEndpoint({ endpointId }, client);
-        await publishAdminNotification(client, { type: 'endpoint.revoked', endpoint_id: endpointId });
+        await publishAdmin(client, { type: 'endpoint.revoked', endpoint_id: endpointId });
       });
     } catch (error) {
       if (error.code !== 'ENDPOINT_NOT_FOUND') throw error;

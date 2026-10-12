@@ -296,6 +296,17 @@ export class PostgresRepository {
       keys: new Map(k.rows.map((r) => [r.key_id, { ...r, public_key: crypto.createPublicKey({ key: r.public_key, format: 'der', type: 'spki' }) }])),
     };
   }
+  async livenessSnapshot({ endpointId }, client = this.pool) {
+    const result = await client.query(
+      `SELECT e.endpoint_id, e.owner_id, e.kind, e.status AS endpoint_status,
+              EXISTS (SELECT 1 FROM endpoint_keys k WHERE k.endpoint_id = e.endpoint_id AND k.status = 'active') AS has_active_key,
+              h.status AS human_status
+         FROM endpoints e
+         LEFT JOIN humans h ON h.human_id = e.owner_id
+        WHERE e.endpoint_id = $1 AND e.origin_domain IS NULL`,
+      [endpointId]);
+    return result.rows[0] ? { ...result.rows[0] } : null;
+  }
   async loadWrappedSigningKey(keyId, client = this.pool) {
     const result = await client.query('SELECT wrapped_private_key FROM human_signing_keys WHERE key_id = $1', [keyId]);
     return result.rows[0]?.wrapped_private_key ?? null;
