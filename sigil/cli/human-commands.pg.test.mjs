@@ -4,7 +4,11 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import pg from 'pg';
+import { createIdentity, saveIdentity } from './identity.mjs';
 import { assertDisposableTestDatabase } from '../scripts/assert-disposable-test-db.mjs';
 import { applyMigrations } from '../scripts/apply-migrations.mjs';
 
@@ -57,11 +61,71 @@ test('human add without a wrap key fails and writes nothing', { skip: !connectio
   assert.equal((await pool.query('SELECT count(*)::int AS n FROM humans')).rows[0].n, 0);
 });
 
-test('human add --room is rejected NOT_IMPLEMENTED and writes nothing', { skip: !connectionString }, async (t) => {
+test('human add no longer accepts --room', { skip: !connectionString }, async (t) => {
   const pool = await freshPool(t);
   await assert.rejects(
     run(process.execPath, [cli, 'human', 'add', '--name', 'Eve', '--room', 'room_x:member', '--database-url', connectionString, '--room-key-wrap-key', 'SIGIL_WRAP_KEY_TEST'], { env }),
-    (error) => /NOT_IMPLEMENTED/.test(error.stderr),
+    (error) => /--room/.test(error.stderr),
   );
   assert.equal((await pool.query('SELECT count(*)::int AS n FROM humans')).rows[0].n, 0);
+});
+
+async function provision(name) {
+  const { stdout } = await run(process.execPath, [cli, 'human', 'add', '--name', name, '--database-url', connectionString, '--room-key-wrap-key', 'SIGIL_WRAP_KEY_TEST'], { env });
+  return { humanId: /human_id: (hum_[0-9a-f]{32})/.exec(stdout)[1], endpointId: /endpoint_id: (ep_[0-9a-f]{32})/.exec(stdout)[1] };
+}
+
+async function seedRoom(pool, roomId, owner) {
+  const now = new Date().toISOString();
+  await pool.query(`INSERT INTO workspaces (workspace_id, name, created_by, created_at) VALUES ('ws_c', 'ws_c', $1, $2) ON CONFLICT DO NOTHING`, [owner.humanId, now]);
+  await pool.query(`INSERT INTO conversations (conversation_id, kind, created_by, created_at) VALUES ($1, 'room', $2, $3)`, [roomId, owner.humanId, now]);
+  await pool.query(`INSERT INTO rooms (conversation_id, workspace_id, name, created_at) VALUES ($1, 'ws_c', $1, $2)`, [roomId, now]);
+  await pool.query(`INSERT INTO conversation_members (conversation_id, endpoint_id, role, added_by, added_at) VALUES ($1, $2, 'owner', $3, $4)`, [roomId, owner.endpointId, owner.humanId, now]);
+}
+
+function identityFor(t, owner) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-h2r-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'identity.json');
+  saveIdentity(file, createIdentity({ ownerId: owner.humanId, endpointId: owner.endpointId }));
+  return file;
+}
+
+test('human add-to-room adds the human to the rooms as the operator and publishes room.members', { skip: !connectionString }, async (t) => {
+  const pool = await freshPool(t);
+  const operator = await provision('Operator');
+  const guest = await provision('Guest');
+  await seedRoom(pool, 'room_a', operator);
+  await seedRoom(pool, 'room_b', operator);
+  const listener = new pg.Client({ connectionString });
+  await listener.connect();
+  t.after(() => listener.end());
+  const received = new Promise((resolve) => listener.on('notification', (m) => resolve(m.payload)));
+  await listener.query('LISTEN sigil_admin');
+
+  const { stdout } = await run(process.execPath, [cli, 'human', 'add-to-room', '--human', guest.humanId, '--room', 'room_b:room_manager', '--room', 'room_a:member', '--identity', identityFor(t, operator), '--database-url', connectionString], { env });
+  assert.match(stdout, /rooms: room_a, room_b/);
+  const rows = (await pool.query('SELECT conversation_id, role, added_by FROM conversation_members WHERE endpoint_id = $1 ORDER BY conversation_id', [guest.endpointId])).rows;
+  assert.deepEqual(rows.map((r) => ({ ...r })), [
+    { conversation_id: 'room_a', role: 'member', added_by: operator.humanId },
+    { conversation_id: 'room_b', role: 'room_manager', added_by: operator.humanId }]);
+  const payload = await Promise.race([received, new Promise((_, reject) => setTimeout(() => reject(new Error('no sigil_admin notification')), 5000))]);
+  assert.deepEqual(JSON.parse(payload), { type: 'room.members', room_ids: ['room_a', 'room_b'] });
+});
+
+test('human add-to-room fails for an operator who does not manage the room, and for an unknown human', { skip: !connectionString }, async (t) => {
+  const pool = await freshPool(t);
+  const owner = await provision('Owner');
+  const outsider = await provision('Outsider');
+  const guest = await provision('Guest');
+  await seedRoom(pool, 'room_a', owner);
+  await assert.rejects(
+    run(process.execPath, [cli, 'human', 'add-to-room', '--human', guest.humanId, '--room', 'room_a:member', '--identity', identityFor(t, outsider), '--database-url', connectionString], { env }),
+    (error) => /does not manage: room_a/.test(error.stderr),
+  );
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM conversation_members WHERE endpoint_id = $1', [guest.endpointId])).rows[0].n, 0);
+  await assert.rejects(
+    run(process.execPath, [cli, 'human', 'add-to-room', '--human', 'hum_missing', '--room', 'room_a:member', '--identity', identityFor(t, owner), '--database-url', connectionString], { env }),
+    (error) => /HUMAN_NOT_FOUND/.test(error.stderr),
+  );
 });

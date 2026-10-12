@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import pg from 'pg';
-import { provisionHumanTx } from './provision-human.mjs';
+import { provisionHumanTx, addHumanToRoomsTx, lockManagerRows } from './provision-human.mjs';
+import { PostgresRepository } from './postgres-repository.mjs';
 import { unwrapPrivateKey } from './key-wrap.mjs';
 import { withTransaction } from './with-transaction.mjs';
 import { assertDisposableTestDatabase } from '../../scripts/assert-disposable-test-db.mjs';
@@ -127,4 +128,149 @@ test('without a displayName the display name is the endpoint id', { skip }, asyn
   const result = await withTransaction(pool, (client) => provisionHumanTx(client, { wrapKey }));
   const row = (await pool.query('SELECT display_name FROM endpoints WHERE endpoint_id = $1', [result.endpoint_id])).rows[0];
   assert.equal(row.display_name, result.endpoint_id);
+});
+
+async function seedRoom(pool, roomId, { createdBy, ownerEndpoint }) {
+  await pool.query(`INSERT INTO workspaces (workspace_id, name, created_by, created_at) VALUES ('ws_t', 'ws_t', $1, $2) ON CONFLICT DO NOTHING`, [createdBy, NOW]);
+  await pool.query(`INSERT INTO conversations (conversation_id, kind, created_by, created_at) VALUES ($1, 'room', $2, $3)`, [roomId, createdBy, NOW]);
+  await pool.query(`INSERT INTO rooms (conversation_id, workspace_id, name, created_at) VALUES ($1, 'ws_t', $1, $2)`, [roomId, NOW]);
+  await pool.query(`INSERT INTO conversation_members (conversation_id, endpoint_id, role, added_by, added_at) VALUES ($1, $2, 'owner', $3, $4)`, [roomId, ownerEndpoint, createdBy, NOW]);
+}
+
+async function setupRooms(t, roomIds = ['room_a', 'room_b']) {
+  const pool = await freshPool(t);
+  const repository = new PostgresRepository({ pool });
+  const actor = await withTransaction(pool, (client) => provisionHumanTx(client, { displayName: 'Actor', wrapKey, now: NOW }));
+  const target = await withTransaction(pool, (client) => provisionHumanTx(client, { displayName: 'Target', wrapKey, now: NOW }));
+  for (const roomId of roomIds) await seedRoom(pool, roomId, { createdBy: actor.human_id, ownerEndpoint: actor.endpoint_id });
+  return { pool, repository, actor, target };
+}
+
+const memberRows = async (pool, endpointId) => (await pool.query(
+  'SELECT conversation_id, role, added_by, removed_at, invokable_by FROM conversation_members WHERE endpoint_id = $1 ORDER BY conversation_id', [endpointId])).rows;
+
+test('addHumanToRoomsTx adds the target to every room with added_by set to the actor', { skip }, async (t) => {
+  const { pool, repository, actor, target } = await setupRooms(t);
+  const result = await withTransaction(pool, (client) => addHumanToRoomsTx(client, {
+    endpointId: target.endpoint_id,
+    memberships: [{ roomId: 'room_b', role: 'room_manager' }, { roomId: 'room_a', role: 'member' }],
+    actorHumanId: actor.human_id, repository, now: NOW,
+  }));
+  assert.deepEqual(result, { room_ids: ['room_a', 'room_b'] });
+  const rows = await memberRows(pool, target.endpoint_id);
+  assert.deepEqual(rows.map((r) => [r.conversation_id, r.role, r.added_by]), [
+    ['room_a', 'member', actor.human_id], ['room_b', 'room_manager', actor.human_id]]);
+});
+
+test('a room_manager held through any of the actor endpoints is enough; a plain member is not', { skip }, async (t) => {
+  const { pool, repository, actor, target } = await setupRooms(t);
+  const manager = await withTransaction(pool, (client) => provisionHumanTx(client, { displayName: 'Mgr', wrapKey, now: NOW }));
+  await pool.query(
+    `INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+     VALUES ('ep_manager_second', $1, 'human', 'human', 'install_second', 'second', 'active', $2)`, [manager.human_id, NOW]);
+  await pool.query(`INSERT INTO conversation_members (conversation_id, endpoint_id, role, added_by, added_at) VALUES ('room_a', 'ep_manager_second', 'room_manager', $1, $2)`, [actor.human_id, NOW]);
+  await pool.query(`INSERT INTO conversation_members (conversation_id, endpoint_id, role, added_by, added_at) VALUES ('room_a', $1, 'member', $2, $3)`, [manager.endpoint_id, actor.human_id, NOW]);
+  await withTransaction(pool, (client) => addHumanToRoomsTx(client, {
+    endpointId: target.endpoint_id, memberships: [{ roomId: 'room_a', role: 'member' }], actorHumanId: manager.human_id, repository, now: NOW,
+  }));
+  assert.equal((await memberRows(pool, target.endpoint_id)).length, 1);
+
+  await pool.query(`UPDATE conversation_members SET role = 'member' WHERE endpoint_id = 'ep_manager_second'`);
+  await assert.rejects(
+    withTransaction(pool, (client) => addHumanToRoomsTx(client, {
+      endpointId: target.endpoint_id, memberships: [{ roomId: 'room_a', role: 'room_manager' }], actorHumanId: manager.human_id, repository, now: NOW,
+    })),
+    (error) => error.code === 'ROUTE_NOT_AUTHORIZED',
+  );
+});
+
+test('an actor missing from one of two rooms fails and writes nothing', { skip }, async (t) => {
+  const { pool, repository, actor, target } = await setupRooms(t);
+  const stranger = await withTransaction(pool, (client) => provisionHumanTx(client, { displayName: 'Stranger', wrapKey, now: NOW }));
+  await pool.query(`INSERT INTO conversation_members (conversation_id, endpoint_id, role, added_by, added_at) VALUES ('room_a', $1, 'room_manager', $2, $3)`, [stranger.endpoint_id, actor.human_id, NOW]);
+  await assert.rejects(
+    withTransaction(pool, (client) => addHumanToRoomsTx(client, {
+      endpointId: target.endpoint_id,
+      memberships: [{ roomId: 'room_a', role: 'member' }, { roomId: 'room_b', role: 'member' }],
+      actorHumanId: stranger.human_id, repository, now: NOW,
+    })),
+    (error) => error.code === 'ROUTE_NOT_AUTHORIZED' && error.rooms.join() === 'room_b',
+  );
+  assert.equal((await memberRows(pool, target.endpoint_id)).length, 0);
+});
+
+test('a target provisioned earlier in the same uncommitted transaction is found', { skip }, async (t) => {
+  const { pool, repository, actor } = await setupRooms(t);
+  const added = await withTransaction(pool, async (client) => {
+    const fresh = await provisionHumanTx(client, { displayName: 'Fresh', wrapKey, now: NOW });
+    await addHumanToRoomsTx(client, {
+      endpointId: fresh.endpoint_id, memberships: [{ roomId: 'room_a', role: 'member' }], actorHumanId: actor.human_id, repository, now: NOW,
+    });
+    return fresh;
+  });
+  assert.equal((await memberRows(pool, added.endpoint_id)).length, 1);
+});
+
+test('re-adding an active member is a no-op; re-adding a removed member restores it with invokable_by owner', { skip }, async (t) => {
+  const { pool, repository, actor, target } = await setupRooms(t);
+  const add = (role = 'member') => withTransaction(pool, (client) => addHumanToRoomsTx(client, {
+    endpointId: target.endpoint_id, memberships: [{ roomId: 'room_a', role }], actorHumanId: actor.human_id, repository, now: NOW,
+  }));
+  await add();
+  await pool.query(`UPDATE conversation_members SET invokable_by = 'members' WHERE endpoint_id = $1`, [target.endpoint_id]);
+  await add('room_manager');
+  let [row] = await memberRows(pool, target.endpoint_id);
+  assert.equal(row.role, 'member');
+  assert.equal(row.invokable_by, 'members');
+
+  await pool.query(`UPDATE conversation_members SET removed_at = $2 WHERE endpoint_id = $1`, [target.endpoint_id, NOW]);
+  await add('room_manager');
+  [row] = await memberRows(pool, target.endpoint_id);
+  assert.equal(row.removed_at, null);
+  assert.equal(row.role, 'room_manager');
+  assert.equal(row.invokable_by, 'owner');
+});
+
+test('roles outside member and room_manager reject INVALID_ROLE', { skip }, async (t) => {
+  const { pool, repository, actor, target } = await setupRooms(t);
+  await assert.rejects(
+    withTransaction(pool, (client) => addHumanToRoomsTx(client, {
+      endpointId: target.endpoint_id, memberships: [{ roomId: 'room_a', role: 'owner' }], actorHumanId: actor.human_id, repository, now: NOW,
+    })),
+    (error) => error.code === 'INVALID_ROLE',
+  );
+  assert.equal((await memberRows(pool, target.endpoint_id)).length, 0);
+});
+
+test('an inactive target is rejected', { skip }, async (t) => {
+  const { pool, repository, actor, target } = await setupRooms(t);
+  await pool.query(`UPDATE endpoints SET status = 'revoked' WHERE endpoint_id = $1`, [target.endpoint_id]);
+  await assert.rejects(
+    withTransaction(pool, (client) => addHumanToRoomsTx(client, {
+      endpointId: target.endpoint_id, memberships: [{ roomId: 'room_a', role: 'member' }], actorHumanId: actor.human_id, repository, now: NOW,
+    })),
+    (error) => error.code === 'ROUTE_NOT_AUTHORIZED',
+  );
+});
+
+test('concurrent transactions naming [a,b] and [b,a] both complete without a deadlock', { skip }, async (t) => {
+  const { pool, repository, actor } = await setupRooms(t);
+  const targets = [];
+  for (const name of ['T1', 'T2']) targets.push(await withTransaction(pool, (client) => provisionHumanTx(client, { displayName: name, wrapKey, now: NOW })));
+  const run = (target, order) => withTransaction(pool, async (client) => {
+    await addHumanToRoomsTx(client, {
+      endpointId: target.endpoint_id, memberships: order.map((roomId) => ({ roomId, role: 'member' })), actorHumanId: actor.human_id, repository, now: NOW,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  });
+  const results = await Promise.allSettled([run(targets[0], ['room_a', 'room_b']), run(targets[1], ['room_b', 'room_a'])]);
+  assert.deepEqual(results.map((r) => r.status), ['fulfilled', 'fulfilled'], JSON.stringify(results.map((r) => r.reason?.code)));
+  for (const target of targets) assert.equal((await memberRows(pool, target.endpoint_id)).length, 2);
+});
+
+test('lockManagerRows returns only active rows in the named rooms, ordered', { skip }, async (t) => {
+  const { pool, actor } = await setupRooms(t, ['room_a', 'room_b', 'room_c']);
+  await pool.query(`UPDATE conversation_members SET removed_at = $1 WHERE conversation_id = 'room_c'`, [NOW]);
+  const rows = await withTransaction(pool, (client) => lockManagerRows(client, actor.human_id, ['room_b', 'room_a', 'room_c']));
+  assert.deepEqual(rows.map((r) => r.conversation_id), ['room_a', 'room_b']);
 });

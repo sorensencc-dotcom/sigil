@@ -44,3 +44,39 @@ export async function provisionHumanTx(client, { displayName, attributes = [], w
   );
   return { human_id: humanId, endpoint_id: endpointId, key_id: keyId };
 }
+
+export async function lockManagerRows(client, humanId, roomIds) {
+  const { rows } = await client.query(
+    `SELECT m.* FROM conversation_members m JOIN endpoints e ON e.endpoint_id = m.endpoint_id
+      WHERE e.owner_id = $1 AND m.conversation_id = ANY($2) AND m.removed_at IS NULL
+      ORDER BY m.conversation_id, m.endpoint_id FOR UPDATE OF m`, [humanId, roomIds]);
+  return rows;
+}
+
+const MANAGER = new Set(['owner', 'room_manager']);
+const GRANTABLE = new Set(['member', 'room_manager']);
+
+// Rooms are locked in sorted order and members inserted in sorted order, so
+// concurrent calls naming the same rooms in different orders cannot deadlock.
+export async function addHumanToRoomsTx(client, { endpointId, memberships, actorHumanId, repository, now = new Date() }) {
+  for (const { role } of memberships) {
+    if (!GRANTABLE.has(role)) throw Object.assign(new Error('role must be member or room_manager'), { code: 'INVALID_ROLE' });
+  }
+  const roomIds = [...new Set(memberships.map((m) => m.roomId))].sort();
+  const locked = await lockManagerRows(client, actorHumanId, roomIds);
+  const managed = new Set(locked.filter((r) => MANAGER.has(r.role)).map((r) => r.conversation_id));
+  const missing = roomIds.filter((id) => !managed.has(id));
+  if (missing.length) throw Object.assign(new Error(`actor does not manage: ${missing.join(', ')}`), { code: 'ROUTE_NOT_AUTHORIZED', rooms: missing });
+  const target = await repository.lookupTrustedEndpoint(endpointId, client);
+  if (!target || target.status !== 'active' || target.kind !== 'human') {
+    throw Object.assign(new Error('target is not an active human endpoint'), { code: 'ROUTE_NOT_AUTHORIZED' });
+  }
+  for (const { roomId, role } of [...memberships].sort((a, b) => (a.roomId < b.roomId ? -1 : a.roomId > b.roomId ? 1 : 0))) {
+    try {
+      await repository.addRoomMember({ conversationId: roomId, endpointId, role, addedByHumanId: actorHumanId, now }, client);
+    } catch (error) {
+      if (error.code !== 'ROOM_MEMBER_EXISTS') throw error;
+    }
+  }
+  return { room_ids: roomIds };
+}

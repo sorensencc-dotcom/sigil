@@ -1793,7 +1793,7 @@ export class PostgresRepository {
        VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (conversation_id, endpoint_id) DO UPDATE
          SET role = EXCLUDED.role, added_by = EXCLUDED.added_by, added_at = EXCLUDED.added_at,
-             response_mode = EXCLUDED.response_mode, removed_at = NULL
+             response_mode = EXCLUDED.response_mode, removed_at = NULL, invokable_by = 'owner'
          WHERE conversation_members.removed_at IS NOT NULL
        RETURNING endpoint_id, role, response_mode, added_at`,
       [conversationId, endpointId, role, addedByHumanId, timestamp, responseMode],
