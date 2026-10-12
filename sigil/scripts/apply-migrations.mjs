@@ -7,7 +7,7 @@ import { assertDisposableTestDatabase } from './assert-disposable-test-db.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const migrationsDir = path.resolve(here, '../migrations');
 
-export async function applyMigrations(connectionString = process.env.SIGIL_DATABASE_URL, { reset = false } = {}) {
+export async function applyMigrations(connectionString = process.env.SIGIL_DATABASE_URL, { reset = false, through = null } = {}) {
   if (!connectionString) {
     throw new Error('SIGIL_DATABASE_URL is not set. Copy .env.example to .env and fill in your local Postgres connection string.');
   }
@@ -79,7 +79,8 @@ export async function applyMigrations(connectionString = process.env.SIGIL_DATAB
       applied.add('011_task_request_lookup_index.sql');
     }
 
-    const files = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
+    const files = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort()
+      .filter((f) => through === null || through === undefined || parseInt(f, 10) <= parseInt(through, 10));
     let count = 0;
 
     for (const file of files) {
