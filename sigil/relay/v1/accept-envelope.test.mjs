@@ -4,12 +4,14 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { signedBytes } from './validate-envelope.mjs';
 import { acceptEnvelope, acceptEnvelopeAsync } from './accept-envelope.mjs';
+import { entryFromRegistryRow } from './trusted-endpoint.mjs';
+const withKeys = (row) => ({ ...row, keys: entryFromRegistryRow(row).keys });
 
 const fixture = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
 const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
 const envelope = { ...fixture, created_at: '2026-08-12T12:00:00.000Z', expires_at: '2026-08-13T00:00:00.000Z' };
 envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
-const options = { now: new Date('2026-08-12T12:01:00Z'), request_id: 'req_1', registered: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]) };
+const options = { now: new Date('2026-08-12T12:01:00Z'), request_id: 'req_1', registered: new Map([['ep_codex', withKeys({ owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey })]]) };
 
 test('accepts and persists valid envelope', () => {
   const writes = [];
@@ -152,7 +154,7 @@ function makeEnvelope({ keys, messageType, body, conversationId = 'conv_1', capa
 
 test('task.result referencing an unaccepted task_id is rejected with INVALID_ENVELOPE', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const registered = new Map([['ep_claude', withKeys({ owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey })]]);
   const envelope = makeEnvelope({ keys, messageType: 'task.result', body: { task_id: 'task_never_sent', status: 'completed', summary: 'x' } });
   const repository = fakeTransactionalRepository();
   const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
@@ -164,7 +166,7 @@ test('task.result referencing an unaccepted task_id is rejected with INVALID_ENV
 
 test('unregistered federated recipient is rejected with RECIPIENT_NOT_FOUND before persistence', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const registered = new Map([['ep_claude', withKeys({ owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey })]]);
   const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'x' } });
   envelope.recipient.endpoint_id = 'missing@relay.example.com';
   envelope.signature.value = crypto.sign(null, signedBytes(envelope), keys.privateKey).toString('base64url');
@@ -182,7 +184,7 @@ test('unregistered federated recipient is rejected with RECIPIENT_NOT_FOUND befo
 
 test('non-federated recipient is checked by exact endpoint id before persistence', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const registered = new Map([['ep_claude', withKeys({ owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey })]]);
   const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'x' } });
   envelope.recipient.endpoint_id = 'ep_missing';
   envelope.signature.value = crypto.sign(null, signedBytes(envelope), keys.privateKey).toString('base64url');
@@ -198,7 +200,7 @@ test('non-federated recipient is checked by exact endpoint id before persistence
 
 test('task.request reusing a task_id already claimed in the conversation is rejected with DUPLICATE_TASK_ID', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const registered = new Map([['ep_claude', withKeys({ owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey })]]);
   // An attacker (or anyone) reusing an in-use task_id must not be able to plant a self-addressed
   // task.request that a later lookupTaskRequest could resolve to instead of the legitimate one.
   const envelope = makeEnvelope({ keys, messageType: 'task.request', body: { task_id: 'task_1', instruction: 'x' } });
@@ -212,7 +214,7 @@ test('task.request reusing a task_id already claimed in the conversation is reje
 
 test('task.request with a fresh task_id in the conversation is accepted', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const registered = new Map([['ep_claude', withKeys({ owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey })]]);
   const envelope = makeEnvelope({ keys, messageType: 'task.request', body: { task_id: 'task_new', instruction: 'x' } });
   const repository = fakeTransactionalRepository();
   const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
@@ -221,7 +223,7 @@ test('task.request with a fresh task_id in the conversation is accepted', async 
 
 test('task.result referencing an accepted task_id in the same conversation is accepted when sent by the assignee', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const registered = new Map([['ep_claude', withKeys({ owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey })]]);
   // makeEnvelope's task.result is sent by ep_claude, so the original task.request must have been addressed to ep_claude.
   const envelope = makeEnvelope({ keys, messageType: 'task.result', body: { task_id: 'task_1', status: 'completed', summary: 'x' } });
   const repository = fakeTransactionalRepository({ taskRequests: new Map([['conv_1:task_1', { message_id: 'msg_original', recipientEndpointId: 'ep_claude' }]]) });
@@ -233,7 +235,7 @@ test('task.result referencing an accepted task_id in the same conversation is ac
 
 test('task.result referencing a task_id assigned to a different endpoint is rejected with TASK_ASSIGNEE_MISMATCH', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const registered = new Map([['ep_claude', withKeys({ owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey })]]);
   // makeEnvelope's task.result is sent by ep_claude, but the task.request was assigned to a third endpoint (ep_reviewer) --
   // ep_claude must not be able to fabricate a result for a task it was never given.
   const envelope = makeEnvelope({ keys, messageType: 'task.result', body: { task_id: 'task_1', status: 'completed', summary: 'x' } });
@@ -248,7 +250,7 @@ test('task.result referencing a task_id assigned to a different endpoint is reje
 
 test('task.result for a broadcast task.request (no single assignee) is accepted from any conversation member', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const registered = new Map([['ep_claude', withKeys({ owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey })]]);
   const envelope = makeEnvelope({ keys, messageType: 'task.result', body: { task_id: 'task_1', status: 'completed', summary: 'x' } });
   const repository = fakeTransactionalRepository({ taskRequests: new Map([['conv_1:task_1', { message_id: 'msg_original', recipientEndpointId: null }]]) });
   const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
@@ -257,7 +259,7 @@ test('task.result for a broadcast task.request (no single assignee) is accepted 
 
 test('non-task envelopes skip the cross-reference lookup entirely', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const registered = new Map([['ep_claude', withKeys({ owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey })]]);
   const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'hi' } });
   const repository = fakeTransactionalRepository();
   const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
@@ -275,7 +277,7 @@ function fakeTransactionalRepositoryWithMessages({ messageIds = new Map(), envel
 
 test('replay: same message_id previously accepted, resubmitted under a different idempotency_key -> REPLAY_DETECTED', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const registered = new Map([['ep_claude', withKeys({ owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey })]]);
   const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'hi' } });
   const repository = fakeTransactionalRepositoryWithMessages({ messageIds: new Map([[`ep_claude:${envelope.message_id}`, { message_id: envelope.message_id, idempotency_key: 'a-different-key' }]]) });
   const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
@@ -285,7 +287,7 @@ test('replay: same message_id previously accepted, resubmitted under a different
 
 test('replay: same message_id + same idempotency_key is an ordinary duplicate, not a replay', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const registered = new Map([['ep_claude', withKeys({ owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey })]]);
   const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'hi' } });
   const repository = fakeTransactionalRepositoryWithMessages({ messageIds: new Map([[`ep_claude:${envelope.message_id}`, { message_id: envelope.message_id, idempotency_key: envelope.idempotency_key }]]) });
   const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
@@ -294,7 +296,7 @@ test('replay: same message_id + same idempotency_key is an ordinary duplicate, n
 
 test('conflicting idempotency key with different body hash throws DUPLICATE_MESSAGE', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const registered = new Map([['ep_claude', withKeys({ owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey })]]);
   const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'hi' } });
   const repository = {
     ...fakeTransactionalRepositoryWithMessages(),
@@ -319,7 +321,7 @@ test('first-time expired message with no prior accepted record -> MESSAGE_EXPIRE
   // no prior accepted record -> falls through to validateEnvelope's own
   // error, not misclassified as REPLAY_DETECTED.
   const keys = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const registered = new Map([['ep_claude', withKeys({ owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey })]]);
   const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'hi' } });
   envelope.created_at = '2026-08-16T11:58:00Z';
   envelope.expires_at = '2026-08-16T11:58:00Z';
@@ -332,7 +334,7 @@ test('first-time expired message with no prior accepted record -> MESSAGE_EXPIRE
 
 test('exceeding the per-endpoint rate limit rejects with RATE_LIMITED and does not persist', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const registered = new Map([['ep_claude', withKeys({ owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey })]]);
   const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'hi' } });
   const repository = { ...fakeTransactionalRepositoryWithMessages(), async reserveRateLimit() { return { count: 101, allowed: false }; } };
   const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
@@ -342,7 +344,7 @@ test('exceeding the per-endpoint rate limit rejects with RATE_LIMITED and does n
 
 test('exceeding recipient inbox depth rejects with QUOTA_EXCEEDED and does not persist', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const registered = new Map([['ep_claude', withKeys({ owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey })]]);
   const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'hi' } });
   const repository = { ...fakeTransactionalRepositoryWithMessages(), async reserveRateLimit() { return { count: 1, allowed: true }; }, async countOpenDeliveries() { return 500; } };
   const result = await acceptEnvelopeAsync(envelope, { registered, repository, now: new Date('2026-08-16T12:01:00Z') });
@@ -352,7 +354,7 @@ test('exceeding recipient inbox depth rejects with QUOTA_EXCEEDED and does not p
 
 test('a CAPABILITY_DENIED rejection triggers a best-effort rejection audit', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const registered = new Map([['ep_claude', withKeys({ owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey })]]);
   const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'hi' } });
   envelope.capabilities = ['sigil.task/submit'];
   envelope.signature.value = crypto.sign(null, signedBytes(envelope), keys.privateKey).toString('base64url');
@@ -456,7 +458,7 @@ test('broadcast envelope (no recipient.endpoint_id) is never checked against dir
 
 test('an envelope carrying a high-risk capability with no matching decision is rejected with APPROVAL_REQUIRED', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const registered = new Map([['ep_claude', withKeys({ owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey })]]);
   const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'x' }, capabilities: ['sigil.approval/request'] });
   const repository = fakeTransactionalRepository({
     riskTiers: new Map([['sigil.approval/request', 'high']]),
@@ -472,7 +474,7 @@ test('an envelope carrying a high-risk capability with no matching decision is r
 
 test('an envelope carrying a high-risk capability with no consumeApprovalDecision support at all fails closed', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const registered = new Map([['ep_claude', withKeys({ owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey })]]);
   const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'x' }, capabilities: ['sigil.approval/request'] });
   const repository = fakeTransactionalRepository({
     riskTiers: new Map([['sigil.approval/request', 'high']]),
@@ -485,7 +487,7 @@ test('an envelope carrying a high-risk capability with no consumeApprovalDecisio
 
 test('an envelope carrying a high-risk capability with a matching decision consumes it and is accepted', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const registered = new Map([['ep_claude', withKeys({ owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey })]]);
   const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'x' }, capabilities: ['sigil.approval/request'] });
   const repository = fakeTransactionalRepository({
     riskTiers: new Map([['sigil.approval/request', 'high']]),
@@ -502,7 +504,7 @@ test('an envelope carrying a high-risk capability with a matching decision consu
 
 test('a low/standard-risk capability never triggers the approval gate', async () => {
   const keys = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([['ep_claude', { owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey }]]);
+  const registered = new Map([['ep_claude', withKeys({ owner_id: 'usr_claude', status: 'active', key_id: 'key_claude', public_key: keys.publicKey })]]);
   const envelope = makeEnvelope({ keys, messageType: 'chat.message', body: { text: 'x' }, capabilities: ['sigil.task/read_inbox'] });
   const repository = fakeTransactionalRepository({
     riskTiers: new Map([['sigil.task/read_inbox', 'low']]),

@@ -14,6 +14,8 @@ import { createAgentMailSecretStore } from '../../ingress/v1/agentmail-secret-sn
 import { createAcceptOptionsBuilder } from './accept-options.mjs';
 import { createP2pHost } from './transport-libp2p/p2p-host.mjs';
 import { wireDataProtocol, sendEnvelope } from './transport-libp2p/p2p-data-protocol.mjs';
+import { entryFromRegistryRow } from './trusted-endpoint.mjs';
+const withKeys = (row) => ({ ...row, keys: entryFromRegistryRow(row).keys });
 
 const NOW = new Date('2026-10-02T12:01:00.000Z');
 
@@ -21,7 +23,7 @@ async function world() {
   const system = createIdentity({ ownerId: 'relay_system', endpointId: 'ep_relay_system', kind: 'system' });
   const ids = ['ep_web', 'ep_web2', 'ep_claude'];
   const keys = Object.fromEntries(ids.map((id) => [id, crypto.generateKeyPairSync('ed25519')]));
-  const registered = new Map(ids.map((id) => [id, { owner_id: 'usr_chris', status: 'active', kind: id === 'ep_claude' ? 'agent' : 'human', key_id: `key_${id}`, public_key: keys[id].publicKey }]));
+  const registered = new Map(ids.map((id) => [id, withKeys({ owner_id: 'usr_chris', status: 'active', kind: id === 'ep_claude' ? 'agent' : 'human', key_id: `key_${id}`, public_key: keys[id].publicKey })]));
   const repository = createMemoryRepository({ registry: registered });
   await repository.ensureRoomSystemEndpoint({ identity: system, now: NOW });
   await repository.createRoom({ conversationId: 'room_1', workspaceId: 'ws_usr_chris', name: 'build', createdByHumanId: 'usr_chris', ownerEndpointId: 'ep_web', now: NOW });
@@ -127,7 +129,7 @@ function realBuilder(w, onPersisted, now = NOW) {
 }
 
 async function addRouter(w) {
-  w.registered.set('ep_router', { owner_id: 'usr_chris', status: 'active', kind: 'agent', key_id: 'key_ep_router', public_key: crypto.generateKeyPairSync('ed25519').publicKey });
+  w.registered.set('ep_router', withKeys({ owner_id: 'usr_chris', status: 'active', kind: 'agent', key_id: 'key_ep_router', public_key: crypto.generateKeyPairSync('ed25519').publicKey }));
   await w.repository.addRoomMember({ conversationId: 'room_1', endpointId: 'ep_router', role: 'member', responseMode: 'router', addedByHumanId: 'usr_chris', now: NOW });
 }
 
@@ -165,7 +167,7 @@ test('an AgentMail-ingested envelope is accepted with the shared builder options
   const w = await world();
   const triage = createIdentity({ ownerId: 'usr_operator', endpointId: 'ep_triage', kind: 'agent' });
   const ingressIdentity = createIdentity({ ownerId: 'usr_operator', endpointId: 'ep_ingress', kind: 'agent' });
-  for (const id of [triage, ingressIdentity]) w.registered.set(id.endpoint_id, { ...id, public_key: crypto.createPublicKey(id.public_key_pem), status: 'active' });
+  for (const id of [triage, ingressIdentity]) { const pk = crypto.createPublicKey(id.public_key_pem); w.registered.set(id.endpoint_id, withKeys({ ...id, public_key: pk, status: 'active' })); }
   const persistedRows = [];
   const buildAcceptOptions = realBuilder(w, async ({ persisted }) => { persistedRows.push(persisted); }, null); // wall clock: ingress envelopes are stamped now
   const ingress = createAgentMailIngress({

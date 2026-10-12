@@ -13,12 +13,14 @@ import { createIdentity } from '../../cli/identity.mjs';
 import { assertDisposableTestDatabase } from '../../scripts/assert-disposable-test-db.mjs';
 import { applyMigrations } from '../../scripts/apply-migrations.mjs';
 import { ROOM_SYSTEM_ENDPOINT_ID, ROOM_SYSTEM_OWNER_ID } from './room-system-identity.mjs';
+import { entryFromRegistryRow } from './trusted-endpoint.mjs';
+const withKeys = (row) => ({ ...row, keys: entryFromRegistryRow(row).keys });
 
 const NOW = new Date('2026-10-02T12:01:00.000Z');
 
 test('memory history returns both a room.message and a room.event row', async () => {
   const web = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([['ep_web', { owner_id: 'usr_chris', status: 'active', kind: 'human', key_id: 'key_web', public_key: web.publicKey }]]);
+  const registered = new Map([['ep_web', withKeys({ owner_id: 'usr_chris', status: 'active', kind: 'human', key_id: 'key_web', public_key: web.publicKey })]]);
   const repository = createMemoryRepository({ registry: registered });
   const system = createIdentity({ ownerId: 'relay_system', endpointId: 'ep_relay_system', kind: 'system' });
   await repository.ensureRoomSystemEndpoint({ identity: system, now: NOW });
@@ -64,7 +66,7 @@ test('postgres history returns both a room.message and a room.event row', { skip
   const room = await repository.lookupRoom(roomId);
   const keys = crypto.generateKeyPairSync('ed25519');
   await pool.query(`INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from) VALUES ($1, $2, 'Ed25519', $3, 'active', NOW())`, [`key_${web}`, web, keys.publicKey.export({ type: 'spki', format: 'der' })]);
-  const registered = new Map([[web, { owner_id: human, status: 'active', kind: 'human', key_id: `key_${web}`, public_key: keys.publicKey }]]);
+  const registered = new Map([[web, withKeys({ owner_id: human, status: 'active', kind: 'human', key_id: `key_${web}`, public_key: keys.publicKey })]]);
   const envelope = {
     protocol: 'sigil/1', message_id: `msg_${run}`, conversation_id: roomId, message_type: 'room.message',
     sender: { endpoint_id: web, owner_id: human }, broadcast_scope: { conversation_id: roomId },

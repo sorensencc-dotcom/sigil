@@ -5,12 +5,14 @@ import crypto from 'node:crypto';
 import { acceptEnvelopeAsync } from './accept-envelope.mjs';
 import { signedBytes } from './validate-envelope.mjs';
 import { createMemoryRepository } from '../../cli/memory-repository.mjs';
+import { entryFromRegistryRow } from './trusted-endpoint.mjs';
+const withKeys = (row) => ({ ...row, keys: entryFromRegistryRow(row).keys });
 
 const NOW = new Date('2026-10-02T12:01:00.000Z');
 
 function world() {
   const keys = Object.fromEntries(['ep_web', 'ep_web2', 'ep_claude', 'ep_codex', 'ep_stranger'].map((id) => [id, crypto.generateKeyPairSync('ed25519')]));
-  const registered = new Map(Object.entries(keys).map(([id, pair]) => [id, { owner_id: 'usr_chris', status: 'active', key_id: `key_${id}`, public_key: pair.publicKey }]));
+  const registered = new Map(Object.entries(keys).map(([id, pair]) => [id, withKeys({ owner_id: 'usr_chris', status: 'active', key_id: `key_${id}`, public_key: pair.publicKey })]));
   const repository = createMemoryRepository({ registry: registered });
   return { keys, registered, repository };
 }
@@ -106,7 +108,7 @@ async function syncForwardWorldWithApprovedHighRiskAction() {
   const senderId = 'ep_codex@a.example';
   const senderKeys = crypto.generateKeyPairSync('ed25519');
   const relayKeys = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([[senderId, { owner_id: 'usr_chris', status: 'active', key_id: 'key_codex', public_key: senderKeys.publicKey }]]);
+  const registered = new Map([[senderId, withKeys({ owner_id: 'usr_chris', status: 'active', key_id: 'key_codex', public_key: senderKeys.publicKey })]]);
   const repository = createMemoryRepository({ registry: registered });
   await repository.upsertPeer({ domain: 'b.example', relayUrl: 'https://relay.b.example', wsUrl: null, keys: [], trustMode: 'pinned', now: NOW });
   const options = {

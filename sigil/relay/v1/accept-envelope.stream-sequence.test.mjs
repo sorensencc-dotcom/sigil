@@ -7,6 +7,8 @@ import { signedBytes } from './validate-envelope.mjs';
 import { buildForwardRequest, signForwardRequest } from './federation-router.mjs';
 import { canonicalJsonBytes } from './jcs.mjs';
 import { createMemoryRepository } from '../../cli/memory-repository.mjs';
+import { entryFromRegistryRow } from './trusted-endpoint.mjs';
+const withKeys = (row) => ({ ...row, keys: entryFromRegistryRow(row).keys });
 
 function signEnvelope(envelope, privateKey) {
   envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
@@ -54,7 +56,7 @@ function localRepository(sequence = 41n) {
 function localOptions(keys, repository, streamSeqEnabled) {
   return {
     repository,
-    registered: new Map([['ep_sender', { owner_id: 'usr_sender', status: 'active', key_id: 'key_sender', public_key: keys.publicKey }]]),
+    registered: new Map([['ep_sender', withKeys({ owner_id: 'usr_sender', status: 'active', key_id: 'key_sender', public_key: keys.publicKey })]]),
     now: new Date('2026-09-09T12:01:00.000Z'),
     stream_seq: { enabled: streamSeqEnabled },
   };
@@ -122,8 +124,8 @@ test('enabled in-memory relay accepts messages and projects a JSON-safe inbox st
     recipient: { endpoint_id: 'ep_recipient', owner_id: 'usr_sender' },
   });
   const registered = new Map([
-    ['ep_sender', { owner_id: 'usr_sender', status: 'active', key_id: 'key_sender', public_key: keys.publicKey }],
-    ['ep_recipient', { owner_id: 'usr_sender', status: 'active', key_id: 'key_recipient', public_key: keys.publicKey }],
+    ['ep_sender', withKeys({ owner_id: 'usr_sender', status: 'active', key_id: 'key_sender', public_key: keys.publicKey })],
+    ['ep_recipient', withKeys({ owner_id: 'usr_sender', status: 'active', key_id: 'key_recipient', public_key: keys.publicKey })],
   ]);
   const repository = createMemoryRepository({ registry: registered });
   const result = await acceptEnvelopeAsync(envelope, {
@@ -140,10 +142,10 @@ function federatedWorld() {
   const relayKeys = crypto.generateKeyPairSync('ed25519');
   const senderKeys = crypto.generateKeyPairSync('ed25519');
   const recipientKeys = crypto.generateKeyPairSync('ed25519');
-  const registered = new Map([[`ep_recipient@${relay}`, {
+  const registered = new Map([[`ep_recipient@${relay}`, withKeys({
     endpoint_id: `ep_recipient@${relay}`, owner_id: 'usr_receiver@receiver.example', key_id: 'key_recipient',
     status: 'active', public_key: recipientKeys.publicKey,
-  }]]);
+  })]]);
   const repository = createMemoryRepository({ registry: registered });
   const relayIdentity = { key_id: 'relay-origin', private_key_pem: relayKeys.privateKey.export({ type: 'pkcs8', format: 'pem' }) };
   const relayPublicKey = relayKeys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url');

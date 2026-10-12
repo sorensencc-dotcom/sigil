@@ -8,6 +8,7 @@ import { boundedDirectoryExpiry } from '../relay/v1/auth-policy.mjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { identityKeys } from './identity.mjs';
 import { withAfterCommitScope } from '../relay/v1/after-commit.mjs';
+import { entryFromRegistryRow } from '../relay/v1/trusted-endpoint.mjs';
 
 const SEEDED_CAPABILITIES = new Map([
   ['sigil.core/read_shared_context', { namespace: 'sigil.core', risk_tier: 'standard' }],
@@ -226,7 +227,12 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     },
     async lookupRecipientEndpoint(endpointId) {
       const endpoint = registry.get(endpointId);
-      return endpoint?.status === 'active' ? endpoint : null;
+      return endpoint?.status === 'active' ? { ...endpoint, kind: endpoint.kind ?? 'human' } : null;
+    },
+    async lookupTrustedEndpoint(endpointId) {
+      const row = registry.get(endpointId);
+      if (!row || row.origin_domain) return null;
+      return row.keys instanceof Map ? { ...row, kind: row.kind ?? 'human' } : entryFromRegistryRow(row);
     },
     async ensureRoomSystemEndpoint({ identity }) {
       const publicKey = identityKeys(identity).publicKey;

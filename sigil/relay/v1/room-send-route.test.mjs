@@ -8,6 +8,8 @@ import { createRoomHumanSigner } from './room-human-signer.mjs';
 import { signedBytes } from './validate-envelope.mjs';
 import { createMemoryRepository } from '../../cli/memory-repository.mjs';
 import { createIdentity } from '../../cli/identity.mjs';
+import { entryFromRegistryRow } from './trusted-endpoint.mjs';
+const withKeys = (row) => ({ ...row, keys: entryFromRegistryRow(row).keys });
 
 const NOW = new Date('2026-10-02T12:01:00.000Z');
 const principals = {
@@ -33,7 +35,7 @@ function call(port, method, path, authorization, body) {
 async function withWorld(fn, { signer = true, spy = false } = {}) {
   const human = createIdentity({ ownerId: 'usr_chris', endpointId: 'ep_web', kind: 'human' });
   const registry = new Map([
-    ['ep_web', { owner_id: 'usr_chris', status: 'active', kind: 'human', key_id: human.key_id, public_key: crypto.createPublicKey(human.public_key_pem) }],
+    ['ep_web', withKeys({ owner_id: 'usr_chris', status: 'active', kind: 'human', key_id: human.key_id, public_key: crypto.createPublicKey(human.public_key_pem) })],
     ['ep_web2', { owner_id: 'usr_chris', status: 'active', kind: 'human' }],
     ['ep_claude', { owner_id: 'usr_chris', status: 'active', kind: 'agent' }],
     ['ep_stranger', { owner_id: 'usr_other', status: 'active', kind: 'human' }],

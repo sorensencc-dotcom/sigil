@@ -377,3 +377,18 @@ test('memory relay consumeApprovalDecision rejects expired-but-active credential
   const ok = await repository.consumeApprovalDecision({ endpointId: 'ep_claude', actionHash: 'hash_b', now: new Date('2026-08-16T12:01:00Z') });
   assert.equal(ok.decision_id, 'decision_2');
 });
+
+test('memory lookupTrustedEndpoint normalizes a top-level-key registry row and skips shadow rows', async () => {
+  const { publicKey } = (await import('node:crypto')).generateKeyPairSync('ed25519');
+  const registry = new Map([
+    ['ep_t', { endpoint_id: 'ep_t', owner_id: 'usr_t', key_id: 'key_t', status: 'active', public_key: publicKey }],
+    ['ep_shadow@peer.example', { endpoint_id: 'ep_shadow@peer.example', owner_id: 'usr_x', key_id: 'k', status: 'active', public_key: publicKey, origin_domain: 'peer.example' }],
+  ]);
+  const repo = createMemoryRepository({ registry });
+  const e = await repo.lookupTrustedEndpoint('ep_t');
+  assert.equal(e.kind, 'human');
+  assert.equal(e.keys.get('key_t').public_key, publicKey);
+  assert.equal(await repo.lookupTrustedEndpoint('ep_shadow@peer.example'), null);
+  assert.equal(await repo.lookupTrustedEndpoint('nope'), null);
+  assert.equal((await repo.lookupRecipientEndpoint('ep_t')).kind, 'human');
+});

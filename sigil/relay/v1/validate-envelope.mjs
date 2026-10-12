@@ -6,6 +6,7 @@ import { validateSessionResendRequestBody } from '../../contracts/v1/session-res
 import { validateRoomMessageBody } from '../../contracts/v1/room-message-schema.mjs';
 import { isAncestorScope } from './scope.mjs';
 import { parseFederatedId, isLocalDomain } from './federated-id.mjs';
+import { keyVerifies } from './trusted-endpoint.mjs';
 
 const MAX_LIFETIME_MS = 24 * 60 * 60 * 1000;
 
@@ -93,12 +94,10 @@ export function validateEnvelope(envelope, { now = new Date(), registered = new 
   if (!endpoint) throw reject('INVALID_SIGNATURE', 'Sender endpoint has no registered signing key');
   if (envelope.signature?.algorithm !== 'Ed25519' || !envelope.signature.key_id || !envelope.signature.value) throw reject('INVALID_SIGNATURE', 'Complete Ed25519 signature metadata is required');
   const timestamp = now instanceof Date ? now.getTime() : Date.parse(now);
-  const keys = endpoint.keys instanceof Map ? [...endpoint.keys.values()] : Array.isArray(endpoint.keys) ? endpoint.keys : [];
-  const key = envelope.signature.key_id === endpoint.key_id ? endpoint : keys.find((candidate) => candidate.key_id === envelope.signature.key_id);
+  if (!Number.isFinite(timestamp)) throw reject('INVALID_SIGNATURE', 'Signature key is outside its validity window');
+  const key = endpoint.keys instanceof Map ? endpoint.keys.get(envelope.signature.key_id) : undefined;
   if (!key?.public_key) throw reject('INVALID_SIGNATURE', 'Signature key is not registered for the endpoint');
-  const validFrom = key.valid_from ? Date.parse(key.valid_from) : -Infinity;
-  const validUntil = key.valid_until ? Date.parse(key.valid_until) : Infinity;
-  if (!Number.isFinite(timestamp) || timestamp < validFrom || timestamp >= validUntil || key.status === 'revoked') throw reject('INVALID_SIGNATURE', 'Signature key is outside its validity window');
+  if (!keyVerifies(key, now)) throw reject('INVALID_SIGNATURE', 'Signature key is outside its validity window');
   let signature;
   try { signature = Buffer.from(envelope.signature.value, 'base64url'); } catch { throw reject('INVALID_SIGNATURE', 'Signature value is not base64url'); }
   if (!signature.length) throw reject('INVALID_SIGNATURE', 'Registered public key is required');

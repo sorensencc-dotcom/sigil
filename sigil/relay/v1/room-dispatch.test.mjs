@@ -6,13 +6,15 @@ import { signedBytes } from './validate-envelope.mjs';
 import { applyRoomDispatch } from './room-dispatch.mjs';
 import { createMemoryRepository } from '../../cli/memory-repository.mjs';
 import { createIdentity } from '../../cli/identity.mjs';
+import { entryFromRegistryRow } from './trusted-endpoint.mjs';
+const withKeys = (row) => ({ ...row, keys: entryFromRegistryRow(row).keys });
 
 const NOW = new Date('2026-10-02T12:01:00.000Z');
 
 function world({ maxTurns } = {}) {
   const ids = ['ep_web', 'ep_claude', 'ep_codex', 'ep_bot', 'ep_router'];
   const keys = Object.fromEntries(ids.map((id) => [id, crypto.generateKeyPairSync('ed25519')]));
-  const registered = new Map(ids.map((id) => [id, { owner_id: 'usr_chris', status: 'active', kind: id === 'ep_web' ? 'human' : 'agent', key_id: `key_${id}`, public_key: keys[id].publicKey }]));
+  const registered = new Map(ids.map((id) => [id, withKeys({ owner_id: 'usr_chris', status: 'active', kind: id === 'ep_web' ? 'human' : 'agent', key_id: `key_${id}`, public_key: keys[id].publicKey })]));
   const repository = createMemoryRepository({ registry: registered });
   return { keys, registered, repository, maxTurns };
 }

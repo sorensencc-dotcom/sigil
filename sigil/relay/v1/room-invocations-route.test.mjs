@@ -10,6 +10,8 @@ import { signedBytes } from './validate-envelope.mjs';
 import { dispatchToTarget } from './room-dispatch.mjs';
 import { createMemoryRepository } from '../../cli/memory-repository.mjs';
 import { createIdentity } from '../../cli/identity.mjs';
+import { entryFromRegistryRow } from './trusted-endpoint.mjs';
+const withKeys = (row) => ({ ...row, keys: entryFromRegistryRow(row).keys });
 
 const NOW = new Date('2026-10-02T12:01:00.000Z');
 const ROOM = 'room_1';
@@ -37,7 +39,7 @@ function call(port, method, path, authorization, body) {
 
 async function withWorld(fn, { withSystem = true, stream } = {}) {
   const keys = Object.fromEntries(IDS.map((id) => [id, crypto.generateKeyPairSync('ed25519')]));
-  const registry = new Map(IDS.map((id) => [id, { owner_id: id === 'ep_stranger' ? 'usr_other' : 'usr_chris', status: 'active', kind: id === 'ep_web' || id === 'ep_stranger' ? 'human' : 'agent', key_id: `key_${id}`, public_key: keys[id].publicKey }]));
+  const registry = new Map(IDS.map((id) => [id, withKeys({ owner_id: id === 'ep_stranger' ? 'usr_other' : 'usr_chris', status: 'active', kind: id === 'ep_web' || id === 'ep_stranger' ? 'human' : 'agent', key_id: `key_${id}`, public_key: keys[id].publicKey })]));
   const repository = createMemoryRepository({ registry });
   await repository.createRoom({ conversationId: ROOM, workspaceId: 'ws_usr_chris', name: 'build', createdByHumanId: 'usr_chris', ownerEndpointId: 'ep_web', now: NOW });
   for (const [endpointId, responseMode] of [['ep_claude', 'joins'], ['ep_codex', 'mentions_only'], ['ep_router', 'router']]) {

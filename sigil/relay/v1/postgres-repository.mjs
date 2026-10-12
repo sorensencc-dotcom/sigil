@@ -273,7 +273,7 @@ export class PostgresRepository {
   async lookupRecipientEndpoint(endpointId, client) {
     if (!client) throw new Error('Recipient lookup requires a transaction client');
     const result = await client.query(
-      `SELECT e.endpoint_id, e.owner_id, e.status
+      `SELECT e.endpoint_id, e.owner_id, e.kind, e.status
        FROM endpoints e
        WHERE e.endpoint_id = $1 AND e.status = 'active'
          AND EXISTS (
@@ -283,6 +283,17 @@ export class PostgresRepository {
       [endpointId]
     );
     return result.rows[0] ?? null;
+  }
+  async lookupTrustedEndpoint(endpointId, client = this.pool) {
+    const e = await client.query(
+      `SELECT endpoint_id, owner_id, kind, status FROM endpoints WHERE endpoint_id = $1 AND origin_domain IS NULL`, [endpointId]);
+    if (!e.rows[0]) return null;
+    const k = await client.query(
+      `SELECT key_id, public_key, status, valid_from, valid_until FROM endpoint_keys WHERE endpoint_id = $1`, [endpointId]);
+    return {
+      ...e.rows[0],
+      keys: new Map(k.rows.map((r) => [r.key_id, { ...r, public_key: crypto.createPublicKey({ key: r.public_key, format: 'der', type: 'spki' }) }])),
+    };
   }
   // No `client = this.pool` default here, unlike the other lookups above --
   // design §3 requires this one to always run on the transaction's client
