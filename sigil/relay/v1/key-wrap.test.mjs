@@ -32,3 +32,21 @@ test('loadWrapKey: absent throws WRAP_KEY_UNAVAILABLE, wrong length rejected, va
   assert.throws(() => loadWrapKey('SIGIL_WRAP', { SIGIL_WRAP: Buffer.alloc(16).toString('base64') }), { code: 'WRAP_KEY_INVALID' });
   assert.equal(loadWrapKey('SIGIL_WRAP', { SIGIL_WRAP: wrapKey.toString('base64') }).length, 32);
 });
+
+test('truncated wrapped (<28 bytes) throws WRAPPED_KEY_INVALID', () => {
+  const wrapped = wrapPrivateKey({ wrapKey, endpointId: 'e', keyId: 'k', privateKey });
+  for (const n of [0, 5, 11, 12, 20, 24, 25, 27]) {
+    assert.throws(() => unwrapPrivateKey({ wrapKey, endpointId: 'e', keyId: 'k', wrapped: wrapped.subarray(0, n) }), { code: 'WRAPPED_KEY_INVALID' }, `length ${n}`);
+  }
+  assert.throws(() => unwrapPrivateKey({ wrapKey, endpointId: 'e', keyId: 'k', wrapped: 'nope' }), { code: 'WRAPPED_KEY_INVALID' });
+});
+test('flipped ciphertext byte throws', () => {
+  const wrapped = wrapPrivateKey({ wrapKey, endpointId: 'e', keyId: 'k', privateKey });
+  wrapped[30] ^= 1;
+  assert.throws(() => unwrapPrivateKey({ wrapKey, endpointId: 'e', keyId: 'k', wrapped }));
+});
+test('flipped tag byte throws', () => {
+  const wrapped = wrapPrivateKey({ wrapKey, endpointId: 'e', keyId: 'k', privateKey });
+  wrapped[13] ^= 1;
+  assert.throws(() => unwrapPrivateKey({ wrapKey, endpointId: 'e', keyId: 'k', wrapped }));
+});
