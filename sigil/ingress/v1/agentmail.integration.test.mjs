@@ -24,6 +24,7 @@ test('synthetic triage ingress produces one signed envelope and receipt', async 
     ingress: { endpoint: { endpoint_id: 'ep_ingress', owner_id: 'usr_operator' }, ownerId: 'usr_operator', signer: { ...keys, keyId: identity.key_id } },
     ledger,
     policy: { senderAllowlist: ['operator@example.test'], forwardingTokens: { 'triage+trm': 'I'.repeat(22) } },
+    repository: { async lookupTrustedEndpoint(id) { return { endpoint_id: id, owner_id: 'usr_operator', kind: 'agent', status: 'active', keys: new Map() }; } },
     enqueue: async (envelope) => { queued.push(envelope); },
     clock: () => new Date('2026-09-14T12:00:00Z'),
   };

@@ -290,3 +290,59 @@ test('sync mode: a room.* message type is refused on the forward path', async ()
   assert.equal(result.body.code, 'INVALID_ENVELOPE');
   assert.equal(forwarded, false);
 });
+
+// Task 4 (multi-human foundation): forwardEnvelope reads the sender's trust
+// state from repository.lookupTrustedEndpoint (Postgres mode), never from the
+// startup registry Map, and refuses before any outbound call when the sender
+// is not active or the signing key does not verify.
+function trustedEntry({ status = 'active', keys }) {
+  return { endpoint_id: 'ep_codex@a.example', owner_id: 'usr_codex_owner', kind: 'agent', status, keys: new Map(keys.map((k) => [k.key_id, k])) };
+}
+const activeKey = (overrides = {}) => ({ key_id: 'key_codex', public_key: senderKeys.publicKey, status: 'active', valid_from: '2020-01-01T00:00:00Z', valid_until: null, ...overrides });
+
+for (const mode of ['sync', 'queue']) {
+  for (const [label, entry] of [
+    ['sender endpoint is revoked', trustedEntry({ status: 'revoked', keys: [activeKey()] })],
+    ['signature.key_id names a retired key', trustedEntry({ keys: [activeKey({ status: 'retired', valid_until: '2026-08-01T00:00:00Z' })] })],
+  ]) {
+    test(`${mode} mode: forwardEnvelope refuses when the ${label} (no outbound call)`, async () => {
+      const repository = fakeRepo();
+      let lookupArgs = null;
+      repository.lookupTrustedEndpoint = async (...args) => { lookupArgs = args; return entry; };
+      let enqueued = false;
+      repository.enqueueFederationForward = async () => { enqueued = true; return { row: {}, inserted: true }; };
+      let posted = false;
+      const result = await acceptEnvelopeAsync(makeEnvelope(), {
+        ...baseOptions(),
+        federationMode: mode,
+        repository,
+        registered: new Map(),
+        postForwardImpl: async () => { posted = true; return { ok: true, status: 202 }; },
+      });
+      assert.equal(lookupArgs?.[0], 'ep_codex@a.example');
+      assert.ok(result.status >= 400, JSON.stringify(result));
+      assert.equal(posted, false);
+      assert.equal(enqueued, false);
+    });
+  }
+}
+
+test('sync mode: forwardEnvelope advertises the sender_key matching signature.key_id when the sender has two keys', async () => {
+  const other = crypto.generateKeyPairSync('ed25519');
+  const repository = fakeRepo();
+  repository.lookupTrustedEndpoint = async () => trustedEntry({ keys: [
+    { key_id: 'key_old', public_key: other.publicKey, status: 'retiring', valid_from: '2020-01-01T00:00:00Z', valid_until: '2099-01-01T00:00:00Z' },
+    activeKey(),
+  ] });
+  let forwardedBody = null;
+  const result = await acceptEnvelopeAsync(makeEnvelope(), {
+    ...baseOptions(),
+    repository,
+    registered: new Map(),
+    postForwardImpl: async (_peer, canonicalBytes) => { forwardedBody = JSON.parse(Buffer.from(canonicalBytes).toString('utf8')); return { ok: true, status: 202 }; },
+  });
+  assert.equal(result.status, 202, JSON.stringify(result));
+  assert.equal(forwardedBody.sender_key.kid, 'key_codex');
+  assert.equal(forwardedBody.sender_key.publicKey, senderKeys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url'));
+  assert.equal(forwardedBody.sender_owner_id, 'usr_codex_owner');
+});

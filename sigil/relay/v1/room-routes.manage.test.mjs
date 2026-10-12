@@ -170,3 +170,32 @@ test('response mode: a phase 1 agent with a null mode can be given one, and a se
     assert.deepEqual(routers.map((m) => m.endpoint_id).sort(), ['ep_claude', 'ep_codex']);
   });
 });
+
+// Task 4 (multi-human foundation): addRoomMember reads owner, status, and kind
+// from repository.lookupTrustedEndpoint, not the startup registry Map. The
+// repository below knows endpoints the server's `registry` Map does not.
+test('add member: an endpoint known only to the repository is added; system and other-owner endpoints get 403', async () => {
+  const repoRegistry = new Map([
+    ...registry,
+    ['ep_pgonly_agent', { owner_id: 'usr_chris', status: 'active', kind: 'agent' }],
+    ['ep_pgonly_human', { owner_id: 'usr_chris', status: 'active', kind: 'human' }],
+    ['ep_sys', { owner_id: 'usr_chris', status: 'active', kind: 'system' }],
+    ['ep_foreign', { owner_id: 'usr_other', status: 'active', kind: 'agent' }],
+  ]);
+  const repository = createMemoryRepository({ registry: repoRegistry });
+  const server = createRelayServer({ registry, repository, authenticate: async (request) => principals[request.headers.authorization] ?? null });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const port = server.address().port;
+    const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer web', { name: 'pgonly' })).body.room.conversation_id;
+    const agent = await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer web', { endpoint_id: 'ep_pgonly_agent', response_mode: 'joins' });
+    assert.equal(agent.status, 201, JSON.stringify(agent.body));
+    const human = await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer web', { endpoint_id: 'ep_pgonly_human', role: 'member' });
+    assert.equal(human.status, 201, JSON.stringify(human.body));
+    for (const endpointId of ['ep_sys', 'ep_foreign', 'ep_missing']) {
+      const refused = await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer web', { endpoint_id: endpointId, role: 'member' });
+      assert.equal(refused.status, 403, `${endpointId}: ${JSON.stringify(refused.body)}`);
+      assert.equal(refused.body.code, 'ROUTE_NOT_AUTHORIZED');
+    }
+  } finally { await new Promise((resolve) => server.close(resolve)); }
+});

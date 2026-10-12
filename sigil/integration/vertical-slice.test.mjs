@@ -39,6 +39,8 @@ async function bootstrapLiveRelay(t) {
   const ids = { a: `usr_a_${suffix}`, b: `usr_b_${suffix}`, epA: `ep_a_${suffix}`, epB: `ep_b_${suffix}` };
   const keyA = crypto.generateKeyPairSync('ed25519');
   const keyIdA = `key_a_${suffix}`;
+  const keyB = crypto.generateKeyPairSync('ed25519');
+  const derHex = (publicKey) => publicKey.export({ type: 'spki', format: 'der' }).toString('hex');
 
   await pool.query(`
     INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.a}', 'active', NOW()), ('${ids.b}', 'active', NOW());
@@ -46,18 +48,19 @@ async function bootstrapLiveRelay(t) {
       VALUES ('${ids.epA}', '${ids.a}', 'claude', 'install_a_${suffix}', 'A', 'active', NOW()),
              ('${ids.epB}', '${ids.b}', 'codex', 'install_b_${suffix}', 'B', 'active', NOW());
     INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
-      VALUES ('${keyIdA}', '${ids.epA}', 'Ed25519', decode('00', 'hex'), 'active', NOW());
+      VALUES ('${keyIdA}', '${ids.epA}', 'Ed25519', decode('${derHex(keyA.publicKey)}', 'hex'), 'active', NOW() - interval '1 minute'),
+             ('key_b_${suffix}', '${ids.epB}', 'Ed25519', decode('${derHex(keyB.publicKey)}', 'hex'), 'active', NOW() - interval '1 minute');
   `);
 
   const repository = new PostgresRepository({ pool });
 
-  // In-memory registry used solely for signature verification and the
-  // sender/recipient owner_id resolution in accept-envelope.mjs -- separate
-  // from the DB endpoint_keys row above, which only exists to satisfy the
-  // envelopes.signature_key_id foreign key.
+  // Signature verification and owner resolution read Postgres
+  // (lookupTrustedEndpoint / lookupRecipientEndpoint), so the endpoint_keys
+  // rows above carry the real public keys. This Map only backs the test's
+  // bearer authenticator below.
   const registry = new Map([
     [ids.epA, { owner_id: ids.a, key_id: keyIdA, status: 'active', public_key: keyA.publicKey }],
-    [ids.epB, { owner_id: ids.b, key_id: `key_b_${suffix}`, status: 'active', public_key: crypto.generateKeyPairSync('ed25519').publicKey }]
+    [ids.epB, { owner_id: ids.b, key_id: `key_b_${suffix}`, status: 'active', public_key: keyB.publicKey }]
   ]);
 
   const tokenHashToEndpoint = new Map();
@@ -147,7 +150,7 @@ test('replay of an already-accepted message under a new idempotency_key is rejec
   const keys = crypto.generateKeyPairSync('ed25519');
   const sender = { owner_id: 'usr_replay', endpoint_id: 'ep_replay', key_id: 'key_replay', kind: 'agent' };
   const registered = new Map([['ep_replay', { ...sender, status: 'active', public_key: keys.publicKey }]]);
-  const repository = createMemoryRepository();
+  const repository = createMemoryRepository({ registry: registered });
   const template = JSON.parse(fs.readFileSync(new URL('../contracts/v1/envelope.example.json', import.meta.url)));
   // Note: signature.key_id must be overridden to match the registered
   // endpoint's key_id ('key_replay') -- the template's default key_id
@@ -169,7 +172,7 @@ test('grant -> send succeeds -> revoke -> resend denied (§18 #10)', async () =>
   const keys = crypto.generateKeyPairSync('ed25519');
   const sender = { owner_id: 'usr_revoke', endpoint_id: 'ep_revoke', key_id: 'key_revoke', kind: 'agent' };
   const registered = new Map([['ep_revoke', { ...sender, status: 'active', public_key: keys.publicKey }]]);
-  const repository = createMemoryRepository();
+  const repository = createMemoryRepository({ registry: registered });
   const template = JSON.parse(fs.readFileSync(new URL('../contracts/v1/envelope.example.json', import.meta.url)));
   const conversationId = 'conv_revoke';
   const grant = await repository.createCapabilityGrant({ grantId: 'grant_1', capability: 'sigil.task/submit', scope: `scope:conversation/${conversationId}`, grantedTo: 'ep_revoke', expiresAt: '2026-08-17T00:00:00Z', now: new Date('2026-08-16T12:00:00Z') });
@@ -193,7 +196,7 @@ test('a RATE_LIMITED rejection never consumes its own reservation (rollback-on-r
   const keys = crypto.generateKeyPairSync('ed25519');
   const sender = { owner_id: 'usr_quota', endpoint_id: 'ep_quota', key_id: 'key_quota', kind: 'agent' };
   const registered = new Map([['ep_quota', { ...sender, status: 'active', public_key: keys.publicKey }]]);
-  const repository = createMemoryRepository();
+  const repository = createMemoryRepository({ registry: registered });
   const template = JSON.parse(fs.readFileSync(new URL('../contracts/v1/envelope.example.json', import.meta.url)));
   const send = async (n) => {
     const envelope = { ...template, message_id: `msg_quota_${n}`, conversation_id: 'conv_quota', sender, recipient: sender, idempotency_key: `send_quota_${n}`, body: { task_id: `task_q${n}`, instruction: 'x' }, created_at: '2026-08-16T12:00:00Z', expires_at: '2026-08-16T13:00:00Z', signature: { algorithm: 'Ed25519', key_id: sender.key_id, value: '' } };

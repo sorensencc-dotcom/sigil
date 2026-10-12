@@ -22,6 +22,24 @@ export function entryFromRegistryRow(row) {
   };
 }
 
+// A registered-Map row in either shape (top-level key, or already a `keys` Map)
+// as a trusted entry. Used only where a repository has no lookupTrustedEndpoint
+// (Postgres-less test fakes and the legacy no-repository accept path).
+export function entryFromMap(registered, endpointId) {
+  const row = registered?.get?.(endpointId);
+  if (!row) return null;
+  return row.keys instanceof Map ? { ...row, kind: row.kind ?? 'human' } : entryFromRegistryRow(row);
+}
+
+// The single read of an endpoint's trust state. Postgres mode (and the memory
+// repository) answer from the repository on the caller's client; the Map is
+// read only when the repository cannot answer at all. `client ?? undefined`
+// so a null client falls through to the repository's pool default.
+export async function lookupTrustedEntry(repository, registered, endpointId, client) {
+  if (typeof repository?.lookupTrustedEndpoint === 'function') return repository.lookupTrustedEndpoint(endpointId, client ?? undefined);
+  return entryFromMap(registered, endpointId);
+}
+
 export function publicKeyFromDer(der) {
   return crypto.createPublicKey({ key: der, format: 'der', type: 'spki' });
 }

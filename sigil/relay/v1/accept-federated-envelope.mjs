@@ -112,7 +112,7 @@ export async function acceptFederatedEnvelope(body, headers, options) {
   if (!ok) { await auditInboundReject('INVALID_SIGNATURE'); return respond(401, 'INVALID_SIGNATURE', 'Envelope signature verification failed against sender_key', options); }
 
   // --- Checks 6-10: validate, same-owner exemption, deliver ---
-  const { registered, relayDomain } = options;
+  const { relayDomain } = options;
 
   const auditReject = async (status, code, message, details = {}) => {
     if (repository.recordAuditEvent) {
@@ -196,11 +196,12 @@ export async function acceptFederatedEnvelope(body, headers, options) {
     await enforceCapabilityRiskGate(envelope, repository, { client, now });
     // 7: recipient exists and is active in the receiver's registry.
     const recipientId = envelope.recipient.endpoint_id;
-    const recipient = (await repository.lookupRecipientEndpoint(recipientId, client)) ?? registered?.get(recipientId);
+    // Repository only (Task 4, multi-human foundation): no `registered` Map
+    // fallback, so a stale startup entry cannot outvote the endpoints row.
+    const recipient = await repository.lookupRecipientEndpoint(recipientId, client);
     // R11: both repos active-filter before returning a row, so a returned row
-    // is already active; only the `registered` fallback carries a `status`
-    // field that can be explicitly non-active. Reject on an explicit
-    // non-active status only, never on an absent one.
+    // is already active. Reject on an explicit non-active status only, never
+    // on an absent one.
     if (!recipient || (recipient.status !== undefined && recipient.status !== 'active')) {
       throw reject('RECIPIENT_NOT_FOUND', 'The recipient endpoint does not exist in this relay\'s registry.', { recipient_id: recipientId });
     }

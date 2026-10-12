@@ -46,6 +46,7 @@ import { encodeFrame, readFrames, readOneFrameWithTimeout } from './frame-codec.
 import { peerIdFromPublicKey } from './peer-id.mjs';
 import { acceptEnvelopeAsync } from '../accept-envelope.mjs';
 import { reject } from '../validate-envelope.mjs';
+import { lookupTrustedEntry } from '../trusted-endpoint.mjs';
 
 export const DATA_PROTOCOL = '/sigil/data/1.0.0';
 const MAX_FRAME_SIZE = 1024 * 1024; // 1 MiB, matches frame-codec default
@@ -69,14 +70,19 @@ export function wireDataProtocol(node, options) {
 
       // Auth model (spec §8): the Noise-authenticated connection.remotePeer
       // stands in for the HTTP transport's bearer token. Before calling
-      // acceptEnvelopeAsync, look up the claimed sender's registered public
-      // key and derive its expected PeerId -- reject if it doesn't match the
-      // PeerId that was actually authenticated on this connection.
-      const registered = requestOptions.registered;
-      const senderEntry = registered?.get(envelope?.sender?.endpoint_id);
+      // acceptEnvelopeAsync, look up the claimed sender's trusted entry
+      // (repository.lookupTrustedEndpoint) and accept the connection only when
+      // the authenticated PeerId derives from one of its `active` keys. A
+      // retired or retiring key never binds a new connection.
+      const senderEntry = await lookupTrustedEntry(requestOptions.repository, requestOptions.registered, envelope?.sender?.endpoint_id);
       if (!senderEntry) throw reject('UNKNOWN_ENDPOINT', 'Sender endpoint is not registered on this relay');
-      const expectedPeerId = await peerIdFromPublicKey(senderEntry.public_key);
-      if (expectedPeerId.toString() !== connection.remotePeer.toString()) {
+      const remotePeer = connection.remotePeer.toString();
+      let bound = false;
+      for (const key of senderEntry.keys instanceof Map ? senderEntry.keys.values() : []) {
+        if (key.status !== 'active' || !key.public_key) continue;
+        if ((await peerIdFromPublicKey(key.public_key)).toString() === remotePeer) { bound = true; break; }
+      }
+      if (!bound) {
         throw reject('PEER_IDENTITY_MISMATCH', 'Authenticated PeerId does not match the sender endpoint\'s registered key');
       }
       responseBody = await acceptEnvelopeAsync(envelope, requestOptions);

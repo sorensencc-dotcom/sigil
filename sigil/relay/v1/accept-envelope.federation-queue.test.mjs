@@ -66,6 +66,17 @@ test('queue mode with live database', { skip: !connectionString }, async (t) => 
     await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
   }
 
+  // forwardEnvelope reads the sender's trust state from Postgres
+  // (lookupTrustedEndpoint), so the local sender and its key live there.
+  await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ('usr_codex_owner', 'active', NOW())`);
+  await pool.query(
+    `INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+     VALUES ('ep_codex@a.example', 'usr_codex_owner', 'agent', 'agent', 'install_ep_codex', 'codex', 'active', NOW())`);
+  await pool.query(
+    `INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
+     VALUES ('key_codex', 'ep_codex@a.example', 'Ed25519', $1, 'active', '2020-01-01T00:00:00Z')`,
+    [senderKeys.publicKey.export({ type: 'spki', format: 'der' })]);
+
   // Register the peer (b.example) so decideRoute doesn't reject with PEER_NOT_PINNED
   const peerPubKey = relayIdentityKeys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url');
   await repository.upsertPeer({

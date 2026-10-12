@@ -1,5 +1,5 @@
 import { deferOrRun } from './after-commit.mjs';
-import { isAgentMember } from './room-policy.mjs';
+import { memberIsHuman } from './room-policy.mjs';
 
 // The only caller of stream.notifyRoom. Members are read now, inside the open
 // transaction, so the recipient set matches the committed state; the frames go
@@ -10,7 +10,7 @@ export async function notifyRoomHumans({ repository, stream, registered, client 
   // A failed member read must not fail the request or roll back the commit it follows.
   try {
     for (const member of await repository.listRoomMembers(roomId, client)) {
-      if (!(await isAgentMember(member, repository, client, registered))) humans.push(member.endpoint_id);
+      if (await memberIsHuman(member, repository, client, registered)) humans.push(member.endpoint_id);
     }
   } catch (error) {
     logger?.error?.('room.updated member read failed', error);

@@ -7,6 +7,7 @@ import { notifyRoomHumans } from './room-notify.mjs';
 import { writeRejectionAudit } from './rejection-audit.mjs';
 import { decideRoute, buildForwardRequest, signForwardRequest, postForward } from './federation-router.mjs';
 import { enforceCapabilityRiskGate } from './capability-risk-gate.mjs';
+import { entryFromMap, keyVerifies, lookupTrustedEntry } from './trusted-endpoint.mjs';
 
 // Rejection codes that represent a real, attributable security-relevant
 // rejection worth auditing (design §9, round 3 blocker 5). A malformed-JSON
@@ -130,9 +131,16 @@ function toResponse(options, error) {
   return { status: statusByCode[error.code], body: { request_id: options.request_id ?? null, code: error.code, message: error.message, details: error.details ?? {} } };
 }
 
+// validateEnvelope sees exactly one entry: the sender's, in the trusted-entry
+// shape (`keys` Map). Never the whole registry.
+function senderOnlyMap(envelope, entry) {
+  return new Map(entry ? [[envelope.sender.endpoint_id, entry]] : []);
+}
+
 export function acceptEnvelope(envelope, options = {}) {
   try {
-    const result = validateEnvelope(envelope, options);
+    const senderId = envelope?.sender?.endpoint_id;
+    const result = validateEnvelope(envelope, { ...options, registered: senderOnlyMap(envelope, entryFromMap(options.registered, senderId)) });
     const existing = options.idempotency?.get(`${envelope.sender.endpoint_id}:${envelope.idempotency_key}`);
     if (existing) return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: existing.message_id, duplicate: true } };
     options.persist?.({ envelope, ...result });
@@ -217,10 +225,9 @@ async function acceptWithRepository(envelope, options) {
       // a transaction (I1: no held Postgres connection across postForward).
       await enforceCapabilityRiskGate(envelope, repository, { now });
 
-      // client = null: forwardEnvelope passes it only to lookupRecipientEndpoint
-      // (L210) for the sender-key lookup, handled by the existing `?? null`
-      // guard. buildForwardRequest / signForwardRequest / postForward never
-      // touch client. Queue mode is not reached here (gated above), so
+      // client = null: forwardEnvelope's sender lookup (lookupTrustedEntry)
+      // turns it into the repository's pool default. buildForwardRequest /
+      // signForwardRequest / postForward never touch client. Queue mode is not reached here (gated above), so
       // enqueueForward's client-dependent INSERT is never called with null.
       return await forwardEnvelope(envelope, route, options, null);
     }
@@ -291,6 +298,12 @@ async function acceptWithRepository(envelope, options) {
     // caller cannot probe room membership.
     const room = repository.lookupRoom ? await repository.lookupRoom(envelope.conversation_id, client) : null;
 
+    // The sender's trust state (status, owner, keys) is read now, on this
+    // transaction's client, so signature verification sees current Postgres
+    // state. validateEnvelope gets a one-entry Map built from it.
+    const senderEntry = await lookupTrustedEntry(repository, options.registered, envelope.sender.endpoint_id, client);
+    const senderOnly = senderOnlyMap(envelope, senderEntry);
+
     // route.action === 'local' -> fall through to recipient/persist checks.
     // Every direct recipient must exist in the relay's endpoint directory
     // before any delivery row can be written. Keep this lookup on the
@@ -298,12 +311,18 @@ async function acceptWithRepository(envelope, options) {
     // turn an accepted envelope into a lost dead letter. Federated addresses
     // are checked only after locality validation; non-federated addresses use
     // their exact bare endpoint id.
+    // No registered-Map fallback: a stale startup entry must not outvote the
+    // endpoints row. A repository without lookupRecipientEndpoint (memory-mode
+    // fakes) reads the Map for the owner only.
+    let recipientEntry = null;
     if (envelope.recipient?.endpoint_id && repository.lookupRecipientEndpoint) {
       const recipientId = envelope.recipient.endpoint_id;
-      const registered = (await repository.lookupRecipientEndpoint(recipientId, client)) ?? options.registered?.get(recipientId);
-      if (!registered || registered.status !== 'active') {
+      recipientEntry = await repository.lookupRecipientEndpoint(recipientId, client);
+      if (!recipientEntry || recipientEntry.status !== 'active') {
         throw reject('RECIPIENT_NOT_FOUND', 'The recipient endpoint does not exist in this relay\'s registry.', { recipient_id: recipientId });
       }
+    } else if (envelope.recipient?.endpoint_id) {
+      recipientEntry = entryFromMap(options.registered, envelope.recipient.endpoint_id);
     }
 
     // Capability registry fail-closed check (design §7) and the high-risk
@@ -313,7 +332,7 @@ async function acceptWithRepository(envelope, options) {
     // so no separate inline check runs here.
     const capabilityGrants = await repository.lookupActiveCapabilityGrants(envelope.sender.endpoint_id, now, client);
     if (envelope.message_type === 'session.resend_request') {
-      const result = validateEnvelope(envelope, { ...options, idempotency: new Map(), capabilityGrants });
+      const result = validateEnvelope(envelope, { ...options, registered: senderOnly, idempotency: new Map(), capabilityGrants });
       if (Date.parse(envelope.expires_at) <= now.getTime()) throw reject('MESSAGE_EXPIRED', 'Message has expired');
       const canonicalHash = result.canonical_hash;
       const prior = repository.lookupIdempotency
@@ -365,20 +384,20 @@ async function acceptWithRepository(envelope, options) {
     // same-owner pair, so gating on it here would permanently block a
     // human's own multi-endpoint traffic (e.g. their Codex and Claude
     // agents talking to each other), which is Sigil's primary use case.
-    // Both the sender's and recipient's real owners are resolved from
-    // options.registered (the trusted endpoint directory used for signature
-    // verification), never from envelope.sender.owner_id or
-    // envelope.recipient.owner_id, which are unverified client input.
+    // Both the sender's and recipient's real owners are resolved from the
+    // trusted lookups above (lookupTrustedEndpoint / lookupRecipientEndpoint),
+    // never from envelope.sender.owner_id or envelope.recipient.owner_id,
+    // which are unverified client input.
     if (envelope.recipient?.endpoint_id && repository.lookupActiveDirectoryLink) {
-      const recipientOwnerId = options.registered?.get(envelope.recipient.endpoint_id)?.owner_id;
-      const senderOwnerId = options.registered?.get(envelope.sender.endpoint_id)?.owner_id;
+      const recipientOwnerId = recipientEntry?.owner_id;
+      const senderOwnerId = senderEntry?.owner_id;
       const sameOwner = recipientOwnerId && senderOwnerId && recipientOwnerId === senderOwnerId;
       if (!sameOwner) {
         const link = await repository.lookupActiveDirectoryLink(envelope.sender.endpoint_id, envelope.recipient.endpoint_id, client);
         if (!link) throw reject('DIRECTORY_LINK_REQUIRED', 'No active directory link between sender and recipient', { sender_endpoint_id: envelope.sender.endpoint_id, recipient_endpoint_id: envelope.recipient.endpoint_id });
       }
     }
-    const result = validateEnvelope(envelope, { ...options, idempotency: new Map(), capabilityGrants, ...(room ? { broadcastAuthorizer: () => true } : {}) });
+    const result = validateEnvelope(envelope, { ...options, registered: senderOnly, idempotency: new Map(), capabilityGrants, ...(room ? { broadcastAuthorizer: () => true } : {}) });
     assertRoomTypeHasRoom(envelope, room);
     const roomPlan = room
       ? await authorizeRoomEnvelope(envelope, room, repository, client, { inboxDepthLimit: options.inboxDepthLimit ?? DEFAULT_INBOX_DEPTH_LIMIT, registered: options.registered, now })
@@ -484,22 +503,20 @@ async function acceptWithRepository(envelope, options) {
 // reached, so the transaction commits with no rows. Queue mode is Task 14.
 async function forwardEnvelope(envelope, route, options, client) {
   const { repository } = options;
-  const registered = options.registered ?? new Map();
-  // The repository fallback is gated on a real transaction client. On the
-  // Phase 1 sync-forward path `client` is null, and
-  // postgres-repository.lookupRecipientEndpoint hard-throws a bare Error
-  // ("Recipient lookup requires a transaction client") when called without
-  // one -- it deliberately has no `client = this.pool` default because it
-  // takes a row lock. With the fallback skipped, an unresolvable sender
-  // falls to the FORWARD_MISCONFIGURED reject below instead, matching the
-  // queue/local paths' behaviour for the same condition.
-  const senderEntry = registered.get(envelope.sender.endpoint_id)
-    ?? (client && repository.lookupRecipientEndpoint
-          ? await repository.lookupRecipientEndpoint(envelope.sender.endpoint_id, client)
-          : null);
+  // Neither forward path runs validateEnvelope, and the receiving peer
+  // verifies only against the sender_key sent here. So the sender must be
+  // active and the key named by signature.key_id must verify now, or a
+  // retired key / revoked endpoint would still verify at every peer.
+  // lookupTrustedEndpoint has a pool default, so the Phase 1 sync path's null
+  // client is safe (lookupRecipientEndpoint, which has none, is not used).
+  const senderEntry = await lookupTrustedEntry(repository, options.registered, envelope.sender.endpoint_id, client);
   const senderOwnerId = senderEntry?.owner_id;
-  const senderPub = senderEntry?.public_key;
-  if (!senderOwnerId || !senderPub) throw reject('FORWARD_MISCONFIGURED', 'Authenticated local sender has no registered owner or key');
+  if (!senderEntry || !senderOwnerId) throw reject('FORWARD_MISCONFIGURED', 'Authenticated local sender has no registered owner or key');
+  if (senderEntry.status !== 'active') throw reject('ENDPOINT_REVOKED', 'Sender endpoint is not active');
+  const key = senderEntry.keys instanceof Map ? senderEntry.keys.get(envelope.signature?.key_id) : undefined;
+  if (!key?.public_key) throw reject('INVALID_SIGNATURE', 'Signature key is not registered for the endpoint');
+  if (!keyVerifies(key, options.now ?? new Date())) throw reject('INVALID_SIGNATURE', 'Signature key is outside its validity window');
+  const senderPub = key.public_key;
   const senderKey = {
     kid: envelope.signature.key_id,
     alg: 'Ed25519',
@@ -558,7 +575,8 @@ export async function acceptEnvelopeAsync(envelope, options = {}) {
   // Legacy / unit-test path: no repository, caller supplies plain
   // lookupIdempotency + persist callbacks (map-backed, no transaction).
   try {
-    const result = validateEnvelope(envelope, { ...options, idempotency: new Map() });
+    const senderEntry = await lookupTrustedEntry(options.repository, options.registered, envelope?.sender?.endpoint_id);
+    const result = validateEnvelope(envelope, { ...options, registered: senderOnlyMap(envelope, senderEntry), idempotency: new Map() });
     const prior = options.lookupIdempotency
       ? await options.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key)
       : options.idempotency?.get(`${envelope.sender.endpoint_id}:${envelope.idempotency_key}`);

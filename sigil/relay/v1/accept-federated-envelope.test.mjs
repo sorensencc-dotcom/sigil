@@ -524,3 +524,26 @@ test('rooms: a federated room.* message type is refused', async () => {
   assert.equal(r.body.code, 'INVALID_ENVELOPE');
   assert.equal((await world.repo.listInbox(`ep_claude@${RELAY}`, '')).length, 0);
 });
+
+// Task 4 (multi-human foundation): the synthetic sender entry has the keys-Map
+// shape validateEnvelope reads, and the recipient comes from the repository
+// alone -- an empty `registered` Map changes nothing, and a recipient that
+// exists only in `registered` is not found.
+test('Task 4: synthetic sender entry verifies with an empty registered Map', async () => {
+  const world = worldWithRecipient('usr_chris@primary.example');
+  await seedSelfPairLink(world);
+  const { body, headers } = forwardPayload(world);
+  const r = await acceptFederatedEnvelope(body, headers, { ...opts9(world), registered: new Map() });
+  assert.equal(r.status, 202, JSON.stringify(r));
+  assert.equal(r.body.code, 'ACCEPTED');
+});
+test('Task 4: a recipient present only in the registered Map (not the repository) → 400 RECIPIENT_NOT_FOUND', async () => {
+  const world = worldWithRecipient('usr_chris@primary.example');
+  const repoOnly = createMemoryRepository({ registry: new Map() });
+  repoOnly.upsertPeer({ domain: ORIGIN, relayUrl: 'https://a.example/relay', keys: [{ kid: world.relayIdentity.key_id, alg: 'Ed25519', publicKey: world.relayPub }], trustMode: 'tofu' });
+  await seedSelfPairLink({ ...world, repo: repoOnly });
+  const { body, headers } = forwardPayload(world);
+  const r = await acceptFederatedEnvelope(body, headers, { ...opts9(world), repository: repoOnly });
+  assert.equal(r.status, 400, JSON.stringify(r));
+  assert.equal(r.body.code, 'RECIPIENT_NOT_FOUND');
+});

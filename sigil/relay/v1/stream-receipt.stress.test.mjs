@@ -132,7 +132,8 @@ test('reconnecting recipient reconciles concurrent missed deliveries and acknowl
   const recipientKeys = identityKeys(recipient);
   const senderEndpoint = endpoint(sender, senderKeys);
   const recipientEndpoint = endpoint(recipient, recipientKeys);
-  const repository = createMemoryRepository();
+  const registry = new Map([[sender.endpoint_id, senderEndpoint], [recipient.endpoint_id, recipientEndpoint]]);
+  const repository = createMemoryRepository({ registry });
   // sender and recipient are owned by different humans (usr_codex/usr_claude),
   // so the directory-link gate (spec §8) applies here for real -- seed an
   // active link via the same invite/redeem/confirm flow a real deployment
@@ -149,7 +150,7 @@ test('reconnecting recipient reconciles concurrent missed deliveries and acknowl
     ]),
   });
   const relayServer = createRelayServer({
-    registry: new Map([[sender.endpoint_id, senderEndpoint], [recipient.endpoint_id, recipientEndpoint]]),
+    registry,
     repository,
     tokenHashes: new Map([
       [hashBearerToken(sender.relay_token), sender.endpoint_id],

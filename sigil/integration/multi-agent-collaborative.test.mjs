@@ -149,7 +149,10 @@ test('Multi-agent collaborative relay: end-to-end task delegation, streaming chu
   });
 
   // 2. Setup Memory Repository & Capabilities
-  const repository = createMemoryRepository();
+  // The memory repository is the trusted-endpoint source (lookupTrustedEndpoint);
+  // the relay server reads the same Map, as in `sigil relay up` memory mode.
+  const registry = new Map();
+  const repository = createMemoryRepository({ registry });
   const conversationId = 'conv_collab_01';
 
   // Grant task submission capability to ep_codex and ep_claude for this conversation
@@ -171,10 +174,8 @@ test('Multi-agent collaborative relay: end-to-end task delegation, streaming chu
     now: new Date()
   });
 
-  const registry = new Map([
-    ['ep_codex', codexEndpoint],
-    ['ep_claude', claudeEndpoint]
-  ]);
+  registry.set('ep_codex', codexEndpoint);
+  registry.set('ep_claude', claudeEndpoint);
 
   const tokenHashes = new Map([
     [hashBearerToken(codexIdentity.relay_token), codexIdentity.endpoint_id],
@@ -410,7 +411,7 @@ test('Multi-agent capability delegation chain and revocation boundary enforcemen
     ['ep_reviewer', endpoint(reviewerIdentity, reviewerKeys)]
   ]);
 
-  const repository = createMemoryRepository();
+  const repository = createMemoryRepository({ registry });
   const conversationId = 'conv_chain_delegation_01';
 
   // Step 1: Grant capability 'sigil.task/submit' to ep_claude
@@ -524,7 +525,7 @@ test('Multi-agent tamper and replay attack rejection across stream channels', as
     ['ep_claude', endpoint(claudeIdentity, claudeKeys)]
   ]);
 
-  const repository = createMemoryRepository();
+  const repository = createMemoryRepository({ registry });
   const tokenHashes = new Map([
     [hashBearerToken(codexIdentity.relay_token), codexIdentity.endpoint_id],
     [hashBearerToken(claudeIdentity.relay_token), claudeIdentity.endpoint_id]
@@ -644,7 +645,7 @@ test('Concurrent bidirectional multi-agent stream exchange and SQLite state reco
     ['ep_claude', claudeEndpoint]
   ]);
 
-  const repository = createMemoryRepository();
+  const repository = createMemoryRepository({ registry });
   const tokenHashes = new Map([
     [hashBearerToken(codexIdentity.relay_token), codexIdentity.endpoint_id],
     [hashBearerToken(claudeIdentity.relay_token), claudeIdentity.endpoint_id]

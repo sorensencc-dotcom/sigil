@@ -160,3 +160,52 @@ test('m5: an unexpected (non-reject()) error thrown before acceptEnvelopeAsync i
     await receiverHost.stop();
   }
 });
+
+// Task 4 (multi-human foundation): the PeerId binding reads the sender's keys
+// from repository.lookupTrustedEndpoint and accepts a PeerId derived from any
+// `active` key, never from a `retired` one.
+test('PeerId binding: an active key of the sender binds, a retired key does not', async () => {
+  const oldIdentity = makeIdentity();
+  const newIdentity = makeIdentity();
+  const receiverIdentity = makeIdentity();
+  const entry = {
+    endpoint_id: 'ep_sender', owner_id: 'usr_sender', kind: 'agent', status: 'active',
+    keys: new Map([
+      ['key_old', { key_id: 'key_old', public_key: oldIdentity.keys.publicKey, status: 'retired', valid_from: '2020-01-01T00:00:00Z', valid_until: '2021-01-01T00:00:00Z' }],
+      ['key_new', { key_id: 'key_new', public_key: newIdentity.keys.publicKey, status: 'active', valid_from: '2020-01-01T00:00:00Z', valid_until: null }],
+    ]),
+  };
+  const receiverHost = await createP2pHost({ identity: receiverIdentity, listenAddrs: ['/ip4/127.0.0.1/tcp/0'] });
+  const hosts = [receiverHost];
+  try {
+    const writes = [];
+    wireWithBuilder(receiverHost, {
+      registered: new Map(),
+      repository: { async lookupTrustedEndpoint(id) { return id === 'ep_sender' ? entry : null; } },
+      relayDomain: undefined,
+      federationMode: undefined,
+      persist: async (row) => { writes.push(row); return { message_id: row.message_id, duplicate: false }; }
+    });
+    const [receiverAddr] = receiverHost.getMultiaddrs();
+    const send = async (identity, n) => {
+      const host = await createP2pHost({ identity, listenAddrs: ['/ip4/127.0.0.1/tcp/0'] });
+      hosts.push(host);
+      const envelope = signEnvelope({
+        protocol: 'sigil/1', message_id: `msg_p2p_keys_${n}`, conversation_id: 'conv_p2p_keys', message_type: 'task.request',
+        sender: { owner_id: 'usr_sender', endpoint_id: 'ep_sender', kind: 'agent', key_id: 'key_new' },
+        recipient: { owner_id: 'usr_receiver', endpoint_id: 'ep_receiver' },
+        body: { task_id: `task_p2p_keys_${n}`, instruction: 'ping', success_criteria: [], dependencies: [], deadline: '2099-01-01T00:00:00Z' },
+        context_refs: [], capabilities: [], correlation_id: null,
+        idempotency_key: `send_p2p_keys_${n}`, expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(), created_at: new Date().toISOString()
+      }, newIdentity.keys.privateKey);
+      return sendEnvelope(host, receiverAddr, envelope);
+    };
+    const bound = await send(newIdentity, 1);
+    assert.equal(bound.status, 202, JSON.stringify(bound));
+    const refused = await send(oldIdentity, 2);
+    assert.equal(refused.body.code, 'PEER_IDENTITY_MISMATCH', JSON.stringify(refused));
+    assert.equal(writes.length, 1);
+  } finally {
+    for (const host of hosts) await host.stop();
+  }
+});
