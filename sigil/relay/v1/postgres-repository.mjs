@@ -514,6 +514,13 @@ export class PostgresRepository {
       if (ownerRow.rows[0]?.owner_id !== identity.owner_id) {
         throw Object.assign(new Error(`endpoint "${identity.endpoint_id}" is already registered to a different owner`), { code: 'ROOM_SYSTEM_OWNER_MISMATCH' });
       }
+      // One active key per endpoint (endpoint_keys_one_active_idx): a different
+      // active key is rejected here, before any insert, so the mismatch code wins
+      // over the index's 23505. Rotation is a deliberate later operation.
+      const otherActive = await client.query(`SELECT key_id FROM endpoint_keys WHERE endpoint_id = $1 AND status = 'active' AND key_id <> $2`, [identity.endpoint_id, identity.key_id]);
+      if (otherActive.rows.length > 0) {
+        throw Object.assign(new Error(`endpoint "${identity.endpoint_id}" already has a different active key`), { code: 'ROOM_SYSTEM_KEY_MISMATCH' });
+      }
       await client.query(
         `INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
          VALUES ($1, $2, 'Ed25519', $3, 'active', $4) ON CONFLICT (key_id) DO NOTHING`,
@@ -525,11 +532,6 @@ export class PostgresRepository {
       const row = stored.rows[0];
       if (!row || row.endpoint_id !== identity.endpoint_id || !Buffer.from(row.public_key).equals(Buffer.from(publicKey))) {
         throw Object.assign(new Error(`room system key "${identity.key_id}" is already registered with a different endpoint or key`), { code: 'ROOM_SYSTEM_KEY_MISMATCH' });
-      }
-      // Rotation is a deliberate later operation: never allow a second active key.
-      const otherActive = await client.query(`SELECT key_id FROM endpoint_keys WHERE endpoint_id = $1 AND status = 'active' AND key_id <> $2`, [identity.endpoint_id, identity.key_id]);
-      if (otherActive.rows.length > 0) {
-        throw Object.assign(new Error(`endpoint "${identity.endpoint_id}" already has a different active key`), { code: 'ROOM_SYSTEM_KEY_MISMATCH' });
       }
     });
   }
@@ -828,6 +830,9 @@ export class PostgresRepository {
   // sweepable. The endpoints row's (endpoint_id, owner_id) matches what the
   // envelope INSERT uses for (sender_endpoint_id, sender_owner_id).
   async registerFederatedSender({ endpoint_id, owner_id, key_id, public_key, origin_domain }, client = this.pool) {
+    if (client === this.pool) {
+      return this.withTransaction((txClient) => this.registerFederatedSender({ endpoint_id, owner_id, key_id, public_key, origin_domain }, txClient));
+    }
     const now = new Date().toISOString();
     await client.query(
       `INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', $2)
@@ -858,12 +863,58 @@ export class PostgresRepository {
         { code: 'FEDERATED_KEY_ID_COLLISION' }
       );
     }
+    // A key_id already on file for this endpoint (active or retired) is never
+    // re-activated, and never retires the endpoint's current key: replaying an
+    // old key_id must not displace the newer one.
+    if (existingKey.rows.length > 0) return;
+    await client.query(
+      `UPDATE endpoint_keys SET status = 'retired', valid_until = GREATEST($2::timestamptz, valid_from)
+        WHERE endpoint_id = $1 AND status = 'active' AND key_id <> $3`,
+      [endpoint_id, now, key_id]
+    );
     await client.query(
       `INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
-       VALUES ($1, $2, 'Ed25519', $3, 'active', $4)
-       ON CONFLICT (key_id) DO NOTHING`,
+       VALUES ($1, $2, 'Ed25519', $3, 'active', $4)`,
       [key_id, endpoint_id, public_key, now]
     );
+  }
+  async rotateEndpointKey({ endpointId, newKey }, client = null) {
+    const run = async (tx) => {
+      const now = new Date().toISOString();
+      await tx.query(
+        `UPDATE endpoint_keys SET status = 'retired', valid_until = GREATEST($2::timestamptz, valid_from)
+          WHERE endpoint_id = $1 AND status = 'active'`,
+        [endpointId, now]
+      );
+      await tx.query(
+        `INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
+         VALUES ($1, $2, 'Ed25519', $3, 'active', $4)`,
+        [newKey.key_id, endpointId, newKey.public_key, now]
+      );
+      return { key_id: newKey.key_id };
+    };
+    return client ? run(client) : this.withTransaction(run);
+  }
+  async revokeEndpoint({ endpointId, actorHumanId = null }, client = null) {
+    const run = async (tx) => {
+      const now = new Date().toISOString();
+      const endpoint = await tx.query(
+        `UPDATE endpoints SET status = 'revoked', revoked_at = COALESCE(revoked_at, $2) WHERE endpoint_id = $1 RETURNING owner_id`,
+        [endpointId, now]
+      );
+      if (!endpoint.rows[0]) throw Object.assign(new Error(`endpoint "${endpointId}" not found`), { code: 'ENDPOINT_NOT_FOUND' });
+      await tx.query(
+        `UPDATE endpoint_keys SET status = 'retired', valid_until = GREATEST(COALESCE(valid_until, $2::timestamptz), valid_from)
+          WHERE endpoint_id = $1 AND (status <> 'retired' OR valid_until IS NULL)`,
+        [endpointId, now]
+      );
+      await this.recordAuditEvent({
+        eventType: 'endpoint.revoked', subjectId: endpointId, actorId: actorHumanId, actorHumanId, endpointId,
+        objectType: 'endpoint', objectId: endpointId, outcome: 'success', now, client: tx,
+      });
+      return { owner_id: endpoint.rows[0].owner_id };
+    };
+    return client ? run(client) : this.withTransaction(run);
   }
   async persistAcceptedEnvelope(row, client) {
     if (client) return this.#insertAcceptedEnvelope(row, client);

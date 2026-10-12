@@ -71,6 +71,7 @@ Commands:
   peer get <domain> [--database-url url]                   Show one pinned peer relay
   peer remove <domain> [--database-url url]                Unpin a peer relay
   peer rotate <domain> --confirm [--database-url url]      Force-overwrite a pinned peer's key set, bypassing the TOFU mismatch check
+  endpoint revoke <endpoint_id> [--database-url url]       Revoke an endpoint and retire all of its signing keys
   federation outbox list [--database-url url]              List queue-mode federation forward jobs: state counts, then one row per job (no envelope bodies)
   federation outbox show <id> [--database-url url]         Show one relay_jobs federation row's metadata (no envelope body)
   federation outbox retry <id> [--database-url url]        Re-queue a forward_rejected / dead_letter row for another forward attempt
@@ -1675,6 +1676,35 @@ async function cmdFederationLinkRevoke(rest) {
   }, { migrate: true });
 }
 
+// `sigil endpoint revoke <endpoint_id>`: revokes the endpoint, retires its keys,
+// and tells running relays over pg NOTIFY so open streams drop.
+async function publishAdminNotification(client, payload) {
+  await client.query("SELECT pg_notify('sigil_admin', $1)", [JSON.stringify(payload)]);
+}
+
+async function cmdEndpoint(argv) {
+  const [action, ...rest] = argv;
+  const usageLine = 'usage: sigil endpoint revoke <endpoint_id> [--database-url url]';
+  if (action !== 'revoke') throw new Error(usageLine);
+  const args = parseArgs({ args: rest, options: { 'database-url': { type: 'string' } }, allowPositionals: true });
+  const endpointId = args.positionals[0];
+  if (!endpointId) throw new Error(usageLine);
+  await withRepository(args, 'sigil endpoint revoke requires --database-url (or SIGIL_DATABASE_URL)', async (repository) => {
+    try {
+      await repository.withTransaction(async (client) => {
+        await repository.revokeEndpoint({ endpointId }, client);
+        await publishAdminNotification(client, { type: 'endpoint.revoked', endpoint_id: endpointId });
+      });
+    } catch (error) {
+      if (error.code !== 'ENDPOINT_NOT_FOUND') throw error;
+      console.error(`sigil endpoint revoke: endpoint "${endpointId}" not found`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`Revoked ${endpointId}.`);
+  }, { migrate: true });
+}
+
 // Read-only federation routing diagnostic. Sends NO envelope, ever: it only
 // parses the recipient id, reads the local peer directory, GETs the peer
 // relay's /v1/health, and prints an advisory same-owner-exemption line based
@@ -1789,6 +1819,7 @@ export async function main() {
     else if (command === 'inbox') await cmdInbox(process.argv.slice(3));
     else if (command === 'federation') await cmdFederation(process.argv.slice(3));
     else if (command === 'route') await cmdRoute(process.argv.slice(3));
+    else if (command === 'endpoint') await cmdEndpoint(process.argv.slice(3));
     else usage();
   } catch (error) {
     console.error(`sigil: ${error.message}`);

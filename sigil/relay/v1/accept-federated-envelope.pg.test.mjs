@@ -303,3 +303,76 @@ test('federated direct envelope into a local room → 403 ROUTE_NOT_AUTHORIZED, 
   const shadow = await pool.query('SELECT 1 FROM endpoints WHERE endpoint_id = $1', [ids.sender]);
   assert.equal(shadow.rowCount, 0, 'a refused federated sender is never shadow-registered');
 });
+
+// Task 7 pin: the shadow sender rotates its signing key. A forwarded envelope
+// signed under a NEW key_id retires the old active shadow key in the same
+// transaction (endpoint_keys_one_active_idx would otherwise raise 23505) and is
+// accepted; exactly one key stays active.
+test('federated sender key rotation retires the old shadow key and accepts the next envelope', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const ids = {
+    owner: `usr_chris_${suffix}@primary.example`,
+    sender: `ep_codex_${suffix}@${ORIGIN}`,
+    recipient: `ep_claude_${suffix}@${RELAY}`,
+    recipientKey: `key_ep_claude_${suffix}@${RELAY}`,
+    conversation: `conv_${suffix}`,
+  };
+  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  assertDisposableTestDatabase(connectionString);
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
+  for (const file of sqlFiles) await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
+
+  const relayKeys = crypto.generateKeyPairSync('ed25519');
+  const relayIdentity = { key_id: `relay-a-${suffix}`, private_key_pem: relayKeys.privateKey.export({ type: 'pkcs8', format: 'pem' }) };
+  const relayPub = relayKeys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url');
+  await pool.query(`
+    INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.owner}', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+      VALUES ('${ids.recipient}', '${ids.owner}', 'claude', 'agent', 'install_claude_${suffix}', 'Claude', 'active', NOW());
+    INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
+      VALUES ('${ids.recipientKey}', '${ids.recipient}', 'Ed25519', decode('00', 'hex'), 'active', NOW());
+  `);
+  const repository = new PostgresRepository({ pool });
+  await repository.upsertPeer({ domain: ORIGIN, relayUrl: 'https://a.example/relay', keys: [{ kid: relayIdentity.key_id, alg: 'Ed25519', publicKey: relayPub }], trustMode: 'tofu' });
+  await repository.createFederationDirectoryLink({
+    linkRef: crypto.randomUUID(),
+    localOwnerId: ids.owner, localEndpointId: ids.recipient,
+    remoteOwnerId: ids.owner, remoteEndpointId: ids.sender,
+    remoteDomain: ORIGIN, role: 'issuer', initiatedVia: 'self_pair', status: 'active',
+    localConfirmedAt: new Date(), remoteConfirmedAt: new Date(), sourceInviteId: null, peerDomain: ORIGIN,
+  });
+
+  const sendWithKey = async (n) => {
+    const keys = crypto.generateKeyPairSync('ed25519');
+    const keyId = `key_ep_codex_${suffix}_${n}@${ORIGIN}`;
+    const pub = keys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url');
+    const base = {
+      protocol: 'sigil/1', message_id: `msg_fed_${suffix}_${n}`, conversation_id: ids.conversation, message_type: 'chat.message',
+      sender: { owner_id: ids.owner, endpoint_id: ids.sender, kind: 'agent' },
+      recipient: { owner_id: ids.owner, endpoint_id: ids.recipient, kind: 'agent' },
+      body: { text: 'hi' }, context_refs: [], capabilities: [], idempotency_key: `idem_fed_${suffix}_${n}`,
+      created_at: '2029-12-31T12:00:00.000Z', expires_at: '2029-12-31T12:10:00.000Z',
+    };
+    const value = crypto.sign(null, signedBytes({ ...base, signature: undefined }), keys.privateKey).toString('base64url');
+    const envelope = { ...base, signature: { algorithm: 'Ed25519', key_id: keyId, value } };
+    const { body } = buildForwardRequest(envelope, { originDomain: ORIGIN, senderKey: { kid: keyId, alg: 'Ed25519', publicKey: pub }, senderOwnerId: ids.owner, now: SIGNED_AT });
+    const { signature, keyId: relayKeyId } = signForwardRequest(canonicalJsonBytes(body), relayIdentity);
+    const result = await acceptFederatedEnvelope(body, { 'sigil-relay-signature': signature, 'sigil-relay-key-id': relayKeyId }, {
+      repository, registered: new Map(), relayDomain: RELAY, request_id: `req_pg_rot_${n}`, now: SERVER_NOW,
+    });
+    return { result, keyId };
+  };
+
+  const first = await sendWithKey(1);
+  assert.equal(first.result.status, 202);
+  const second = await sendWithKey(2);
+  assert.equal(second.result.status, 202);
+  assert.equal(second.result.body.code, 'ACCEPTED');
+
+  const keys = await pool.query(`SELECT key_id, status, valid_until FROM endpoint_keys WHERE endpoint_id = $1 ORDER BY key_id`, [ids.sender]);
+  assert.deepEqual(keys.rows.map((r) => [r.key_id, r.status]), [[first.keyId, 'retired'], [second.keyId, 'active']]);
+  assert.notEqual(keys.rows[0].valid_until, null);
+});
