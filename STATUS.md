@@ -13,6 +13,23 @@
 - Known, unchanged: `relay up --p2p` listen-multiaddr test can time out; CLI subprocess tests are flaky under parallel load and pass serially.
 - Next action: final whole-branch review, then the login-spec plan (`docs/superpowers/specs/2026-10-11-sigil-rooms-third-party-login-design.md`).
 
+### Known gaps: memory-only test coverage
+
+The foundation spec's Testing section says every bullet runs against Postgres. The bullets below are covered only by memory-repository or stubbed-handler tests. No Postgres versions exist yet; write them before you rely on Postgres coverage for these rules.
+
+- Guest `task.request` to an owner-only assignee is refused; a `members` assignee runs with the guest as subject: `sigil/relay/v1/room-dispatch.test.mjs` "policy 3".
+- A `members` agent invoked by a guest cannot hand off to an owner-only agent: `room-dispatch.test.mjs` "policy 4".
+- A guest who may invoke no `joins` agent triggers no router delivery: `room-dispatch.test.mjs` "policy 5".
+- A guest thread post does not reset an operator chain's `agent_turns`: `room-dispatch.test.mjs` "policy 6".
+- Promotion refuses a queued invocation whose subject was removed from the room, or whose agent switched to `owner`: `room-dispatch.test.mjs` "policy 7" (memory labels). Only the suspended-subject case has a Postgres test (`room-invocations.pg.test.mjs` "policy 7 (Postgres)").
+- Guest `stop` cancels none of the operator's invocations and does cancel its own, at route level: `sigil/relay/v1/room-routes.manage.test.mjs` "stop: a guest cancels what they started...". The repository query has a Postgres test (`rooms-manage.pg.test.mjs` "cancelRoomInvocations scoped by agent owner or subject"); the route does not.
+- Guest `POST /v1/rooms` answers 403: `room-routes.manage.test.mjs` "create room: a non-operator endpoint gets 403...".
+- A relay without `--room-human-identity` answers 503 `NO_OPERATOR_IDENTITY`: `room-send-route.test.mjs` "no humanSigner answers 503 NO_OPERATOR_IDENTITY and signs nothing" and `room-routes.manage.test.mjs` "create room: without --room-human-identity...".
+- An agent caller cannot create rooms, add members, or post as a human (`HUMAN_CONTEXT_REQUIRED`): `room-routes.test.mjs` and `room-send-route.test.mjs` "a non-member gets 404 and an agent gets 403 HUMAN_CONTEXT_REQUIRED".
+- Removing a human member cancels their invocations in that room: `room-routes.manage.test.mjs` "remove member: removing a human cancels their invocations in that room only".
+
+The full bullet-by-bullet coverage walk is in `.superpowers/sdd/2026-10-12-sigil-rooms-multi-human-foundation/task-17-report.md`, which is untracked.
+
 ## Session update: 2026-10-10 Tincan listener pushed
 
 - Branch `feat/sigil-tincan-bridge` in `C:\dev\.worktrees\sigil-tincan`. Listener commit `3a7214c feat(tincan): serve dispatch on the tailnet` is on origin (`778b9d9..3a7214c`). This note is the resume record on top of it.
