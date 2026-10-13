@@ -756,7 +756,7 @@ test('POST /v1/directory/invites is rate-limited per issuing endpoint/human', as
 test('POST /v1/directory/invites is reachable under the CLI\'s real bearer authenticator, with human_id resolved from the registry', async () => {
   const repository = { createDirectoryInvite: async () => ({ invite_id: 'invite_1', code: 'plaintext-code', expires_at: '2026-08-22T00:00:00Z' }), recordAuditEvent: async () => {} };
   const tokenHashes = new Map([[hashBearerToken('token_a'), 'ep_a']]);
-  const registry = new Map([['ep_a', { owner_id: 'usr_a', endpoint_id: 'ep_a', status: 'active' }]]);
+  const registry = new Map([['ep_a', { owner_id: 'usr_a', endpoint_id: 'ep_a', kind: 'human', status: 'active' }]]);
   const { server, baseUrl } = await startServer({ tokenHashes, registry, repository });
   try {
     const url = new URL(baseUrl);

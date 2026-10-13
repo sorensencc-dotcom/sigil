@@ -114,3 +114,26 @@ test('--reconcile-kind fixes only a mismatch equal to the file kind; other misma
   assert.equal((await row(pool, 'ep_a')).kind, 'human');
   assert.equal((await row(pool, 'ep_b')).kind, 'human');
 });
+
+// Spec Testing, `kind` bullet: a legacy human row predates `kind`, so its file
+// row has none (meaning human) while migration 033 backfilled Postgres from
+// runtime as agent.
+test('a legacy file row with no kind fails with REGISTRY_CONFLICT until --reconcile-kind, then has that kind', { skip: !connectionString }, async (t) => {
+  const pool = await freshPool(t);
+  const legacy = entry(createIdentity({ ownerId: 'usr_a', endpointId: 'ep_legacy', kind: 'human' }));
+  delete legacy.kind;
+  await seedRegistry(pool, { endpoints: [legacy] });
+  await pool.query(`UPDATE endpoints SET kind='agent' WHERE endpoint_id='ep_legacy'`);
+
+  await assert.rejects(seedRegistry(pool, { endpoints: [legacy] }), (err) => {
+    assert.equal(err.code, 'REGISTRY_CONFLICT');
+    assert.deepEqual(err.details.map((d) => [d.endpoint_id, d.field, d.file, d.postgres]), [['ep_legacy', 'kind', 'human', 'agent']]);
+    return true;
+  });
+  assert.equal((await row(pool, 'ep_legacy')).kind, 'agent');
+
+  await seedRegistry(pool, { endpoints: [legacy] }, { reconcileKind: new Map([['ep_legacy', 'human']]) });
+  assert.equal((await row(pool, 'ep_legacy')).kind, 'human');
+  await seedRegistry(pool, { endpoints: [legacy] });
+  assert.equal((await row(pool, 'ep_legacy')).kind, 'human');
+});

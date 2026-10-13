@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { PostgresRepository } from './postgres-repository.mjs';
 import { acceptFederatedEnvelope } from './accept-federated-envelope.mjs';
+import { acceptEnvelopeAsync } from './accept-envelope.mjs';
 import { signedBytes } from './validate-envelope.mjs';
 import { buildForwardRequest, signForwardRequest } from './federation-router.mjs';
 import { canonicalJsonBytes } from './jcs.mjs';
@@ -125,6 +126,20 @@ test('federated envelope with an unregistered foreign sender is accepted and sha
   const shadowKey = await pool.query('SELECT algorithm, status FROM endpoint_keys WHERE key_id = $1', [ids.senderKey]);
   assert.equal(shadowKey.rowCount, 1);
   assert.equal(shadowKey.rows[0].status, 'active');
+
+  // Spec Testing, federated rows: the shadow sender is not a trusted local
+  // endpoint, so the same key cannot sign a local POST /v1/envelopes.
+  assert.equal(await repository.lookupTrustedEndpoint(ids.sender), null);
+  const localNow = new Date();
+  const localBase = { ...base, message_id: `msg_local_${suffix}`, idempotency_key: `idem_local_${suffix}`, created_at: localNow.toISOString(), expires_at: new Date(localNow.getTime() + 600_000).toISOString() };
+  const localValue = crypto.sign(null, signedBytes({ ...localBase, signature: undefined }), senderKeys.privateKey).toString('base64url');
+  const localPost = await acceptEnvelopeAsync({ ...localBase, signature: { algorithm: 'Ed25519', key_id: ids.senderKey, value: localValue } }, { repository, registered: new Map(), now: localNow });
+  // Trusted, the shadow row would pass the same-owner directory exemption and
+  // its valid signature would be accepted. Untrusted, the sender has no owner,
+  // so the directory gate (or, past it, UNKNOWN_ENDPOINT) refuses it.
+  assert.ok(localPost.status >= 400, JSON.stringify(localPost));
+  assert.ok(['DIRECTORY_LINK_REQUIRED', 'UNKNOWN_ENDPOINT'].includes(localPost.body.code), JSON.stringify(localPost));
+  assert.equal((await pool.query('SELECT 1 FROM envelopes WHERE message_id = $1', [localBase.message_id])).rowCount, 0);
 });
 
 // I3 live-DB pin: a peer-chosen signature.key_id that collides with a key

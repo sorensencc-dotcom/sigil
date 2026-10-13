@@ -276,3 +276,33 @@ async function raceBothOrders({ pool, repository, ids, suffix, suspender, login 
   await suspender.query('COMMIT');
   assert.ok((await pool.query('SELECT revoked_at FROM human_sessions WHERE session_id = $1', [`sess_race_${suffix}`])).rows[0].revoked_at, 'the session committed first is revoked by the sweep');
 }
+
+// Spec Testing: every CLI pg_notify payload stays under 8000 bytes however much
+// data the command touches. 120 endpoints and 120 sessions would overflow a
+// payload that listed them.
+test('suspend and unsuspend of a human with many endpoints and sessions publish a fixed-size payload', { skip: !connectionString }, async (t) => {
+  const { pool, suffix } = await setup(t);
+  const human = `hum_many_${suffix}`;
+  await addHuman(pool, human);
+  for (let i = 0; i < 120; i++) {
+    await addEndpoint(pool, { endpointId: `ep_many_${i}_${suffix}`, owner: human, kind: i % 2 ? 'agent' : 'human' });
+    await addSession(pool, `sess_many_${i}_${suffix}`, human);
+  }
+  const listener = new pg.Client({ connectionString });
+  await listener.connect();
+  t.after(() => listener.end());
+  const payloads = [];
+  listener.on('notification', (message) => payloads.push(message.payload));
+  await listener.query('LISTEN sigil_admin');
+
+  await cmdHumanSuspend([human, '--database-url', connectionString]);
+  await cmdHumanUnsuspend([human, '--database-url', connectionString]);
+  const deadline = Date.now() + 5000;
+  while (payloads.length < 2) {
+    if (Date.now() > deadline) throw new Error(`expected 2 notifications, got ${payloads.length}`);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.deepEqual(payloads.map((p) => JSON.parse(p)), [{ type: 'human.suspended', human_id: human }, { type: 'human.unsuspended', human_id: human }]);
+  for (const payload of payloads) assert.ok(Buffer.byteLength(payload) < 8000);
+  assert.equal((await pool.query(`SELECT count(*)::int AS n FROM endpoints WHERE owner_id = $1 AND status = 'active'`, [human])).rows[0].n, 120);
+});

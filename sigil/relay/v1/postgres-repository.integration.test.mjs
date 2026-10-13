@@ -316,8 +316,8 @@ test('a genuine concurrent task_id race is translated to an audited DUPLICATE_TA
       VALUES ('${ids.claude}', '${ids.human}', 'claude', 'agent', 'install_claude_${suffix}', 'Claude', 'active', NOW()),
              ('${ids.reviewer}', '${ids.human}', 'claude', 'agent', 'install_reviewer_${suffix}', 'Reviewer', 'active', NOW());
     INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
-      VALUES ('${ids.key}', '${ids.claude}', 'Ed25519', decode('00', 'hex'), 'active', NOW()),
-             ('${ids.keyReviewer}', '${ids.reviewer}', 'Ed25519', decode('00', 'hex'), 'active', NOW());
+      VALUES ('${ids.key}', '${ids.claude}', 'Ed25519', decode('${claudeKeys.publicKey.export({ type: 'spki', format: 'der' }).toString('hex')}', 'hex'), 'active', NOW()),
+             ('${ids.keyReviewer}', '${ids.reviewer}', 'Ed25519', decode('${reviewerKeys.publicKey.export({ type: 'spki', format: 'der' }).toString('hex')}', 'hex'), 'active', NOW());
     INSERT INTO conversations (conversation_id, kind, created_by, created_at)
       VALUES ('${ids.conversation}', 'direct', '${ids.human}', NOW());
   `);
@@ -592,7 +592,7 @@ test('a high-risk capability envelope is rejected without a decision, accepted o
     INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
       VALUES ('${ids.endpoint}', '${ids.human}', 'claude', 'agent', 'install_${suffix}', 'Claude', 'active', NOW());
     INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
-      VALUES ('${ids.key}', '${ids.endpoint}', 'Ed25519', decode('00', 'hex'), 'active', NOW());
+      VALUES ('${ids.key}', '${ids.endpoint}', 'Ed25519', decode('${keys.publicKey.export({ type: 'spki', format: 'der' }).toString('hex')}', 'hex'), 'active', NOW());
     INSERT INTO conversations (conversation_id, kind, created_by, created_at)
       VALUES ('${ids.conversation}', 'direct', '${ids.human}', NOW());
     INSERT INTO capability_grants (grant_id, capability, scope, granted_to, granted_by, granted_at, expires_at)

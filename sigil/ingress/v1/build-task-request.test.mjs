@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createIdentity, identityKeys } from '../../cli/identity.mjs';
 import { validateEnvelope } from '../../relay/v1/validate-envelope.mjs';
+import { entryFromRegistryRow } from '../../relay/v1/trusted-endpoint.mjs';
 import { buildTaskRequest, signTaskRequest } from './build-task-request.mjs';
 
 const identity = createIdentity({ ownerId: 'usr_operator', endpointId: 'ep_ingress', kind: 'agent' });
@@ -58,7 +59,7 @@ test('buildTaskRequest creates an ordinary signed Sigil task.request', () => {
   assert.equal(envelope.signature.key_id, identity.key_id);
   const result = validateEnvelope(envelope, {
     now: new Date('2026-09-14T12:01:00Z'),
-    registered: new Map([['ep_ingress', { ...ingressEndpoint, status: 'active', public_key: keys.publicKey }]]),
+    registered: new Map([['ep_ingress', entryFromRegistryRow({ ...ingressEndpoint, kind: 'agent', status: 'active', public_key: keys.publicKey })]]),
     capabilityGrants: [],
   });
   assert.equal(result.accepted, true);
@@ -72,7 +73,7 @@ test('signTaskRequest uses the existing unsigned-envelope signing convention', (
   assert.equal(crypto.verify(null, Buffer.from(JSON.stringify({})), keys.publicKey, Buffer.alloc(0)), false);
   assert.equal(validateEnvelope(signed, {
     now: new Date('2026-09-14T12:01:00Z'),
-    registered: new Map([['ep_ingress', { ...ingressEndpoint, status: 'active', public_key: keys.publicKey }]]),
+    registered: new Map([['ep_ingress', entryFromRegistryRow({ ...ingressEndpoint, kind: 'agent', status: 'active', public_key: keys.publicKey })]]),
   }).accepted, true);
 });
 

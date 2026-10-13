@@ -2,6 +2,7 @@
 // through the sigil_admin NOTIFY channel.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -155,4 +156,57 @@ test('human suspend from a second process closes every socket of that human', { 
     if (Date.now() > deadline) throw new Error('unsuspend did not restore access');
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
+});
+
+// Spec Testing, cross-process: `human add` in a second process reaches a live
+// relay and a live stream socket. The operator's socket learns of the new
+// member through room.updated without any request to the relay.
+test('human add --room from a second process sends room.updated to the operator socket of a running relay', { skip: !connectionString, timeout: 60_000 }, async (t) => {
+  assertDisposableTestDatabase(connectionString);
+  const pool = new pg.Pool({ connectionString });
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-admin-human-add-'));
+  let relay = null;
+  let socket = null;
+  t.after(async () => {
+    socket?.terminate();
+    if (relay) await killChild(relay.child);
+    await rmCwd(cwd);
+    await pool.end();
+  });
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
+
+  const owner = 'usr_op@local';
+  execFileSync(process.execPath, [sigilCli, 'init', 'op', '--owner', owner], { cwd, encoding: 'utf8' });
+  const identityPath = path.join(cwd, '.sigil', 'op.identity.json');
+  const operator = loadIdentity(identityPath);
+
+  relay = startRelay(cwd);
+  const { port, streamPort } = await relay.ready;
+
+  const now = new Date().toISOString();
+  await pool.query(`INSERT INTO workspaces (workspace_id, name, created_by, created_at) VALUES ('ws_x', 'ws_x', $1, $2)`, [owner, now]);
+  await pool.query(`INSERT INTO conversations (conversation_id, kind, created_by, created_at) VALUES ('room_x', 'room', $1, $2)`, [owner, now]);
+  await pool.query(`INSERT INTO rooms (conversation_id, workspace_id, name, created_at) VALUES ('room_x', 'ws_x', 'room_x', $1)`, [now]);
+  await pool.query(`INSERT INTO conversation_members (conversation_id, endpoint_id, role, added_by, added_at) VALUES ('room_x', $1, 'owner', $2, $3)`, [operator.endpoint_id, owner, now]);
+
+  assert.equal(await get(port, '/v1/inbox', operator.relay_token), 200);
+  socket = new WebSocket(`ws://127.0.0.1:${streamPort}/v1/stream`, { headers: { authorization: `Bearer ${operator.relay_token}` } });
+  const frames = [];
+  socket.on('message', (data) => { try { frames.push(JSON.parse(data)); } catch { /* not JSON */ } });
+  await new Promise((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+
+  const env = { ...process.env, SIGIL_WRAP_KEY_TEST: crypto.randomBytes(32).toString('base64') };
+  const { stdout } = await run(process.execPath, [sigilCli, 'human', 'add', '--name', 'Guest', '--room', 'room_x:member', '--identity', identityPath, '--database-url', connectionString, '--room-key-wrap-key', 'SIGIL_WRAP_KEY_TEST'], { env });
+  const guestEndpoint = /endpoint_id: (ep_[0-9a-f]{32})/.exec(stdout)?.[1];
+  assert.ok(guestEndpoint, stdout);
+
+  const deadline = Date.now() + 5000;
+  while (!frames.some((f) => f.type === 'room.updated' && f.room_id === 'room_x' && f.changed === 'members')) {
+    if (Date.now() > deadline) throw new Error(`no room.updated frame: ${JSON.stringify(frames)} ${relay.out.text}`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(socket.readyState, WebSocket.OPEN, 'the operator socket stays open');
+  const member = await pool.query('SELECT role FROM conversation_members WHERE conversation_id = $1 AND endpoint_id = $2', ['room_x', guestEndpoint]);
+  assert.equal(member.rows[0].role, 'member');
 });
