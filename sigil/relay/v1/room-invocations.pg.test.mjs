@@ -46,7 +46,7 @@ async function setup() {
   const roomId = `room_${run}`;
   const workspaceId = `ws_${ids.human}`;
   await repository.createRoom({ conversationId: roomId, workspaceId, name: `build_${run}`, createdByHumanId: ids.human, ownerEndpointId: ids.web, now: NOW });
-  const base = { roomId, workspaceId, threadRootId: 'msg_root', endpointId: ids.claude, decidedBy: 'mention', now: NOW };
+  const base = { roomId, workspaceId, threadRootId: 'msg_root', endpointId: ids.claude, decidedBy: 'mention', subjectHumanId: ids.human, now: NOW };
   return { db, run, ids, repository, roomId, workspaceId, base };
 }
 
@@ -64,7 +64,8 @@ test('running, queued, promotion, and finish', { skip: !connectionString }, asyn
   assert.equal(running.finished_at, null);
   assert.equal(running.reason, null);
   assert.equal(running.reply_message_id, null);
-  assert.deepEqual(Object.keys(running).sort(), ['created_at', 'decided_by', 'delivery_id', 'endpoint_id', 'finished_at', 'invocation_id', 'reason', 'reply_message_id', 'room_id', 'started_at', 'status', 'thread_root_id', 'trigger_message_id']);
+  assert.deepEqual(Object.keys(running).sort(), ['created_at', 'decided_by', 'delivery_id', 'endpoint_id', 'finished_at', 'invocation_id', 'reason', 'reply_message_id', 'room_id', 'started_at', 'status', 'subject_human_id', 'thread_root_id', 'trigger_message_id']);
+  assert.equal(running.subject_human_id, ids.human);
   await repository.createRoomInvocation({ ...base, invocationId: `inv_2_${run}`, triggerMessageId: `msg_2_${run}`, status: 'queued' });
   assert.equal((await repository.lookupRunningInvocation(roomId, ids.claude)).invocation_id, `inv_1_${run}`);
   assert.equal((await repository.nextQueuedInvocation(roomId, ids.claude)).invocation_id, `inv_2_${run}`);
@@ -136,10 +137,99 @@ test('the partial unique index refuses a second running row even without the app
   const { db, repository, roomId, workspaceId, ids, base, run } = await setup();
   await repository.createRoomInvocation({ ...base, invocationId: `inv_1_${run}`, triggerMessageId: `msg_1_${run}`, status: 'running' });
   await assert.rejects(db.query(
-    `INSERT INTO room_invocations (invocation_id, room_id, workspace_id, trigger_message_id, thread_root_id, endpoint_id, decided_by, status, created_at)
-     VALUES ($1,$2,$3,'msg_raw','msg_root',$4,'mention','running',now())`,
-    [`inv_raw_${run}`, roomId, workspaceId, ids.claude],
+    `INSERT INTO room_invocations (invocation_id, room_id, workspace_id, trigger_message_id, thread_root_id, endpoint_id, decided_by, status, subject_human_id, created_at)
+     VALUES ($1,$2,$3,'msg_raw','msg_root',$4,'mention','running',$5,now())`,
+    [`inv_raw_${run}`, roomId, workspaceId, ids.claude, ids.human],
   ), { code: '23505' });
+});
+
+// --- Invocation policy (Task 13) ---------------------------------------------
+
+test('policy 9: createRoomInvocation without subjectHumanId throws MISSING_SUBJECT and writes nothing', { skip: !connectionString }, async () => {
+  const { repository, roomId, base, run } = await setup();
+  const { subjectHumanId: _omit, ...noSubject } = base;
+  await assert.rejects(repository.createRoomInvocation({ ...noSubject, invocationId: `inv_1_${run}`, triggerMessageId: `msg_1_${run}`, status: 'queued' }), { code: 'MISSING_SUBJECT' });
+  assert.deepEqual(await repository.listRoomInvocations(roomId), []);
+});
+
+test('member reads carry invokable_by and owner_id; setRoomMemberInvokableBy; a restore resets to owner', { skip: !connectionString }, async () => {
+  const { repository, roomId, ids } = await setup();
+  const added = await repository.addRoomMember({ conversationId: roomId, endpointId: ids.claude, role: 'member', responseMode: 'joins', addedByHumanId: ids.human, now: NOW });
+  assert.deepEqual([added.invokable_by, added.owner_id], ['owner', ids.human]);
+  const listed = await repository.listRoomMembers(roomId);
+  assert.deepEqual(listed.map((m) => [m.endpoint_id, m.invokable_by, m.owner_id]).sort(), [[ids.claude, 'owner', ids.human], [ids.web, 'owner', ids.human]]);
+  const set = await repository.setRoomMemberInvokableBy({ conversationId: roomId, endpointId: ids.claude, invokableBy: 'members' });
+  assert.deepEqual([set.endpoint_id, set.invokable_by, set.owner_id], [ids.claude, 'members', ids.human]);
+  assert.equal((await repository.lookupRoomMember(roomId, ids.claude)).invokable_by, 'members');
+  assert.equal((await repository.setRoomMemberResponseMode({ conversationId: roomId, endpointId: ids.claude, responseMode: 'mentions_only' })).invokable_by, 'members');
+  await assert.rejects(repository.setRoomMemberInvokableBy({ conversationId: roomId, endpointId: ids.claude, invokableBy: 'everyone' }), { code: '23514' });
+  await repository.removeRoomMember({ conversationId: roomId, endpointId: ids.claude, now: NOW });
+  assert.equal(await repository.setRoomMemberInvokableBy({ conversationId: roomId, endpointId: ids.claude, invokableBy: 'members' }), null, 'a removed member is not changed');
+  const restored = await repository.addRoomMember({ conversationId: roomId, endpointId: ids.claude, role: 'member', responseMode: 'joins', addedByHumanId: ids.human, now: NOW });
+  assert.equal(restored.invokable_by, 'owner');
+});
+
+test('lookupInvocationSubject reports human status and live room membership', { skip: !connectionString }, async () => {
+  const { db, repository, roomId, ids } = await setup();
+  assert.deepEqual(await repository.lookupInvocationSubject(roomId, ids.human), { status: 'active', is_member: true });
+  assert.equal(await repository.lookupInvocationSubject(roomId, 'usr_missing'), null);
+  await db.query(`UPDATE humans SET status = 'suspended' WHERE human_id = $1`, [ids.human]);
+  assert.equal((await repository.lookupInvocationSubject(roomId, ids.human)).status, 'suspended');
+  await repository.removeRoomMember({ conversationId: roomId, endpointId: ids.web, now: NOW });
+  assert.equal((await repository.lookupInvocationSubject(roomId, ids.human)).is_member, false);
+});
+
+test('listActiveThreadSubjects returns the subjects of queued and running rows in one thread', { skip: !connectionString }, async () => {
+  const { db, repository, roomId, ids, base, run } = await setup();
+  const guest = `usr_guest_${run}`;
+  await db.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW())`, [guest]);
+  await repository.createRoomInvocation({ ...base, invocationId: `inv_1_${run}`, triggerMessageId: `msg_1_${run}`, status: 'running' });
+  await repository.createRoomInvocation({ ...base, subjectHumanId: guest, invocationId: `inv_2_${run}`, triggerMessageId: `msg_2_${run}`, status: 'refused', reason: 'not_allowed' });
+  await repository.createRoomInvocation({ ...base, subjectHumanId: guest, threadRootId: 'msg_other', invocationId: `inv_3_${run}`, triggerMessageId: `msg_3_${run}`, status: 'queued' });
+  assert.deepEqual(await repository.listActiveThreadSubjects(roomId, 'msg_root'), [ids.human]);
+  assert.deepEqual(await repository.listActiveThreadSubjects(roomId, 'msg_other'), [guest]);
+  assert.deepEqual(await repository.listActiveThreadSubjects(roomId, 'msg_none'), []);
+});
+
+test('policy 7 (Postgres): promotion refuses a queued row whose subject is suspended, audits it, and promotes the next', { skip: !connectionString }, async () => {
+  const { db, repository, roomId, ids, base, run } = await setup();
+  const { promoteNextInvocation } = await import('./room-dispatch.mjs');
+  const guest = `usr_guest_${run}`;
+  const guestEp = `ep_guest_${run}`;
+  await db.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW())`, [guest]);
+  await db.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at) VALUES ($1, $2, 'web', 'human', $3, 'guest', 'active', NOW())`, [guestEp, guest, `install_${guestEp}`]);
+  // An active key makes the agent deliverable (deliveryBlocker), so only the subject check can refuse.
+  await db.query(`INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from) VALUES ($1, $2, 'Ed25519', $3, 'active', NOW())`, [`key_claude_${run}`, ids.claude, Buffer.alloc(32, 3)]);
+  await repository.addRoomMember({ conversationId: roomId, endpointId: guestEp, role: 'member', addedByHumanId: ids.human, now: NOW });
+  await repository.addRoomMember({ conversationId: roomId, endpointId: ids.claude, role: 'member', responseMode: 'joins', addedByHumanId: ids.human, now: NOW });
+  await repository.setRoomMemberInvokableBy({ conversationId: roomId, endpointId: ids.claude, invokableBy: 'members' });
+  const persistTrigger = (messageId) => repository.withTransaction(async (client) => {
+    const roomSeq = await repository.assignRoomSequence(client, roomId);
+    const envelope = {
+      protocol: 'sigil/1', message_id: messageId, conversation_id: roomId, message_type: 'room.message',
+      sender: { endpoint_id: ids.web, owner_id: ids.human }, broadcast_scope: { conversation_id: roomId },
+      body: { text: 'hi' }, context_refs: [], capabilities: [], correlation_id: null, idempotency_key: `idem_${messageId}`,
+      created_at: NOW.toISOString(), expires_at: new Date(NOW.getTime() + 600_000).toISOString(),
+      signature: { algorithm: 'Ed25519', key_id: ids.webKey, value: 'sig' },
+    };
+    return repository.persistAcceptedEnvelope({ envelope, canonical_hash: 'h', action_hash: 'h', canonical_bytes: Buffer.from('canonical'), roomSeq, roomFanout: [] }, client);
+  });
+  for (const n of [1, 2, 3]) await persistTrigger(`msg_${n}_${run}`);
+  await repository.createRoomInvocation({ ...base, invocationId: `inv_1_${run}`, triggerMessageId: `msg_1_${run}`, status: 'running' });
+  await repository.createRoomInvocation({ ...base, subjectHumanId: guest, invocationId: `inv_2_${run}`, triggerMessageId: `msg_2_${run}`, status: 'queued', now: new Date(NOW.getTime() + 1000) });
+  await repository.createRoomInvocation({ ...base, invocationId: `inv_3_${run}`, triggerMessageId: `msg_3_${run}`, status: 'queued', now: new Date(NOW.getTime() + 2000) });
+  await db.query(`UPDATE humans SET status = 'suspended' WHERE human_id = $1`, [guest]);
+  const room = await repository.lookupRoom(roomId);
+  const promoted = await repository.withTransaction(async (client) => {
+    await repository.finishInvocation(`inv_1_${run}`, { status: 'completed', now: NOW }, client);
+    return promoteNextInvocation({ roomId, endpointId: ids.claude, repository, client, now: NOW, inboxDepthLimit: 100, room });
+  });
+  assert.equal(promoted.message_id, `msg_3_${run}`);
+  const rows = Object.fromEntries((await repository.listRoomInvocations(roomId)).map((row) => [row.invocation_id, row]));
+  assert.deepEqual([rows[`inv_2_${run}`].status, rows[`inv_2_${run}`].reason], ['refused', 'subject_inactive']);
+  assert.equal(rows[`inv_3_${run}`].status, 'running');
+  const audit = await db.query(`SELECT endpoint_id, conversation_id, actor_human_id, reason FROM audit_events WHERE event_type = 'room.invocation_refused' AND subject_id = $1`, [`inv_2_${run}`]);
+  assert.deepEqual(audit.rows, [{ endpoint_id: ids.claude, conversation_id: roomId, actor_human_id: guest, reason: 'subject_inactive' }]);
 });
 
 test.after(async () => {

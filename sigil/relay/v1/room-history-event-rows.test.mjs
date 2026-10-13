@@ -65,7 +65,9 @@ test('postgres history returns both a room.message and a room.event row', { skip
   await repository.createRoom({ conversationId: roomId, workspaceId: `ws_${human}`, name: `hist_${run}`, createdByHumanId: human, ownerEndpointId: web, now: NOW });
   const room = await repository.lookupRoom(roomId);
   const keys = crypto.generateKeyPairSync('ed25519');
-  await pool.query(`INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from) VALUES ($1, $2, 'Ed25519', $3, 'active', NOW())`, [`key_${web}`, web, keys.publicKey.export({ type: 'spki', format: 'der' })]);
+  // The envelope is dated 2026-10-02 and the key must already be valid then
+  // (validity is checked at created_at), so valid_from cannot be the DB NOW().
+  await pool.query(`INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from) VALUES ($1, $2, 'Ed25519', $3, 'active', $4)`, [`key_${web}`, web, keys.publicKey.export({ type: 'spki', format: 'der' }), '2026-10-01T00:00:00.000Z']);
   const registered = new Map([[web, withKeys({ owner_id: human, status: 'active', kind: 'human', key_id: `key_${web}`, public_key: keys.publicKey })]]);
   const envelope = {
     protocol: 'sigil/1', message_id: `msg_${run}`, conversation_id: roomId, message_type: 'room.message',

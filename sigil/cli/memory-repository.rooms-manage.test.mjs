@@ -43,7 +43,7 @@ test('setRoomMemberResponseMode updates an active member and returns null otherw
   await repository.createRoom({ conversationId: 'room_1', name: 'one', ...base });
   await repository.addRoomMember({ conversationId: 'room_1', endpointId: 'ep_claude', role: 'member', responseMode: 'joins', addedByHumanId: 'usr_a' });
   const member = await repository.setRoomMemberResponseMode({ conversationId: 'room_1', endpointId: 'ep_claude', responseMode: 'mentions_only' });
-  assert.deepEqual({ ...member, added_at: undefined }, { endpoint_id: 'ep_claude', role: 'member', response_mode: 'mentions_only', added_at: undefined });
+  assert.deepEqual({ ...member, added_at: undefined }, { endpoint_id: 'ep_claude', role: 'member', response_mode: 'mentions_only', added_at: undefined, invokable_by: 'owner', owner_id: null });
   assert.equal((await repository.lookupRoomMember('room_1', 'ep_claude')).response_mode, 'mentions_only');
   assert.equal(await repository.setRoomMemberResponseMode({ conversationId: 'room_1', endpointId: 'ep_missing', responseMode: 'joins' }), null);
   await repository.removeRoomMember({ conversationId: 'room_1', endpointId: 'ep_claude' });

@@ -74,6 +74,12 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
   const roomMembers = new Map(); // conversation_id -> Map(endpoint_id -> member row incl. removed_at)
   const roomInvocations = new Map(); // invocation_id -> row (migration 028)
   const roomThreads = new Map(); // JSON [room_id, thread_root_id] -> { agent_turns, updated_at } (migration 028)
+  const humanStatuses = new Map(); // human_id -> status; absent means 'active' (the memory repo has no humans table)
+  // Mirrors postgres-repository.mjs memberRow: owner_id comes from the endpoint (registry) row.
+  const memberView = (member) => ({
+    endpoint_id: member.endpoint_id, role: member.role, response_mode: member.response_mode, added_at: member.added_at,
+    invokable_by: member.invokable_by ?? 'owner', owner_id: registry.get(member.endpoint_id)?.owner_id ?? null,
+  });
   // Scoped rollback support for withTransaction (Devin review, PR #6): this
   // repo has no real transaction to roll back, so a mutation performed mid-
   // callback (e.g. consumeApprovalDecision) stayed committed even when the
@@ -306,7 +312,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       if (!workspaces.has(workspaceId)) workspaces.set(workspaceId, { workspace_id: workspaceId, name: workspaceId, created_by: createdByHumanId, created_at: timestamp });
       const room = { conversation_id: conversationId, workspace_id: workspaceId, name, description, created_at: timestamp, max_agent_turns: 6 };
       rooms.set(conversationId, { ...room, next_room_seq: 1n, archived_at: null });
-      roomMembers.set(conversationId, new Map([[ownerEndpointId, { endpoint_id: ownerEndpointId, role: 'owner', response_mode: null, added_by: createdByHumanId, added_at: timestamp, removed_at: null }]]));
+      roomMembers.set(conversationId, new Map([[ownerEndpointId, { endpoint_id: ownerEndpointId, role: 'owner', response_mode: null, invokable_by: 'owner', added_by: createdByHumanId, added_at: timestamp, removed_at: null }]]));
       return room;
     },
     async lookupRoom(conversationId) {
@@ -324,9 +330,10 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       const members = roomMembers.get(conversationId);
       if (!members) throw Object.assign(new Error('Room not found'), { code: 'ROOM_NOT_FOUND' });
       if (members.get(endpointId)?.removed_at === null) throw Object.assign(new Error('Endpoint is already a room member'), { code: 'ROOM_MEMBER_EXISTS' });
-      const member = { endpoint_id: endpointId, role, response_mode: responseMode, added_by: addedByHumanId, added_at: (now instanceof Date ? now : new Date(now)).toISOString(), removed_at: null };
+      // A restore is a fresh row, so invokable_by resets to 'owner' (as in Postgres).
+      const member = { endpoint_id: endpointId, role, response_mode: responseMode, invokable_by: 'owner', added_by: addedByHumanId, added_at: (now instanceof Date ? now : new Date(now)).toISOString(), removed_at: null };
       members.set(endpointId, member);
-      return { endpoint_id: member.endpoint_id, role: member.role, response_mode: member.response_mode, added_at: member.added_at };
+      return memberView(member);
     },
     async removeRoomMember({ conversationId, endpointId, now = new Date() }) {
       const member = roomMembers.get(conversationId)?.get(endpointId);
@@ -348,18 +355,45 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       const member = roomMembers.get(conversationId)?.get(endpointId);
       if (!member || member.removed_at !== null) return null;
       member.response_mode = responseMode;
-      return { endpoint_id: member.endpoint_id, role: member.role, response_mode: member.response_mode, added_at: member.added_at };
+      return memberView(member);
+    },
+    async setRoomMemberInvokableBy({ conversationId, endpointId, invokableBy }) {
+      if (invokableBy !== 'owner' && invokableBy !== 'members') throw Object.assign(new Error('invokable_by must be owner or members'), { code: '23514' });
+      const member = roomMembers.get(conversationId)?.get(endpointId);
+      if (!member || member.removed_at !== null) return null;
+      const previous = member.invokable_by;
+      onRollback(() => { member.invokable_by = previous; });
+      member.invokable_by = invokableBy;
+      return memberView(member);
+    },
+    async lookupInvocationSubject(roomId, humanId) {
+      const known = humanStatuses.has(humanId) || [...registry.values()].some((entry) => entry.owner_id === humanId);
+      if (!known) return null;
+      const isMember = [...(roomMembers.get(roomId)?.values() ?? [])].some((member) => {
+        const entry = registry.get(member.endpoint_id);
+        return member.removed_at === null && entry?.owner_id === humanId && entry.status === 'active';
+      });
+      return { status: humanStatuses.get(humanId) ?? 'active', is_member: isMember };
+    },
+    async listActiveThreadSubjects(roomId, threadRootId) {
+      return [...new Set([...roomInvocations.values()]
+        .filter((r) => r.room_id === roomId && r.thread_root_id === threadRootId && (r.status === 'queued' || r.status === 'running'))
+        .map((r) => r.subject_human_id))].sort();
+    },
+    // Test-only: the memory repo has no humans table to suspend in.
+    _debugSetHumanStatus(humanId, status) {
+      humanStatuses.set(humanId, status);
     },
     async lookupRoomMember(conversationId, endpointId) {
       const member = roomMembers.get(conversationId)?.get(endpointId);
       if (!member || member.removed_at !== null) return null;
-      return { endpoint_id: member.endpoint_id, role: member.role, response_mode: member.response_mode, added_at: member.added_at };
+      return memberView(member);
     },
     async listRoomMembers(conversationId) {
       return [...(roomMembers.get(conversationId)?.values() ?? [])]
         .filter((member) => member.removed_at === null)
         .sort((a, b) => a.added_at.localeCompare(b.added_at))
-        .map((member) => ({ endpoint_id: member.endpoint_id, role: member.role, response_mode: member.response_mode, added_at: member.added_at }));
+        .map(memberView);
     },
     // Not undone by withTransaction: a rejected accept can leave a gap in the
     // memory repo's room_seq. Postgres assigns inside the accept transaction,
@@ -410,7 +444,8 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       if (!row || row.envelope.conversation_id !== conversationId) return null;
       return { room_seq: row.roomSeq == null ? null : String(row.roomSeq), message_id: row.message_id, envelope: row.envelope };
     },
-    async createRoomInvocation({ invocationId, roomId, workspaceId: _workspaceId, triggerMessageId, threadRootId, endpointId, decidedBy, reason = null, status, deliveryId = null, now = new Date() }) {
+    async createRoomInvocation({ invocationId, roomId, workspaceId: _workspaceId, triggerMessageId, threadRootId, endpointId, decidedBy, reason = null, status, deliveryId = null, subjectHumanId, now = new Date() }) {
+      if (!subjectHumanId) throw Object.assign(new Error('createRoomInvocation requires subjectHumanId'), { code: 'MISSING_SUBJECT' });
       const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
       const rows = [...roomInvocations.values()];
       if (rows.some((row) => row.trigger_message_id === triggerMessageId && row.endpoint_id === endpointId)) {
@@ -423,6 +458,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
         invocation_id: invocationId, room_id: roomId, trigger_message_id: triggerMessageId, thread_root_id: threadRootId, endpoint_id: endpointId,
         decided_by: decidedBy, reason, status, delivery_id: deliveryId, reply_message_id: null, created_at: timestamp,
         started_at: status === 'running' ? timestamp : null, finished_at: status === 'refused' ? timestamp : null,
+        subject_human_id: subjectHumanId,
       };
       undoMapSet(roomInvocations, invocationId);
       roomInvocations.set(invocationId, row);

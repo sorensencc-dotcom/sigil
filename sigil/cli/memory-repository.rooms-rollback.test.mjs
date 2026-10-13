@@ -5,7 +5,7 @@ import { createMemoryRepository } from './memory-repository.mjs';
 const NOW = new Date('2026-10-04T12:00:00.000Z');
 const invocation = (overrides = {}) => ({
   invocationId: 'inv_1', roomId: 'room_1', workspaceId: 'ws_1', triggerMessageId: 'msg_1', threadRootId: 'msg_1',
-  endpointId: 'ep_claude', decidedBy: 'mention', status: 'running', now: NOW, ...overrides,
+  endpointId: 'ep_claude', decidedBy: 'mention', status: 'running', subjectHumanId: 'usr_chris', now: NOW, ...overrides,
 });
 
 test('a throw inside withTransaction undoes room invocation, turn, and delivery writes', async () => {

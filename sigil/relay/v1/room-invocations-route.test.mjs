@@ -15,7 +15,9 @@ const withKeys = (row) => ({ ...row, keys: entryFromRegistryRow(row).keys });
 
 const NOW = new Date('2026-10-02T12:01:00.000Z');
 const ROOM = 'room_1';
-const IDS = ['ep_web', 'ep_claude', 'ep_codex', 'ep_router', 'ep_stranger'];
+const IDS = ['ep_web', 'ep_claude', 'ep_codex', 'ep_router', 'ep_stranger', 'ep_guest'];
+const OWNERS = { ep_stranger: 'usr_other', ep_guest: 'usr_guest' };
+const HUMANS = new Set(['ep_web', 'ep_stranger', 'ep_guest']);
 const principals = {
   'Bearer web': { endpoint_id: 'ep_web', owner_id: 'usr_chris', human_id: 'usr_chris' },
   'Bearer claude': { endpoint_id: 'ep_claude', owner_id: 'usr_chris' },
@@ -39,7 +41,7 @@ function call(port, method, path, authorization, body) {
 
 async function withWorld(fn, { withSystem = true, stream } = {}) {
   const keys = Object.fromEntries(IDS.map((id) => [id, crypto.generateKeyPairSync('ed25519')]));
-  const registry = new Map(IDS.map((id) => [id, withKeys({ owner_id: id === 'ep_stranger' ? 'usr_other' : 'usr_chris', status: 'active', kind: id === 'ep_web' || id === 'ep_stranger' ? 'human' : 'agent', key_id: `key_${id}`, public_key: keys[id].publicKey })]));
+  const registry = new Map(IDS.map((id) => [id, withKeys({ owner_id: OWNERS[id] ?? 'usr_chris', status: 'active', kind: HUMANS.has(id) ? 'human' : 'agent', key_id: `key_${id}`, public_key: keys[id].publicKey })]));
   const repository = createMemoryRepository({ registry });
   await repository.createRoom({ conversationId: ROOM, workspaceId: 'ws_usr_chris', name: 'build', createdByHumanId: 'usr_chris', ownerEndpointId: 'ep_web', now: NOW });
   for (const [endpointId, responseMode] of [['ep_claude', 'joins'], ['ep_codex', 'mentions_only'], ['ep_router', 'router']]) {
@@ -57,7 +59,7 @@ async function withWorld(fn, { withSystem = true, stream } = {}) {
 async function post(w, senderId, body) {
   const envelope = {
     protocol: 'sigil/1', message_id: `msg_${crypto.randomUUID()}`, conversation_id: ROOM, message_type: 'room.message',
-    sender: { endpoint_id: senderId, owner_id: 'usr_chris' }, broadcast_scope: { conversation_id: ROOM },
+    sender: { endpoint_id: senderId, owner_id: OWNERS[senderId] ?? 'usr_chris' }, broadcast_scope: { conversation_id: ROOM },
     body, context_refs: [], capabilities: [], correlation_id: null,
     idempotency_key: `idem_${crypto.randomUUID()}`, created_at: '2026-10-02T12:00:00.000Z', expires_at: '2026-10-02T13:00:00.000Z',
     signature: { algorithm: 'Ed25519', key_id: `key_${senderId}`, value: '' },
@@ -273,7 +275,7 @@ test('hop budget applies to router picks (dispatchToTarget)', async () => {
     for (let i = 0; i < room.max_agent_turns; i += 1) {
       assert.equal((await w.repository.reserveAgentTurn(ROOM, triggerId, room.max_agent_turns, { now: NOW })).allowed, true);
     }
-    const { invocation, roomDelivery } = await dispatchToTarget({ room, triggerMessageId: triggerId, threadRootId: triggerId, endpointId: 'ep_claude', decidedBy: 'router', repository: w.repository, client: null, now: NOW, inboxDepthLimit: 100, registered: w.registry });
+    const { invocation, roomDelivery } = await dispatchToTarget({ room, triggerMessageId: triggerId, threadRootId: triggerId, endpointId: 'ep_claude', decidedBy: 'router', subjectHumanId: 'usr_chris', repository: w.repository, client: null, now: NOW, inboxDepthLimit: 100, registered: w.registry });
     assert.equal(invocation.status, 'refused');
     assert.equal(invocation.reason, 'hop_budget');
     assert.equal(invocation.decided_by, 'router');
@@ -407,4 +409,35 @@ test('a promoted queued invocation sends one receipt frame to its trigger sender
     assert.equal(frame.recipient_endpoint_id, 'ep_claude');
     assert.equal(frame.state, w.repository.initialDeliveryState ?? 'delivered');
   }, { stream });
+});
+
+// Invocation policy (Task 13, case 2): the router is an agent, so the subject is
+// the trigger's human sender, and mayInvoke filters each pick before dispatch.
+test('policy 2: a router pick of an owner-only agent for a guest trigger is refused; a members agent runs with the guest as subject', async () => {
+  await withWorld(async (w) => {
+    await w.repository.addRoomMember({ conversationId: ROOM, endpointId: 'ep_guest', role: 'member', addedByHumanId: 'usr_chris', now: NOW });
+    const triggerId = await post(w, 'ep_guest', { text: 'who can help?', mentions: [] });
+    const res = await pick(w, { trigger_message_id: triggerId, invoke: ['ep_claude'], reason: 'claude' });
+    assert.equal(res.status, 200);
+    assert.deepEqual([res.body.items[0].status, res.body.items[0].reason, res.body.items[0].subject_human_id], ['refused', 'not_allowed', 'usr_guest']);
+    assert.equal((await w.repository.listInbox('ep_claude')).length, 0, 'no delivery to the owner-only agent');
+    const evts = await events(w);
+    const refused = evts.find((e) => e.envelope.body.kind === 'invocation_refused');
+    assert.equal(refused.envelope.body.reason, 'not allowed to invoke ep_claude');
+    assert.deepEqual(evts.find((e) => e.envelope.body.kind === 'router_decision').envelope.body.endpoint_ids, []);
+    assert.ok(w.repository._debugGetAuditEvents().some((a) => a.event_type === 'room.invocation_refused' && a.subject_id === res.body.items[0].invocation_id));
+
+    await w.repository.setRoomMemberInvokableBy({ conversationId: ROOM, endpointId: 'ep_claude', invokableBy: 'members' });
+    const second = await post(w, 'ep_guest', { text: 'again?', mentions: [] });
+    const ok = await pick(w, { trigger_message_id: second, invoke: ['ep_claude'] });
+    assert.deepEqual([ok.body.items[0].status, ok.body.items[0].subject_human_id], ['running', 'usr_guest']);
+  });
+});
+
+test('policy 2b: a router pick for an operator trigger records the operator as subject, including not_eligible rows', async () => {
+  await withWorld(async (w) => {
+    const triggerId = await humanMessage(w, 'who?');
+    const res = await pick(w, { trigger_message_id: triggerId, invoke: ['ep_claude', 'ep_codex'] });
+    assert.deepEqual(res.body.items.map((item) => [item.endpoint_id, item.status, item.subject_human_id]), [['ep_claude', 'running', 'usr_chris'], ['ep_codex', 'refused', 'usr_chris']]);
+  });
 });

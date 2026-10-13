@@ -51,6 +51,9 @@ test('postgres emitRoomEvent persists with a room_seq and a repeat key writes no
       [endpointId, human, runtime, `install_${endpointId}`],
     );
   }
+  // memberIsHuman and deliveryBlocker read lookupRecipientEndpoint, which needs an
+  // active key: without one the web human is neither classified nor deliverable.
+  await pool.query(`INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from) VALUES ($1, $2, 'Ed25519', $3, 'active', NOW())`, [`key_${web}`, web, Buffer.alloc(32, 1)]);
   const repository = new PostgresRepository({ pool });
   const system = createIdentity({ ownerId: ROOM_SYSTEM_OWNER_ID, endpointId: ROOM_SYSTEM_ENDPOINT_ID, kind: 'system' });
   await repository.ensureRoomSystemEndpoint({ identity: system, now: NOW });

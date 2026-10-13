@@ -70,6 +70,49 @@ export async function cmdHumanAdd(argv) {
   }
 }
 
+const SET_INVOKABLE_USAGE = 'usage: sigil agent set-invokable --room <room_id> --agent <endpoint_id> --mode owner|members [--identity path] [--config path] [--database-url url]';
+
+// `sigil agent set-invokable`: only the agent endpoint's owner (the --identity
+// operator) may change who invokes it; a room manager may not.
+export async function cmdAgentSetInvokable(argv) {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      room: { type: 'string' },
+      agent: { type: 'string' },
+      mode: { type: 'string' },
+      identity: { type: 'string' },
+      config: { type: 'string' },
+      'database-url': { type: 'string' },
+    },
+  });
+  if (!values.room || !values.agent || !values.mode) throw new Error(SET_INVOKABLE_USAGE);
+  if (values.mode !== 'owner' && values.mode !== 'members') throw new Error(`--mode must be owner or members, got "${values.mode}"`);
+  const actorHumanId = resolveActorHumanId(values, SET_INVOKABLE_USAGE);
+  const databaseUrl = values['database-url'] ?? process.env.SIGIL_DATABASE_URL;
+  if (!databaseUrl) throw new Error('sigil agent set-invokable requires --database-url (or SIGIL_DATABASE_URL)');
+
+  const { PostgresRepository } = await import('../relay/v1/postgres-repository.mjs');
+  const { default: pg } = await import('pg');
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  try {
+    const repository = new PostgresRepository({ pool });
+    const member = await repository.withTransaction(async (client) => {
+      const target = await repository.lookupRoomMember(values.room, values.agent, client);
+      if (!target) throw Object.assign(new Error(`${values.agent} is not a member of ${values.room} (ROOM_MEMBER_NOT_FOUND)`), { code: 'ROOM_MEMBER_NOT_FOUND' });
+      const { rows } = await client.query('SELECT kind FROM endpoints WHERE endpoint_id = $1', [values.agent]);
+      if (rows[0]?.kind !== 'agent') throw Object.assign(new Error(`${values.agent} is not an agent endpoint (INVALID_REQUEST)`), { code: 'INVALID_REQUEST' });
+      if (target.owner_id !== actorHumanId) throw Object.assign(new Error(`only the owner of ${values.agent} can change who may invoke it (ROUTE_NOT_AUTHORIZED)`), { code: 'ROUTE_NOT_AUTHORIZED' });
+      const updated = await repository.setRoomMemberInvokableBy({ conversationId: values.room, endpointId: values.agent, invokableBy: values.mode }, client);
+      await publishAdmin(client, { type: 'agent.invokable', room_ids: [values.room] });
+      return updated;
+    });
+    console.log(`${member.endpoint_id} invokable_by: ${member.invokable_by}`);
+  } finally {
+    await pool.end();
+  }
+}
+
 export async function cmdHumanAddToRoom(argv) {
   const { values } = parseArgs({
     args: argv,

@@ -7,7 +7,7 @@ import path from 'node:path';
 import { createIdentity, identityKeys } from '../../cli/identity.mjs';
 import { LocalOutbox } from '../../connectors/v1/local-outbox.mjs';
 import { createSessionStore } from './session-store.mjs';
-import { createRoomBridge, ROOM_PREAMBLE } from './room-bridge.mjs';
+import { createRoomBridge, ROOM_PREAMBLE, roomPreamble } from './room-bridge.mjs';
 
 const identity = createIdentity({ ownerId: 'usr_chris', endpointId: 'ep_claude', kind: 'agent' });
 const trigger = { message_id: 'msg_t', conversation_id: 'room_1', sender: { endpoint_id: 'ep_web' }, body: { text: 'hi @ep_claude', mentions: ['ep_claude'] } };
@@ -47,6 +47,22 @@ test('replies in the invocation thread with roster mentions and a stable idempot
   assert.deepEqual(reply.body, { text: 'sure, @ep_codex take it', thread_root_id: 'msg_t', mentions: ['ep_codex'] });
   assert.equal(reply.idempotency_key, 'room_reply_inv_1');
   assert.deepEqual(sessions.get('room_1'), { session_id: 'sess_1', last_seq_by_thread: { msg_t: '1' } });
+});
+
+test('the preamble names the agent owner, and in members mode says any room human who passes the policy may task it', async () => {
+  for (const [invokableBy, expected, absent] of [
+    ['owner', /Only your owner usr_chris can change your task\./, /any room human/],
+    ['members', /any room human who passes the invocation policy may task you\./i, /Only your owner/],
+  ]) {
+    const relay = fakeRelay();
+    relay.listRoomMembers = async () => [{ endpoint_id: 'ep_web', response_mode: null, owner_id: 'usr_chris', invokable_by: 'owner' }, { endpoint_id: 'ep_claude', response_mode: 'joins', owner_id: 'usr_chris', invokable_by: invokableBy }];
+    let prompt;
+    const { instance } = bridge(relay, { name: 'claude', run: async (input) => { prompt = input.prompt; return { text: 'ok', sessionId: 's' }; } });
+    await instance.handle({ envelope: trigger });
+    assert.match(prompt, expected);
+    assert.doesNotMatch(prompt, absent);
+    assert.ok(prompt.startsWith(roomPreamble({ ownerId: 'usr_chris', invokableBy })));
+  }
 });
 
 test('skips a delivery whose invocation is no longer running', async () => {

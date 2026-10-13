@@ -152,3 +152,40 @@ test('human add --room by a non-manager fails ROUTE_NOT_AUTHORIZED and rolls bac
   assert.equal((await pool.query('SELECT count(*)::int AS n FROM endpoints')).rows[0].n, before.endpoints);
   assert.equal((await pool.query(`SELECT count(*)::int AS n FROM endpoints WHERE display_name = 'Rejected'`)).rows[0].n, 0);
 });
+
+// Invocation policy (Task 13, case 8, CLI): only the agent's owner sets invokable_by.
+async function seedAgent(pool, roomId, owner, agentId) {
+  await pool.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at) VALUES ($1, $2, 'claude', 'agent', $3, $1, 'active', NOW())`, [agentId, owner.humanId, `install_${agentId}`]);
+  await pool.query(`INSERT INTO conversation_members (conversation_id, endpoint_id, role, added_by, added_at, response_mode) VALUES ($1, $2, 'member', $3, NOW(), 'joins')`, [roomId, agentId, owner.humanId]);
+}
+
+test('agent set-invokable: the owner sets the mode and publishes agent.invokable; a room_manager guest is refused', { skip: !connectionString }, async (t) => {
+  const pool = await freshPool(t);
+  const operator = await provision('Operator');
+  const guest = await provision('Guest');
+  await seedRoom(pool, 'room_a', operator);
+  await seedAgent(pool, 'room_a', operator, 'ep_agent_a');
+  await pool.query(`INSERT INTO conversation_members (conversation_id, endpoint_id, role, added_by, added_at) VALUES ('room_a', $1, 'room_manager', $2, NOW())`, [guest.endpointId, operator.humanId]);
+  const mode = async () => (await pool.query(`SELECT invokable_by FROM conversation_members WHERE conversation_id = 'room_a' AND endpoint_id = 'ep_agent_a'`)).rows[0].invokable_by;
+
+  await assert.rejects(
+    run(process.execPath, [cli, 'agent', 'set-invokable', '--room', 'room_a', '--agent', 'ep_agent_a', '--mode', 'members', '--identity', identityFor(t, guest), '--database-url', connectionString], { env }),
+    (error) => /ROUTE_NOT_AUTHORIZED/.test(error.stderr),
+  );
+  assert.equal(await mode(), 'owner');
+  await assert.rejects(
+    run(process.execPath, [cli, 'agent', 'set-invokable', '--room', 'room_a', '--agent', 'ep_agent_a', '--mode', 'everyone', '--identity', identityFor(t, operator), '--database-url', connectionString], { env }),
+    (error) => /--mode/.test(error.stderr),
+  );
+
+  const listener = new pg.Client({ connectionString });
+  await listener.connect();
+  t.after(() => listener.end());
+  const received = new Promise((resolve) => listener.on('notification', (m) => resolve(m.payload)));
+  await listener.query('LISTEN sigil_admin');
+  const { stdout } = await run(process.execPath, [cli, 'agent', 'set-invokable', '--room', 'room_a', '--agent', 'ep_agent_a', '--mode', 'members', '--identity', identityFor(t, operator), '--database-url', connectionString], { env });
+  assert.match(stdout, /ep_agent_a invokable_by: members/);
+  assert.equal(await mode(), 'members');
+  const payload = await Promise.race([received, new Promise((_, reject) => setTimeout(() => reject(new Error('no sigil_admin notification')), 5000))]);
+  assert.deepEqual(JSON.parse(payload), { type: 'agent.invokable', room_ids: ['room_a'] });
+});

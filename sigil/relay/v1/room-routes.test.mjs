@@ -170,7 +170,7 @@ test('invocations list, fail, and stop', async () => {
   await withServer(async (port, repository) => {
     const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'r' })).body.room.conversation_id;
     await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_claude', response_mode: 'joins' });
-    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', now: new Date() };
+    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', subjectHumanId: 'usr_chris', now: new Date() };
     await repository.createRoomInvocation({ ...base, invocationId: 'inv_1', triggerMessageId: 'msg_1', status: 'running' });
     await repository.createRoomInvocation({ ...base, invocationId: 'inv_2', triggerMessageId: 'msg_2', status: 'queued' });
 
@@ -193,7 +193,7 @@ test('fail with invocation_id only fails the matching running invocation', async
   await withServer(async (port, repository) => {
     const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'r' })).body.room.conversation_id;
     await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_claude', response_mode: 'joins' });
-    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', now: new Date() };
+    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', subjectHumanId: 'usr_chris', now: new Date() };
     await repository.createRoomInvocation({ ...base, invocationId: 'inv_new', triggerMessageId: 'msg_1', status: 'running' });
 
     const stale = await call(port, 'POST', `/v1/rooms/${roomId}/invocations/fail`, 'Bearer claude', { invocation_id: 'inv_old', reason: 'late' });
@@ -236,7 +236,7 @@ test('Stop emits one invocation_stopped event per cancelled invocation', async (
     const port = server.address().port;
     const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'r' })).body.room.conversation_id;
     await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_claude', response_mode: 'joins' });
-    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', now: new Date() };
+    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', subjectHumanId: 'usr_chris', now: new Date() };
     await repository.createRoomInvocation({ ...base, invocationId: 'inv_1', triggerMessageId: 'msg_1', status: 'running' });
     await repository.createRoomInvocation({ ...base, invocationId: 'inv_2', triggerMessageId: 'msg_2', status: 'queued' });
     const stopped = await call(port, 'POST', `/v1/rooms/${roomId}/stop`, 'Bearer chris-web');
@@ -260,7 +260,7 @@ test('a queued invocation refused on promotion emits invocation_refused', async 
     const port = server.address().port;
     const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'r' })).body.room.conversation_id;
     await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_claude', response_mode: 'joins' });
-    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', now: new Date() };
+    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', subjectHumanId: 'usr_chris', now: new Date() };
     await repository.createRoomInvocation({ ...base, invocationId: 'inv_1', triggerMessageId: 'msg_1', status: 'running' });
     await repository.createRoomInvocation({ ...base, invocationId: 'inv_2', triggerMessageId: 'msg_2', status: 'queued' });
     // The agent goes inactive while inv_2 waits, so completing inv_1 promotes into a refusal.
@@ -283,7 +283,7 @@ test('fail and stop take the room lock before touching invocation rows', async (
   await withServer(async (port, repository) => {
     const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'r' })).body.room.conversation_id;
     await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_claude', response_mode: 'joins' });
-    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', now: new Date() };
+    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', subjectHumanId: 'usr_chris', now: new Date() };
     await repository.createRoomInvocation({ ...base, invocationId: 'inv_1', triggerMessageId: 'msg_1', status: 'running' });
     await repository.createRoomInvocation({ ...base, invocationId: 'inv_2', triggerMessageId: 'msg_2', status: 'running', endpointId: 'ep_codex' });
     const calls = [];

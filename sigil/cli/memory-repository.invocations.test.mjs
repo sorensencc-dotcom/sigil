@@ -11,7 +11,7 @@ async function setup() {
   return repository;
 }
 
-const base = { roomId: 'room_1', workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', now: NOW };
+const base = { roomId: 'room_1', workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', subjectHumanId: 'usr_chris', now: NOW };
 
 test('lookupRoom carries max_agent_turns 6', async () => {
   const repository = await setup();

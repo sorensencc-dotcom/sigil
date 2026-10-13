@@ -132,7 +132,14 @@ function roomRow(row) {
 }
 
 const INVOCATION_COLUMNS = `invocation_id, room_id, trigger_message_id, thread_root_id, endpoint_id, decided_by, reason, status,
-  delivery_id, reply_message_id, created_at, started_at, finished_at`;
+  delivery_id, reply_message_id, created_at, started_at, finished_at, subject_human_id`;
+
+// Member reads return invokable_by and the endpoint's owner_id (invocation
+// policy). RETURNING cannot join, so writes use the same owner subquery.
+const MEMBER_RETURNING = `endpoint_id, role, response_mode, added_at, invokable_by,
+  (SELECT e.owner_id FROM endpoints e WHERE e.endpoint_id = conversation_members.endpoint_id) AS owner_id`;
+const MEMBER_SELECT = `SELECT m.endpoint_id, m.role, m.response_mode, m.added_at, m.invokable_by, e.owner_id
+  FROM conversation_members m LEFT JOIN endpoints e ON e.endpoint_id = m.endpoint_id`;
 
 function invocationRow(row) {
   const iso = (value) => (value == null ? null : new Date(value).toISOString());
@@ -173,6 +180,8 @@ function memberRow(row) {
     role: row.role,
     response_mode: row.response_mode ?? null,
     added_at: row.added_at instanceof Date ? row.added_at.toISOString() : row.added_at,
+    invokable_by: row.invokable_by ?? 'owner',
+    owner_id: row.owner_id ?? null,
   };
 }
 
@@ -1810,7 +1819,7 @@ export class PostgresRepository {
          SET role = EXCLUDED.role, added_by = EXCLUDED.added_by, added_at = EXCLUDED.added_at,
              response_mode = EXCLUDED.response_mode, removed_at = NULL, invokable_by = 'owner'
          WHERE conversation_members.removed_at IS NOT NULL
-       RETURNING endpoint_id, role, response_mode, added_at`,
+       RETURNING ${MEMBER_RETURNING}`,
       [conversationId, endpointId, role, addedByHumanId, timestamp, responseMode],
     );
     if (!result.rows[0]) throw Object.assign(new Error('Endpoint is already a room member'), { code: 'ROOM_MEMBER_EXISTS' });
@@ -1842,37 +1851,70 @@ export class PostgresRepository {
     const result = await client.query(
       `UPDATE conversation_members SET response_mode = $3
         WHERE conversation_id = $1 AND endpoint_id = $2 AND removed_at IS NULL
-       RETURNING endpoint_id, role, response_mode, added_at`,
+       RETURNING ${MEMBER_RETURNING}`,
       [conversationId, endpointId, responseMode],
+    );
+    return result.rows[0] ? memberRow(result.rows[0]) : null;
+  }
+  async setRoomMemberInvokableBy({ conversationId, endpointId, invokableBy }, client = this.pool) {
+    const result = await client.query(
+      `UPDATE conversation_members SET invokable_by = $3
+        WHERE conversation_id = $1 AND endpoint_id = $2 AND removed_at IS NULL
+       RETURNING ${MEMBER_RETURNING}`,
+      [conversationId, endpointId, invokableBy],
     );
     return result.rows[0] ? memberRow(result.rows[0]) : null;
   }
   async lookupRoomMember(conversationId, endpointId, client = this.pool) {
     const result = await client.query(
-      `SELECT endpoint_id, role, response_mode, added_at FROM conversation_members
-        WHERE conversation_id = $1 AND endpoint_id = $2 AND removed_at IS NULL`,
+      `${MEMBER_SELECT}
+        WHERE m.conversation_id = $1 AND m.endpoint_id = $2 AND m.removed_at IS NULL`,
       [conversationId, endpointId],
     );
     return result.rows[0] ? memberRow(result.rows[0]) : null;
   }
   async listRoomMembers(conversationId, client = this.pool) {
     const result = await client.query(
-      `SELECT endpoint_id, role, response_mode, added_at FROM conversation_members
-        WHERE conversation_id = $1 AND removed_at IS NULL ORDER BY added_at, endpoint_id`,
+      `${MEMBER_SELECT}
+        WHERE m.conversation_id = $1 AND m.removed_at IS NULL ORDER BY m.added_at, m.endpoint_id`,
       [conversationId],
     );
     return result.rows.map(memberRow);
   }
-  async createRoomInvocation({ invocationId, roomId, workspaceId, triggerMessageId, threadRootId, endpointId, decidedBy, reason = null, status, deliveryId = null, now = new Date() }, client = this.pool) {
+  // Whether the human an invocation runs under may still start it: their
+  // humans.status, and whether one of their active endpoints is still an
+  // active member of the room. null when the human does not exist.
+  async lookupInvocationSubject(roomId, humanId, client = this.pool) {
+    const result = await client.query(
+      `SELECT h.status,
+              EXISTS (SELECT 1 FROM conversation_members m JOIN endpoints e ON e.endpoint_id = m.endpoint_id
+                       WHERE m.conversation_id = $1 AND m.removed_at IS NULL AND e.owner_id = h.human_id AND e.status = 'active') AS is_member
+         FROM humans h WHERE h.human_id = $2`,
+      [roomId, humanId],
+    );
+    return result.rows[0] ? { status: result.rows[0].status, is_member: result.rows[0].is_member } : null;
+  }
+  // Distinct subjects of the queued and running invocations in one thread.
+  async listActiveThreadSubjects(roomId, threadRootId, client = this.pool) {
+    const result = await client.query(
+      `SELECT DISTINCT subject_human_id FROM room_invocations
+        WHERE room_id = $1 AND thread_root_id = $2 AND status IN ('queued', 'running') ORDER BY subject_human_id`,
+      [roomId, threadRootId],
+    );
+    return result.rows.map((row) => row.subject_human_id);
+  }
+  async createRoomInvocation({ invocationId, roomId, workspaceId, triggerMessageId, threadRootId, endpointId, decidedBy, reason = null, status, deliveryId = null, subjectHumanId, now = new Date() }, client = this.pool) {
+    if (!subjectHumanId) throw Object.assign(new Error('createRoomInvocation requires subjectHumanId'), { code: 'MISSING_SUBJECT' });
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     try {
       const result = await client.query(
-        `INSERT INTO room_invocations (invocation_id, room_id, workspace_id, trigger_message_id, thread_root_id, endpoint_id, decided_by, reason, status, delivery_id, created_at, started_at, finished_at)
+        `INSERT INTO room_invocations (invocation_id, room_id, workspace_id, trigger_message_id, thread_root_id, endpoint_id, decided_by, reason, status, delivery_id, created_at, started_at, finished_at, subject_human_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
                  CASE WHEN $9 = 'running' THEN $11::timestamptz END,
-                 CASE WHEN $9 = 'refused' THEN $11::timestamptz END)
+                 CASE WHEN $9 = 'refused' THEN $11::timestamptz END,
+                 $12)
          RETURNING ${INVOCATION_COLUMNS}`,
-        [invocationId, roomId, workspaceId, triggerMessageId, threadRootId, endpointId, decidedBy, reason, status, deliveryId, timestamp],
+        [invocationId, roomId, workspaceId, triggerMessageId, threadRootId, endpointId, decidedBy, reason, status, deliveryId, timestamp, subjectHumanId],
       );
       return invocationRow(result.rows[0]);
     } catch (error) {

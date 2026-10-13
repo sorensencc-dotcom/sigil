@@ -10,6 +10,7 @@ const principals = {
   'Bearer mgr': { endpoint_id: 'ep_mgr', owner_id: 'usr_chris', human_id: 'usr_chris' },
   'Bearer claude': { endpoint_id: 'ep_claude', owner_id: 'usr_chris', human_id: 'usr_chris' },
   'Bearer stranger': { endpoint_id: 'ep_stranger', owner_id: 'usr_other', human_id: 'usr_other' },
+  'Bearer guest': { endpoint_id: 'ep_guest', owner_id: 'usr_guest', human_id: 'usr_guest' },
 };
 const registry = new Map([
   ['ep_web', { owner_id: 'usr_chris', status: 'active', kind: 'human' }],
@@ -17,6 +18,7 @@ const registry = new Map([
   ['ep_mgr', { owner_id: 'usr_chris', status: 'active', kind: 'human' }],
   ['ep_claude', { owner_id: 'usr_chris', status: 'active', kind: 'agent' }],
   ['ep_codex', { owner_id: 'usr_chris', status: 'active', kind: 'agent' }],
+  ['ep_guest', { owner_id: 'usr_guest', status: 'active', kind: 'human' }],
 ]);
 
 function call(port, method, path, authorization, body) {
@@ -198,4 +200,41 @@ test('add member: an endpoint known only to the repository is added; system and 
       assert.equal(refused.body.code, 'ROUTE_NOT_AUTHORIZED');
     }
   } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
+// Invocation policy (Task 13, case 8): only the agent's owner sets invokable_by.
+const invokablePath = (roomId, endpointId) => `/v1/rooms/${roomId}/members/${encodeURIComponent(endpointId)}/invokable-by`;
+
+test('invokable-by: a guest room_manager gets 403, the agent owner succeeds, and humans get one members frame', async () => {
+  await withRoom(async ({ port, roomId, frames, repository }) => {
+    await repository.addRoomMember({ conversationId: roomId, endpointId: 'ep_guest', role: 'room_manager', addedByHumanId: 'usr_chris' });
+    const guest = await call(port, 'POST', invokablePath(roomId, 'ep_claude'), 'Bearer guest', { invokable_by: 'members' });
+    assert.deepEqual([guest.status, guest.body.code], [403, 'ROUTE_NOT_AUTHORIZED']);
+    assert.equal((await repository.lookupRoomMember(roomId, 'ep_claude')).invokable_by, 'owner');
+    frames.length = 0;
+    const owner = await call(port, 'POST', invokablePath(roomId, 'ep_claude'), 'Bearer web', { invokable_by: 'members' });
+    assert.equal(owner.status, 200, JSON.stringify(owner.body));
+    assert.deepEqual([owner.body.member.endpoint_id, owner.body.member.invokable_by, owner.body.member.owner_id], ['ep_claude', 'members', 'usr_chris']);
+    assert.equal((await repository.lookupRoomMember(roomId, 'ep_claude')).invokable_by, 'members');
+    assert.ok(frames.length > 0 && frames.every(([, frame]) => frame.changed === 'members'));
+  });
+});
+
+test('invokable-by: bad mode 400, human target 400, non-member 404, agent caller 403', async () => {
+  await withRoom(async ({ port, roomId }) => {
+    assert.equal((await call(port, 'POST', invokablePath(roomId, 'ep_claude'), 'Bearer web', { invokable_by: 'everyone' })).status, 400);
+    assert.equal((await call(port, 'POST', invokablePath(roomId, 'ep_alice'), 'Bearer web', { invokable_by: 'members' })).status, 400);
+    assert.equal((await call(port, 'POST', invokablePath(roomId, 'ep_codex'), 'Bearer web', { invokable_by: 'members' })).status, 404);
+    assert.equal((await call(port, 'POST', invokablePath(roomId, 'ep_claude'), 'Bearer claude', { invokable_by: 'members' })).status, 403);
+  });
+});
+
+test('invokable-by: removing and re-adding an agent resets it to owner', async () => {
+  await withRoom(async ({ port, roomId }) => {
+    assert.equal((await call(port, 'POST', invokablePath(roomId, 'ep_claude'), 'Bearer web', { invokable_by: 'members' })).status, 200);
+    assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/members/ep_claude/remove`, 'Bearer web')).status, 200);
+    assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer web', { endpoint_id: 'ep_claude', response_mode: 'joins' })).status, 201);
+    const claude = (await call(port, 'GET', `/v1/rooms/${roomId}/members`, 'Bearer web')).body.items.find((m) => m.endpoint_id === 'ep_claude');
+    assert.equal(claude.invokable_by, 'owner');
+  });
 });

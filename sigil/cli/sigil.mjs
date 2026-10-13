@@ -38,7 +38,7 @@ import { signContract, verifyContract } from './contract-signing.mjs';
 import { checkRelayConnectivity } from './doctor.mjs';
 import { resolveRateLimits } from '../relay/v1/relay-config.mjs';
 import { createRelayMetrics } from '../relay/v1/metrics.mjs';
-import { cmdHumanAdd, cmdHumanAddToRoom } from './human-commands.mjs';
+import { cmdAgentSetInvokable, cmdHumanAdd, cmdHumanAddToRoom } from './human-commands.mjs';
 import { provisionIngressEndpoint } from './agentmail-provision.mjs';
 import { createAgentMailDeployment } from '../ingress/v1/agentmail-bootstrap.mjs';
 
@@ -76,6 +76,7 @@ Commands:
   peer rotate <domain> --confirm [--database-url url]      Force-overwrite a pinned peer's key set, bypassing the TOFU mismatch check
   human add --name <name> [--room <room_id>:<member|room_manager>]... [--identity path] [--database-url url] [--room-key-wrap-key env_var]   Provision a human with a relay-custodial signing key; with --room the --identity operator must own or manage each room
   human add-to-room --human <human_id> --room <room_id>:<member|room_manager>... [--identity path] [--database-url url]   Add a provisioned human to rooms; the --identity operator must own or manage each room
+  agent set-invokable --room <room_id> --agent <endpoint_id> --mode owner|members [--identity path] [--database-url url]   Set who may invoke an agent in a room; only the agent's owner (--identity) may change it
   endpoint revoke <endpoint_id> [--database-url url]       Revoke an endpoint and retire all of its signing keys
   federation outbox list [--database-url url]              List queue-mode federation forward jobs: state counts, then one row per job (no envelope bodies)
   federation outbox show <id> [--database-url url]         Show one relay_jobs federation row's metadata (no envelope body)
@@ -1833,6 +1834,7 @@ export async function main() {
     else if (command === 'peer' && sub === 'rotate') await cmdPeerRotate(rest);
     else if (command === 'peer' && sub === 'validate-document') await cmdPeerValidateDocument(rest);
     else if (command === 'agent' && sub === 'run') await cmdAgentRun(rest);
+    else if (command === 'agent' && sub === 'set-invokable') await cmdAgentSetInvokable(rest);
     else if (command === 'agentmail' && sub === 'provision') await cmdAgentmailProvision(rest);
     else if (command === 'doctor') await cmdDoctor(process.argv.slice(3));
     else if (command === 'send') await cmdSend(process.argv.slice(3));
