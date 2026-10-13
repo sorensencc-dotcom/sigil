@@ -19,6 +19,8 @@ export interface HistoryItem {
   room_seq: string | number;
   message_id: string;
   canonical_bytes: string;
+  // Sender label from endpoints.display_name; absent on older relays.
+  display_name?: string;
   envelope: RoomEnvelope;
 }
 
@@ -54,11 +56,16 @@ export interface RoomUpdatedFrame {
 
 export type ResponseMode = 'joins' | 'mentions_only' | 'router';
 
+export type InvokableBy = 'owner' | 'members';
+
 export interface Member {
   endpoint_id: string;
   role: 'owner' | 'room_manager' | 'member';
   response_mode: ResponseMode | null;
   added_at: string;
+  invokable_by: InvokableBy;
+  owner_id: string | null;
+  display_name: string;
 }
 
 export interface StopResult {

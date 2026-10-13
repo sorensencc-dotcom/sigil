@@ -7,8 +7,8 @@ import { renderWithClient } from '../testUtils';
 import { RoomHeader } from './RoomHeader';
 
 const members: Member[] = [
-  { endpoint_id: 'ep_web', role: 'owner', response_mode: null, added_at: 't' },
-  { endpoint_id: 'ep_claude', role: 'member', response_mode: 'joins', added_at: 't' },
+  { endpoint_id: 'ep_web', role: 'owner', response_mode: null, added_at: 't', invokable_by: 'owner', owner_id: null, display_name: 'ep_web' },
+  { endpoint_id: 'ep_claude', role: 'member', response_mode: 'joins', added_at: 't', invokable_by: 'owner', owner_id: null, display_name: 'ep_claude' },
 ];
 const listMembers = vi.fn(async () => members);
 

@@ -43,9 +43,18 @@ test('setRoomMemberResponseMode updates an active member and returns null otherw
   await repository.createRoom({ conversationId: 'room_1', name: 'one', ...base });
   await repository.addRoomMember({ conversationId: 'room_1', endpointId: 'ep_claude', role: 'member', responseMode: 'joins', addedByHumanId: 'usr_a' });
   const member = await repository.setRoomMemberResponseMode({ conversationId: 'room_1', endpointId: 'ep_claude', responseMode: 'mentions_only' });
-  assert.deepEqual({ ...member, added_at: undefined }, { endpoint_id: 'ep_claude', role: 'member', response_mode: 'mentions_only', added_at: undefined, invokable_by: 'owner', owner_id: null });
+  assert.deepEqual({ ...member, added_at: undefined }, { endpoint_id: 'ep_claude', role: 'member', response_mode: 'mentions_only', added_at: undefined, invokable_by: 'owner', owner_id: null, display_name: 'ep_claude' });
   assert.equal((await repository.lookupRoomMember('room_1', 'ep_claude')).response_mode, 'mentions_only');
   assert.equal(await repository.setRoomMemberResponseMode({ conversationId: 'room_1', endpointId: 'ep_missing', responseMode: 'joins' }), null);
   await repository.removeRoomMember({ conversationId: 'room_1', endpointId: 'ep_claude' });
   assert.equal(await repository.setRoomMemberResponseMode({ conversationId: 'room_1', endpointId: 'ep_claude', responseMode: 'joins' }), null);
+});
+
+test('member and history rows carry display_name, falling back to the endpoint id', async () => {
+  const registry = new Map([['ep_owner', { endpoint_id: 'ep_owner', owner_id: 'usr_a', kind: 'human', status: 'active', display_name: 'Ada' }]]);
+  const repository = createMemoryRepository({ registry });
+  await repository.createRoom({ conversationId: 'room_dn', name: 'dn', ...base });
+  await repository.addRoomMember({ conversationId: 'room_dn', endpointId: 'ep_noname', role: 'member', addedByHumanId: 'usr_a' });
+  const members = await repository.listRoomMembers('room_dn');
+  assert.deepEqual(Object.fromEntries(members.map((m) => [m.endpoint_id, m.display_name])), { ep_owner: 'Ada', ep_noname: 'ep_noname' });
 });

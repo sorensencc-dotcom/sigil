@@ -137,8 +137,10 @@ const INVOCATION_COLUMNS = `invocation_id, room_id, trigger_message_id, thread_r
 // Member reads return invokable_by and the endpoint's owner_id (invocation
 // policy). RETURNING cannot join, so writes use the same owner subquery.
 const MEMBER_RETURNING = `endpoint_id, role, response_mode, added_at, invokable_by,
-  (SELECT e.owner_id FROM endpoints e WHERE e.endpoint_id = conversation_members.endpoint_id) AS owner_id`;
-const MEMBER_SELECT = `SELECT m.endpoint_id, m.role, m.response_mode, m.added_at, m.invokable_by, e.owner_id
+  (SELECT e.owner_id FROM endpoints e WHERE e.endpoint_id = conversation_members.endpoint_id) AS owner_id,
+  COALESCE(NULLIF((SELECT e.display_name FROM endpoints e WHERE e.endpoint_id = conversation_members.endpoint_id), ''), endpoint_id) AS display_name`;
+const MEMBER_SELECT = `SELECT m.endpoint_id, m.role, m.response_mode, m.added_at, m.invokable_by, e.owner_id,
+  COALESCE(NULLIF(e.display_name, ''), m.endpoint_id) AS display_name
   FROM conversation_members m LEFT JOIN endpoints e ON e.endpoint_id = m.endpoint_id`;
 
 function invocationRow(row) {
@@ -154,6 +156,7 @@ function roomMessageRow(row) {
   return {
     room_seq: String(row.room_seq),
     message_id: row.message_id,
+    display_name: row.sender_display_name ?? row.sender_endpoint_id,
     canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'),
     envelope: {
       protocol: row.protocol,
@@ -182,6 +185,7 @@ function memberRow(row) {
     added_at: row.added_at instanceof Date ? row.added_at.toISOString() : row.added_at,
     invokable_by: row.invokable_by ?? 'owner',
     owner_id: row.owner_id ?? null,
+    display_name: row.display_name ?? row.endpoint_id,
   };
 }
 
@@ -2105,7 +2109,8 @@ export class PostgresRepository {
     const result = await client.query(
       `SELECT room_seq, message_id, protocol, message_type, body, context_refs, capabilities, correlation_id,
               sender_endpoint_id, sender_owner_id, broadcast_scope, conversation_id, idempotency_key,
-              signature_algorithm, signature_key_id, signature_value, expires_at, created_at, canonical_bytes
+              signature_algorithm, signature_key_id, signature_value, expires_at, created_at, canonical_bytes,
+              COALESCE(NULLIF((SELECT e.display_name FROM endpoints e WHERE e.endpoint_id = envelopes.sender_endpoint_id), ''), sender_endpoint_id) AS sender_display_name
          FROM envelopes
         WHERE conversation_id = $1 AND room_seq > $2
         ORDER BY room_seq
@@ -2132,7 +2137,8 @@ export class PostgresRepository {
     const result = await client.query(
       `SELECT room_seq, message_id, protocol, message_type, body, context_refs, capabilities, correlation_id,
               sender_endpoint_id, sender_owner_id, broadcast_scope, conversation_id, idempotency_key,
-              signature_algorithm, signature_key_id, signature_value, expires_at, created_at, canonical_bytes
+              signature_algorithm, signature_key_id, signature_value, expires_at, created_at, canonical_bytes,
+              COALESCE(NULLIF((SELECT e.display_name FROM endpoints e WHERE e.endpoint_id = envelopes.sender_endpoint_id), ''), sender_endpoint_id) AS sender_display_name
          FROM envelopes
         WHERE conversation_id = $1 AND message_id = $2`,
       [conversationId, messageId],

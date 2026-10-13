@@ -79,6 +79,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
   const memberView = (member) => ({
     endpoint_id: member.endpoint_id, role: member.role, response_mode: member.response_mode, added_at: member.added_at,
     invokable_by: member.invokable_by ?? 'owner', owner_id: registry.get(member.endpoint_id)?.owner_id ?? null,
+    display_name: registry.get(member.endpoint_id)?.display_name || member.endpoint_id,
   });
   // Scoped rollback support for withTransaction (Devin review, PR #6): this
   // repo has no real transaction to roll back, so a mutation performed mid-
@@ -409,7 +410,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
         .filter((row) => row.envelope.conversation_id === conversationId && row.roomSeq != null && row.roomSeq > BigInt(afterSeq))
         .sort((a, b) => (a.roomSeq < b.roomSeq ? -1 : a.roomSeq > b.roomSeq ? 1 : 0))
         .slice(0, limit)
-        .map((row) => ({ room_seq: String(row.roomSeq), message_id: row.message_id, canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'), envelope: row.envelope }));
+        .map((row) => ({ room_seq: String(row.roomSeq), message_id: row.message_id, display_name: registry.get(row.envelope.sender.endpoint_id)?.display_name || row.envelope.sender.endpoint_id, canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'), envelope: row.envelope }));
     },
     async listMentionsForEndpoint(endpointId, limit = 50) {
       const cap = Math.min(Math.max(Number(limit) || 50, 1), 100);
@@ -442,7 +443,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     async lookupRoomMessage(conversationId, messageId) {
       const row = envelopes.get(messageId);
       if (!row || row.envelope.conversation_id !== conversationId) return null;
-      return { room_seq: row.roomSeq == null ? null : String(row.roomSeq), message_id: row.message_id, envelope: row.envelope };
+      return { room_seq: row.roomSeq == null ? null : String(row.roomSeq), message_id: row.message_id, display_name: registry.get(row.envelope.sender.endpoint_id)?.display_name || row.envelope.sender.endpoint_id, envelope: row.envelope };
     },
     async createRoomInvocation({ invocationId, roomId, workspaceId: _workspaceId, triggerMessageId, threadRootId, endpointId, decidedBy, reason = null, status, deliveryId = null, subjectHumanId, now = new Date() }) {
       if (!subjectHumanId) throw Object.assign(new Error('createRoomInvocation requires subjectHumanId'), { code: 'MISSING_SUBJECT' });

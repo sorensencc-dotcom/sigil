@@ -1,4 +1,4 @@
-import type { AckResult, HistoryPage, Member, ResponseMode, Room, SendResult, StopResult, TicketResult } from './types';
+import type { AckResult, HistoryPage, InvokableBy, Member, ResponseMode, Room, SendResult, StopResult, TicketResult } from './types';
 
 export class ApiError extends Error {
   readonly code: string;
@@ -28,6 +28,7 @@ export interface ApiClient {
   listMembers(roomId: string): Promise<Member[]>;
   renameRoom(roomId: string, name: string): Promise<Room>;
   setResponseMode(roomId: string, endpointId: string, mode: ResponseMode): Promise<Member>;
+  setInvokableBy(roomId: string, endpointId: string, mode: InvokableBy): Promise<Member>;
   stopRoom(roomId: string): Promise<StopResult>;
   ack(roomId: string, upToRoomSeq: string): Promise<AckResult>;
   wsTicket(): Promise<TicketResult>;
@@ -83,6 +84,9 @@ export function createClient({ baseUrl, getToken, onUnauthorized, fetchImpl = (.
     },
     async setResponseMode(roomId, endpointId, mode) {
       return (await request<{ member: Member }>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/members/${encodeURIComponent(endpointId)}/response-mode`, { response_mode: mode })).member;
+    },
+    async setInvokableBy(roomId, endpointId, mode) {
+      return (await request<{ member: Member }>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/members/${encodeURIComponent(endpointId)}/invokable-by`, { invokable_by: mode })).member;
     },
     async stopRoom(roomId) {
       const { code, cancelled } = await request<StopResult>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/stop`);
