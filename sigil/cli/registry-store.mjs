@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { hashBearerToken } from '../relay/v1/transport-auth.mjs';
+import { entryFromRegistryRow } from '../relay/v1/trusted-endpoint.mjs';
 
 export function loadRegistryFile(filePath) {
   if (!fs.existsSync(filePath)) return { endpoints: [] };
@@ -32,13 +33,12 @@ export function addEndpointToRegistry(filePath, identity) {
 export function toRegistryMap(data) {
   const map = new Map();
   for (const e of data.endpoints) {
+    const publicKey = crypto.createPublicKey(e.public_key_pem);
+    // Legacy top-level key_id/public_key stay until Task 11 removes the last reader.
     map.set(e.endpoint_id, {
-      owner_id: e.owner_id,
-      endpoint_id: e.endpoint_id,
+      ...entryFromRegistryRow({ ...e, status: e.status ?? 'active', public_key: publicKey }),
       key_id: e.key_id,
-      kind: e.kind,
-      status: e.status ?? 'active',
-      public_key: crypto.createPublicKey(e.public_key_pem)
+      public_key: publicKey
     });
   }
   return map;

@@ -8,7 +8,7 @@ import { identityKeys } from '../../cli/identity.mjs';
 import { validateRoomEventBody } from '../../contracts/v1/room-event-schema.mjs';
 import { signedBytes } from './validate-envelope.mjs';
 import { notifyRoomHumans } from './room-notify.mjs';
-import { deliveryBlocker, isAgentMember } from './room-policy.mjs';
+import { deliveryBlocker, memberIsHuman } from './room-policy.mjs';
 
 const EVENT_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -43,7 +43,7 @@ export async function emitRoomEvent({ identity, repository, client, room, body, 
 
   const fanoutIds = [];
   for (const member of await repository.listRoomMembers(room.conversation_id, client)) {
-    if (await isAgentMember(member, repository, client, registered)) continue;
+    if (!(await memberIsHuman(member, repository, client, registered))) continue;
     if (!(await deliveryBlocker(member.endpoint_id, repository, client, { inboxDepthLimit, registered }))) fanoutIds.push(member.endpoint_id);
   }
   const roomSeq = await repository.assignRoomSequence(client, room.conversation_id);

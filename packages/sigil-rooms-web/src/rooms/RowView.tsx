@@ -24,7 +24,7 @@ export function RowView({ row, sender, replies = 0, onReply }: { row: Row; sende
   return (
     <li data-mine={mine ? 'true' : undefined}>
       <div className="meta">
-        <small className="sender">{envelope.sender.endpoint_id}</small>
+        <small className="sender">{row.item!.display_name || envelope.sender.endpoint_id}</small>
         <Stamp at={envelope.created_at} />
       </div>
       <span className="text">{envelope.body.text}</span>

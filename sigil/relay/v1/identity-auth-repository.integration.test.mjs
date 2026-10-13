@@ -25,8 +25,8 @@ async function seedHuman(pool, suffix) {
 
 async function seedEndpoint(pool, { endpointId, humanId, displayName }) {
   await pool.query(
-    `INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-     VALUES ($1, $2, 'codex', $3, $4, 'active', NOW())`,
+    `INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+     VALUES ($1, $2, 'codex', 'agent', $3, $4, 'active', NOW())`,
     [endpointId, humanId, `install_${endpointId}`, displayName || `Codex_${endpointId}`]
   );
 }
@@ -268,7 +268,7 @@ test('createEndpointWithAudit creates the endpoint, its key, and an audit row in
 
   const created = await repository.createEndpointWithAudit({
     endpointId: `ep_${suffix}`, ownerId: humanId, installationId: `install_${suffix}`,
-    runtime: 'codex', displayName: 'Codex', keyId: `key_${suffix}`, publicKey: publicKeyDer,
+    runtime: 'codex', kind: 'agent', displayName: 'Codex', keyId: `key_${suffix}`, publicKey: publicKeyDer,
   });
   assert.equal(created.endpoint_id, `ep_${suffix}`);
   assert.equal(created.display_name, 'Codex');
@@ -284,7 +284,7 @@ test('createEndpointWithAudit creates the endpoint, its key, and an audit row in
   await assert.rejects(
     () => repository.createEndpointWithAudit({
       endpointId: `ep_collide_${suffix}`, ownerId: humanId, installationId: `install_collide_${suffix}`,
-      runtime: 'codex', displayName: '  codex  ', keyId: `key_collide_${suffix}`, publicKey: publicKeyDer,
+      runtime: 'codex', kind: 'agent', displayName: '  codex  ', keyId: `key_collide_${suffix}`, publicKey: publicKeyDer,
     }),
     { code: 'DISPLAY_NAME_COLLISION' }
   );
@@ -297,7 +297,7 @@ test('createEndpointWithAudit creates the endpoint, its key, and an audit row in
   const otherHumanId = await seedHuman(pool, `${suffix}_other`);
   const otherOwnerCreated = await repository.createEndpointWithAudit({
     endpointId: `ep_other_${suffix}`, ownerId: otherHumanId, installationId: `install_other_${suffix}`,
-    runtime: 'codex', displayName: 'Codex', keyId: `key_other_${suffix}`, publicKey: publicKeyDer,
+    runtime: 'codex', kind: 'agent', displayName: 'Codex', keyId: `key_other_${suffix}`, publicKey: publicKeyDer,
   });
   assert.equal(otherOwnerCreated.endpoint_id, `ep_other_${suffix}`);
 });

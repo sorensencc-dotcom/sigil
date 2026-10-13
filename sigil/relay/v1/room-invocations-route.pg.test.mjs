@@ -48,9 +48,12 @@ async function setup(t) {
   const ids = { web: `ep_web_${run}`, claude: `ep_claude_${run}`, claudeB: `ep_claude_b_${run}`, outsider: `ep_outsider_${run}`, router: `ep_router_${run}` };
   await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW())`, [human]);
   for (const [endpointId, runtime] of [[ids.web, 'web'], [ids.claude, 'claude'], [ids.claudeB, 'claude'], [ids.outsider, 'claude'], [ids.router, 'claude']]) {
-    await pool.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at) VALUES ($1, $2, $3, $4, $1, 'active', NOW())`, [endpointId, human, runtime, `install_${endpointId}`]);
+    await pool.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at) VALUES ($1, $2, $3, CASE $3 WHEN 'relay' THEN 'system' WHEN 'human' THEN 'human' WHEN 'web' THEN 'human' ELSE 'agent' END, $4, $1, 'active', NOW())`, [endpointId, human, runtime, `install_${endpointId}`]);
   }
-  await pool.query(`INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from) VALUES ($1, $2, 'Ed25519', $3, 'active', NOW())`, [`key_${ids.web}`, ids.web, Buffer.alloc(32, 1)]);
+  // lookupRecipientEndpoint (deliveryBlocker) requires an active key, so every endpoint gets one.
+  for (const [n, endpointId] of Object.values(ids).entries()) {
+    await pool.query(`INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from) VALUES ($1, $2, 'Ed25519', $3, 'active', NOW())`, [`key_${endpointId}`, endpointId, Buffer.alloc(32, n + 1)]);
+  }
   const repository = new PostgresRepository({ pool });
   const system = createIdentity({ ownerId: ROOM_SYSTEM_OWNER_ID, endpointId: ROOM_SYSTEM_ENDPOINT_ID, kind: 'system' });
   await repository.ensureRoomSystemEndpoint({ identity: system, now: NOW });
@@ -80,7 +83,7 @@ async function setup(t) {
   const server = createRelayServer({ registry, repository, authenticate: async (request) => (request.headers.authorization === 'Bearer router' ? { endpoint_id: ids.router, owner_id: human } : null), roomSystemIdentity: system });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { await new Promise((resolve) => server.close(resolve)); await cleanSystem(); await pool.end(); });
-  return { pool, repository, roomId, ids, triggerId, port: server.address().port };
+  return { pool, repository, roomId, ids, triggerId, human, run, port: server.address().port };
 }
 
 const countRows = async (pool, sql, params) => (await pool.query(sql, params)).rows[0].n;
@@ -91,6 +94,7 @@ test('a router pick commits one invocation row and one router_decision envelope 
   assert.equal(res.status, 200, JSON.stringify(res.body));
   assert.equal(res.body.items[0].status, 'running');
   assert.equal(res.body.items[0].decided_by, 'router');
+  assert.equal(res.body.items[0].subject_human_id, s.human, 'the subject is the trigger sender, not the router owner');
   assert.equal(await countRows(s.pool, `SELECT count(*)::int AS n FROM room_invocations WHERE trigger_message_id = $1 AND decided_by = 'router'`, [s.triggerId]), 1);
   const evt = await s.pool.query(`SELECT body FROM envelopes WHERE conversation_id = $1 AND message_type = 'room.event' AND idempotency_key = $2`, [s.roomId, `${s.roomId}:evt_router_${s.triggerId}`]);
   assert.equal(evt.rowCount, 1);
@@ -126,4 +130,32 @@ test('a router decision naming two joins agents and a non-member commits one row
   assert.equal(again.status, 200);
   assert.equal(again.body.duplicate, true);
   assert.equal(await countRows(s.pool, `SELECT count(*)::int AS n FROM room_invocations WHERE trigger_message_id = $1`, [s.triggerId]), 3);
+});
+
+// Invocation policy (Task 13, case 2) against Postgres: a guest trigger, an
+// owner-only pick, a refused row with the guest as subject and an audit row.
+test('policy 2 (Postgres): a router pick of an owner-only agent for a guest trigger is refused and audited', { skip: !connectionString }, async (t) => {
+  const s = await setup(t);
+  const guest = `usr_guest_${s.run}`;
+  const guestEp = `ep_guest_${s.run}`;
+  await s.pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW())`, [guest]);
+  await s.pool.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at) VALUES ($1, $2, 'web', 'human', $3, 'guest', 'active', NOW())`, [guestEp, guest, `install_${guestEp}`]);
+  await s.pool.query(`INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from) VALUES ($1, $2, 'Ed25519', $3, 'active', NOW())`, [`key_${guestEp}`, guestEp, Buffer.alloc(32, 2)]);
+  await s.repository.addRoomMember({ conversationId: s.roomId, endpointId: guestEp, role: 'member', addedByHumanId: s.human, now: NOW });
+  const guestTrigger = `msg_guest_${s.run}`;
+  await s.repository.withTransaction(async (client) => {
+    const roomSeq = await s.repository.assignRoomSequence(client, s.roomId);
+    const envelope = {
+      protocol: 'sigil/1', message_id: guestTrigger, conversation_id: s.roomId, message_type: 'room.message',
+      sender: { endpoint_id: guestEp, owner_id: guest }, broadcast_scope: { conversation_id: s.roomId }, body: { text: 'help?' },
+      context_refs: [], capabilities: [], correlation_id: null, idempotency_key: `idem_guest_${s.run}`, created_at: NOW.toISOString(),
+      expires_at: new Date(NOW.getTime() + 600_000).toISOString(), signature: { algorithm: 'Ed25519', key_id: `key_${guestEp}`, value: 'sig' },
+    };
+    return s.repository.persistAcceptedEnvelope({ envelope, canonical_hash: 'h2', action_hash: 'h2', canonical_bytes: Buffer.from('canonical2'), roomSeq, roomFanout: [] }, client);
+  });
+  const res = await call(s.port, `/v1/rooms/${s.roomId}/invocations`, 'Bearer router', { trigger_message_id: guestTrigger, invoke: [s.ids.claude] });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.deepEqual([res.body.items[0].status, res.body.items[0].reason, res.body.items[0].subject_human_id], ['refused', 'not_allowed', guest]);
+  assert.equal(await countRows(s.pool, `SELECT count(*)::int AS n FROM deliveries WHERE message_id = $1 AND recipient_endpoint_id = $2`, [guestTrigger, s.ids.claude]), 0);
+  assert.equal(await countRows(s.pool, `SELECT count(*)::int AS n FROM audit_events WHERE event_type = 'room.invocation_refused' AND subject_id = $1 AND actor_human_id = $2`, [res.body.items[0].invocation_id, guest]), 1);
 });

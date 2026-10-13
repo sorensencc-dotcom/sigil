@@ -1,6 +1,7 @@
 import { WebSocketServer } from 'ws';
 import { createBearerAuthenticator } from './transport-auth.mjs';
 import { isAllowedOrigin } from './browser-cors.mjs';
+import { isSocketLive } from './liveness.mjs';
 
 function streamSequenceValue(value) {
   return value == null ? null : String(value);
@@ -11,7 +12,7 @@ function sequenceFrame(type, payload = {}) {
   return { type, ...frame, stream_seq: streamSequenceValue(streamSeq ?? stream_seq) };
 }
 
-export function createStreamServer({ server, authenticate, tokenHashes, ticketStore = null, allowedOrigins = [], logger = null } = {}) {
+export function createStreamServer({ server, authenticate, tokenHashes, ticketStore = null, allowedOrigins = [], logger = null, repository = null, livenessIntervalMs = 60_000 } = {}) {
   const authenticateRequest = authenticate ?? (tokenHashes ? createBearerAuthenticator(tokenHashes) : () => null);
   const wss = new WebSocketServer({ server, path: '/v1/stream' });
   // endpoint_id -> Set<socket>, in connection order. A closing socket removes
@@ -39,9 +40,37 @@ export function createStreamServer({ server, authenticate, tokenHashes, ticketSt
     sockets[sockets.length - 1].send(JSON.stringify(frame));
     return true;
   };
-  wss.on('connection', (socket, request) => {
+  // socket -> { endpointId, ownerId }, so revalidate can select a human's sockets.
+  const socketInfo = new WeakMap();
+  const checksLiveness = typeof repository?.livenessSnapshot === 'function';
+  // Resolves the snapshot when live, null otherwise. A failed read fails closed.
+  const liveSnapshot = async (endpointId) => {
+    if (!checksLiveness) return {};
+    try {
+      const snapshot = await repository.livenessSnapshot({ endpointId });
+      return isSocketLive(snapshot) ? snapshot : null;
+    } catch (error) {
+      logger?.warn?.({ event: 'stream.liveness_read_failed', endpoint_id: endpointId, error: error?.message });
+      return null;
+    }
+  };
+  const register = (map, endpointId, socket) => {
+    if (!map.has(endpointId)) map.set(endpointId, new Set());
+    map.get(endpointId).add(socket);
+    socket.on('close', () => {
+      const sockets = map.get(endpointId);
+      if (!sockets) return;
+      sockets.delete(socket);
+      if (!sockets.size) map.delete(endpointId);
+    });
+  };
+  const handleConnection = async (socket, request) => {
     // A malformed frame makes ws emit 'error'; without a listener that throws and kills the relay.
     socket.on('error', () => socket.terminate());
+    socket.on('message', (raw) => {
+      let message; try { message = JSON.parse(raw); } catch { return; }
+      if (message?.type === 'ping') socket.send(JSON.stringify({ type: 'pong', timestamp: message.timestamp }));
+    });
     // Never log request.url: for /v1/stream it can carry a ticket.
     const ticketParam = new URL(request.url, 'http://localhost').searchParams.get('ticket');
     // Redeem first so a ticket is spent even when the origin check then fails.
@@ -52,38 +81,51 @@ export function createStreamServer({ server, authenticate, tokenHashes, ticketSt
     // (CLI and agent clients) skips the check.
     const origin = request.headers.origin;
     if (origin !== undefined && !isAllowedOrigin(origin, allowedOrigins)) return socket.close(1008, 'unauthorized');
+    let principal;
     if (ticketParam !== null) {
       if (!ticketPrincipal) return socket.close(1008, 'unauthorized');
-      const endpointId = ticketPrincipal.endpoint_id;
-      if (!browserClients.has(endpointId)) browserClients.set(endpointId, new Set());
-      browserClients.get(endpointId).add(socket);
-      socket.on('message', (raw) => {
-        let message; try { message = JSON.parse(raw); } catch { return; }
-        if (message?.type === 'ping') socket.send(JSON.stringify({ type: 'pong', timestamp: message.timestamp }));
-      });
-      socket.on('close', () => {
-        const sockets = browserClients.get(endpointId);
-        sockets?.delete(socket);
-        if (sockets && !sockets.size) browserClients.delete(endpointId);
-      });
-      return;
+      principal = ticketPrincipal;
+    } else {
+      principal = await authenticateRequest(request);
     }
-    const principal = authenticateRequest(request);
     const endpointId = typeof principal === 'string' ? principal : principal?.endpoint_id;
     if (!endpointId) return socket.close(1008, 'unauthorized');
-    if (!clients.has(endpointId)) clients.set(endpointId, new Set());
-    clients.get(endpointId).add(socket);
-    socket.on('message', (raw) => {
-      let message; try { message = JSON.parse(raw); } catch { return; }
-      if (message?.type === 'ping') socket.send(JSON.stringify({ type: 'pong', timestamp: message.timestamp }));
-    });
-    socket.on('close', () => {
-      const sockets = clients.get(endpointId);
-      if (!sockets) return;
-      sockets.delete(socket);
-      if (!sockets.size) clients.delete(endpointId);
+    // The socket joins clients/browserClients only after liveness passes, so
+    // no frame reaches a socket whose endpoint or human is not live.
+    const snapshot = await liveSnapshot(endpointId);
+    if (!snapshot) return socket.close(1008, 'unauthorized');
+    if (socket.readyState !== 1) return;
+    socketInfo.set(socket, { endpointId, ownerId: snapshot.owner_id ?? principal?.owner_id ?? null });
+    register(ticketParam !== null ? browserClients : clients, endpointId, socket);
+  };
+  wss.on('connection', (socket, request) => {
+    handleConnection(socket, request).catch((error) => {
+      logger?.error?.({ event: 'stream.upgrade_failed', error: error?.message });
+      socket.close(1008, 'unauthorized');
     });
   });
+  // One snapshot read per endpoint; every failing socket closes 1008.
+  const recheck = async (sockets) => {
+    const byEndpoint = new Map();
+    for (const socket of sockets) {
+      const info = socketInfo.get(socket);
+      if (!info || socket.readyState !== 1) continue;
+      if (!byEndpoint.has(info.endpointId)) byEndpoint.set(info.endpointId, []);
+      byEndpoint.get(info.endpointId).push(socket);
+    }
+    for (const [endpointId, group] of byEndpoint) {
+      if (await liveSnapshot(endpointId)) continue;
+      for (const socket of group) socket.close(1008, 'unauthorized');
+    }
+  };
+  const allSockets = () => [...clients.values(), ...browserClients.values()].flatMap((set) => [...set]);
+  let passRunning = false;
+  const livenessTimer = checksLiveness ? setInterval(async () => {
+    if (passRunning) return;
+    passRunning = true;
+    try { await recheck(allSockets()); } finally { passRunning = false; }
+  }, livenessIntervalMs) : null;
+  livenessTimer?.unref?.();
   return {
     notify(endpointId, deliveryId, streamSeq = null) {
       return notifyLatest(endpointId, sequenceFrame('delivered', { delivery_id: deliveryId, streamSeq }));
@@ -106,6 +148,16 @@ export function createStreamServer({ server, authenticate, tokenHashes, ticketSt
       for (const socket of sockets) socket.send(frame);
       return true;
     },
-    close() { return new Promise((resolve) => wss.close(resolve)); }
+    async revalidate({ humanId, endpointId } = {}) {
+      if (!humanId && !endpointId) return;
+      await recheck(allSockets().filter((socket) => {
+        const info = socketInfo.get(socket);
+        return info && ((endpointId && info.endpointId === endpointId) || (humanId && info.ownerId === humanId));
+      }));
+    },
+    close() {
+      if (livenessTimer) clearInterval(livenessTimer);
+      return new Promise((resolve) => wss.close(resolve));
+    }
   };
 }

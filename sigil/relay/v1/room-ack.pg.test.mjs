@@ -19,7 +19,7 @@ test('postgres acknowledgeRoomDeliveries moves only the caller\'s rows up to the
   const keyId = `key_web_${suffix}`;
   await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW())`, [human]);
   for (const [runtime, endpointId] of Object.entries(ep)) {
-    await pool.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at) VALUES ($1, $2, $3, $4, $3, 'active', NOW())`, [endpointId, human, runtime, `install_${endpointId}`]);
+    await pool.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at) VALUES ($1, $2, $3, CASE $3 WHEN 'relay' THEN 'system' WHEN 'human' THEN 'human' WHEN 'web' THEN 'human' ELSE 'agent' END, $4, $3, 'active', NOW())`, [endpointId, human, runtime, `install_${endpointId}`]);
   }
   await pool.query(`INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from) VALUES ($1, $2, 'Ed25519', $3, 'active', NOW())`, [keyId, ep.web, Buffer.alloc(32, 1)]);
   const repository = new PostgresRepository({ pool });

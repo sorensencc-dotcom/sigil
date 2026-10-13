@@ -54,7 +54,7 @@ async function bootstrap(t, { seedIssuer = true } = {}) {
   const endpointId = `ep_${suffix}`;
   await pool.query(`
     INSERT INTO humans (human_id, status, created_at) VALUES ('${humanId}', 'active', NOW());
-    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at) VALUES ('${endpointId}', '${humanId}', 'claude', 'install_${suffix}', 'A', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at) VALUES ('${endpointId}', '${humanId}', 'claude', 'agent', 'install_${suffix}', 'A', 'active', NOW());
   `);
   if (seedIssuer) {
     await pool.query(

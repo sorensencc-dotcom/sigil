@@ -58,3 +58,31 @@ test('room.* message types are rejected outside a room', () => {
   assert.doesNotThrow(() => assertRoomTypeHasRoom({ message_type: 'chat.message' }, null));
   assert.doesNotThrow(() => assertRoomTypeHasRoom({ message_type: 'room.message' }, room));
 });
+
+// Task 4 (multi-human foundation): fan-out reads trust state from the
+// repository only. A stale startup-Map entry must not outvote a suspended row.
+test('endpointIsActive: a suspended repository row wins over an active registered Map entry', async () => {
+  const { endpointIsActive } = await import('./room-policy.mjs');
+  const repo = { async lookupRecipientEndpoint() { return { endpoint_id: 'ep_x', status: 'suspended', kind: 'agent' }; } };
+  const registered = new Map([['ep_x', { endpoint_id: 'ep_x', status: 'active', kind: 'agent' }]]);
+  assert.equal(await endpointIsActive('ep_x', repo, null, registered), false);
+  const missing = { async lookupRecipientEndpoint() { return null; } };
+  assert.equal(await endpointIsActive('ep_x', missing, null, registered), false, 'no repository row means inactive, never the Map');
+  assert.equal(await endpointIsActive('ep_x', {}, null, registered), true, 'memory mode without lookupRecipientEndpoint reads the Map');
+});
+
+test('kind rules: system endpoints are neither agent nor human members', async () => {
+  const { isAgentMember, memberIsHuman } = await import('./room-policy.mjs');
+  const byKind = (kind) => ({ async lookupRecipientEndpoint(id) { return { endpoint_id: id, status: 'active', kind }; } });
+  const member = { endpoint_id: 'ep_y', response_mode: null };
+  assert.equal(await isAgentMember(member, byKind('agent'), null), true);
+  assert.equal(await memberIsHuman(member, byKind('agent'), null), false);
+  assert.equal(await isAgentMember(member, byKind('human'), null), false);
+  assert.equal(await memberIsHuman(member, byKind('human'), null), true);
+  assert.equal(await isAgentMember(member, byKind('system'), null), false);
+  assert.equal(await memberIsHuman(member, byKind('system'), null), false);
+  // The Map does not outvote the repository row's kind in Postgres mode.
+  const stale = new Map([['ep_y', { endpoint_id: 'ep_y', status: 'active', kind: 'agent' }]]);
+  assert.equal(await isAgentMember(member, byKind('human'), null, stale), false);
+  assert.equal(await isAgentMember({ ...member, response_mode: 'joins' }, byKind('system'), null), true);
+});

@@ -64,20 +64,34 @@ export async function authorizeRoomEnvelope(envelope, room, repository, client, 
   return { senderMember, fanout, skipped, agentMembers: others.filter((member) => member.is_agent).map((member) => ({ ...member, response_mode: member.response_mode ?? 'mentions_only' })) };
 }
 
-// A member is an agent when it has a response_mode or its registry entry says
-// kind 'agent'. Phase 1 rooms can hold agents with response_mode null (added
+// The member's endpoint entry: from the repository when it can answer
+// (Postgres mode, memory repository), from the registered Map only when the
+// repository has no lookupRecipientEndpoint. Never both: a stale Map entry
+// must not outvote the endpoints row.
+async function memberEndpoint(endpointId, repository, client, registered) {
+  return repository.lookupRecipientEndpoint
+    ? repository.lookupRecipientEndpoint(endpointId, client)
+    : registered?.get?.(endpointId) ?? null;
+}
+
+// A member is an agent when it has a response_mode or its endpoint's kind is
+// 'agent'. Phase 1 rooms can hold agents with response_mode null (added
 // without a mode, or an agent that created the room as owner), so the mode
-// alone does not prove a human. Both sources are checked, not `a ?? b`: the
-// Postgres endpoints row has no kind column, so a found row must not hide the
-// registry entry that does.
-export function isAgentEndpoint(member, entries) {
-  return member.response_mode != null || entries.some((entry) => entry?.kind === 'agent');
+// alone does not prove a human. A 'system' endpoint is neither agent nor human.
+export function isAgentEndpoint(member, entry) {
+  return member.response_mode != null || entry?.kind === 'agent';
 }
 
 export async function isAgentMember(member, repository, client, registered) {
   if (member.response_mode != null) return true;
-  const stored = repository.lookupRecipientEndpoint ? await repository.lookupRecipientEndpoint(member.endpoint_id, client) : null;
-  return isAgentEndpoint(member, [stored, registered?.get?.(member.endpoint_id)]);
+  return isAgentEndpoint(member, await memberEndpoint(member.endpoint_id, repository, client, registered));
+}
+
+// A human member: kind 'human' and no response_mode. An unknown or missing
+// kind is never treated as human.
+export async function memberIsHuman(member, repository, client, registered) {
+  if (member.response_mode != null) return false;
+  return (await memberEndpoint(member.endpoint_id, repository, client, registered))?.kind === 'human';
 }
 
 // Room members carry is_agent once authorizeRoomEnvelope has classified them.
@@ -85,13 +99,11 @@ export function memberIsAgent(member) {
   return member.is_agent ?? member.response_mode != null;
 }
 
-// Returns null when endpointId may receive a room delivery now, otherwise the
-// reason it may not. Shared with room-dispatch.mjs for agent deliveries.
+// Whether endpointId may receive a room delivery now. Shared with
+// room-dispatch.mjs for agent deliveries.
 export async function endpointIsActive(endpointId, repository, client, registered) {
-  const endpoint = repository.lookupRecipientEndpoint
-    ? (await repository.lookupRecipientEndpoint(endpointId, client)) ?? registered?.get(endpointId)
-    : registered?.get(endpointId);
-  return endpoint?.status === 'active';
+  if (repository.lookupRecipientEndpoint) return (await repository.lookupRecipientEndpoint(endpointId, client))?.status === 'active';
+  return registered?.get?.(endpointId)?.status === 'active';
 }
 
 export async function deliveryBlocker(endpointId, repository, client, { inboxDepthLimit, registered }) {

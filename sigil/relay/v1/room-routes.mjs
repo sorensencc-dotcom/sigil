@@ -2,7 +2,8 @@
 import crypto from 'node:crypto';
 import { emitRoomEvent } from './room-events.mjs';
 import { promoteNextInvocation, dispatchToTarget, emitRefusal } from './room-dispatch.mjs';
-import { isAgentMember, isRouterMember } from './room-policy.mjs';
+import { isAgentMember, isRouterMember, memberIsHuman } from './room-policy.mjs';
+import { lookupTrustedEntry } from './trusted-endpoint.mjs';
 import { clampReason } from '../../contracts/v1/room-event-schema.mjs';
 import { notifyRoomHumans } from './room-notify.mjs';
 import { sendReceiptFrame } from './receipt-notify.mjs';
@@ -13,6 +14,7 @@ import { validateRoomMessageBody } from '../../contracts/v1/room-message-schema.
 const MANAGER_ROLES = new Set(['owner', 'room_manager']);
 const GRANTABLE_ROLES = new Set(['room_manager', 'member']);
 const RESPONSE_MODES = new Set(['joins', 'mentions_only', 'router']);
+const INVOKABLE_MODES = new Set(['owner', 'members']);
 const ROOM_METHODS = ['createRoom', 'lookupRoom', 'listRoomsForEndpoint', 'addRoomMember', 'removeRoomMember', 'lookupRoomMember', 'listRoomMembers', 'listRoomMessages', 'listRoomInvocations', 'lookupRunningInvocation', 'finishInvocation', 'cancelRoomInvocations', 'nextQueuedInvocation', 'startInvocation', 'createRoomDelivery', 'lookupRouterDecision', 'lookupRoomMessage', 'lookupRoomEventByKey', 'lockRoom', 'createRoomInvocation', 'reserveAgentTurn', 'withTransaction', 'acknowledgeRoomDeliveries', 'renameRoom', 'setRoomMemberResponseMode'];
 const NAME_MAX = 80;
 const HISTORY_LIMIT_MAX = 500;
@@ -46,12 +48,24 @@ async function membership(repository, roomId, principal) {
 // a token minted elsewhere, could still pair an agent endpoint with a
 // human_id. Room management and Stop therefore also refuse any endpoint the
 // registry lists as kind 'agent'.
-function isAgentCaller(registry, principal) {
-  return registry?.get?.(principal?.endpoint_id)?.kind === 'agent';
+// The kind comes from repository.lookupTrustedEndpoint (the registry Map only
+// when the repository cannot answer).
+async function isAgentCaller(repository, registry, principal) {
+  if (!principal?.endpoint_id) return false;
+  return (await lookupTrustedEntry(repository, registry, principal.endpoint_id))?.kind === 'agent';
 }
 
 export async function handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream = null, inboxDepthLimit, systemIdentity = null, logger = null, ticketStore = null, humanSigner = null, buildAcceptOptions = null }) {
   const path = parsedUrl.pathname;
+  // notifyRoomHumans needs a real client: with client null its member read
+  // throws in Postgres mode and no room.updated frame goes out.
+  const notifyRoomChange = async (roomId, changed) => {
+    try {
+      await repository.withTransaction((client) => notifyRoomHumans({ repository, stream, registered: registry, client, roomId, changed, logger: logger ?? console }));
+    } catch (error) {
+      (logger ?? console)?.error?.('room.updated notify failed', error);
+    }
+  };
   if (request.method === 'GET' && path === '/v1/mentions') {
     if (!principal?.endpoint_id) return fail(response, requestId, 401, 'UNAUTHENTICATED', 'Authentication required');
     if (typeof repository?.listMentionsForEndpoint !== 'function') return fail(response, requestId, 503, 'DATABASE_UNAVAILABLE', 'Mentions are unavailable');
@@ -62,7 +76,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
   }
   if (path !== '/v1/rooms' && !path.startsWith('/v1/rooms/')) return false;
   if (request.method === 'POST' && path === '/v1/rooms/ws-ticket') {
-    if (isAgentCaller(registry, principal) || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'An authenticated human context is required');
+    if ((await isAgentCaller(repository, registry, principal)) || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'An authenticated human context is required');
     if (!ticketStore) return fail(response, requestId, 503, 'TICKETS_UNAVAILABLE', 'Browser tickets are not configured');
     try {
       const { ticket, expires_at } = ticketStore.issue({ endpoint_id: principal.endpoint_id, owner_id: principal.owner_id, human_id: principal.human_id });
@@ -77,8 +91,13 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
   if (!repository || ROOM_METHODS.some((method) => typeof repository[method] !== 'function')) return fail(response, requestId, 503, 'DATABASE_UNAVAILABLE', 'Rooms are unavailable');
 
   if (request.method === 'POST' && path === '/v1/rooms') {
-    if (isAgentCaller(registry, principal)) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'Agents cannot create rooms');
+    if (await isAgentCaller(repository, registry, principal)) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'Agents cannot create rooms');
     if (!principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'An authenticated human context is required');
+    // Only the operator creates rooms: the human owning the --room-human-identity
+    // endpoint, read from that endpoint's row so every endpoint of theirs qualifies.
+    if (!humanSigner) return fail(response, requestId, 503, 'NO_OPERATOR_IDENTITY', 'Room creation is not configured (--room-human-identity)');
+    const operator = await lookupTrustedEntry(repository, registry, humanSigner.endpointId);
+    if (!operator?.owner_id || operator.status !== 'active' || principal.human_id !== operator.owner_id) return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', 'Only the operator can create rooms');
     const body = await readJson(request, readBody);
     const name = typeof body?.name === 'string' ? body.name.trim() : '';
     if (!name || name.length > NAME_MAX) return fail(response, requestId, 400, 'INVALID_REQUEST', `name must be 1-${NAME_MAX} characters`);
@@ -99,7 +118,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     return send(response, requestId, 200, { code: 'OK', items: await repository.listRoomsForEndpoint(principal.endpoint_id) });
   }
 
-  const match = path.match(/^\/v1\/rooms\/([^/]+)\/(members|messages|invocations|stop|ack|rename)(?:\/([^/]+)(?:\/(remove|response-mode))?)?$/);
+  const match = path.match(/^\/v1\/rooms\/([^/]+)\/(members|messages|invocations|stop|ack|rename)(?:\/([^/]+)(?:\/(remove|response-mode|invokable-by))?)?$/);
   if (!match) return false;
   const [, roomId, resource, segment, removeAction] = match;
   // Browsers percent-encode '@' in endpoint IDs (ep_claude%40local); the pathname arrives undecoded.
@@ -129,10 +148,9 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
   }
 
   if (request.method === 'POST' && resource === 'messages' && !segment) {
-    if (!humanSigner || !buildAcceptOptions) return fail(response, requestId, 503, 'ROOM_SEND_UNAVAILABLE', 'Human send is not configured (--room-human-identity)');
-    if (isAgentCaller(registry, principal) || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'An authenticated human context is required');
-    // The seam is never the only guard: only the loaded identity's endpoint may post.
-    if (principal.endpoint_id !== humanSigner.endpointId) return fail(response, requestId, 403, 'NO_SIGNING_KEY', 'This endpoint cannot post through the relay');
+    if (!humanSigner) return fail(response, requestId, 503, 'NO_OPERATOR_IDENTITY', 'Human send is not configured (--room-human-identity)');
+    if (!buildAcceptOptions) return fail(response, requestId, 503, 'ROOM_SEND_UNAVAILABLE', 'Human send is not available');
+    if ((await isAgentCaller(repository, registry, principal)) || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'An authenticated human context is required');
     const body = await readJson(request, readBody);
     if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.idempotency_key !== 'string' || !body.idempotency_key || body.idempotency_key.length > 128) return fail(response, requestId, 400, 'INVALID_REQUEST', 'idempotency_key is required');
     // Only the client's text, thread, and mentions survive: idempotency_key is
@@ -151,7 +169,14 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     const replay = await stored();
     if (replay) return send(response, requestId, 200, { code: 'OK', ...replay });
 
-    const signer = humanSigner.signForEndpoint(principal.endpoint_id);
+    let signer;
+    try {
+      signer = await humanSigner.signForEndpoint(principal.endpoint_id);
+    } catch (error) {
+      if (error.code === 'NO_SIGNING_KEY') return fail(response, requestId, 403, 'NO_SIGNING_KEY', 'This endpoint cannot post through the relay');
+      if (error.code === 'KEY_MISMATCH' || error.code === 'WRAP_KEY_UNAVAILABLE') return fail(response, requestId, 503, error.code, 'Relay signing is unavailable for this endpoint');
+      throw error;
+    }
     const outbox = new LocalOutbox({ privateKey: signer.privateKey, endpoint: signer.endpoint });
     const created = now instanceof Date ? now : new Date(now);
     const { envelope } = outbox.queue({
@@ -169,6 +194,8 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
       const winner = await stored();
       if (winner) return send(response, requestId, 200, { code: 'OK', ...winner });
     }
+    // The relay signed with a key its own registry rejects: a relay fault, not the caller's.
+    if (result.status === 401 && (result.body?.code === 'UNKNOWN_ENDPOINT' || result.body?.code === 'INVALID_SIGNATURE')) return fail(response, requestId, 500, 'INTERNAL', 'Relay failed to sign the message');
     if (result.status !== 202) return send(response, requestId, result.status, result.body);
     const row = await repository.lookupRoomMessage(roomId, envelope.message_id);
     return send(response, requestId, result.body.duplicate ? 200 : 201, { code: 'OK', message_id: result.body.message_id, room_seq: row?.room_seq ?? null });
@@ -179,7 +206,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
   }
 
   if (request.method === 'POST' && resource === 'members' && !segment) {
-    if (isAgentCaller(registry, principal)) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'Agents cannot manage room members');
+    if (await isAgentCaller(repository, registry, principal)) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'Agents cannot manage room members');
     if (!MANAGER_ROLES.has(access.member.role)) return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', 'Only room managers can add members');
     const body = await readJson(request, readBody);
     const endpointId = body?.endpoint_id;
@@ -188,8 +215,9 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     if (typeof endpointId !== 'string' || !endpointId) return fail(response, requestId, 400, 'INVALID_REQUEST', 'endpoint_id is required');
     if (!GRANTABLE_ROLES.has(role)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'role must be room_manager or member');
     if (responseMode !== null && !RESPONSE_MODES.has(responseMode)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'response_mode must be joins, mentions_only, or router');
-    const endpoint = registry?.get?.(endpointId);
-    if (!endpoint || endpoint.status !== 'active' || endpoint.owner_id !== principal.human_id) {
+    // Owner, status, and kind come from the trusted lookup, never the startup Map.
+    const endpoint = await lookupTrustedEntry(repository, registry, endpointId);
+    if (!endpoint || endpoint.status !== 'active' || endpoint.owner_id !== principal.human_id || endpoint.kind === 'system') {
       return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', 'You can only add active endpoints you own');
     }
     const targetIsAgent = endpoint.kind === 'agent';
@@ -197,7 +225,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     if (!targetIsAgent && responseMode !== null) return fail(response, requestId, 400, 'INVALID_REQUEST', 'response_mode applies only to agent endpoints');
     try {
       const member = await repository.addRoomMember({ conversationId: roomId, endpointId, role, responseMode, addedByHumanId: principal.human_id, now });
-      await notifyRoomHumans({ repository, stream, registered: registry, client: null, roomId, changed: 'members', logger: logger ?? console });
+      await notifyRoomChange(roomId, 'members');
       return send(response, requestId, 201, { code: 'OK', member });
     } catch (error) {
       if (error.code === 'ROOM_MEMBER_EXISTS') return fail(response, requestId, 409, 'ROOM_MEMBER_EXISTS', error.message);
@@ -206,18 +234,36 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
   }
 
   if (request.method === 'POST' && resource === 'members' && segment && action === 'remove') {
-    if (isAgentCaller(registry, principal)) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'Agents cannot manage room members');
+    if (await isAgentCaller(repository, registry, principal)) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'Agents cannot manage room members');
     if (!MANAGER_ROLES.has(access.member.role)) return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', 'Only room managers can remove members');
     const target = await repository.lookupRoomMember(roomId, targetEndpointId);
     if (!target) return fail(response, requestId, 404, 'ROOM_MEMBER_NOT_FOUND', 'Member not found');
     if (target.role === 'owner') return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', 'The room owner cannot be removed');
-    await repository.removeRoomMember({ conversationId: roomId, endpointId: targetEndpointId, now });
-    await notifyRoomHumans({ repository, stream, registered: registry, client: null, roomId, changed: 'members', logger: logger ?? console });
+    // A manager removes humans; an agent also needs the caller to own it.
+    const targetIsAgent = await repository.withTransaction((client) => isAgentMember(target, repository, client, registry));
+    if (targetIsAgent && (!target.owner_id || target.owner_id !== principal.human_id)) return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', "Only the agent's owner can remove it");
+    await repository.withTransaction(async (client) => {
+      // Take the rooms row lock first, the same order as accept (assignRoomSequence).
+      await repository.lockRoom(client, roomId);
+      await repository.removeRoomMember({ conversationId: roomId, endpointId: targetEndpointId, now }, client);
+      // A human who leaves the room loses the work they started in it, the
+      // way Stop cancels it. Not when another human endpoint of theirs stays.
+      if (!target.owner_id || !(await memberIsHuman(target, repository, client, registry))) return;
+      for (const member of await repository.listRoomMembers(roomId, client)) {
+        if (member.owner_id === target.owner_id && await memberIsHuman(member, repository, client, registry)) return;
+      }
+      const rows = await repository.cancelRoomInvocations(roomId, { subjectHumanId: target.owner_id, now }, client);
+      if (!systemIdentity) return;
+      for (const invocation of rows) {
+        await emitRoomEvent({ identity: systemIdentity, repository, client, room: access.room, body: { kind: 'invocation_stopped', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: 'stopped' }, idempotencyKey: `evt_stopped_${invocation.invocation_id}`, now, inboxDepthLimit, registered: registry, stream });
+      }
+    });
+    await notifyRoomChange(roomId, 'members');
     return send(response, requestId, 200, { code: 'OK', removed: true });
   }
 
   if (request.method === 'POST' && resource === 'rename' && !segment) {
-    if (isAgentCaller(registry, principal) || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'An authenticated human context is required');
+    if ((await isAgentCaller(repository, registry, principal)) || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'An authenticated human context is required');
     if (!MANAGER_ROLES.has(access.member.role)) return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', 'Only room managers can rename the room');
     const body = await readJson(request, readBody);
     const name = typeof body?.name === 'string' ? body.name.trim() : '';
@@ -225,7 +271,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     if (name === access.room.name) return send(response, requestId, 200, { code: 'OK', room: access.room });
     try {
       const room = await repository.renameRoom({ conversationId: roomId, name });
-      await notifyRoomHumans({ repository, stream, registered: registry, client: null, roomId, changed: 'room', logger: logger ?? console });
+      await notifyRoomChange(roomId, 'room');
       return send(response, requestId, 200, { code: 'OK', room });
     } catch (error) {
       if (error.code === 'ROOM_NAME_TAKEN') return fail(response, requestId, 409, 'ROOM_NAME_TAKEN', error.message);
@@ -235,7 +281,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
   }
 
   if (request.method === 'POST' && resource === 'members' && segment && action === 'response-mode') {
-    if (isAgentCaller(registry, principal)) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'Agents cannot manage room members');
+    if (await isAgentCaller(repository, registry, principal)) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'Agents cannot manage room members');
     if (!MANAGER_ROLES.has(access.member.role)) return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', 'Only room managers can change response modes');
     const body = await readJson(request, readBody);
     const responseMode = body?.response_mode;
@@ -245,9 +291,29 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     // Same agent rule as room dispatch: a phase 1 agent can have a null mode, so response_mode alone is not enough.
     const targetIsAgent = await repository.withTransaction((client) => isAgentMember(target, repository, client, registry));
     if (!targetIsAgent) return fail(response, requestId, 400, 'INVALID_REQUEST', 'response_mode applies only to agent endpoints');
+    if (!target.owner_id || target.owner_id !== principal.human_id) return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', "Only the agent's owner can change its response mode");
     const member = await repository.setRoomMemberResponseMode({ conversationId: roomId, endpointId: targetEndpointId, responseMode });
     if (!member) return fail(response, requestId, 404, 'ROOM_MEMBER_NOT_FOUND', 'Member not found');
-    await notifyRoomHumans({ repository, stream, registered: registry, client: null, roomId, changed: 'members', logger: logger ?? console });
+    await notifyRoomChange(roomId, 'members');
+    return send(response, requestId, 200, { code: 'OK', member });
+  }
+
+  // Invocation policy: only the agent's owner may widen or narrow who invokes
+  // it. Being a room manager grants no control over an agent's configuration.
+  if (request.method === 'POST' && resource === 'members' && segment && action === 'invokable-by') {
+    if ((await isAgentCaller(repository, registry, principal)) || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'Agents cannot manage room members');
+    if (typeof repository.setRoomMemberInvokableBy !== 'function') return fail(response, requestId, 503, 'DATABASE_UNAVAILABLE', 'Rooms are unavailable');
+    const body = await readJson(request, readBody);
+    const invokableBy = body?.invokable_by;
+    if (!INVOKABLE_MODES.has(invokableBy)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'invokable_by must be owner or members');
+    const target = await repository.lookupRoomMember(roomId, targetEndpointId);
+    if (!target) return fail(response, requestId, 404, 'ROOM_MEMBER_NOT_FOUND', 'Member not found');
+    const targetIsAgent = await repository.withTransaction((client) => isAgentMember(target, repository, client, registry));
+    if (!targetIsAgent) return fail(response, requestId, 400, 'INVALID_REQUEST', 'invokable_by applies only to agent endpoints');
+    if (!target.owner_id || target.owner_id !== principal.human_id) return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', "Only the agent's owner can change who may invoke it");
+    const member = await repository.setRoomMemberInvokableBy({ conversationId: roomId, endpointId: targetEndpointId, invokableBy });
+    if (!member) return fail(response, requestId, 404, 'ROOM_MEMBER_NOT_FOUND', 'Member not found');
+    await notifyRoomChange(roomId, 'members');
     return send(response, requestId, 200, { code: 'OK', member });
   }
 
@@ -285,12 +351,17 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     if (failed && invoke.length > 0) return fail(response, requestId, 400, 'INVALID_REQUEST', 'failed decisions cannot invoke agents');
     const reason = clampReason(body?.reason);
     const outcome = await repository.withTransaction(async (client) => {
+      // Lock order humans -> endpoints -> rooms, as accept does: FOR SHARE on the
+      // trigger sender's endpoint first, so a concurrent suspension waits for this
+      // pick and then cancels the invocation it creates.
+      const preTrigger = repository.lockEndpointForShare ? await repository.lookupRoomMessage(roomId, triggerId, client) : null;
+      if (preTrigger) await repository.lockEndpointForShare(client, preTrigger.envelope.sender.endpoint_id);
       // Serialize per room so a retried decision cannot race its original.
       await repository.lockRoom(client, roomId);
       const trigger = await repository.lookupRoomMessage(roomId, triggerId, client);
       const triggerBody = trigger?.envelope?.body;
       const triggerSender = trigger ? await repository.lookupRoomMember(roomId, trigger.envelope.sender.endpoint_id, client) : null;
-      const humanTrigger = trigger && trigger.envelope.message_type === 'room.message' && triggerSender && !(await isAgentMember(triggerSender, repository, client, registry));
+      const humanTrigger = trigger && trigger.envelope.message_type === 'room.message' && triggerSender && await memberIsHuman(triggerSender, repository, client, registry);
       if (!humanTrigger || (triggerBody?.mentions ?? []).length > 0) return { invalid: true };
       const decisionKey = `evt_router_${triggerId}`;
       const prior = await repository.lookupRouterDecision(triggerId, client);
@@ -299,6 +370,8 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
       const room = await repository.lookupRoom(roomId, client);
       const roster = new Map((await repository.listRoomMembers(roomId, client)).map((member) => [member.endpoint_id, member]));
       const threadRootId = triggerBody?.thread_root_id ?? triggerId;
+      // The router is an agent, so the pick runs under the trigger's human sender.
+      const subjectHumanId = trigger.envelope.sender.owner_id;
       const items = [];
       const deliveries = [];
       const accepted = [];
@@ -306,10 +379,11 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
         const target = roster.get(endpointId);
         let result;
         if (!target || target.response_mode !== 'joins') {
-          const refusedRow = { invocationId: `inv_${crypto.randomUUID()}`, roomId, workspaceId: room.workspace_id, triggerMessageId: triggerId, threadRootId, endpointId, decidedBy: 'router', reason: 'not_eligible', status: 'refused', now };
+          const refusedRow = { invocationId: `inv_${crypto.randomUUID()}`, roomId, workspaceId: room.workspace_id, triggerMessageId: triggerId, threadRootId, endpointId, decidedBy: 'router', reason: 'not_eligible', status: 'refused', subjectHumanId, now };
           result = { invocation: await repository.createRoomInvocation(refusedRow, client), roomDelivery: null };
         } else {
-          result = await dispatchToTarget({ room, triggerMessageId: triggerId, threadRootId, endpointId, decidedBy: 'router', reason: reason || null, repository, client, now, inboxDepthLimit, registered: registry });
+          // dispatchToTarget applies mayInvoke(subject, target) before any delivery.
+          result = await dispatchToTarget({ room, triggerMessageId: triggerId, threadRootId, endpointId, decidedBy: 'router', reason: reason || null, subjectHumanId, target, repository, client, now, inboxDepthLimit, registered: registry });
         }
         items.push(result.invocation);
         if (result.roomDelivery) deliveries.push(result.roomDelivery);
@@ -354,12 +428,13 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
   if (request.method === 'POST' && resource === 'stop' && !segment) {
     // Same agent rule as room dispatch (room-policy.mjs isAgentMember):
     // response_mode set, or the registry or endpoints row says kind 'agent'.
-    const callerIsAgent = isAgentCaller(registry, principal) || await repository.withTransaction((client) => isAgentMember(access.member, repository, client, registry));
-    if (callerIsAgent) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'Only human members can stop a room');
+    const callerIsAgent = (await isAgentCaller(repository, registry, principal)) || await repository.withTransaction((client) => isAgentMember(access.member, repository, client, registry));
+    if (callerIsAgent || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'Only human members can stop a room');
     const cancelled = await repository.withTransaction(async (client) => {
       // Take the rooms row lock first, the same order as accept (assignRoomSequence).
       await repository.lockRoom(client, roomId);
-      const rows = await repository.cancelRoomInvocations(roomId, { now }, client);
+      // Stop reaches only the caller's own agents and the chains the caller started.
+      const rows = await repository.cancelRoomInvocations(roomId, { ownerHumanId: principal.human_id, subjectHumanId: principal.human_id, now }, client);
       if (systemIdentity && rows.length) {
         for (const invocation of rows) {
           await emitRoomEvent({ identity: systemIdentity, repository, client, room: access.room, body: { kind: 'invocation_stopped', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: 'stopped' }, idempotencyKey: `evt_stopped_${invocation.invocation_id}`, now, inboxDepthLimit, registered: registry, stream });

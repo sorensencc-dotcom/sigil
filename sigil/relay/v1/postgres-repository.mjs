@@ -68,6 +68,7 @@ function rowToFederationDirectoryLink(row) {
   };
 }
 
+const ENDPOINT_KINDS = new Set(['human', 'agent', 'system']);
 const federationStateToJobState = {
   forwarded: 'done',
   forward_rejected: 'rejected',
@@ -131,7 +132,16 @@ function roomRow(row) {
 }
 
 const INVOCATION_COLUMNS = `invocation_id, room_id, trigger_message_id, thread_root_id, endpoint_id, decided_by, reason, status,
-  delivery_id, reply_message_id, created_at, started_at, finished_at`;
+  delivery_id, reply_message_id, created_at, started_at, finished_at, subject_human_id`;
+
+// Member reads return invokable_by and the endpoint's owner_id (invocation
+// policy). RETURNING cannot join, so writes use the same owner subquery.
+const MEMBER_RETURNING = `endpoint_id, role, response_mode, added_at, invokable_by,
+  (SELECT e.owner_id FROM endpoints e WHERE e.endpoint_id = conversation_members.endpoint_id) AS owner_id,
+  COALESCE(NULLIF((SELECT e.display_name FROM endpoints e WHERE e.endpoint_id = conversation_members.endpoint_id), ''), endpoint_id) AS display_name`;
+const MEMBER_SELECT = `SELECT m.endpoint_id, m.role, m.response_mode, m.added_at, m.invokable_by, e.owner_id,
+  COALESCE(NULLIF(e.display_name, ''), m.endpoint_id) AS display_name
+  FROM conversation_members m LEFT JOIN endpoints e ON e.endpoint_id = m.endpoint_id`;
 
 function invocationRow(row) {
   const iso = (value) => (value == null ? null : new Date(value).toISOString());
@@ -146,6 +156,7 @@ function roomMessageRow(row) {
   return {
     room_seq: String(row.room_seq),
     message_id: row.message_id,
+    display_name: row.sender_display_name ?? row.sender_endpoint_id,
     canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'),
     envelope: {
       protocol: row.protocol,
@@ -172,6 +183,9 @@ function memberRow(row) {
     role: row.role,
     response_mode: row.response_mode ?? null,
     added_at: row.added_at instanceof Date ? row.added_at.toISOString() : row.added_at,
+    invokable_by: row.invokable_by ?? 'owner',
+    owner_id: row.owner_id ?? null,
+    display_name: row.display_name ?? row.endpoint_id,
   };
 }
 
@@ -273,7 +287,7 @@ export class PostgresRepository {
   async lookupRecipientEndpoint(endpointId, client) {
     if (!client) throw new Error('Recipient lookup requires a transaction client');
     const result = await client.query(
-      `SELECT e.endpoint_id, e.owner_id, e.status
+      `SELECT e.endpoint_id, e.owner_id, e.kind, e.status
        FROM endpoints e
        WHERE e.endpoint_id = $1 AND e.status = 'active'
          AND EXISTS (
@@ -283,6 +297,41 @@ export class PostgresRepository {
       [endpointId]
     );
     return result.rows[0] ?? null;
+  }
+  async lookupTrustedEndpoint(endpointId, client = this.pool) {
+    const e = await client.query(
+      `SELECT endpoint_id, owner_id, kind, status FROM endpoints WHERE endpoint_id = $1 AND origin_domain IS NULL`, [endpointId]);
+    if (!e.rows[0]) return null;
+    const k = await client.query(
+      `SELECT key_id, public_key, status, valid_from, valid_until FROM endpoint_keys WHERE endpoint_id = $1`, [endpointId]);
+    return {
+      ...e.rows[0],
+      keys: new Map(k.rows.map((r) => [r.key_id, { ...r, public_key: crypto.createPublicKey({ key: r.public_key, format: 'der', type: 'spki' }) }])),
+    };
+  }
+  // Accept takes FOR SHARE on the sender's endpoints row before any room lock.
+  // suspendHuman and revokeEndpoint UPDATE that row, so an accept either holds
+  // them off until it commits (suspension's later room scan sees its rows; revoke
+  // only orders the commits) or waits for
+  // them and then reads the new status. Lock order: humans -> endpoints -> rooms.
+  async lockEndpointForShare(client, endpointId) {
+    if (client == null) throw new Error('lockEndpointForShare requires transaction client');
+    await client.query('SELECT 1 FROM endpoints WHERE endpoint_id = $1 FOR SHARE', [endpointId]);
+  }
+  async livenessSnapshot({ endpointId }, client = this.pool) {
+    const result = await client.query(
+      `SELECT e.endpoint_id, e.owner_id, e.kind, e.status AS endpoint_status,
+              EXISTS (SELECT 1 FROM endpoint_keys k WHERE k.endpoint_id = e.endpoint_id AND k.status = 'active') AS has_active_key,
+              h.status AS human_status
+         FROM endpoints e
+         LEFT JOIN humans h ON h.human_id = e.owner_id
+        WHERE e.endpoint_id = $1 AND e.origin_domain IS NULL`,
+      [endpointId]);
+    return result.rows[0] ? { ...result.rows[0] } : null;
+  }
+  async loadWrappedSigningKey(keyId, client = this.pool) {
+    const result = await client.query('SELECT wrapped_private_key FROM human_signing_keys WHERE key_id = $1', [keyId]);
+    return result.rows[0]?.wrapped_private_key ?? null;
   }
   // No `client = this.pool` default here, unlike the other lookups above --
   // design §3 requires this one to always run on the transaction's client
@@ -474,10 +523,11 @@ export class PostgresRepository {
       return result.rows[0];
     });
   }
-  async createEndpointWithAudit({ endpointId, ownerId, installationId, runtime, displayName, keyId, publicKey, now = new Date() } = {}) {
+  async createEndpointWithAudit({ endpointId, ownerId, installationId, runtime, displayName, keyId, publicKey, kind, now = new Date() } = {}) {
+    if (!ENDPOINT_KINDS.has(kind)) throw Object.assign(new Error('kind must be human, agent, or system'), { code: 'INVALID_KIND' });
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     return this.withTransaction(async (client) => { try {
-      const endpoint = await client.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at) VALUES ($1,$2,$3,$4,$5,'active',$6) RETURNING *`, [endpointId, ownerId, runtime, installationId, displayName, timestamp]);
+      const endpoint = await client.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at) VALUES ($1,$2,$3,$4,$5,$6,'active',$7) RETURNING *`, [endpointId, ownerId, runtime, kind, installationId, displayName, timestamp]);
       await client.query(`INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from) VALUES ($1,$2,'Ed25519',$3,'active',$4)`, [keyId, endpointId, publicKey, timestamp]);
       await client.query(`INSERT INTO audit_events (event_id,event_type,subject_id,actor_id,object_type,object_id,outcome,created_at) VALUES ($1,'endpoint.created',$2,$3,'endpoint',$2,'success',$4)`, [`audit_${crypto.randomUUID()}`, endpointId, ownerId, timestamp]);
       return endpoint.rows[0];
@@ -491,8 +541,8 @@ export class PostgresRepository {
     await this.withTransaction(async (client) => {
       await client.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', $2) ON CONFLICT (human_id) DO NOTHING`, [identity.owner_id, timestamp]);
       await client.query(
-        `INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-         VALUES ($1, $2, 'relay', 'relay_system', 'Relay system', 'active', $3) ON CONFLICT (endpoint_id) DO NOTHING`,
+        `INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+         VALUES ($1, $2, 'relay', 'system', 'relay_system', 'Relay system', 'active', $3) ON CONFLICT (endpoint_id) DO NOTHING`,
         [identity.endpoint_id, identity.owner_id, timestamp],
       );
       // Same reason as the key check below: a pre-existing endpoint row owned by
@@ -500,6 +550,13 @@ export class PostgresRepository {
       const ownerRow = await client.query(`SELECT owner_id FROM endpoints WHERE endpoint_id = $1`, [identity.endpoint_id]);
       if (ownerRow.rows[0]?.owner_id !== identity.owner_id) {
         throw Object.assign(new Error(`endpoint "${identity.endpoint_id}" is already registered to a different owner`), { code: 'ROOM_SYSTEM_OWNER_MISMATCH' });
+      }
+      // One active key per endpoint (endpoint_keys_one_active_idx): a different
+      // active key is rejected here, before any insert, so the mismatch code wins
+      // over the index's 23505. Rotation is a deliberate later operation.
+      const otherActive = await client.query(`SELECT key_id FROM endpoint_keys WHERE endpoint_id = $1 AND status = 'active' AND key_id <> $2`, [identity.endpoint_id, identity.key_id]);
+      if (otherActive.rows.length > 0) {
+        throw Object.assign(new Error(`endpoint "${identity.endpoint_id}" already has a different active key`), { code: 'ROOM_SYSTEM_KEY_MISMATCH' });
       }
       await client.query(
         `INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
@@ -512,11 +569,6 @@ export class PostgresRepository {
       const row = stored.rows[0];
       if (!row || row.endpoint_id !== identity.endpoint_id || !Buffer.from(row.public_key).equals(Buffer.from(publicKey))) {
         throw Object.assign(new Error(`room system key "${identity.key_id}" is already registered with a different endpoint or key`), { code: 'ROOM_SYSTEM_KEY_MISMATCH' });
-      }
-      // Rotation is a deliberate later operation: never allow a second active key.
-      const otherActive = await client.query(`SELECT key_id FROM endpoint_keys WHERE endpoint_id = $1 AND status = 'active' AND key_id <> $2`, [identity.endpoint_id, identity.key_id]);
-      if (otherActive.rows.length > 0) {
-        throw Object.assign(new Error(`endpoint "${identity.endpoint_id}" already has a different active key`), { code: 'ROOM_SYSTEM_KEY_MISMATCH' });
       }
     });
   }
@@ -815,6 +867,9 @@ export class PostgresRepository {
   // sweepable. The endpoints row's (endpoint_id, owner_id) matches what the
   // envelope INSERT uses for (sender_endpoint_id, sender_owner_id).
   async registerFederatedSender({ endpoint_id, owner_id, key_id, public_key, origin_domain }, client = this.pool) {
+    if (client === this.pool) {
+      return this.withTransaction((txClient) => this.registerFederatedSender({ endpoint_id, owner_id, key_id, public_key, origin_domain }, txClient));
+    }
     const now = new Date().toISOString();
     await client.query(
       `INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', $2)
@@ -822,8 +877,8 @@ export class PostgresRepository {
       [owner_id, now]
     );
     await client.query(
-      `INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, origin_domain, created_at)
-       VALUES ($1, $2, 'federated', $3, $1, 'active', $3, $4)
+      `INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, origin_domain, created_at)
+       VALUES ($1, $2, 'federated', 'agent', $3, $1, 'active', $3, $4)
        ON CONFLICT (endpoint_id) DO NOTHING`,
       [endpoint_id, owner_id, origin_domain, now]
     );
@@ -845,12 +900,131 @@ export class PostgresRepository {
         { code: 'FEDERATED_KEY_ID_COLLISION' }
       );
     }
+    // A key_id already on file for this endpoint (active or retired) is never
+    // re-activated, and never retires the endpoint's current key: replaying an
+    // old key_id must not displace the newer one.
+    if (existingKey.rows.length > 0) return;
+    await client.query(
+      `UPDATE endpoint_keys SET status = 'retired', valid_until = GREATEST($2::timestamptz, valid_from)
+        WHERE endpoint_id = $1 AND status = 'active' AND key_id <> $3`,
+      [endpoint_id, now, key_id]
+    );
     await client.query(
       `INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
-       VALUES ($1, $2, 'Ed25519', $3, 'active', $4)
-       ON CONFLICT (key_id) DO NOTHING`,
+       VALUES ($1, $2, 'Ed25519', $3, 'active', $4)`,
       [key_id, endpoint_id, public_key, now]
     );
+  }
+  async rotateEndpointKey({ endpointId, newKey }, client = null) {
+    const run = async (tx) => {
+      const now = new Date().toISOString();
+      await tx.query(
+        `UPDATE endpoint_keys SET status = 'retired', valid_until = GREATEST($2::timestamptz, valid_from)
+          WHERE endpoint_id = $1 AND status = 'active'`,
+        [endpointId, now]
+      );
+      await tx.query(
+        `INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
+         VALUES ($1, $2, 'Ed25519', $3, 'active', $4)`,
+        [newKey.key_id, endpointId, newKey.public_key, now]
+      );
+      return { key_id: newKey.key_id };
+    };
+    return client ? run(client) : this.withTransaction(run);
+  }
+  async revokeEndpoint({ endpointId, actorHumanId = null }, client = null) {
+    const run = async (tx) => {
+      const now = new Date().toISOString();
+      const endpoint = await tx.query(
+        `UPDATE endpoints SET status = 'revoked', revoked_at = COALESCE(revoked_at, $2) WHERE endpoint_id = $1 RETURNING owner_id`,
+        [endpointId, now]
+      );
+      if (!endpoint.rows[0]) throw Object.assign(new Error(`endpoint "${endpointId}" not found`), { code: 'ENDPOINT_NOT_FOUND' });
+      await tx.query(
+        `UPDATE endpoint_keys SET status = 'retired', valid_until = GREATEST(COALESCE(valid_until, $2::timestamptz), valid_from)
+          WHERE endpoint_id = $1 AND (status <> 'retired' OR valid_until IS NULL)`,
+        [endpointId, now]
+      );
+      await this.recordAuditEvent({
+        eventType: 'endpoint.revoked', subjectId: endpointId, actorId: actorHumanId, actorHumanId, endpointId,
+        objectType: 'endpoint', objectId: endpointId, outcome: 'success', now, client: tx,
+      });
+      return { owner_id: endpoint.rows[0].owner_id };
+    };
+    return client ? run(client) : this.withTransaction(run);
+  }
+  // Foundation spec, "Suspension". The humans row is the first write: a
+  // returning login takes FOR SHARE on it, so a login in flight either commits
+  // its session before the sweep below (and is revoked by it) or reads
+  // 'suspended'. Only endpoints that are 'active' now are suspended, and they
+  // are marked so unsuspend restores exactly those.
+  async suspendHuman({ humanId, actorHumanId = null }, client = null) {
+    const run = async (tx) => {
+      const now = new Date().toISOString();
+      const human = await tx.query(
+        `UPDATE humans SET status = 'suspended' WHERE human_id = $1 AND status IN ('active', 'suspended') RETURNING human_id`,
+        [humanId]
+      );
+      if (!human.rows[0]) throw await this.#humanStatusError(humanId, tx);
+      const endpoints = await tx.query(
+        `UPDATE endpoints SET status = 'suspended', suspended_by_human_id = $1
+          WHERE owner_id = $1 AND status = 'active' RETURNING endpoint_id`,
+        [humanId]
+      );
+      await tx.query('UPDATE human_sessions SET revoked_at = $2 WHERE human_id = $1 AND revoked_at IS NULL', [humanId, now]);
+      // Cancel in-flight work the human started, room by room, through the
+      // same subject-scoped path as Stop. Rooms are locked in id order, the
+      // rooms row first as on accept.
+      const rooms = await tx.query(
+        `SELECT DISTINCT room_id FROM room_invocations WHERE subject_human_id = $1 AND status IN ('queued', 'running') ORDER BY room_id`,
+        [humanId]
+      );
+      const invocationIds = [];
+      for (const { room_id: roomId } of rooms.rows) {
+        await this.lockRoom(tx, roomId);
+        const cancelled = await this.cancelRoomInvocations(roomId, { subjectHumanId: humanId, now }, tx);
+        invocationIds.push(...cancelled.map((row) => row.invocation_id));
+      }
+      const endpointIds = endpoints.rows.map((row) => row.endpoint_id);
+      await this.recordAuditEvent({
+        eventType: 'human.suspended', subjectId: humanId, actorId: actorHumanId, actorHumanId,
+        objectType: 'human', objectId: humanId, outcome: 'success',
+        payload: { endpoint_ids: endpointIds, invocation_ids: invocationIds }, now, client: tx,
+      });
+      return { endpoint_ids: endpointIds, invocation_ids: invocationIds };
+    };
+    return client ? run(client) : this.withTransaction(run);
+  }
+  // Restores only endpoints this human's suspension flipped and that are
+  // still 'suspended'. Revoked sessions stay revoked.
+  async unsuspendHuman({ humanId, actorHumanId = null }, client = null) {
+    const run = async (tx) => {
+      const now = new Date().toISOString();
+      const human = await tx.query(
+        `UPDATE humans SET status = 'active' WHERE human_id = $1 AND status IN ('active', 'suspended') RETURNING human_id`,
+        [humanId]
+      );
+      if (!human.rows[0]) throw await this.#humanStatusError(humanId, tx);
+      const endpoints = await tx.query(
+        `UPDATE endpoints SET status = CASE WHEN status = 'suspended' THEN 'active' ELSE status END, suspended_by_human_id = NULL
+          WHERE owner_id = $1 AND suspended_by_human_id = $1
+          RETURNING endpoint_id, status`,
+        [humanId]
+      );
+      const endpointIds = endpoints.rows.filter((row) => row.status === 'active').map((row) => row.endpoint_id);
+      await this.recordAuditEvent({
+        eventType: 'human.unsuspended', subjectId: humanId, actorId: actorHumanId, actorHumanId,
+        objectType: 'human', objectId: humanId, outcome: 'success', payload: { endpoint_ids: endpointIds }, now, client: tx,
+      });
+      return { endpoint_ids: endpointIds };
+    };
+    return client ? run(client) : this.withTransaction(run);
+  }
+  async #humanStatusError(humanId, client) {
+    const { rows } = await client.query('SELECT status FROM humans WHERE human_id = $1', [humanId]);
+    return rows[0]
+      ? Object.assign(new Error(`human "${humanId}" is ${rows[0].status}`), { code: 'HUMAN_REVOKED' })
+      : Object.assign(new Error(`human "${humanId}" not found`), { code: 'HUMAN_NOT_FOUND' });
   }
   async persistAcceptedEnvelope(row, client) {
     if (client) return this.#insertAcceptedEnvelope(row, client);
@@ -1729,9 +1903,9 @@ export class PostgresRepository {
        VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (conversation_id, endpoint_id) DO UPDATE
          SET role = EXCLUDED.role, added_by = EXCLUDED.added_by, added_at = EXCLUDED.added_at,
-             response_mode = EXCLUDED.response_mode, removed_at = NULL
+             response_mode = EXCLUDED.response_mode, removed_at = NULL, invokable_by = 'owner'
          WHERE conversation_members.removed_at IS NOT NULL
-       RETURNING endpoint_id, role, response_mode, added_at`,
+       RETURNING ${MEMBER_RETURNING}`,
       [conversationId, endpointId, role, addedByHumanId, timestamp, responseMode],
     );
     if (!result.rows[0]) throw Object.assign(new Error('Endpoint is already a room member'), { code: 'ROOM_MEMBER_EXISTS' });
@@ -1763,37 +1937,70 @@ export class PostgresRepository {
     const result = await client.query(
       `UPDATE conversation_members SET response_mode = $3
         WHERE conversation_id = $1 AND endpoint_id = $2 AND removed_at IS NULL
-       RETURNING endpoint_id, role, response_mode, added_at`,
+       RETURNING ${MEMBER_RETURNING}`,
       [conversationId, endpointId, responseMode],
+    );
+    return result.rows[0] ? memberRow(result.rows[0]) : null;
+  }
+  async setRoomMemberInvokableBy({ conversationId, endpointId, invokableBy }, client = this.pool) {
+    const result = await client.query(
+      `UPDATE conversation_members SET invokable_by = $3
+        WHERE conversation_id = $1 AND endpoint_id = $2 AND removed_at IS NULL
+       RETURNING ${MEMBER_RETURNING}`,
+      [conversationId, endpointId, invokableBy],
     );
     return result.rows[0] ? memberRow(result.rows[0]) : null;
   }
   async lookupRoomMember(conversationId, endpointId, client = this.pool) {
     const result = await client.query(
-      `SELECT endpoint_id, role, response_mode, added_at FROM conversation_members
-        WHERE conversation_id = $1 AND endpoint_id = $2 AND removed_at IS NULL`,
+      `${MEMBER_SELECT}
+        WHERE m.conversation_id = $1 AND m.endpoint_id = $2 AND m.removed_at IS NULL`,
       [conversationId, endpointId],
     );
     return result.rows[0] ? memberRow(result.rows[0]) : null;
   }
   async listRoomMembers(conversationId, client = this.pool) {
     const result = await client.query(
-      `SELECT endpoint_id, role, response_mode, added_at FROM conversation_members
-        WHERE conversation_id = $1 AND removed_at IS NULL ORDER BY added_at, endpoint_id`,
+      `${MEMBER_SELECT}
+        WHERE m.conversation_id = $1 AND m.removed_at IS NULL ORDER BY m.added_at, m.endpoint_id`,
       [conversationId],
     );
     return result.rows.map(memberRow);
   }
-  async createRoomInvocation({ invocationId, roomId, workspaceId, triggerMessageId, threadRootId, endpointId, decidedBy, reason = null, status, deliveryId = null, now = new Date() }, client = this.pool) {
+  // Whether the human an invocation runs under may still start it: their
+  // humans.status, and whether one of their active endpoints is still an
+  // active member of the room. null when the human does not exist.
+  async lookupInvocationSubject(roomId, humanId, client = this.pool) {
+    const result = await client.query(
+      `SELECT h.status,
+              EXISTS (SELECT 1 FROM conversation_members m JOIN endpoints e ON e.endpoint_id = m.endpoint_id
+                       WHERE m.conversation_id = $1 AND m.removed_at IS NULL AND e.owner_id = h.human_id AND e.status = 'active') AS is_member
+         FROM humans h WHERE h.human_id = $2`,
+      [roomId, humanId],
+    );
+    return result.rows[0] ? { status: result.rows[0].status, is_member: result.rows[0].is_member } : null;
+  }
+  // Distinct subjects of the queued and running invocations in one thread.
+  async listActiveThreadSubjects(roomId, threadRootId, client = this.pool) {
+    const result = await client.query(
+      `SELECT DISTINCT subject_human_id FROM room_invocations
+        WHERE room_id = $1 AND thread_root_id = $2 AND status IN ('queued', 'running') ORDER BY subject_human_id`,
+      [roomId, threadRootId],
+    );
+    return result.rows.map((row) => row.subject_human_id);
+  }
+  async createRoomInvocation({ invocationId, roomId, workspaceId, triggerMessageId, threadRootId, endpointId, decidedBy, reason = null, status, deliveryId = null, subjectHumanId, now = new Date() }, client = this.pool) {
+    if (!subjectHumanId) throw Object.assign(new Error('createRoomInvocation requires subjectHumanId'), { code: 'MISSING_SUBJECT' });
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     try {
       const result = await client.query(
-        `INSERT INTO room_invocations (invocation_id, room_id, workspace_id, trigger_message_id, thread_root_id, endpoint_id, decided_by, reason, status, delivery_id, created_at, started_at, finished_at)
+        `INSERT INTO room_invocations (invocation_id, room_id, workspace_id, trigger_message_id, thread_root_id, endpoint_id, decided_by, reason, status, delivery_id, created_at, started_at, finished_at, subject_human_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
                  CASE WHEN $9 = 'running' THEN $11::timestamptz END,
-                 CASE WHEN $9 = 'refused' THEN $11::timestamptz END)
+                 CASE WHEN $9 = 'refused' THEN $11::timestamptz END,
+                 $12)
          RETURNING ${INVOCATION_COLUMNS}`,
-        [invocationId, roomId, workspaceId, triggerMessageId, threadRootId, endpointId, decidedBy, reason, status, deliveryId, timestamp],
+        [invocationId, roomId, workspaceId, triggerMessageId, threadRootId, endpointId, decidedBy, reason, status, deliveryId, timestamp, subjectHumanId],
       );
       return invocationRow(result.rows[0]);
     } catch (error) {
@@ -1831,11 +2038,18 @@ export class PostgresRepository {
     );
     return result.rows[0] ? invocationRow(result.rows[0]) : null;
   }
-  async cancelRoomInvocations(roomId, { now = new Date() } = {}, client = this.pool) {
+  // With ownerHumanId and/or subjectHumanId, cancels only rows on agents that
+  // human owns or rows whose subject is that human (room Stop). With neither,
+  // cancels every active row in the room.
+  async cancelRoomInvocations(roomId, { ownerHumanId = null, subjectHumanId = null, now = new Date() } = {}, client = this.pool) {
     const result = await client.query(
       `UPDATE room_invocations SET status = 'cancelled', reason = 'stopped', finished_at = $2
-        WHERE room_id = $1 AND status IN ('queued', 'running') RETURNING ${INVOCATION_COLUMNS}`,
-      [roomId, now instanceof Date ? now.toISOString() : new Date(now).toISOString()],
+        WHERE room_id = $1 AND status IN ('queued', 'running')
+          AND (($3::text IS NULL AND $4::text IS NULL)
+            OR endpoint_id IN (SELECT endpoint_id FROM endpoints WHERE owner_id = $3)
+            OR subject_human_id = $4)
+        RETURNING ${INVOCATION_COLUMNS}`,
+      [roomId, now instanceof Date ? now.toISOString() : new Date(now).toISOString(), ownerHumanId, subjectHumanId],
     );
     return result.rows.map(invocationRow);
   }
@@ -1904,7 +2118,8 @@ export class PostgresRepository {
     const result = await client.query(
       `SELECT room_seq, message_id, protocol, message_type, body, context_refs, capabilities, correlation_id,
               sender_endpoint_id, sender_owner_id, broadcast_scope, conversation_id, idempotency_key,
-              signature_algorithm, signature_key_id, signature_value, expires_at, created_at, canonical_bytes
+              signature_algorithm, signature_key_id, signature_value, expires_at, created_at, canonical_bytes,
+              COALESCE(NULLIF((SELECT e.display_name FROM endpoints e WHERE e.endpoint_id = envelopes.sender_endpoint_id), ''), sender_endpoint_id) AS sender_display_name
          FROM envelopes
         WHERE conversation_id = $1 AND room_seq > $2
         ORDER BY room_seq
@@ -1931,7 +2146,8 @@ export class PostgresRepository {
     const result = await client.query(
       `SELECT room_seq, message_id, protocol, message_type, body, context_refs, capabilities, correlation_id,
               sender_endpoint_id, sender_owner_id, broadcast_scope, conversation_id, idempotency_key,
-              signature_algorithm, signature_key_id, signature_value, expires_at, created_at, canonical_bytes
+              signature_algorithm, signature_key_id, signature_value, expires_at, created_at, canonical_bytes,
+              COALESCE(NULLIF((SELECT e.display_name FROM endpoints e WHERE e.endpoint_id = envelopes.sender_endpoint_id), ''), sender_endpoint_id) AS sender_display_name
          FROM envelopes
         WHERE conversation_id = $1 AND message_id = $2`,
       [conversationId, messageId],

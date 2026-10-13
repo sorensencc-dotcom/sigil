@@ -8,6 +8,7 @@ import pg from 'pg';
 import http from 'node:http';
 
 import { createIdentity } from './identity.mjs';
+import { seedRegistry } from './registry-seed.mjs';
 import { assertDisposableTestDatabase } from '../scripts/assert-disposable-test-db.mjs';
 
 const connectionString = process.env.SIGIL_TEST_DATABASE_URL;
@@ -70,22 +71,7 @@ test('sigil relay up auto-migrates fresh database and registers endpoints', { sk
   assert.equal(tablesResult.rows.length, 5, 'Core tables must exist after auto-migration');
 
   // Perform endpoint sync
-  for (const ep of registryData.endpoints) {
-    await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW()) ON CONFLICT (human_id) DO NOTHING`, [ep.owner_id]);
-    await pool.query(`
-      INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-      VALUES ($1, $2, $3, $4, $5, 'active', NOW())
-      ON CONFLICT (endpoint_id) DO UPDATE SET status = 'active'
-    `, [ep.endpoint_id, ep.owner_id, ep.kind ?? 'agent', `install_${ep.endpoint_id}`, ep.endpoint_id]);
-    if (ep.public_key_pem) {
-      const pubKeyBuf = crypto.createPublicKey(ep.public_key_pem).export({ type: 'spki', format: 'der' });
-      await pool.query(`
-        INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
-        VALUES ($1, $2, 'Ed25519', $3, 'active', NOW())
-        ON CONFLICT (key_id) DO NOTHING
-      `, [ep.key_id, ep.endpoint_id, pubKeyBuf]);
-    }
-  }
+  await seedRegistry(pool, registryData);
 
   // 4. Assert endpoints and keys are persisted
   const endpointsResult = await pool.query('SELECT endpoint_id, status FROM endpoints WHERE owner_id = $1 ORDER BY endpoint_id ASC', ['usr_test_owner']);

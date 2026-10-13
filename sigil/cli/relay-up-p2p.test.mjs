@@ -55,7 +55,7 @@ test('--p2p-no-mdns flag wires enableMdns: false into createP2pHost', () => {
   assert.match(sigilSource, /enableMdns:\s*!args\.values\['p2p-no-mdns'\]/, 'createP2pHost call site no longer derives enableMdns from --p2p-no-mdns');
 });
 
-test('sigil relay up --p2p logs a listen multiaddr', async () => {
+test('sigil relay up --p2p logs a listen multiaddr', { timeout: 90_000 }, async () => {
   const cwd = tmpCwdWithRegistry(); // sigil init alice writes .sigil/alice.identity.json (has the private key p2p needs)
   const child = spawn(process.execPath, [
     sigilCli, 'relay', 'up', '--port', '0', '--p2p',
@@ -70,8 +70,9 @@ test('sigil relay up --p2p logs a listen multiaddr', async () => {
       };
       child.stdout.on('data', onData);
       child.on('exit', (code) => reject(new Error(`sigil relay up exited early with code ${code}: ${buf}`)));
-      // libp2p startup can exceed five seconds on Windows under a cold Node process.
-      setTimeout(() => reject(new Error(`timed out waiting for a p2p listen multiaddr: ${buf}`)), 25_000);
+      // libp2p startup can exceed five seconds on Windows under a cold Node process,
+      // and past 25s when the full suite runs in parallel (pre-push hook).
+      setTimeout(() => reject(new Error(`timed out waiting for a p2p listen multiaddr: ${buf}`)), 80_000);
     });
     assert.match(output, /\/ip4\/127\.0\.0\.1\/tcp\/\d+\/p2p\/\w+/);
   } finally {

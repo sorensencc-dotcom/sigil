@@ -13,8 +13,8 @@ async function seed(pool, suffix) {
   await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW())`, [ids.human]);
   for (const [endpointId, runtime] of [[ids.web, 'web'], [ids.claude, 'claude'], [ids.codex, 'codex']]) {
     await pool.query(
-      `INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-       VALUES ($1, $2, $3, $4, $3, 'active', NOW())`,
+      `INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+       VALUES ($1, $2, $3, CASE $3 WHEN 'relay' THEN 'system' WHEN 'human' THEN 'human' WHEN 'web' THEN 'human' ELSE 'agent' END, $4, $3, 'active', NOW())`,
       [endpointId, ids.human, runtime, `install_${endpointId}`],
     );
   }
@@ -46,6 +46,7 @@ test('postgres room lifecycle, ordering, and fan-out', { skip: !connectionString
   await assert.rejects(repository.addRoomMember({ conversationId, endpointId: ids.codex, role: 'member', addedByHumanId: ids.human, now }), { code: 'ROOM_MEMBER_EXISTS' });
   assert.equal((await repository.lookupRoomMember(conversationId, ids.web)).role, 'owner');
   assert.deepEqual((await repository.listRoomMembers(conversationId)).map((m) => m.endpoint_id).sort(), [ids.claude, ids.codex, ids.web].sort());
+  assert.deepEqual(Object.fromEntries((await repository.listRoomMembers(conversationId)).map((m) => [m.endpoint_id, m.display_name])), { [ids.web]: 'web', [ids.claude]: 'claude', [ids.codex]: 'codex' }, 'members carry endpoints.display_name');
   assert.deepEqual((await repository.listRoomsForEndpoint(ids.claude)).map((r) => r.conversation_id), [conversationId]);
 
   const persisted = await repository.withTransaction(async (client) => {
@@ -69,6 +70,8 @@ test('postgres room lifecycle, ordering, and fan-out', { skip: !connectionString
   const messages = await repository.listRoomMessages(conversationId, 0n, 100);
   assert.deepEqual(messages.map((m) => [m.room_seq, m.message_id]), [['1', `msg_${suffix}`]]);
   assert.equal(messages[0].envelope.body.text, 'hi');
+  assert.equal(messages[0].display_name, 'web', 'history rows carry the sender display name');
+  assert.equal((await repository.lookupRoomMessage(conversationId, `msg_${suffix}`)).display_name, 'web');
   assert.equal(messages[0].canonical_bytes, Buffer.from('canonical').toString('base64url'), 'history carries the stored signed bytes as base64url');
 
   await assert.rejects(repository.withTransaction(async (client) => {

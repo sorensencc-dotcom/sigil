@@ -24,9 +24,9 @@ test('directory link confirmation, revocation, and lookup', { skip: !connectionS
   const ids = { a: `usr_a_${suffix}`, b: `usr_b_${suffix}`, outsider: `usr_outsider_${suffix}`, epA: `ep_a_${suffix}`, epB: `ep_b_${suffix}` };
   await pool.query(`
     INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.a}', 'active', NOW()), ('${ids.b}', 'active', NOW());
-    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-      VALUES ('${ids.epA}', '${ids.a}', 'claude', 'install_a', 'A', 'active', NOW()),
-             ('${ids.epB}', '${ids.b}', 'codex', 'install_b', 'B', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+      VALUES ('${ids.epA}', '${ids.a}', 'claude', 'agent', 'install_a', 'A', 'active', NOW()),
+             ('${ids.epB}', '${ids.b}', 'codex', 'agent', 'install_b', 'B', 'active', NOW());
   `);
   const repository = new PostgresRepository({ pool });
   const now = new Date('2026-08-21T00:00:00Z');
@@ -93,10 +93,10 @@ test('confirmed_by attribution is correct when the redeemer/nominee endpoint sor
   };
   await pool.query(`
     INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.issuer}', 'active', NOW()), ('${ids.redeemer}', 'active', NOW()), ('${ids.nominee}', 'active', NOW());
-    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-      VALUES ('${ids.epIssuer}', '${ids.issuer}', 'claude', 'install_issuer', 'Issuer', 'active', NOW()),
-             ('${ids.epRedeemer}', '${ids.redeemer}', 'codex', 'install_redeemer', 'Redeemer', 'active', NOW()),
-             ('${ids.epNominee}', '${ids.nominee}', 'codex', 'install_nominee', 'Nominee', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+      VALUES ('${ids.epIssuer}', '${ids.issuer}', 'claude', 'agent', 'install_issuer', 'Issuer', 'active', NOW()),
+             ('${ids.epRedeemer}', '${ids.redeemer}', 'codex', 'agent', 'install_redeemer', 'Redeemer', 'active', NOW()),
+             ('${ids.epNominee}', '${ids.nominee}', 'codex', 'agent', 'install_nominee', 'Nominee', 'active', NOW());
     INSERT INTO oidc_issuer_allowlist (issuer, display_label, added_at)
       VALUES ('https://issuer.example', 'Test Issuer', NOW());
   `);

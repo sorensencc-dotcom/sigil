@@ -143,7 +143,7 @@ async function verifyWebhook(provider, args, maxParserSeconds) {
   }
 }
 
-export async function handleAgentMailWebhook({ rawBody, headers, inboxId, provider, registry, secretStore, ingress, ledger, policy = {}, quarantine, maxAttachmentBytes, maxParserSeconds, senderRateLimiter, enqueue, clock = () => new Date() } = {}) {
+export async function handleAgentMailWebhook({ rawBody, headers, inboxId, provider, registry, repository, secretStore, ingress, ledger, policy = {}, quarantine, maxAttachmentBytes, maxParserSeconds, senderRateLimiter, enqueue, clock = () => new Date() } = {}) {
   let event;
   let providerEventId = null;
   let deadLettered = false;
@@ -157,9 +157,11 @@ export async function handleAgentMailWebhook({ rawBody, headers, inboxId, provid
     const webhookSecret = readSnapshotSecret(snapshot, 'withWebhookSecret', mapping.webhookSecretId);
     event = await verifyWebhook(provider, { rawBody, headers, inboxId, webhookSecretId: mapping.webhookSecretId, webhookSecret }, maxParserSeconds);
     if (!event || typeof event !== 'object') fail('WEBHOOK_SIGNATURE_INVALID', 'Webhook authenticity could not be verified');
-    const registeredEndpoint = registry instanceof Map ? registry.get(mapping.endpointId) : registry?.endpoints?.get?.(mapping.endpointId);
-    if (registeredEndpoint && registeredEndpoint.status !== 'active') fail('ENDPOINT_UNAVAILABLE', 'Recipient endpoint is not active');
-    if (registry instanceof Map && !registeredEndpoint) fail('ENDPOINT_UNAVAILABLE', 'Recipient endpoint is not registered');
+    // Trust state comes from repository.lookupTrustedEndpoint. Missing or
+    // inactive is rejected whatever shape `registry` has: no source, no entry.
+    const registeredEndpoint = typeof repository?.lookupTrustedEndpoint === 'function' ? await repository.lookupTrustedEndpoint(mapping.endpointId) : null;
+    if (!registeredEndpoint) fail('ENDPOINT_UNAVAILABLE', 'Recipient endpoint is not registered');
+    if (registeredEndpoint.status !== 'active') fail('ENDPOINT_UNAVAILABLE', 'Recipient endpoint is not active');
     const sender = String(event.from ?? event.sender?.email ?? '').trim().toLowerCase();
     if (!exactSenderAllowed(event, policy)) fail('SENDER_NOT_ALLOWLISTED', 'Sender is not authorized for AgentMail ingress');
     if (typeof senderRateLimiter === 'function' && !(await senderRateLimiter(sender, clock()))) fail('SENDER_RATE_LIMITED', 'Sender rate limit exceeded');
@@ -244,7 +246,7 @@ export async function handleAgentMailWebhook({ rawBody, headers, inboxId, provid
   }
 }
 
-export function createAgentMailIngress({ config, provider, secretStore, ingress, repository, registry, quarantine, policy = {}, relayOptions = {} } = {}) {
+export function createAgentMailIngress({ config, provider, secretStore, ingress, repository, quarantine, policy = {}, relayOptions = {} } = {}) {
   if (!config?.inboxMappings || !provider || !secretStore || !ingress || !repository) fail('AGENTMAIL_INGRESS_UNAVAILABLE', 'AgentMail ingress requires config, secret store, provider, identity, and repository');
   const { buildAcceptOptions } = relayOptions;
   if (typeof buildAcceptOptions !== 'function') fail('AGENTMAIL_INGRESS_UNAVAILABLE', 'AgentMail ingress requires relayOptions.buildAcceptOptions (see relay/v1/accept-options.mjs)');
@@ -274,7 +276,8 @@ export function createAgentMailIngress({ config, provider, secretStore, ingress,
         inboxId,
         secretStore,
         provider,
-        registry: { inboxMappings, endpoints: registry },
+        registry: { inboxMappings },
+        repository,
         ingress,
         ledger,
         policy: effectivePolicy,

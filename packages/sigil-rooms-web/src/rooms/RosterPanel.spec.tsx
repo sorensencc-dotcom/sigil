@@ -7,9 +7,9 @@ import { renderWithClient } from '../testUtils';
 import { RosterPanel } from './RosterPanel';
 
 const members: Member[] = [
-  { endpoint_id: 'ep_web', role: 'owner', response_mode: null, added_at: 't' },
-  { endpoint_id: 'ep_claude', role: 'member', response_mode: 'joins', added_at: 't' },
-  { endpoint_id: 'ep_old', role: 'member', response_mode: null, added_at: 't' },
+  { endpoint_id: 'ep_web', role: 'owner', response_mode: null, added_at: 't', invokable_by: 'owner', owner_id: 'usr_a', display_name: 'Ada' },
+  { endpoint_id: 'ep_claude', role: 'member', response_mode: 'joins', added_at: 't', invokable_by: 'owner', owner_id: 'usr_a', display_name: 'ep_claude' },
+  { endpoint_id: 'ep_old', role: 'member', response_mode: null, added_at: 't', invokable_by: 'owner', owner_id: 'usr_b', display_name: 'Old Bot' },
 ];
 
 describe('RosterPanel', () => {
@@ -50,5 +50,30 @@ describe('RosterPanel', () => {
     renderWithClient(<RosterPanel roomId="room_1" members={members} manager onGone={onGone} />, { setResponseMode });
     await userEvent.selectOptions(screen.getByLabelText('Response mode for ep_claude'), 'router');
     await vi.waitFor(() => expect(onGone).toHaveBeenCalledOnce());
+  });
+
+  it('shows display names, falling back to the endpoint id', () => {
+    renderWithClient(<RosterPanel roomId="room_1" members={members} manager={false} onGone={() => {}} />, {});
+    expect(screen.getByText('Ada')).toBeInTheDocument();
+    expect(screen.getByText('Old Bot')).toBeInTheDocument();
+    expect(screen.getByText('ep_claude')).toBeInTheDocument();
+    expect(screen.queryByText('ep_web')).toBeNull();
+  });
+
+  it('shows the invokable-by mode to everyone but the control only to the agent owner', () => {
+    renderWithClient(<RosterPanel roomId="room_1" members={members} manager={false} viewer="ep_web" onGone={() => {}} />, {});
+    expect(screen.getByLabelText('Invokable by for ep_claude')).toHaveValue('owner');
+    renderWithClient(<RosterPanel roomId="room_1" members={members} manager={false} viewer="ep_guest" onGone={() => {}} />, {});
+    expect(screen.getAllByLabelText('Invokable by for ep_claude')).toHaveLength(1);
+    expect(screen.getAllByText('invokable by: owner').length).toBeGreaterThan(0);
+  });
+
+  it('posts a new invokable-by mode and refetches', async () => {
+    const setInvokableBy = vi.fn(async () => ({ ...members[1]!, invokable_by: 'members' as const }));
+    const { queryClient } = renderWithClient(<RosterPanel roomId="room_1" members={members} manager={false} viewer="ep_web" onGone={() => {}} />, { setInvokableBy });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    await userEvent.selectOptions(screen.getByLabelText('Invokable by for ep_claude'), 'members');
+    await vi.waitFor(() => expect(setInvokableBy).toHaveBeenCalledWith('room_1', 'ep_claude', 'members'));
+    await vi.waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'members'] }));
   });
 });

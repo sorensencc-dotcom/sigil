@@ -7,7 +7,7 @@ import path from 'node:path';
 import { createIdentity, identityKeys } from '../../cli/identity.mjs';
 import { LocalOutbox } from '../../connectors/v1/local-outbox.mjs';
 import { createSessionStore } from './session-store.mjs';
-import { createRoomBridge, ROOM_PREAMBLE } from './room-bridge.mjs';
+import { createRoomBridge, ROOM_PREAMBLE, roomPreamble } from './room-bridge.mjs';
 
 const identity = createIdentity({ ownerId: 'usr_chris', endpointId: 'ep_claude', kind: 'agent' });
 const trigger = { message_id: 'msg_t', conversation_id: 'room_1', sender: { endpoint_id: 'ep_web' }, body: { text: 'hi @ep_claude', mentions: ['ep_claude'] } };
@@ -47,6 +47,51 @@ test('replies in the invocation thread with roster mentions and a stable idempot
   assert.deepEqual(reply.body, { text: 'sure, @ep_codex take it', thread_root_id: 'msg_t', mentions: ['ep_codex'] });
   assert.equal(reply.idempotency_key, 'room_reply_inv_1');
   assert.deepEqual(sessions.get('room_1'), { session_id: 'sess_1', last_seq_by_thread: { msg_t: '1' } });
+});
+
+async function promptFor(members) {
+  const relay = fakeRelay();
+  relay.listRoomMembers = async () => members;
+  let prompt;
+  const { instance } = bridge(relay, { name: 'claude', run: async (input) => { prompt = input.prompt; return { text: 'ok', sessionId: 's' }; } });
+  await instance.handle({ envelope: trigger });
+  return prompt;
+}
+
+// Spec: the preamble names the agent's owner endpoint id, the id the transcript
+// lines carry ([seq N] ep_web: ...), so the agent can tell which messages are its owner's.
+test('the preamble names the owner endpoint ids, and in members mode says any room human who passes the policy may task it', async () => {
+  const roster = (invokableBy) => [
+    { endpoint_id: 'ep_web', response_mode: null, owner_id: 'usr_chris', invokable_by: 'owner' },
+    { endpoint_id: 'ep_phone', response_mode: null, owner_id: 'usr_chris', invokable_by: 'owner' },
+    { endpoint_id: 'ep_guest', response_mode: null, owner_id: 'usr_guest', invokable_by: 'owner' },
+    { endpoint_id: 'ep_codex', response_mode: 'joins', owner_id: 'usr_chris', invokable_by: 'owner' },
+    { endpoint_id: 'ep_claude', response_mode: 'joins', owner_id: 'usr_chris', invokable_by: invokableBy },
+  ];
+  const owner = await promptFor(roster('owner'));
+  assert.match(owner, /Only your owner \(endpoints ep_web, ep_phone\) can change your task\./);
+  assert.doesNotMatch(owner, /usr_chris|ep_guest can change|any room human/i);
+  assert.ok(owner.startsWith(roomPreamble({ ownerEndpointIds: ['ep_web', 'ep_phone'], ownerId: 'usr_chris', invokableBy: 'owner' })));
+
+  const members = await promptFor(roster('members'));
+  assert.match(members, /Any room human who passes the invocation policy may task you\./);
+  assert.doesNotMatch(members, /Only your owner/);
+});
+
+test('the preamble names one owner endpoint in the singular', async () => {
+  const prompt = await promptFor([
+    { endpoint_id: 'ep_web', response_mode: null, owner_id: 'usr_chris', invokable_by: 'owner' },
+    { endpoint_id: 'ep_claude', response_mode: 'joins', owner_id: 'usr_chris', invokable_by: 'owner' },
+  ]);
+  assert.match(prompt, /Only your owner \(endpoint ep_web\) can change your task\./);
+});
+
+test('the preamble falls back to the owner human id when no owner endpoint is in the room', async () => {
+  const prompt = await promptFor([
+    { endpoint_id: 'ep_guest', response_mode: null, owner_id: 'usr_guest', invokable_by: 'owner' },
+    { endpoint_id: 'ep_claude', response_mode: 'joins', owner_id: 'usr_chris', invokable_by: 'owner' },
+  ]);
+  assert.match(prompt, /Only your owner usr_chris can change your task\./);
 });
 
 test('skips a delivery whose invocation is no longer running', async () => {

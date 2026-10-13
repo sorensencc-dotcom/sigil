@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { validateEnvelope, signedBytes } from './validate-envelope.mjs';
+import { entryFromRegistryRow } from './trusted-endpoint.mjs';
 
 function signedEnvelope(privateKey, keyId, overrides = {}) {
   const base = {
@@ -20,9 +21,9 @@ test('skipSenderRegistration lets an unregistered federated sender validate agai
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const keyId = 'key_ep_codex@a.example';
   const envelope = signedEnvelope(privateKey, keyId);
-  const registered = new Map([[envelope.sender.endpoint_id, {
+  const registered = new Map([[envelope.sender.endpoint_id, entryFromRegistryRow({
     endpoint_id: envelope.sender.endpoint_id, owner_id: 'usr_other@a.example', key_id: keyId, status: 'active', public_key: publicKey,
-  }]]);
+  })]]);
   const result = validateEnvelope(envelope, {
     now: new Date('2026-08-30T12:00:30.000Z'), registered, relayDomain: 'b.example', skipSenderRegistration: true,
   });
@@ -42,9 +43,9 @@ test('skipSenderRegistration still enforces the expiry window', () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const keyId = 'key_ep_codex@a.example';
   const envelope = signedEnvelope(privateKey, keyId, { created_at: '2026-08-30T12:00:00.000Z', expires_at: '2026-08-31T13:00:00.000Z' });
-  const registered = new Map([[envelope.sender.endpoint_id, {
+  const registered = new Map([[envelope.sender.endpoint_id, entryFromRegistryRow({
     endpoint_id: envelope.sender.endpoint_id, owner_id: envelope.sender.owner_id, key_id: keyId, status: 'active', public_key: publicKey,
-  }]]);
+  })]]);
   assert.throws(
     () => validateEnvelope(envelope, { now: new Date('2026-08-30T12:00:30.000Z'), registered, relayDomain: 'b.example', skipSenderRegistration: true }),
     (err) => err.code === 'MESSAGE_EXPIRED',
@@ -69,7 +70,7 @@ test('skipSenderRegistration skips ENDPOINT_REVOKED for a non-active synthetic e
   const envelope = signedEnvelope(privateKey, keyId);
   const registered = new Map([[envelope.sender.endpoint_id, {
     endpoint_id: envelope.sender.endpoint_id, owner_id: envelope.sender.owner_id, status: 'revoked',
-    keys: [{ key_id: keyId, public_key: publicKey, status: 'active' }],
+    keys: new Map([[keyId, { key_id: keyId, public_key: publicKey, status: 'active' }]]),
   }]]);
   const result = validateEnvelope(envelope, {
     now: new Date('2026-08-30T12:00:30.000Z'), registered, relayDomain: 'b.example', skipSenderRegistration: true,

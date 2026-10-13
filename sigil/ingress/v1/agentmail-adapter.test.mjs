@@ -49,6 +49,7 @@ function makeInput(overrides = {}) {
       forwardingTokens: { 'triage+trm': token, 'judgment+review': token },
       allowFinancialLocalOnly: false,
     },
+    repository: { async lookupTrustedEndpoint(id) { return { endpoint_id: id, owner_id: 'usr_operator', kind: 'agent', status: 'active', keys: new Map() }; } },
     quarantine: async () => null,
     enqueue: async (envelope) => { queued.push(envelope); return { inserted: true }; },
     clock: () => new Date('2026-09-14T12:00:00Z'),
@@ -140,7 +141,7 @@ test('forwarding addresses require one configured domain', () => {
 test('sender rate limits and inactive endpoint registry fail closed', async () => {
   const limited = makeInput({ senderRateLimiter: async () => false });
   assert.equal((await handleAgentMailWebhook(limited)).body.code, 'SENDER_RATE_LIMITED');
-  const inactive = makeInput({ registry: { ...makeInput().registry, endpoints: new Map([['ep_triage', { status: 'paused' }]]) } });
+  const inactive = makeInput({ repository: { async lookupTrustedEndpoint(id) { return id === 'ep_triage' ? { endpoint_id: id, status: 'paused', keys: new Map() } : null; } } });
   assert.equal((await handleAgentMailWebhook(inactive)).body.code, 'ENDPOINT_UNAVAILABLE');
 });
 
@@ -177,4 +178,20 @@ test('financial attachments receive short retention before approval or rejection
   const result = await handleAgentMailWebhook(input);
   assert.equal(result.body.code, 'FINANCIAL_APPROVAL_REQUIRED');
   assert.deepEqual(retention, [{ reference: 'quarantine://synthetic/financial', retentionClass: 'short' }]);
+});
+
+// Task 4 (multi-human foundation): the recipient endpoint comes from
+// repository.lookupTrustedEndpoint, and a non-Map registry no longer skips the
+// "not registered" / "not active" rejections (it used to fail open).
+test('non-Map registry: unregistered and inactive recipient endpoints are rejected', async () => {
+  const unregistered = makeInput({ repository: { async lookupTrustedEndpoint() { return null; } } });
+  const r1 = await handleAgentMailWebhook(unregistered);
+  assert.equal(r1.body.code, 'ENDPOINT_UNAVAILABLE');
+  assert.equal(unregistered.queued.length, 0);
+  const inactive = makeInput({ repository: { async lookupTrustedEndpoint(id) { return { endpoint_id: id, status: 'suspended', kind: 'agent', keys: new Map() }; } } });
+  const r2 = await handleAgentMailWebhook(inactive);
+  assert.equal(r2.body.code, 'ENDPOINT_UNAVAILABLE');
+  assert.equal(inactive.queued.length, 0);
+  const noLookup = makeInput({ repository: undefined });
+  assert.equal((await handleAgentMailWebhook(noLookup)).body.code, 'ENDPOINT_UNAVAILABLE', 'no trusted-endpoint source fails closed');
 });

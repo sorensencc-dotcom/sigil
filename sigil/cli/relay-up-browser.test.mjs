@@ -164,11 +164,12 @@ test('--room-human-identity with a key that differs from the registry exits non-
   }
 });
 
-test('without --room-human-identity the send route answers 503', async () => {
+// Without an operator nobody creates rooms (Task 14). The send route's own 503
+// without a signer is covered in relay/v1/room-send-route.test.mjs.
+test('without --room-human-identity room creation answers 503 NO_OPERATOR_IDENTITY', async () => {
   await withRelay([], async ({ port, token }) => {
     const room = await call(port, 'POST', '/v1/rooms', { token, body: { name: 'general' } });
-    assert.equal(room.status, 201, JSON.stringify(room.body));
-    const sent = await call(port, 'POST', `/v1/rooms/${room.body.room.conversation_id}/messages`, { token, body: { text: 'hi', idempotency_key: 'k1' } });
-    assert.equal(sent.status, 503, JSON.stringify(sent.body));
+    assert.equal(room.status, 503, JSON.stringify(room.body));
+    assert.equal(room.body.code, 'NO_OPERATOR_IDENTITY');
   });
 });

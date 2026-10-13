@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { signedBytes, validateEnvelope } from './validate-envelope.mjs';
+import { entryFromRegistryRow } from './trusted-endpoint.mjs';
 
 const fixture = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
 const base = { ...fixture, created_at: '2026-08-12T12:00:00.000Z', expires_at: '2026-08-13T00:00:00.000Z' };
 const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
-const endpoint = { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey };
+const endpoint = entryFromRegistryRow({ endpoint_id: 'ep_codex', owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey });
 base.signature.value = crypto.sign(null, signedBytes(base), privateKey).toString('base64url');
 const options = { now: new Date('2026-08-12T12:01:00.000Z'), registered: new Map([['ep_codex', endpoint]]) };
 
@@ -45,7 +46,7 @@ test('accepts a retiring key during grace and rejects it after retirement', () =
   const old = { key_id: 'key_old', public_key: publicKey, status: 'retiring', valid_from: '2026-08-01T00:00:00Z', valid_until: '2026-08-20T00:00:00Z' };
   const candidate = { ...base, created_at: '2026-08-15T00:00:00Z', expires_at: '2026-08-16T00:00:00Z', signature: { ...base.signature, key_id: old.key_id } };
   candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
-  const registered = new Map([['ep_codex', { ...endpoint, keys: [old] }]]);
+  const registered = new Map([['ep_codex', { ...endpoint, keys: new Map([[old.key_id, old]]) }]]);
   assert.equal(validateEnvelope(candidate, { ...options, registered, now: new Date('2026-08-15T00:00:00Z') }).accepted, true);
   assert.throws(() => validateEnvelope(candidate, { ...options, registered, now: new Date('2026-08-20T00:00:00Z') }), (error) => error.code === 'INVALID_SIGNATURE');
 });
@@ -166,4 +167,25 @@ test('accepts a well-formed room.message broadcast', () => {
   const candidate = { ...base, message_type: 'room.message', body: { text: 'hello room' }, recipient: undefined, signature: { ...base.signature }, broadcast_scope: { conversation_id: base.conversation_id } };
   candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
   assert.equal(validateEnvelope(candidate, { ...options, broadcastAuthorizer: () => true }).accepted, true);
+});
+
+function freshSigned() {
+  const candidate = structuredClone(base);
+  candidate.signature.value = crypto.sign(null, signedBytes(candidate), privateKey).toString('base64url');
+  return candidate;
+}
+
+test('a registered entry shaped { keys: Map } verifies by key_id', () => {
+  const keyed = { owner_id: 'usr_codex_owner', status: 'active', keys: new Map([['key_01JEXAMPLE', { key_id: 'key_01JEXAMPLE', public_key: publicKey, status: 'active', valid_from: '2026-01-01T00:00:00Z', valid_until: null }]]) };
+  assert.equal(validateEnvelope(freshSigned(), { ...options, registered: new Map([['ep_codex', keyed]]) }).accepted, true);
+});
+
+test('a retired key with null valid_until rejects INVALID_SIGNATURE', () => {
+  const keyed = { owner_id: 'usr_codex_owner', status: 'active', keys: new Map([['key_01JEXAMPLE', { key_id: 'key_01JEXAMPLE', public_key: publicKey, status: 'retired', valid_from: '2026-01-01T00:00:00Z', valid_until: null }]]) };
+  assert.throws(() => validateEnvelope(freshSigned(), { ...options, registered: new Map([['ep_codex', keyed]]) }), (error) => error.code === 'INVALID_SIGNATURE');
+});
+
+test('an entry with top-level key_id/public_key but no keys Map rejects', () => {
+  const legacy = { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey };
+  assert.throws(() => validateEnvelope(freshSigned(), { ...options, registered: new Map([['ep_codex', legacy]]) }), (error) => error.code === 'INVALID_SIGNATURE');
 });

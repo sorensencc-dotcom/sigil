@@ -46,11 +46,14 @@ test('postgres emitRoomEvent persists with a room_seq and a repeat key writes no
   await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW())`, [human]);
   for (const [endpointId, runtime] of [[web, 'web'], [claude, 'claude']]) {
     await pool.query(
-      `INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-       VALUES ($1, $2, $3, $4, $3, 'active', NOW())`,
+      `INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+       VALUES ($1, $2, $3, CASE $3 WHEN 'relay' THEN 'system' WHEN 'human' THEN 'human' WHEN 'web' THEN 'human' ELSE 'agent' END, $4, $3, 'active', NOW())`,
       [endpointId, human, runtime, `install_${endpointId}`],
     );
   }
+  // memberIsHuman and deliveryBlocker read lookupRecipientEndpoint, which needs an
+  // active key: without one the web human is neither classified nor deliverable.
+  await pool.query(`INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from) VALUES ($1, $2, 'Ed25519', $3, 'active', NOW())`, [`key_${web}`, web, Buffer.alloc(32, 1)]);
   const repository = new PostgresRepository({ pool });
   const system = createIdentity({ ownerId: ROOM_SYSTEM_OWNER_ID, endpointId: ROOM_SYSTEM_ENDPOINT_ID, kind: 'system' });
   await repository.ensureRoomSystemEndpoint({ identity: system, now: NOW });

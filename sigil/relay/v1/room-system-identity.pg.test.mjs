@@ -76,7 +76,7 @@ test('postgres ensureRoomSystemEndpoint rejects an existing endpoint row owned b
   t.after(async () => { await clean(); await pool.end(); });
   const now = new Date().toISOString();
   await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ('usr_squatter', 'active', $1)`, [now]);
-  await pool.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at) VALUES ('ep_relay_system', 'usr_squatter', 'relay', 'squat', 'Squat', 'active', $1)`, [now]);
+  await pool.query(`INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at) VALUES ('ep_relay_system', 'usr_squatter', 'relay', 'system', 'squat', 'Squat', 'active', $1)`, [now]);
   const repository = new PostgresRepository({ pool });
   const identity = createIdentity({ ownerId: ROOM_SYSTEM_OWNER_ID, endpointId: ROOM_SYSTEM_ENDPOINT_ID, kind: 'system' });
   await assert.rejects(() => repository.ensureRoomSystemEndpoint({ identity }), { code: 'ROOM_SYSTEM_OWNER_MISMATCH' });

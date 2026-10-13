@@ -70,9 +70,9 @@ test('a --domain relay with NO --federation-mode still accepts a matching-domain
     ['ep_codex@a.example', { endpoint_id: 'ep_codex@a.example', owner_id: 'usr_chris@primary.example', key_id: keyId, status: 'active', public_key: publicKey }],
     ['ep_claude@a.example', { endpoint_id: 'ep_claude@a.example', owner_id: 'usr_chris@primary.example', status: 'active' }],
   ]);
-  const repository = createMemoryRepository({
-    registry: new Map([['ep_claude@a.example', { endpoint_id: 'ep_claude@a.example', owner_id: 'usr_chris@primary.example', status: 'active' }]]),
-  });
+  // The memory repository is the trusted-endpoint source (lookupTrustedEndpoint),
+  // so it holds the sender too, as it does in `sigil relay up` memory mode.
+  const repository = createMemoryRepository({ registry: registered });
 
   const res = await acceptEnvelopeAsync(envelope, {
     repository, registered, relayDomain: 'a.example', now: NOW, request_id: 'req_1',
@@ -93,9 +93,9 @@ test('a relay with NO --domain runs no federation logic (bare ids still work)', 
     ['ep_codex', { endpoint_id: 'ep_codex', owner_id: 'usr_chris@primary.example', key_id: keyId, status: 'active', public_key: publicKey }],
     ['ep_claude', { endpoint_id: 'ep_claude', owner_id: 'usr_chris@primary.example', status: 'active' }],
   ]);
-  const repository = createMemoryRepository({
-    registry: new Map([['ep_claude', { endpoint_id: 'ep_claude', owner_id: 'usr_chris@primary.example', status: 'active' }]]),
-  });
+  // The memory repository is the trusted-endpoint source (lookupTrustedEndpoint),
+  // so it holds the sender too, as it does in `sigil relay up` memory mode.
+  const repository = createMemoryRepository({ registry: registered });
 
   const res = await acceptEnvelopeAsync(envelope, {
     repository, registered, now: NOW, request_id: 'req_1',

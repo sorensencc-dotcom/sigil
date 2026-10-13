@@ -168,3 +168,135 @@ test('an endpoint with no open socket returns false from every notify method', a
   assert.equal(stream.notifySequenceReset('ep_a', {}), false);
   await done();
 });
+
+// Liveness: a repository-backed stream server admits a socket only while its
+// endpoint (and owning human) are live, and drops it once they are not.
+async function livenessRig({ livenessIntervalMs } = {}) {
+  const snapshots = new Map([
+    ['ep_a', { endpoint_status: 'active', has_active_key: true, human_status: 'active' }],
+    ['ep_b', { endpoint_status: 'active', has_active_key: true, human_status: 'active' }],
+    ['ep_c', { endpoint_status: 'active', has_active_key: true, human_status: 'active' }],
+  ]);
+  const owners = { ep_a: 'hum_a', ep_b: 'hum_b', ep_c: 'hum_a' };
+  const repository = {
+    async livenessSnapshot({ endpointId }) {
+      const row = snapshots.get(endpointId);
+      if (row === 'throw') throw new Error('db down');
+      return row ? { ...row } : null;
+    },
+  };
+  const ticketStore = { redeem: (ticket) => (ticket === 'tk_c' ? { endpoint_id: 'ep_c', owner_id: 'hum_a', human_id: 'hum_a' } : null) };
+  const httpServer = http.createServer();
+  const stream = createStreamServer({
+    server: httpServer,
+    repository,
+    ticketStore,
+    livenessIntervalMs,
+    authenticate: async (request) => {
+      const endpointId = request.headers['x-endpoint-id'];
+      return endpointId ? { endpoint_id: endpointId, owner_id: owners[endpointId] } : null;
+    },
+  });
+  await new Promise((resolve) => httpServer.listen(0, resolve));
+  const url = `ws://127.0.0.1:${httpServer.address().port}/v1/stream`;
+  const open = (socket) => new Promise((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); });
+  const connect = async (endpointId) => {
+    const socket = new WebSocket(url, { headers: { 'x-endpoint-id': endpointId } });
+    await open(socket);
+    return socket;
+  };
+  const connectTicket = async (ticket) => {
+    const socket = new WebSocket(`${url}?ticket=${ticket}`);
+    await open(socket);
+    return socket;
+  };
+  const raw = (endpointId) => new WebSocket(url, { headers: { 'x-endpoint-id': endpointId } });
+  const rawTicket = (ticket) => new WebSocket(`${url}?ticket=${ticket}`);
+  const closed = (socket) => new Promise((resolve) => socket.once('close', (code, reason) => resolve({ code, reason: reason.toString() })));
+  const settle = (ms = 50) => new Promise((resolve) => setTimeout(resolve, ms));
+  const done = async (...sockets) => {
+    for (const socket of sockets) socket.terminate();
+    await stream.close();
+    await new Promise((resolve) => httpServer.close(resolve));
+  };
+  return { stream, snapshots, connect, connectTicket, raw, rawTicket, closed, settle, done };
+}
+
+test('a bearer socket for a non-live endpoint is closed 1008 at upgrade and never registered', async () => {
+  const rig = await livenessRig();
+  const live = rig.snapshots.get('ep_a');
+  for (const bad of [{ ...live, endpoint_status: 'revoked' }, { ...live, has_active_key: false }, { ...live, human_status: 'suspended' }, null, 'throw']) {
+    if (bad === null) rig.snapshots.delete('ep_a'); else rig.snapshots.set('ep_a', bad);
+    const socket = rig.raw('ep_a');
+    const close = await rig.closed(socket);
+    assert.deepEqual(close, { code: 1008, reason: 'unauthorized' }, JSON.stringify(bad));
+    assert.equal(rig.stream.notifyReceipt('ep_a', { message_id: 'm' }), false);
+    assert.equal(rig.stream.notifyRoom('ep_a', { room_id: 'r', changed: 'members' }), false);
+  }
+  rig.snapshots.set('ep_c', { ...live, human_status: 'suspended' });
+  const ticketSocket = rig.rawTicket('tk_c');
+  assert.deepEqual(await rig.closed(ticketSocket), { code: 1008, reason: 'unauthorized' });
+  assert.equal(rig.stream.notifyRoom('ep_c', { room_id: 'r', changed: 'members' }), false);
+  await rig.done();
+});
+
+test('a live bearer socket is registered once liveness passes', async () => {
+  const rig = await livenessRig();
+  const socket = await rig.connect('ep_a');
+  await rig.settle();
+  assert.equal(rig.stream.notify('ep_a', 'del_1'), true);
+  await rig.done(socket);
+});
+
+test('revalidate({ endpointId }) closes only the failing sockets of that endpoint', async () => {
+  const rig = await livenessRig();
+  const a = await rig.connect('ep_a');
+  const b = await rig.connect('ep_b');
+  await rig.settle();
+  rig.snapshots.set('ep_a', { endpoint_status: 'revoked', has_active_key: false, human_status: 'active' });
+  rig.snapshots.set('ep_b', { endpoint_status: 'revoked', has_active_key: false, human_status: 'active' });
+  const aClosed = rig.closed(a);
+  await rig.stream.revalidate({ endpointId: 'ep_a' });
+  assert.deepEqual(await aClosed, { code: 1008, reason: 'unauthorized' });
+  assert.equal(rig.stream.notify('ep_a', 'd'), false);
+  assert.equal(b.readyState, WebSocket.OPEN, 'ep_b was not named, so it is not rechecked');
+  assert.equal(rig.stream.notify('ep_b', 'd'), true);
+  await rig.done(b);
+});
+
+test('revalidate({ humanId }) checks every bearer and browser socket that human owns', async () => {
+  const rig = await livenessRig();
+  const a = await rig.connect('ep_a');
+  const b = await rig.connect('ep_b');
+  const c = await rig.connectTicket('tk_c');
+  await rig.settle();
+  for (const id of ['ep_a', 'ep_c']) rig.snapshots.set(id, { endpoint_status: 'active', has_active_key: true, human_status: 'suspended' });
+  const closes = [rig.closed(a), rig.closed(c)];
+  await rig.stream.revalidate({ humanId: 'hum_a' });
+  for (const close of await Promise.all(closes)) assert.deepEqual(close, { code: 1008, reason: 'unauthorized' });
+  assert.equal(rig.stream.notifyRoom('ep_c', { room_id: 'r', changed: 'members' }), false);
+  assert.equal(b.readyState, WebSocket.OPEN);
+  await rig.done(b);
+});
+
+test('revalidate keeps a socket whose snapshot is still live', async () => {
+  const rig = await livenessRig();
+  const a = await rig.connect('ep_a');
+  await rig.settle();
+  await rig.stream.revalidate({ endpointId: 'ep_a' });
+  await rig.settle();
+  assert.equal(a.readyState, WebSocket.OPEN);
+  await rig.done(a);
+});
+
+test('the periodic liveness pass closes a socket whose snapshot turns bad', async () => {
+  const rig = await livenessRig({ livenessIntervalMs: 20 });
+  const a = await rig.connect('ep_a');
+  const b = await rig.connect('ep_b');
+  await rig.settle();
+  const aClosed = rig.closed(a);
+  rig.snapshots.set('ep_a', 'throw');
+  assert.deepEqual(await aClosed, { code: 1008, reason: 'unauthorized' });
+  assert.equal(b.readyState, WebSocket.OPEN);
+  await rig.done(b);
+});

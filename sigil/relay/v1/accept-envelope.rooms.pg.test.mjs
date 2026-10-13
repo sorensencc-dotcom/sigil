@@ -25,8 +25,8 @@ async function seed(pool, suffix) {
     const keyId = `key_${name}_${suffix}`;
     const keys = crypto.generateKeyPairSync('ed25519');
     await pool.query(
-      `INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-       VALUES ($1, $2, $3, $4, $3, 'active', NOW())`,
+      `INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+       VALUES ($1, $2, $3, CASE WHEN $3 IN ('web', 'web2', 'stranger') THEN 'human' ELSE 'agent' END, $4, $3, 'active', NOW())`,
       [endpointId, human, name, `install_${endpointId}`],
     );
     await pool.query(
@@ -155,4 +155,49 @@ test('postgres accept path: two concurrent replies on one invocation yield one 2
   assert.equal(results.find((r) => r.status === 403).body.code, 'ROOM_NOT_INVOKED');
   const history = await repository.listRoomMessages(conversationId, 0n, 100);
   assert.equal(history.filter((m) => m.envelope.sender.endpoint_id === claude.endpointId).length, 1, 'exactly one agent message persisted');
+});
+
+// Task 4 (multi-human foundation): in Postgres mode the accept path reads the
+// sender's trust state from lookupTrustedEndpoint and the recipient's owner
+// from lookupRecipientEndpoint, so an endpoint that exists only in Postgres
+// (no startup registry Map entry) can send, and two such endpoints of one
+// human never need a directory link. Seeds set `kind` explicitly.
+test('postgres accept path: Postgres-only endpoints send a same-owner direct envelope without a registry Map', { skip: !connectionString }, async (t) => {
+  assertDisposableTestDatabase(connectionString);
+  await applyMigrations(connectionString, { reset: true });
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const human = `hum_pgonly_${suffix}`;
+  await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW())`, [human]);
+  const made = {};
+  for (const name of ['a', 'b']) {
+    const endpointId = `ep_pgonly_${name}_${suffix}`;
+    const keyId = `key_pgonly_${name}_${suffix}`;
+    const keys = crypto.generateKeyPairSync('ed25519');
+    await pool.query(
+      `INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+       VALUES ($1, $2, 'agent', 'agent', $3, $1, 'active', NOW())`,
+      [endpointId, human, `install_${endpointId}`],
+    );
+    await pool.query(
+      `INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
+       VALUES ($1, $2, 'Ed25519', $3, 'active', NOW() - interval '1 day')`,
+      [keyId, endpointId, keys.publicKey.export({ type: 'spki', format: 'der' })],
+    );
+    made[name] = { endpointId, keyId, keys };
+  }
+  const repository = new PostgresRepository({ pool });
+  const now = new Date();
+  const envelope = {
+    protocol: 'sigil/1', message_id: `msg_${crypto.randomUUID()}`, conversation_id: `conv_pgonly_${suffix}`, message_type: 'chat.message',
+    sender: { endpoint_id: made.a.endpointId, owner_id: human }, recipient: { endpoint_id: made.b.endpointId, owner_id: human },
+    body: { text: 'postgres only' }, context_refs: [], capabilities: [], correlation_id: null,
+    idempotency_key: `idem_${crypto.randomUUID()}`, created_at: now.toISOString(), expires_at: new Date(now.getTime() + 3600_000).toISOString(),
+    signature: { algorithm: 'Ed25519', key_id: made.a.keyId, value: '' },
+  };
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), made.a.keys.privateKey).toString('base64url');
+  const result = await acceptEnvelopeAsync(envelope, { repository, registered: new Map(), now });
+  assert.equal(result.status, 202, JSON.stringify(result));
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM envelopes WHERE message_id = $1', [envelope.message_id])).rows[0].n, 1);
 });

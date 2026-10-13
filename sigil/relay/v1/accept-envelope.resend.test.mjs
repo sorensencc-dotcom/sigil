@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { acceptEnvelopeAsync } from './accept-envelope.mjs';
 import { signedBytes } from './validate-envelope.mjs';
+import { entryFromRegistryRow } from './trusted-endpoint.mjs';
+const withKeys = (row) => ({ ...row, keys: entryFromRegistryRow(row).keys });
 
 const NOW = new Date('2026-09-09T12:01:00.000Z');
 
@@ -53,10 +55,10 @@ function resendRepository({ member = true, highWater = 7n, priorMessage = null }
 function options(keys, repository) {
   return {
     repository,
-    registered: new Map([['ep_requester', {
+    registered: new Map([['ep_requester', withKeys({
       endpoint_id: 'ep_requester', owner_id: 'usr_requester', status: 'active',
       key_id: 'key_requester', public_key: keys.publicKey,
-    }]]),
+    })]]),
     now: NOW,
   };
 }

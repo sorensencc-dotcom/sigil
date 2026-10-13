@@ -1,5 +1,39 @@
 # Status
 
+## Session update: 2026-10-13 multi-human foundation Task 17 (docs and full verification)
+
+- Branch `docs/sigil-rooms-third-party-login-spec` in `C:\dev\.worktrees\sigil-third-party-login`, plan `docs/superpowers/plans/2026-10-12-sigil-rooms-multi-human-foundation.md`. Tasks 1-17 done; nothing pushed, no PR.
+- Docs: README "Multi-human rooms" (wrap key, `--reconcile-kind`, `--public-origin`, trust change, operator commands, invocation policy, residual risk, room controls, known limitations), CHANGELOG Unreleased, and the `relay up` help text.
+- Test fixes (stale fixtures, no production change): `sigil/ingress/v1/build-task-request.test.mjs` (registry entry needs a `keys` Map), `sigil/relay/v1/http-server.test.mjs` directory invites (registry row needs `kind: 'human'` to get `human_id`), `sigil/relay/v1/postgres-repository.integration.test.mjs` (two tests stored `decode('00')` as the public key, which the Postgres trust lookup now reads; they returned 500).
+- New tests for spec Testing bullets: legacy no-`kind` row and `--reconcile-kind` (`registry-seed.pg`), shadow sender refused on local accept (`accept-federated-envelope.pg`), fixed-size `sigil_admin` payloads for a human with 120 endpoints and sessions (`human-suspension.pg`), `human add --room` from a second process reaching a live relay socket (`relay-admin-listener.pg`).
+- Verification, `SIGIL_TEST_DATABASE_URL=postgres://sigil:sigil_password@127.0.0.1:55432/sigil_test`:
+  - `npm test` with the URL set runs Postgres files in parallel and they reset the shared schema: 1855 tests, 1617 pass, 236 fail (206 `pg_type_typname_nsp_index`, 99 "already exists"). Not a valid run; use the two runs below.
+  - `npm test` without the URL (Postgres tests skip): 1858 tests, 1606 pass, 3 fail, 3 cancelled, 246 skipped. All six are 30 s subprocess timeouts under load from an unrelated concurrent `npm test`; rerun serially (`agent-cli`, `cli-runner`, `rooms-exit`, `rooms-router-exit`, `agent-daemon`, `contract-signing`): 38 pass, 0 fail.
+  - The 58 Postgres test files, `node --test --test-concurrency=1`, in two halves: 151 tests, 150 pass, 0 fail, 1 skipped (multi-worker control race, needs provisioned fixtures); 125 tests, 125 pass, 0 fail.
+- Known, unchanged: `relay up --p2p` listen-multiaddr test can time out; CLI subprocess tests are flaky under parallel load and pass serially.
+- Next action: final whole-branch review, then the login-spec plan (`docs/superpowers/specs/2026-10-11-sigil-rooms-third-party-login-design.md`).
+
+### Known gap: router pick vs suspension after endpoint revoke
+
+Router pick (`POST /v1/rooms/:id/invocations`, `sigil/relay/v1/room-routes.mjs`) takes `FOR SHARE` on the trigger sender's endpoint before the room lock so a concurrent `suspendHuman` waits and then cancels the picked invocation. `suspendHuman` updates only `active` endpoints, so if the trigger sender's endpoint was already revoked (and the human still has another active endpoint in the room) the suspension does not wait, and a pick landing mid-suspension can start one running invocation under the suspended human that nothing cancels. Exposure: one agent turn. Fix: also `SELECT 1 FROM humans WHERE human_id = $1 FOR SHARE` on the trigger sender's `owner_id` before the endpoint lock (order humans, endpoints, rooms), plus a revoked-endpoint interleaving test through `handleRoomRoute`. The existing race test calls `lockEndpointForShare` and `dispatchToTarget` directly, not the route.
+
+### Known gaps: memory-only test coverage
+
+The foundation spec's Testing section says every bullet runs against Postgres. The bullets below are covered only by memory-repository or stubbed-handler tests. No Postgres versions exist yet; write them before you rely on Postgres coverage for these rules.
+
+- Guest `task.request` to an owner-only assignee is refused; a `members` assignee runs with the guest as subject: `sigil/relay/v1/room-dispatch.test.mjs` "policy 3".
+- A `members` agent invoked by a guest cannot hand off to an owner-only agent: `room-dispatch.test.mjs` "policy 4".
+- A guest who may invoke no `joins` agent triggers no router delivery: `room-dispatch.test.mjs` "policy 5".
+- A guest thread post does not reset an operator chain's `agent_turns`: `room-dispatch.test.mjs` "policy 6".
+- Promotion refuses a queued invocation whose subject was removed from the room, or whose agent switched to `owner`: `room-dispatch.test.mjs` "policy 7" (memory labels). Only the suspended-subject case has a Postgres test (`room-invocations.pg.test.mjs` "policy 7 (Postgres)").
+- Guest `stop` cancels none of the operator's invocations and does cancel its own, at route level: `sigil/relay/v1/room-routes.manage.test.mjs` "stop: a guest cancels what they started...". The repository query has a Postgres test (`rooms-manage.pg.test.mjs` "cancelRoomInvocations scoped by agent owner or subject"); the route does not.
+- Guest `POST /v1/rooms` answers 403: `room-routes.manage.test.mjs` "create room: a non-operator endpoint gets 403...".
+- A relay without `--room-human-identity` answers 503 `NO_OPERATOR_IDENTITY`: `room-send-route.test.mjs` "no humanSigner answers 503 NO_OPERATOR_IDENTITY and signs nothing" and `room-routes.manage.test.mjs` "create room: without --room-human-identity...".
+- An agent caller cannot create rooms, add members, or post as a human (`HUMAN_CONTEXT_REQUIRED`): `room-routes.test.mjs` and `room-send-route.test.mjs` "a non-member gets 404 and an agent gets 403 HUMAN_CONTEXT_REQUIRED".
+- Removing a human member cancels their invocations in that room: `room-routes.manage.test.mjs` "remove member: removing a human cancels their invocations in that room only".
+
+The full bullet-by-bullet coverage walk is in `.superpowers/sdd/2026-10-12-sigil-rooms-multi-human-foundation/task-17-report.md`, which is untracked.
+
 ## Session update: 2026-10-10 Tincan listener pushed
 
 - Branch `feat/sigil-tincan-bridge` in `C:\dev\.worktrees\sigil-tincan`. Listener commit `3a7214c feat(tincan): serve dispatch on the tailnet` is on origin (`778b9d9..3a7214c`). This note is the resume record on top of it.

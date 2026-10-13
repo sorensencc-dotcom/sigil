@@ -20,6 +20,8 @@ const registry = new Map([
   ['ep_router', { owner_id: 'usr_chris', status: 'active', kind: 'agent' }],
   ['ep_other_agent', { owner_id: 'usr_other', status: 'active', kind: 'agent' }],
 ]);
+// Room creation is operator-only: the operator owns ep_web (--room-human-identity).
+const humanSigner = { endpointId: 'ep_web', ownerId: 'usr_chris' };
 
 function call(port, method, path, authorization, body) {
   const payload = body === undefined ? '' : JSON.stringify(body);
@@ -36,7 +38,7 @@ function call(port, method, path, authorization, body) {
 
 async function withServer(fn) {
   const repository = createMemoryRepository({ registry });
-  const server = createRelayServer({ registry, repository, authenticate: async (request) => principals[request.headers.authorization] ?? null });
+  const server = createRelayServer({ registry, repository, humanSigner, authenticate: async (request) => principals[request.headers.authorization] ?? null });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try { await fn(server.address().port, repository); } finally { await new Promise((resolve) => server.close(resolve)); }
 }
@@ -170,7 +172,7 @@ test('invocations list, fail, and stop', async () => {
   await withServer(async (port, repository) => {
     const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'r' })).body.room.conversation_id;
     await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_claude', response_mode: 'joins' });
-    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', now: new Date() };
+    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', subjectHumanId: 'usr_chris', now: new Date() };
     await repository.createRoomInvocation({ ...base, invocationId: 'inv_1', triggerMessageId: 'msg_1', status: 'running' });
     await repository.createRoomInvocation({ ...base, invocationId: 'inv_2', triggerMessageId: 'msg_2', status: 'queued' });
 
@@ -193,7 +195,7 @@ test('fail with invocation_id only fails the matching running invocation', async
   await withServer(async (port, repository) => {
     const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'r' })).body.room.conversation_id;
     await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_claude', response_mode: 'joins' });
-    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', now: new Date() };
+    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', subjectHumanId: 'usr_chris', now: new Date() };
     await repository.createRoomInvocation({ ...base, invocationId: 'inv_new', triggerMessageId: 'msg_1', status: 'running' });
 
     const stale = await call(port, 'POST', `/v1/rooms/${roomId}/invocations/fail`, 'Bearer claude', { invocation_id: 'inv_old', reason: 'late' });
@@ -230,13 +232,13 @@ test('Stop emits one invocation_stopped event per cancelled invocation', async (
   const roomSystemIdentity = createIdentity({ ownerId: 'relay_system', endpointId: 'ep_relay_system', kind: 'system' });
   const repository = createMemoryRepository({ registry });
   await repository.ensureRoomSystemEndpoint({ identity: roomSystemIdentity, now: new Date() });
-  const server = createRelayServer({ registry, repository, roomSystemIdentity, authenticate: async (request) => principals[request.headers.authorization] ?? null });
+  const server = createRelayServer({ registry, repository, roomSystemIdentity, humanSigner, authenticate: async (request) => principals[request.headers.authorization] ?? null });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     const port = server.address().port;
     const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'r' })).body.room.conversation_id;
     await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_claude', response_mode: 'joins' });
-    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', now: new Date() };
+    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', subjectHumanId: 'usr_chris', now: new Date() };
     await repository.createRoomInvocation({ ...base, invocationId: 'inv_1', triggerMessageId: 'msg_1', status: 'running' });
     await repository.createRoomInvocation({ ...base, invocationId: 'inv_2', triggerMessageId: 'msg_2', status: 'queued' });
     const stopped = await call(port, 'POST', `/v1/rooms/${roomId}/stop`, 'Bearer chris-web');
@@ -254,13 +256,13 @@ test('a queued invocation refused on promotion emits invocation_refused', async 
   localRegistry.delete('ep_relay_system');
   const repository = createMemoryRepository({ registry: localRegistry });
   await repository.ensureRoomSystemEndpoint({ identity: roomSystemIdentity, now: new Date() });
-  const server = createRelayServer({ registry: localRegistry, repository, roomSystemIdentity, authenticate: async (request) => principals[request.headers.authorization] ?? null });
+  const server = createRelayServer({ registry: localRegistry, repository, roomSystemIdentity, humanSigner, authenticate: async (request) => principals[request.headers.authorization] ?? null });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     const port = server.address().port;
     const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'r' })).body.room.conversation_id;
     await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_claude', response_mode: 'joins' });
-    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', now: new Date() };
+    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', subjectHumanId: 'usr_chris', now: new Date() };
     await repository.createRoomInvocation({ ...base, invocationId: 'inv_1', triggerMessageId: 'msg_1', status: 'running' });
     await repository.createRoomInvocation({ ...base, invocationId: 'inv_2', triggerMessageId: 'msg_2', status: 'queued' });
     // The agent goes inactive while inv_2 waits, so completing inv_1 promotes into a refusal.
@@ -283,7 +285,7 @@ test('fail and stop take the room lock before touching invocation rows', async (
   await withServer(async (port, repository) => {
     const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'r' })).body.room.conversation_id;
     await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_claude', response_mode: 'joins' });
-    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', now: new Date() };
+    const base = { roomId, workspaceId: 'ws_usr_chris', threadRootId: 'msg_root', endpointId: 'ep_claude', decidedBy: 'mention', subjectHumanId: 'usr_chris', now: new Date() };
     await repository.createRoomInvocation({ ...base, invocationId: 'inv_1', triggerMessageId: 'msg_1', status: 'running' });
     await repository.createRoomInvocation({ ...base, invocationId: 'inv_2', triggerMessageId: 'msg_2', status: 'running', endpointId: 'ep_codex' });
     const calls = [];

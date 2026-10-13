@@ -7,6 +7,8 @@ import { signedBytes } from './validate-envelope.mjs';
 import { createRelayServer } from './http-server.mjs';
 import { hashBearerToken } from './transport-auth.mjs';
 import { parseAttestationObject } from './approval-ceremony.mjs';
+import { entryFromRegistryRow } from './trusted-endpoint.mjs';
+const withKeys = (row) => ({ ...row, keys: entryFromRegistryRow(row).keys });
 
 function cborInt(value) { return value >= 0 ? Buffer.from([value]) : Buffer.from([0x20 + (-1 - value)]); }
 function cborMap(entries) { return Buffer.concat([Buffer.from([0xa0 + entries.length]), ...entries.flatMap(([key, value]) => [typeof key === 'string' ? Buffer.concat([Buffer.from([0x60 + key.length]), Buffer.from(key)]) : cborInt(key), value])]); }
@@ -26,7 +28,7 @@ test('relay clock function is evaluated for each request', async () => {
   };
   let calls = 0;
   const server = createRelayServer({
-    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    registry: new Map([['ep_codex', withKeys({ owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey })]]),
     repository, now: () => (++calls === 1 ? new Date('2026-08-18T15:00:00.000Z') : new Date('2026-08-19T15:00:01.000Z')),
   });
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
@@ -54,7 +56,7 @@ test('HTTP relay accepts signed envelope and returns request ID', async () => {
   const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));
   envelope.created_at = '2026-08-13T12:00:00.000Z'; envelope.expires_at = '2026-08-14T00:00:00.000Z';
   envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
-  const server = createRelayServer({ registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]), persist: () => {}, now: new Date('2026-08-13T12:01:00Z') });
+  const server = createRelayServer({ registry: new Map([['ep_codex', withKeys({ owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey })]]), persist: () => {}, now: new Date('2026-08-13T12:01:00Z') });
   await new Promise((resolve) => server.listen(0, resolve));
   const { port } = server.address();
   const result = await new Promise((resolve, reject) => {
@@ -78,7 +80,7 @@ test('HTTP relay rejects an unknown recipient before persistence', async () => {
     async lookupActiveCapabilityGrants() { return []; }, async reserveRateLimit() { return { count: 1, allowed: true }; }, async countOpenDeliveries() { return 0; },
     async persistAcceptedEnvelope() { persisted = true; return { message_id: envelope.message_id }; }
   };
-  const server = createRelayServer({ registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]), repository, now: new Date('2026-08-13T12:01:00Z') });
+  const server = createRelayServer({ registry: new Map([['ep_codex', withKeys({ owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey })]]), repository, now: new Date('2026-08-13T12:01:00Z') });
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
   const result = await request(port, { method: 'POST', path: '/v1/envelopes', body: envelope });
   await new Promise((resolve) => server.close(resolve));
@@ -102,7 +104,7 @@ test('HTTP relay defaults to repository persistence with canonical acceptance da
     async persistAcceptedEnvelope(row) { persisted.push(row); return { message_id: row.envelope.message_id }; }
   };
   const server = createRelayServer({
-    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    registry: new Map([['ep_codex', withKeys({ owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey })]]),
     repository, now: new Date('2026-08-13T12:01:00Z')
   });
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
@@ -135,7 +137,7 @@ test('HTTP relay propagates stream_seq.enabled into local acceptance', async () 
       async persistAcceptedEnvelope(row) { persisted.push(row); return { message_id: row.envelope.message_id, duplicate: false }; },
     };
     const server = createRelayServer({
-      registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+      registry: new Map([['ep_codex', withKeys({ owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey })]]),
       repository, stream_seq: { enabled }, now: new Date('2026-08-13T12:01:00Z'),
     });
     await new Promise((resolve) => server.listen(0, resolve));
@@ -169,7 +171,7 @@ test('a relay with --domain configured rejects a foreign-domain recipient with R
     async persistAcceptedEnvelope(row) { return { message_id: row.envelope.message_id }; }
   };
   const server = createRelayServer({
-    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    registry: new Map([['ep_codex', withKeys({ owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey })]]),
     repository, now: new Date('2026-08-25T12:01:00Z'), relayDomain: 'relay.example.com',
   });
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
@@ -188,7 +190,7 @@ test('HTTP relay does not notify when durable persistence fails', async () => {
   envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
   const notifications = [];
   const server = createRelayServer({
-    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    registry: new Map([['ep_codex', withKeys({ owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey })]]),
     repository: { async withTransaction(fn) { return fn(null); }, async lookupIdempotency() { return null; }, async lookupAcceptedMessageId() { return null; }, async lookupTaskRequest() { return null; }, async lookupCapabilityRegistration(capability) { return { capability, namespace: capability.split('/')[0], risk_tier: 'standard' }; }, async lookupActiveCapabilityGrants() { return []; }, async reserveRateLimit() { return { count: 1, allowed: true }; }, async countOpenDeliveries() { return 0; }, async persistAcceptedEnvelope() { throw new Error('database unavailable'); } },
     stream: { notify(...args) { notifications.push(args); } }, now: new Date('2026-08-13T12:01:00Z')
   });
@@ -223,7 +225,7 @@ test('HTTP relay returns prior acceptance for duplicate idempotency retry', asyn
     async persistAcceptedEnvelope(row) { persisted.push(row); return { message_id: row.envelope.message_id }; }
   };
   const server = createRelayServer({
-    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    registry: new Map([['ep_codex', withKeys({ owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey })]]),
     repository, stream: { notify(...args) { notifications.push(args); } }, now: new Date('2026-08-13T12:01:00Z')
   });
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
@@ -253,7 +255,7 @@ test('HTTP relay rejects conflicting idempotency retry', async () => {
     async persistAcceptedEnvelope() { throw new Error('must not persist conflicting retry'); }
   };
   const server = createRelayServer({
-    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    registry: new Map([['ep_codex', withKeys({ owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey })]]),
     repository, now: new Date('2026-08-13T12:01:00Z')
   });
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
@@ -279,7 +281,7 @@ test('HTTP relay notifies recipient stream after acceptance', async () => {
     async countOpenDeliveries() { return 0; },
     async persistAcceptedEnvelope(row) { return { message_id: row.envelope.message_id, duplicate: false }; }
   };
-  const server = createRelayServer({ registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]), repository, stream, now: new Date('2026-08-13T12:01:00Z') });
+  const server = createRelayServer({ registry: new Map([['ep_codex', withKeys({ owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey })]]), repository, stream, now: new Date('2026-08-13T12:01:00Z') });
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
   await new Promise((resolve, reject) => { const request = http.request({ port, method: 'POST', path: '/v1/envelopes' }, (response) => { response.resume(); response.on('end', resolve); }); request.on('error', reject); request.end(JSON.stringify(envelope)); });
   await new Promise((resolve) => server.close(resolve));
@@ -302,7 +304,7 @@ test('HTTP relay pushes the sender a delivered receipt via stream.notifyReceipt 
     async countOpenDeliveries() { return 0; },
     async persistAcceptedEnvelope(row) { return { message_id: row.envelope.message_id, duplicate: false }; }
   };
-  const server = createRelayServer({ registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]), repository, stream, now: new Date('2026-08-13T12:01:00Z') });
+  const server = createRelayServer({ registry: new Map([['ep_codex', withKeys({ owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey })]]), repository, stream, now: new Date('2026-08-13T12:01:00Z') });
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
   await new Promise((resolve, reject) => { const request = http.request({ port, method: 'POST', path: '/v1/envelopes' }, (response) => { response.resume(); response.on('end', resolve); }); request.on('error', reject); request.end(JSON.stringify(envelope)); });
   await new Promise((resolve) => server.close(resolve));
@@ -331,7 +333,7 @@ test('HTTP relay suppresses duplicate notification when persistence detects a co
     async persistAcceptedEnvelope() { return { message_id: 'msg_won_the_race', duplicate: true }; }
   };
   const server = createRelayServer({
-    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    registry: new Map([['ep_codex', withKeys({ owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey })]]),
     repository, stream: { notify(...args) { notifications.push(args); } }, now: new Date('2026-08-13T12:01:00Z')
   });
   await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
@@ -754,7 +756,7 @@ test('POST /v1/directory/invites is rate-limited per issuing endpoint/human', as
 test('POST /v1/directory/invites is reachable under the CLI\'s real bearer authenticator, with human_id resolved from the registry', async () => {
   const repository = { createDirectoryInvite: async () => ({ invite_id: 'invite_1', code: 'plaintext-code', expires_at: '2026-08-22T00:00:00Z' }), recordAuditEvent: async () => {} };
   const tokenHashes = new Map([[hashBearerToken('token_a'), 'ep_a']]);
-  const registry = new Map([['ep_a', { owner_id: 'usr_a', endpoint_id: 'ep_a', status: 'active' }]]);
+  const registry = new Map([['ep_a', { owner_id: 'usr_a', endpoint_id: 'ep_a', kind: 'human', status: 'active' }]]);
   const { server, baseUrl } = await startServer({ tokenHashes, registry, repository });
   try {
     const url = new URL(baseUrl);
@@ -790,7 +792,7 @@ test('a relay with --domain configured rejects a foreign-domain recipient with R
   envelope.recipient = { endpoint_id: 'ep_claude@other.example.com', owner_id: 'usr_claude_owner' };
   envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
   const server = createRelayServer({
-    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    registry: new Map([['ep_codex', withKeys({ owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey })]]),
     persist: () => {}, now: new Date('2026-08-25T12:01:00Z'), relayDomain: 'relay.example.com',
   });
   await new Promise((resolve) => server.listen(0, resolve));
@@ -810,7 +812,7 @@ test('a relay with --domain configured rejects a bare recipient with MALFORMED_F
   envelope.recipient = { endpoint_id: 'ep_claude', owner_id: 'usr_claude_owner' };
   envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
   const server = createRelayServer({
-    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    registry: new Map([['ep_codex', withKeys({ owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey })]]),
     persist: () => {}, now: new Date('2026-08-25T12:01:00Z'), relayDomain: 'relay.example.com',
   });
   await new Promise((resolve) => server.listen(0, resolve));
@@ -828,7 +830,7 @@ test('a relay with no --domain still accepts a bare legacy recipient unchanged (
   envelope.recipient = { endpoint_id: 'ep_claude', owner_id: 'usr_claude_owner' };
   envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
   const server = createRelayServer({
-    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    registry: new Map([['ep_codex', withKeys({ owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey })]]),
     persist: () => {}, now: new Date('2026-08-25T12:01:00Z'),
   });
   await new Promise((resolve) => server.listen(0, resolve));
@@ -846,7 +848,7 @@ test('local-part case is significant: ep_Foo@x.com and ep_foo@x.com are distinct
   envelope.signature.value = crypto.sign(null, signedBytes(envelope), privateKey).toString('base64url');
   let persistedRecipient;
   const server = createRelayServer({
-    registry: new Map([['ep_codex', { owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey }]]),
+    registry: new Map([['ep_codex', withKeys({ owner_id: 'usr_codex_owner', status: 'active', key_id: 'key_01JEXAMPLE', public_key: publicKey })]]),
     persist: ({ envelope: accepted }) => { persistedRecipient = accepted.recipient.endpoint_id; },
     now: new Date('2026-08-25T12:01:00Z'), relayDomain: 'relay.example.com',
   });

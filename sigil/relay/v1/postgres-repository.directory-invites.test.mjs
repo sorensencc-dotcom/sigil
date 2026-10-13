@@ -24,10 +24,10 @@ test('directory invite create/redeem lifecycle', { skip: !connectionString }, as
   const ids = { a: `usr_a_${suffix}`, b: `usr_b_${suffix}`, epA: `ep_a_${suffix}`, epB: `ep_b_${suffix}`, epOther: `ep_other_${suffix}` };
   await pool.query(`
     INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.a}', 'active', NOW()), ('${ids.b}', 'active', NOW());
-    INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-      VALUES ('${ids.epA}', '${ids.a}', 'claude', 'install_a', 'A', 'active', NOW()),
-             ('${ids.epB}', '${ids.b}', 'codex', 'install_b', 'B', 'active', NOW()),
-             ('${ids.epOther}', '${ids.a}', 'claude', 'install_other', 'Other', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+      VALUES ('${ids.epA}', '${ids.a}', 'claude', 'agent', 'install_a', 'A', 'active', NOW()),
+             ('${ids.epB}', '${ids.b}', 'codex', 'agent', 'install_b', 'B', 'active', NOW()),
+             ('${ids.epOther}', '${ids.a}', 'claude', 'agent', 'install_other', 'Other', 'active', NOW());
   `);
   const repository = new PostgresRepository({ pool });
 

@@ -25,7 +25,10 @@ import { createRelayServer, createOnPersisted } from '../relay/v1/http-server.mj
 import { createAcceptOptionsBuilder } from '../relay/v1/accept-options.mjs';
 import { createStreamServer } from '../relay/v1/stream-server.mjs';
 import { createTicketStore } from '../relay/v1/ticket-store.mjs';
+import { createBearerAuthenticator } from '../relay/v1/transport-auth.mjs';
+import { seedRegistry } from './registry-seed.mjs';
 import { createRoomHumanSigner } from '../relay/v1/room-human-signer.mjs';
+import { loadWrapKey } from '../relay/v1/key-wrap.mjs';
 import { RelayClient } from '../connectors/v1/relay-client.mjs';
 import { LocalOutbox } from '../connectors/v1/local-outbox.mjs';
 import { loadConfigFile, resolveConfig } from './config-resolver.mjs';
@@ -35,6 +38,7 @@ import { signContract, verifyContract } from './contract-signing.mjs';
 import { checkRelayConnectivity } from './doctor.mjs';
 import { resolveRateLimits } from '../relay/v1/relay-config.mjs';
 import { createRelayMetrics } from '../relay/v1/metrics.mjs';
+import { cmdAgentSetInvokable, cmdHumanAdd, cmdHumanAddToRoom, cmdHumanSuspend, cmdHumanUnsuspend } from './human-commands.mjs';
 import { provisionIngressEndpoint } from './agentmail-provision.mjs';
 import { createAgentMailDeployment } from '../ingress/v1/agentmail-bootstrap.mjs';
 
@@ -53,7 +57,7 @@ Commands:
                                                             Run the agent daemon; --room-bridge answers room.message deliveries via a local CLI, or via a local Ollama router (--router-* flags: model, Ollama URL, timeout, context messages, sole-agent fallback on|off, default on)
   agentmail provision --identity path --installation-id id [--registry path] [--audit-output path]
                                                             Explicitly provision non-mailbox ep_ingress; creates no grants or inbox mapping
-  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] [--relay-request-freshness-ms N] [--room-system-identity path] [--browser-origin origin]... [--room-human-identity path] [--p2p [--p2p-identity path] [--p2p-listen multiaddr] [--p2p-no-mdns]] Run a local relay; --room-system-identity is a dedicated identity file (endpoint ep_relay_system, owner relay_system) that signs room.event envelopes, without it rooms emit no events and the router route answers 503 --browser-origin is an exact origin a browser may call from (repeatable; default none); --room-human-identity is the human identity file the relay signs POST /v1/rooms/{id}/messages with (its key must match the registry key; without it the route answers 503). If you front the relay with a proxy, do not log request URLs for /v1/stream: they carry single-use tickets (blocks; Ctrl+C to stop; set SIGIL_STREAM_SEQ_ENABLED=1 to stamp stream sequences)
+  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] [--relay-request-freshness-ms N] [--room-system-identity path] [--browser-origin origin]... [--room-human-identity path] [--public-origin origin] [--room-key-wrap-key env_var] [--reconcile-kind endpoint_id=kind]... [--p2p [--p2p-identity path] [--p2p-listen multiaddr] [--p2p-no-mdns]] Run a local relay; --room-system-identity is a dedicated identity file (endpoint ep_relay_system, owner relay_system) that signs room.event envelopes, without it rooms emit no events and the router route answers 503 --browser-origin is an exact origin a browser may call from (repeatable; default none); --room-human-identity is the human identity file the relay signs POST /v1/rooms/{id}/messages with (its key must match the registry key; without it the route answers 503); --public-origin requires --room-human-identity; --room-key-wrap-key names the environment variable holding the 32-byte base64 key that unwraps provisioned humans' signing keys (pass the same name to "human add"); --reconcile-kind sets one endpoint's Postgres kind to the registry file's kind after a REGISTRY_CONFLICT. If you front the relay with a proxy, do not log request URLs for /v1/stream: they carry single-use tickets (blocks; Ctrl+C to stop; set SIGIL_STREAM_SEQ_ENABLED=1 to stamp stream sequences)
   relay well-known generate --identity path --domain domain --endpoint url [--ws-endpoint url] [--output path]
                                                             Emit this relay's .well-known/sigil discovery document from a designated endpoint identity
   oidc-issuer add <issuer> --client-id id [--label text] [--assurance level] [--database-url url]
@@ -70,6 +74,12 @@ Commands:
   peer get <domain> [--database-url url]                   Show one pinned peer relay
   peer remove <domain> [--database-url url]                Unpin a peer relay
   peer rotate <domain> --confirm [--database-url url]      Force-overwrite a pinned peer's key set, bypassing the TOFU mismatch check
+  human add --name <name> [--room <room_id>:<member|room_manager>]... [--identity path] [--database-url url] [--room-key-wrap-key env_var]   Provision a human with a relay-custodial signing key; with --room the --identity operator must own or manage each room
+  human add-to-room --human <human_id> --room <room_id>:<member|room_manager>... [--identity path] [--database-url url]   Add a provisioned human to rooms; the --identity operator must own or manage each room
+  human suspend <human_id> [--identity path] [--database-url url]   Suspend a human: their active endpoints, sessions, and in-flight invocations; running relays close their sockets
+  human unsuspend <human_id> [--identity path] [--database-url url]   Restore a suspended human and the endpoints the suspension flipped
+  agent set-invokable --room <room_id> --agent <endpoint_id> --mode owner|members [--identity path] [--database-url url]   Set who may invoke an agent in a room; only the agent's owner (--identity) may change it
+  endpoint revoke <endpoint_id> [--database-url url]       Revoke an endpoint and retire all of its signing keys
   federation outbox list [--database-url url]              List queue-mode federation forward jobs: state counts, then one row per job (no envelope bodies)
   federation outbox show <id> [--database-url url]         Show one relay_jobs federation row's metadata (no envelope body)
   federation outbox retry <id> [--database-url url]        Re-queue a forward_rejected / dead_letter row for another forward attempt
@@ -186,8 +196,16 @@ export function startOidcIssuerAllowlistPolling({ repository, allowlistSet, inte
 }
 
 async function cmdRelayUp(argv) {
-  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' }, 'oidc-issuer-refresh-interval-ms': { type: 'string' }, domain: { type: 'string' }, 'federation-mode': { type: 'string' }, 'federation-identity': { type: 'string' }, 'room-system-identity': { type: 'string' }, 'browser-origin': { type: 'string', multiple: true }, 'room-human-identity': { type: 'string' }, 'relay-request-freshness-ms': { type: 'string' }, p2p: { type: 'boolean' }, 'p2p-listen': { type: 'string' }, 'p2p-identity': { type: 'string' }, 'p2p-no-mdns': { type: 'boolean' } } });
+  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' }, 'oidc-issuer-refresh-interval-ms': { type: 'string' }, domain: { type: 'string' }, 'federation-mode': { type: 'string' }, 'federation-identity': { type: 'string' }, 'room-system-identity': { type: 'string' }, 'browser-origin': { type: 'string', multiple: true }, 'room-human-identity': { type: 'string' }, 'room-key-wrap-key': { type: 'string' }, 'public-origin': { type: 'string' }, 'reconcile-kind': { type: 'string', multiple: true }, 'relay-request-freshness-ms': { type: 'string' }, p2p: { type: 'boolean' }, 'p2p-listen': { type: 'string' }, 'p2p-identity': { type: 'string' }, 'p2p-no-mdns': { type: 'boolean' } } });
   const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
+  if (opt(args, ['public-origin']) !== undefined && !opt(args, ['room-human-identity'])) throw new Error('sigil relay up: --public-origin requires --room-human-identity');
+  const reconcileKind = new Map();
+  for (const spec of args.values['reconcile-kind'] ?? []) {
+    const eq = spec.indexOf('=');
+    const kind = eq > 0 ? spec.slice(eq + 1) : '';
+    if (!['human', 'agent', 'system'].includes(kind)) throw new Error(`sigil relay up: --reconcile-kind expects <endpoint_id>=<human|agent|system>, got "${spec}"`);
+    reconcileKind.set(spec.slice(0, eq), kind);
+  }
   const port = Number(opt(args, ['port']) ?? 0);
   const streamPort = Number(opt(args, ['stream-port']) ?? (port ? port + 1 : 0));
   const databaseUrl = opt(args, ['database-url']) ?? process.env.SIGIL_DATABASE_URL;
@@ -242,12 +260,13 @@ async function cmdRelayUp(argv) {
   const registry = toRegistryMap(data);
   const tokenHashes = toTokenHashes(data);
   let repository;
+  let pool = null;
   if (databaseUrl) {
     const { applyMigrations } = await import('../scripts/apply-migrations.mjs');
     await applyMigrations(databaseUrl);
     const { PostgresRepository } = await import('../relay/v1/postgres-repository.mjs');
     const { default: pg } = await import('pg');
-    const pool = new pg.Pool({ connectionString: databaseUrl });
+    pool = new pg.Pool({ connectionString: databaseUrl });
     repository = new PostgresRepository({ pool });
 
     if (enableMockOidc) {
@@ -255,22 +274,7 @@ async function cmdRelayUp(argv) {
       await repository.upsertMockOidcIssuerAllowlist({ issuer: FIXTURE_ISSUER });
     }
 
-    for (const ep of data.endpoints) {
-      await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW()) ON CONFLICT (human_id) DO NOTHING`, [ep.owner_id]);
-      await pool.query(`
-        INSERT INTO endpoints (endpoint_id, owner_id, runtime, installation_id, display_name, status, created_at)
-        VALUES ($1, $2, $3, $4, $5, 'active', NOW())
-        ON CONFLICT (endpoint_id) DO UPDATE SET status = 'active'
-      `, [ep.endpoint_id, ep.owner_id, ep.kind ?? 'agent', `install_${ep.endpoint_id}`, ep.endpoint_id]);
-      if (ep.public_key_pem) {
-        const pubKeyBuf = crypto.createPublicKey(ep.public_key_pem).export({ type: 'spki', format: 'der' });
-        await pool.query(`
-          INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
-          VALUES ($1, $2, 'Ed25519', $3, 'active', NOW())
-          ON CONFLICT (key_id) DO NOTHING
-        `, [ep.key_id, ep.endpoint_id, pubKeyBuf]);
-      }
-    }
+    await seedRegistry(pool, data, { reconcileKind });
   } else {
     repository = createMemoryRepository({ registry });
   }
@@ -319,12 +323,28 @@ async function cmdRelayUp(argv) {
   const humanIdentityPath = opt(args, ['room-human-identity']);
   if (humanIdentityPath) {
     try {
-      humanSigner = createRoomHumanSigner({ identity: loadIdentity(humanIdentityPath), registry });
+      const wrapKeyRef = opt(args, ['room-key-wrap-key']);
+      humanSigner = createRoomHumanSigner({ identity: loadIdentity(humanIdentityPath), repository, wrapKey: wrapKeyRef ? loadWrapKey(wrapKeyRef) : undefined });
+      await humanSigner.verifyOperator();
     } catch (error) {
       throw error.code ? new Error(`${error.code}: ${error.message}`) : error;
     }
   }
-  const stream = createStreamServer({ server: streamHttpServer, tokenHashes, ticketStore, allowedOrigins, logger: relayLogger });
+  // Postgres mode: owner, kind, and liveness come from Postgres through a 5 s
+  // cache that sigil_admin notifications clear. Memory mode reads the registry.
+  const bearerAuth = createBearerAuthenticator(tokenHashes, registry, { repository: pool ? repository : null });
+  const stream = createStreamServer({ server: streamHttpServer, authenticate: bearerAuth, ticketStore, allowedOrigins, logger: relayLogger, repository });
+  let adminListener = null;
+  if (pool) {
+    const { startAdminListener, createAdminMessageHandler } = await import('../relay/v1/admin-notify.mjs');
+    adminListener = await startAdminListener({
+      pool,
+      onMessage: createAdminMessageHandler({ auth: bearerAuth, stream, repository, logger: relayLogger }),
+      // Notifications sent while the listener was down are lost, so drop every cached entry.
+      onReconnect: () => bearerAuth.clearAll(),
+      logger: relayLogger,
+    });
+  }
   const relayMetrics = createRelayMetrics();
   const buildAcceptOptions = createAcceptOptionsBuilder({
     registered: registry, request_id: undefined, now: undefined, repository, relayDomain, persist: undefined,
@@ -435,7 +455,7 @@ async function cmdRelayUp(argv) {
     const addr = server?.address();
     return addr ? `http://127.0.0.1:${addr.port}` : `http://127.0.0.1:${port}`;
   };
-  server = createRelayServer({ buildAcceptOptions, roomSystemIdentity, registry, repository, tokenHashes, stream, ticketStore, allowedOrigins, humanSigner, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity, relayRequestFreshnessMs, stream_seq: { enabled: streamSequenceEnabled }, logger: relayLogger, resendMetrics: relayMetrics, agentmailIngress: agentmailDeployment?.agentmailIngress, agentmailControl: agentmailDeployment?.agentmailControl });
+  server = createRelayServer({ buildAcceptOptions, roomSystemIdentity, registry, repository, authenticate: bearerAuth, stream, ticketStore, allowedOrigins, humanSigner, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity, relayRequestFreshnessMs, stream_seq: { enabled: streamSequenceEnabled }, logger: relayLogger, resendMetrics: relayMetrics, agentmailIngress: agentmailDeployment?.agentmailIngress, agentmailControl: agentmailDeployment?.agentmailControl });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();
   let federationReaperTimer;
@@ -455,6 +475,7 @@ async function cmdRelayUp(argv) {
   await new Promise((resolve) => {
     const shutdown = async () => {
       agentmailDeployment?.close();
+      await adminListener?.close();
       if (p2pHost) await p2pHost.stop();
       await new Promise((done) => server.close(() => done()));
       await new Promise((done) => streamHttpServer.close(() => done()));
@@ -1681,6 +1702,33 @@ async function cmdFederationLinkRevoke(rest) {
   }, { migrate: true });
 }
 
+// `sigil endpoint revoke <endpoint_id>`: revokes the endpoint, retires its keys,
+// and tells running relays over pg NOTIFY so open streams drop.
+
+async function cmdEndpoint(argv) {
+  const [action, ...rest] = argv;
+  const usageLine = 'usage: sigil endpoint revoke <endpoint_id> [--database-url url]';
+  if (action !== 'revoke') throw new Error(usageLine);
+  const args = parseArgs({ args: rest, options: { 'database-url': { type: 'string' } }, allowPositionals: true });
+  const endpointId = args.positionals[0];
+  if (!endpointId) throw new Error(usageLine);
+  await withRepository(args, 'sigil endpoint revoke requires --database-url (or SIGIL_DATABASE_URL)', async (repository) => {
+    const { publishAdmin } = await import('../relay/v1/admin-notify.mjs');
+    try {
+      await repository.withTransaction(async (client) => {
+        await repository.revokeEndpoint({ endpointId }, client);
+        await publishAdmin(client, { type: 'endpoint.revoked', endpoint_id: endpointId });
+      });
+    } catch (error) {
+      if (error.code !== 'ENDPOINT_NOT_FOUND') throw error;
+      console.error(`sigil endpoint revoke: endpoint "${endpointId}" not found`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`Revoked ${endpointId}.`);
+  }, { migrate: true });
+}
+
 // Read-only federation routing diagnostic. Sends NO envelope, ever: it only
 // parses the recipient id, reads the local peer directory, GETs the peer
 // relay's /v1/health, and prints an advisory same-owner-exemption line based
@@ -1788,6 +1836,7 @@ export async function main() {
     else if (command === 'peer' && sub === 'rotate') await cmdPeerRotate(rest);
     else if (command === 'peer' && sub === 'validate-document') await cmdPeerValidateDocument(rest);
     else if (command === 'agent' && sub === 'run') await cmdAgentRun(rest);
+    else if (command === 'agent' && sub === 'set-invokable') await cmdAgentSetInvokable(rest);
     else if (command === 'agentmail' && sub === 'provision') await cmdAgentmailProvision(rest);
     else if (command === 'doctor') await cmdDoctor(process.argv.slice(3));
     else if (command === 'send') await cmdSend(process.argv.slice(3));
@@ -1795,6 +1844,11 @@ export async function main() {
     else if (command === 'inbox') await cmdInbox(process.argv.slice(3));
     else if (command === 'federation') await cmdFederation(process.argv.slice(3));
     else if (command === 'route') await cmdRoute(process.argv.slice(3));
+    else if (command === 'endpoint') await cmdEndpoint(process.argv.slice(3));
+    else if (command === 'human' && sub === 'add') await cmdHumanAdd(rest);
+    else if (command === 'human' && sub === 'add-to-room') await cmdHumanAddToRoom(rest);
+    else if (command === 'human' && sub === 'suspend') await cmdHumanSuspend(rest);
+    else if (command === 'human' && sub === 'unsuspend') await cmdHumanUnsuspend(rest);
     else usage();
   } catch (error) {
     console.error(`sigil: ${error.message}`);

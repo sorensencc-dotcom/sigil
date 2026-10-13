@@ -6,13 +6,16 @@ import { signedBytes } from './validate-envelope.mjs';
 import { applyRoomDispatch } from './room-dispatch.mjs';
 import { createMemoryRepository } from '../../cli/memory-repository.mjs';
 import { createIdentity } from '../../cli/identity.mjs';
+import { entryFromRegistryRow } from './trusted-endpoint.mjs';
+const withKeys = (row) => ({ ...row, keys: entryFromRegistryRow(row).keys });
 
 const NOW = new Date('2026-10-02T12:01:00.000Z');
 
 function world({ maxTurns } = {}) {
-  const ids = ['ep_web', 'ep_claude', 'ep_codex', 'ep_bot', 'ep_router'];
+  const ids = ['ep_web', 'ep_claude', 'ep_codex', 'ep_bot', 'ep_router', 'ep_guest'];
   const keys = Object.fromEntries(ids.map((id) => [id, crypto.generateKeyPairSync('ed25519')]));
-  const registered = new Map(ids.map((id) => [id, { owner_id: 'usr_chris', status: 'active', kind: id === 'ep_web' ? 'human' : 'agent', key_id: `key_${id}`, public_key: keys[id].publicKey }]));
+  const human = (id) => id === 'ep_web' || id === 'ep_guest';
+  const registered = new Map(ids.map((id) => [id, withKeys({ owner_id: id === 'ep_guest' ? 'usr_guest' : 'usr_chris', status: 'active', kind: human(id) ? 'human' : 'agent', key_id: `key_${id}`, public_key: keys[id].publicKey })]));
   const repository = createMemoryRepository({ registry: registered });
   return { keys, registered, repository, maxTurns };
 }
@@ -443,4 +446,163 @@ test('a message mentioning only a non-agent is not delivered to the router', asy
   const { persisted } = await accept(w, post(w, 'ep_web', { text: '@ep_nobody hi', mentions: ['ep_nobody'] }), sys);
   assert.equal(persisted.roomDeliveries.some((d) => d.endpoint_id === 'ep_router'), false);
   assert.equal(await w.repository.countOpenDeliveries('ep_router'), 0);
+});
+
+// --- Invocation policy (multi-human foundation, Task 13) ---------------------
+// ep_guest is a human owned by usr_guest; every agent is owned by usr_chris.
+
+async function guestRoom(w) {
+  await room(w.repository);
+  await w.repository.addRoomMember({ conversationId: 'room_1', endpointId: 'ep_guest', role: 'member', addedByHumanId: 'usr_chris', now: NOW });
+}
+
+const guestPost = (w, body, overrides = {}) => post(w, 'ep_guest', body, { sender: { endpoint_id: 'ep_guest', owner_id: 'usr_guest' }, ...overrides });
+const setMode = (w, endpointId, invokableBy) => w.repository.setRoomMemberInvokableBy({ conversationId: 'room_1', endpointId, invokableBy });
+const roomEvents = async (w) => (await w.repository.listRoomMessages('room_1', 0n, 200)).filter((item) => item.envelope.message_type === 'room.event');
+const refusalAudits = (w) => w.repository._debugGetAuditEvents().filter((event) => event.event_type === 'room.invocation_refused');
+
+test('policy 1: a guest mention of an owner-only agent is refused with an event and an audit row', async () => {
+  const w = world();
+  await guestRoom(w);
+  const systemIdentity = await withSystem(w);
+  const { result, persisted } = await accept(w, guestPost(w, { text: '@ep_claude hi', mentions: ['ep_claude'] }), { systemIdentity });
+  assert.equal(result.status, 202);
+  assert.deepEqual(persisted.roomDeliveries, [], 'no delivery to the owner-only agent');
+  const [inv] = await w.repository.listRoomInvocations('room_1');
+  assert.deepEqual([inv.status, inv.reason, inv.subject_human_id, inv.endpoint_id], ['refused', 'not_allowed', 'usr_guest', 'ep_claude']);
+  const [event] = await roomEvents(w);
+  assert.equal(event.envelope.body.kind, 'invocation_refused');
+  assert.equal(event.envelope.body.invocation_id, inv.invocation_id);
+  assert.equal(event.envelope.body.reason, 'not allowed to invoke ep_claude');
+  const [audit] = refusalAudits(w);
+  assert.deepEqual([audit.subject_id, audit.endpoint_id, audit.conversation_id, audit.actor_human_id, audit.reason], [inv.invocation_id, 'ep_claude', 'room_1', 'usr_guest', 'not_allowed']);
+});
+
+test('policy 1b: the owner mentioning the same agent runs it with the owner as subject', async () => {
+  const w = world();
+  await guestRoom(w);
+  await accept(w, post(w, 'ep_web', { text: '@ep_claude hi', mentions: ['ep_claude'] }));
+  const [inv] = await w.repository.listRoomInvocations('room_1');
+  assert.deepEqual([inv.status, inv.subject_human_id], ['running', 'usr_chris']);
+});
+
+test('policy 3: a guest task.request to an owner-only assignee is refused; a members assignee runs with the guest as subject', async () => {
+  const w = world();
+  await guestRoom(w);
+  const systemIdentity = await withSystem(w);
+  await accept(w, guestPost(w, { task_id: 'task_1', instruction: 'review', assignee: 'ep_codex' }, { message_type: 'task.request' }), { systemIdentity });
+  const [refused] = await w.repository.listRoomInvocations('room_1');
+  assert.deepEqual([refused.decided_by, refused.status, refused.reason, refused.subject_human_id], ['assignee', 'refused', 'not_allowed', 'usr_guest']);
+  await setMode(w, 'ep_codex', 'members');
+  const { persisted } = await accept(w, guestPost(w, { task_id: 'task_2', instruction: 'review', assignee: 'ep_codex' }, { message_type: 'task.request' }), { systemIdentity });
+  assert.deepEqual(persisted.roomDeliveries.map((d) => d.endpoint_id), ['ep_codex']);
+  const running = await w.repository.lookupRunningInvocation('room_1', 'ep_codex');
+  assert.deepEqual([running.decided_by, running.subject_human_id], ['assignee', 'usr_guest']);
+});
+
+test('policy 4: the subject survives a hop, so a members agent cannot hand a guest chain to an owner-only agent', async () => {
+  const w = world();
+  await guestRoom(w);
+  const systemIdentity = await withSystem(w);
+  await setMode(w, 'ep_claude', 'members');
+  const root = guestPost(w, { text: '@ep_claude', mentions: ['ep_claude'] });
+  await accept(w, root, { systemIdentity });
+  assert.equal((await w.repository.lookupRunningInvocation('room_1', 'ep_claude')).subject_human_id, 'usr_guest');
+  const { result, persisted } = await accept(w, post(w, 'ep_claude', { text: 'over to @ep_codex', thread_root_id: root.message_id, mentions: ['ep_codex'] }), { systemIdentity });
+  assert.equal(result.status, 202);
+  assert.deepEqual(persisted.roomDeliveries, []);
+  const codex = (await w.repository.listRoomInvocations('room_1', { endpointId: 'ep_codex' }))[0];
+  assert.deepEqual([codex.status, codex.reason, codex.subject_human_id], ['refused', 'not_allowed', 'usr_guest']);
+
+  // The same hop under the operator's authority is allowed.
+  const opRoot = post(w, 'ep_web', { text: '@ep_claude', mentions: ['ep_claude'] });
+  await accept(w, opRoot, { systemIdentity });
+  const hop = await accept(w, post(w, 'ep_claude', { text: 'over to @ep_codex', thread_root_id: opRoot.message_id, mentions: ['ep_codex'] }), { systemIdentity });
+  assert.deepEqual(hop.persisted.roomDeliveries.map((d) => d.endpoint_id), ['ep_codex']);
+  assert.equal((await w.repository.lookupRunningInvocation('room_1', 'ep_codex')).subject_human_id, 'usr_chris');
+});
+
+test('policy 5: router delivery for a guest needs an invocable router and an invocable joins agent', async () => {
+  const w = world();
+  await guestRoom(w);
+  await addRouter(w.repository);
+  const sys = { systemIdentity: await withSystem(w) };
+  const routed = async () => (await accept(w, guestPost(w, { text: 'anyone?', mentions: [] }), sys)).persisted.roomDeliveries.map((d) => d.endpoint_id);
+  assert.deepEqual(await routed(), [], 'the only joins agent is owner-only');
+  await setMode(w, 'ep_claude', 'members');
+  assert.deepEqual(await routed(), [], 'the router itself is owner-only');
+  await setMode(w, 'ep_router', 'members');
+  assert.deepEqual(await routed(), ['ep_router']);
+  // The operator is routed regardless of modes.
+  await setMode(w, 'ep_claude', 'owner');
+  await setMode(w, 'ep_router', 'owner');
+  assert.deepEqual((await accept(w, post(w, 'ep_web', { text: 'anyone?', mentions: [] }), sys)).persisted.roomDeliveries.map((d) => d.endpoint_id), ['ep_router']);
+});
+
+test('policy 6: a guest post does not reset the hop budget of an operator chain; the operator post does', async () => {
+  const w = world();
+  await guestRoom(w);
+  const root = post(w, 'ep_web', { text: '@ep_claude', mentions: ['ep_claude'] });
+  await accept(w, root);
+  await accept(w, guestPost(w, { text: 'me too', thread_root_id: root.message_id }));
+  assert.equal((await w.repository.reserveAgentTurn('room_1', root.message_id, 6, { now: NOW })).agent_turns, 2, 'the guest post did not reset the operator chain');
+  await accept(w, post(w, 'ep_web', { text: 'more', thread_root_id: root.message_id }));
+  assert.equal((await w.repository.reserveAgentTurn('room_1', root.message_id, 6, { now: NOW })).agent_turns, 1, 'the operator post reset it');
+});
+
+async function queueGuestBehindOperator(w, systemIdentity) {
+  await setMode(w, 'ep_claude', 'members');
+  const first = post(w, 'ep_web', { text: '@ep_claude one', mentions: ['ep_claude'] });
+  await accept(w, first, { systemIdentity });
+  // Distinct accept times keep the queue order (created_at) deterministic: guest first.
+  await accept(w, guestPost(w, { text: '@ep_claude two', mentions: ['ep_claude'] }), { systemIdentity, now: new Date(NOW.getTime() + 1000) });
+  const operatorSecond = post(w, 'ep_web', { text: '@ep_claude three', mentions: ['ep_claude'] });
+  await accept(w, operatorSecond, { systemIdentity, now: new Date(NOW.getTime() + 2000) });
+  const queued = await w.repository.listRoomInvocations('room_1', { status: 'queued' });
+  assert.deepEqual(queued.map((row) => row.subject_human_id).sort(), ['usr_chris', 'usr_guest']);
+  return { first, operatorSecond };
+}
+
+for (const [label, change] of [
+  ['the agent switched to owner', (w) => setMode(w, 'ep_claude', 'owner')],
+  ['the subject was removed from the room', (w) => w.repository.removeRoomMember({ conversationId: 'room_1', endpointId: 'ep_guest', now: NOW })],
+  ['the subject was suspended', (w) => w.repository._debugSetHumanStatus('usr_guest', 'suspended')],
+]) {
+  test(`policy 7: a queued guest row is refused at promotion when ${label}; the next queued row runs`, async () => {
+    const w = world();
+    await guestRoom(w);
+    const systemIdentity = await withSystem(w);
+    const { first, operatorSecond } = await queueGuestBehindOperator(w, systemIdentity);
+    await change(w);
+    const { persisted } = await accept(w, post(w, 'ep_claude', { text: 'done one', thread_root_id: first.message_id }), { systemIdentity });
+    assert.deepEqual(persisted.roomDeliveries.map((d) => d.endpoint_id), ['ep_claude']);
+    const running = await w.repository.lookupRunningInvocation('room_1', 'ep_claude');
+    assert.equal(running.trigger_message_id, operatorSecond.message_id, 'the operator row behind the refused one was promoted');
+    const refused = (await w.repository.listRoomInvocations('room_1', { status: 'refused' }))[0];
+    assert.equal(refused.subject_human_id, 'usr_guest');
+    assert.ok(refused.finished_at);
+    assert.ok((await roomEvents(w)).some((e) => e.envelope.body.kind === 'invocation_refused' && e.envelope.body.invocation_id === refused.invocation_id));
+    assert.ok(refusalAudits(w).some((a) => a.subject_id === refused.invocation_id));
+  });
+}
+
+test('policy 9: createRoomInvocation without subjectHumanId throws MISSING_SUBJECT (memory)', async () => {
+  const w = world();
+  await room(w.repository);
+  await assert.rejects(
+    w.repository.createRoomInvocation({ invocationId: 'inv_x', roomId: 'room_1', workspaceId: 'ws_usr_chris', triggerMessageId: 'msg_x', threadRootId: 'msg_x', endpointId: 'ep_claude', decidedBy: 'mention', status: 'queued', now: NOW }),
+    { code: 'MISSING_SUBJECT' },
+  );
+});
+
+test('listRoomMembers and lookupRoomMember return invokable_by and owner_id; a restore resets the grant (memory)', async () => {
+  const w = world();
+  await guestRoom(w);
+  const members = await w.repository.listRoomMembers('room_1');
+  assert.deepEqual(members.map((m) => [m.endpoint_id, m.invokable_by, m.owner_id]), [['ep_web', 'owner', 'usr_chris'], ['ep_claude', 'owner', 'usr_chris'], ['ep_codex', 'owner', 'usr_chris'], ['ep_guest', 'owner', 'usr_guest']]);
+  await setMode(w, 'ep_claude', 'members');
+  assert.equal((await w.repository.lookupRoomMember('room_1', 'ep_claude')).invokable_by, 'members');
+  await w.repository.removeRoomMember({ conversationId: 'room_1', endpointId: 'ep_claude', now: NOW });
+  await w.repository.addRoomMember({ conversationId: 'room_1', endpointId: 'ep_claude', role: 'member', responseMode: 'joins', addedByHumanId: 'usr_chris', now: NOW });
+  assert.equal((await w.repository.lookupRoomMember('room_1', 'ep_claude')).invokable_by, 'owner', 'a restore resets the grant');
 });
