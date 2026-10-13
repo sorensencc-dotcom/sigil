@@ -309,6 +309,14 @@ export class PostgresRepository {
       keys: new Map(k.rows.map((r) => [r.key_id, { ...r, public_key: crypto.createPublicKey({ key: r.public_key, format: 'der', type: 'spki' }) }])),
     };
   }
+  // Accept takes FOR SHARE on the sender's endpoints row before any room lock.
+  // suspendHuman and revokeEndpoint UPDATE that row, so an accept either holds
+  // them off until it commits (their later reads see its rows) or waits for
+  // them and then reads the new status. Lock order: humans -> endpoints -> rooms.
+  async lockEndpointForShare(client, endpointId) {
+    if (client == null) throw new Error('lockEndpointForShare requires transaction client');
+    await client.query('SELECT 1 FROM endpoints WHERE endpoint_id = $1 FOR SHARE', [endpointId]);
+  }
   async livenessSnapshot({ endpointId }, client = this.pool) {
     const result = await client.query(
       `SELECT e.endpoint_id, e.owner_id, e.kind, e.status AS endpoint_status,

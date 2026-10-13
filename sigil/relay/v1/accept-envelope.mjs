@@ -301,6 +301,9 @@ async function acceptWithRepository(envelope, options) {
     // The sender's trust state (status, owner, keys) is read now, on this
     // transaction's client, so signature verification sees current Postgres
     // state. validateEnvelope gets a one-entry Map built from it.
+    // FOR SHARE first, so a concurrent suspension or revocation cannot commit
+    // between this read and the room dispatch below (foundation spec:170).
+    if (client && repository.lockEndpointForShare) await repository.lockEndpointForShare(client, envelope.sender.endpoint_id);
     const senderEntry = await lookupTrustedEntry(repository, options.registered, envelope.sender.endpoint_id, client);
     const senderOnly = senderOnlyMap(envelope, senderEntry);
 

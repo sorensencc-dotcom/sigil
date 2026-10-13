@@ -306,3 +306,60 @@ test('suspend and unsuspend of a human with many endpoints and sessions publish 
   for (const payload of payloads) assert.ok(Buffer.byteLength(payload) < 8000);
   assert.equal((await pool.query(`SELECT count(*)::int AS n FROM endpoints WHERE owner_id = $1 AND status = 'active'`, [human])).rows[0].n, 120);
 });
+
+// Whole-branch review I1: an accept that read its sender as active must not
+// commit a running invocation that a concurrent suspension never cancels.
+// Accept takes FOR SHARE on the sender's endpoints row, so the suspension
+// waits for it and then cancels what it started.
+test('accept racing a suspension: the suspension waits on the sender lock and cancels the new invocation; a later post is refused', { skip: !connectionString }, async (t) => {
+  const { pool, repository, suffix } = await setup(t);
+  const ids = await seedGuest(pool, suffix);
+  const opAgent = await addEndpoint(pool, { endpointId: `ep_opagent_${suffix}`, owner: ids.op, kind: 'agent' });
+  const now = new Date();
+  const roomId = `room_race_${suffix}`;
+  await repository.createRoom({ conversationId: roomId, workspaceId: `ws_${ids.op}`, name: `race_${suffix}`, createdByHumanId: ids.op, ownerEndpointId: ids.opWeb.endpointId, now });
+  await repository.addRoomMember({ conversationId: roomId, endpointId: ids.web.endpointId, role: 'member', addedByHumanId: ids.op, now });
+  await repository.addRoomMember({ conversationId: roomId, endpointId: opAgent.endpointId, role: 'member', responseMode: 'mentions_only', addedByHumanId: ids.op, now });
+  await repository.setRoomMemberInvokableBy({ conversationId: roomId, endpointId: opAgent.endpointId, invokableBy: 'members' });
+  const guestPost = () => {
+    const envelope = {
+      protocol: 'sigil/1', message_id: `msg_${crypto.randomUUID()}`, conversation_id: roomId, message_type: 'room.message',
+      sender: { endpoint_id: ids.web.endpointId, owner_id: ids.guest }, broadcast_scope: { conversation_id: roomId },
+      body: { text: 'go', mentions: [opAgent.endpointId] }, context_refs: [], capabilities: [], correlation_id: null,
+      idempotency_key: `idem_${crypto.randomUUID()}`, created_at: now.toISOString(), expires_at: new Date(now.getTime() + 3600_000).toISOString(),
+      signature: { algorithm: 'Ed25519', key_id: ids.web.keyId, value: '' },
+    };
+    envelope.signature.value = crypto.sign(null, signedBytes(envelope), ids.web.keys.privateKey).toString('base64url');
+    return envelope;
+  };
+
+  // Barrier: the accept pauses right after it read the sender's trust state.
+  let reached;
+  const atBarrier = new Promise((resolve) => { reached = resolve; });
+  let release;
+  const released = new Promise((resolve) => { release = resolve; });
+  const acceptRepository = new PostgresRepository({ pool });
+  const original = acceptRepository.lookupTrustedEndpoint.bind(acceptRepository);
+  acceptRepository.lookupTrustedEndpoint = async (endpointId, client) => {
+    const entry = await original(endpointId, client);
+    if (endpointId === ids.web.endpointId && entry?.status === 'active') { reached(); await released; }
+    return entry;
+  };
+  const accepting = acceptEnvelopeAsync(guestPost(), { repository: acceptRepository, registered: new Map(), now });
+  await atBarrier;
+
+  const suspension = repository.suspendHuman({ humanId: ids.guest, actorHumanId: ids.op });
+  const settled = await Promise.race([suspension.then(() => true, () => true), new Promise((resolve) => setTimeout(() => resolve(false), 500))]);
+  release();
+  const accepted = await accepting;
+  await suspension;
+  assert.equal(accepted.status, 202, JSON.stringify(accepted));
+  const live = await pool.query(`SELECT invocation_id, status FROM room_invocations WHERE subject_human_id = $1 AND status IN ('queued', 'running')`, [ids.guest]);
+  assert.deepEqual(live.rows, [], 'no queued or running invocation survives under the suspended subject');
+  assert.equal((await pool.query(`SELECT count(*)::int AS n FROM room_invocations WHERE subject_human_id = $1 AND status = 'cancelled'`, [ids.guest])).rows[0].n, 1);
+  assert.equal(settled, false, 'the suspension waits while accept holds the sender lock');
+
+  // (b) An accept that starts after the suspension committed is refused.
+  const late = await acceptEnvelopeAsync(guestPost(), { repository, registered: new Map(), now });
+  assert.deepEqual([late.status, late.body.code], [403, 'ENDPOINT_REVOKED']);
+});
