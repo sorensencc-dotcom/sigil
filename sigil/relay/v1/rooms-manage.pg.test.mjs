@@ -52,3 +52,37 @@ test('postgres rename and response-mode updates', { skip: !connectionString }, a
   await repository.removeRoomMember({ conversationId: one, endpointId: ids.claude, now });
   assert.equal(await repository.setRoomMemberResponseMode({ conversationId: one, endpointId: ids.claude, responseMode: 'joins' }), null);
 });
+
+// Task 14: Stop's selector. Rows on agents ownerHumanId owns, or rows whose
+// subject_human_id is subjectHumanId; other rows and terminal rows stay.
+test('postgres cancelRoomInvocations scoped by agent owner or subject', { skip: !connectionString }, async (t) => {
+  assertDisposableTestDatabase(connectionString);
+  await applyMigrations(connectionString, { reset: true });
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const op = await seed(pool, suffix);
+  const guest = await seed(pool, `g_${suffix}`);
+  const repository = new PostgresRepository({ pool });
+  const now = new Date();
+  const roomId = `room_stop_${suffix}`;
+  await repository.createRoom({ conversationId: roomId, workspaceId: `ws_${op.human}`, name: `stop_${suffix}`, createdByHumanId: op.human, ownerEndpointId: op.web, now });
+  const base = { roomId, workspaceId: `ws_${op.human}`, threadRootId: 'msg_root', decidedBy: 'mention', now };
+  const rows = [
+    ['op_on_op', op.claude, op.human, 'running'],
+    ['guest_on_op', op.claude, guest.human, 'queued'],
+    ['guest_on_guest', guest.claude, guest.human, 'running'],
+    ['op_on_guest', guest.claude, op.human, 'queued'],
+    ['guest_done', op.claude, guest.human, 'refused'],
+  ];
+  for (const [name, endpointId, subjectHumanId, status] of rows) {
+    await repository.createRoomInvocation({ ...base, invocationId: `inv_${name}_${suffix}`, triggerMessageId: `msg_${name}_${suffix}`, endpointId, subjectHumanId, status, reason: status === 'refused' ? 'not_allowed' : null });
+  }
+  const names = (list) => list.map((row) => row.invocation_id.replace(`inv_`, '').replace(`_${suffix}`, '')).sort();
+  const byGuest = await repository.cancelRoomInvocations(roomId, { ownerHumanId: guest.human, subjectHumanId: guest.human, now });
+  assert.deepEqual(names(byGuest), ['guest_on_guest', 'guest_on_op', 'op_on_guest']);
+  assert.equal((await repository.lookupRunningInvocation(roomId, op.claude)).invocation_id, `inv_op_on_op_${suffix}`);
+  const byOperator = await repository.cancelRoomInvocations(roomId, { ownerHumanId: op.human, subjectHumanId: op.human, now });
+  assert.deepEqual(names(byOperator), ['op_on_op']);
+  assert.deepEqual(names(await repository.listRoomInvocations(roomId, { status: 'refused' })), ['guest_done']);
+});

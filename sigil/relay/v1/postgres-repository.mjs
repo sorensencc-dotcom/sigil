@@ -1952,11 +1952,18 @@ export class PostgresRepository {
     );
     return result.rows[0] ? invocationRow(result.rows[0]) : null;
   }
-  async cancelRoomInvocations(roomId, { now = new Date() } = {}, client = this.pool) {
+  // With ownerHumanId and/or subjectHumanId, cancels only rows on agents that
+  // human owns or rows whose subject is that human (room Stop). With neither,
+  // cancels every active row in the room.
+  async cancelRoomInvocations(roomId, { ownerHumanId = null, subjectHumanId = null, now = new Date() } = {}, client = this.pool) {
     const result = await client.query(
       `UPDATE room_invocations SET status = 'cancelled', reason = 'stopped', finished_at = $2
-        WHERE room_id = $1 AND status IN ('queued', 'running') RETURNING ${INVOCATION_COLUMNS}`,
-      [roomId, now instanceof Date ? now.toISOString() : new Date(now).toISOString()],
+        WHERE room_id = $1 AND status IN ('queued', 'running')
+          AND (($3::text IS NULL AND $4::text IS NULL)
+            OR endpoint_id IN (SELECT endpoint_id FROM endpoints WHERE owner_id = $3)
+            OR subject_human_id = $4)
+        RETURNING ${INVOCATION_COLUMNS}`,
+      [roomId, now instanceof Date ? now.toISOString() : new Date(now).toISOString(), ownerHumanId, subjectHumanId],
     );
     return result.rows.map(invocationRow);
   }

@@ -93,6 +93,11 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
   if (request.method === 'POST' && path === '/v1/rooms') {
     if (await isAgentCaller(repository, registry, principal)) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'Agents cannot create rooms');
     if (!principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'An authenticated human context is required');
+    // Only the operator creates rooms: the human owning the --room-human-identity
+    // endpoint, read from that endpoint's row so every endpoint of theirs qualifies.
+    if (!humanSigner) return fail(response, requestId, 503, 'NO_OPERATOR_IDENTITY', 'Room creation is not configured (--room-human-identity)');
+    const operator = await lookupTrustedEntry(repository, registry, humanSigner.endpointId);
+    if (!operator?.owner_id || operator.status !== 'active' || principal.human_id !== operator.owner_id) return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', 'Only the operator can create rooms');
     const body = await readJson(request, readBody);
     const name = typeof body?.name === 'string' ? body.name.trim() : '';
     if (!name || name.length > NAME_MAX) return fail(response, requestId, 400, 'INVALID_REQUEST', `name must be 1-${NAME_MAX} characters`);
@@ -234,6 +239,9 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     const target = await repository.lookupRoomMember(roomId, targetEndpointId);
     if (!target) return fail(response, requestId, 404, 'ROOM_MEMBER_NOT_FOUND', 'Member not found');
     if (target.role === 'owner') return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', 'The room owner cannot be removed');
+    // A manager removes humans; an agent also needs the caller to own it.
+    const targetIsAgent = await repository.withTransaction((client) => isAgentMember(target, repository, client, registry));
+    if (targetIsAgent && (!target.owner_id || target.owner_id !== principal.human_id)) return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', "Only the agent's owner can remove it");
     await repository.removeRoomMember({ conversationId: roomId, endpointId: targetEndpointId, now });
     await notifyRoomChange(roomId, 'members');
     return send(response, requestId, 200, { code: 'OK', removed: true });
@@ -268,6 +276,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     // Same agent rule as room dispatch: a phase 1 agent can have a null mode, so response_mode alone is not enough.
     const targetIsAgent = await repository.withTransaction((client) => isAgentMember(target, repository, client, registry));
     if (!targetIsAgent) return fail(response, requestId, 400, 'INVALID_REQUEST', 'response_mode applies only to agent endpoints');
+    if (!target.owner_id || target.owner_id !== principal.human_id) return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', "Only the agent's owner can change its response mode");
     const member = await repository.setRoomMemberResponseMode({ conversationId: roomId, endpointId: targetEndpointId, responseMode });
     if (!member) return fail(response, requestId, 404, 'ROOM_MEMBER_NOT_FOUND', 'Member not found');
     await notifyRoomChange(roomId, 'members');
@@ -400,11 +409,12 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     // Same agent rule as room dispatch (room-policy.mjs isAgentMember):
     // response_mode set, or the registry or endpoints row says kind 'agent'.
     const callerIsAgent = (await isAgentCaller(repository, registry, principal)) || await repository.withTransaction((client) => isAgentMember(access.member, repository, client, registry));
-    if (callerIsAgent) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'Only human members can stop a room');
+    if (callerIsAgent || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'Only human members can stop a room');
     const cancelled = await repository.withTransaction(async (client) => {
       // Take the rooms row lock first, the same order as accept (assignRoomSequence).
       await repository.lockRoom(client, roomId);
-      const rows = await repository.cancelRoomInvocations(roomId, { now }, client);
+      // Stop reaches only the caller's own agents and the chains the caller started.
+      const rows = await repository.cancelRoomInvocations(roomId, { ownerHumanId: principal.human_id, subjectHumanId: principal.human_id, now }, client);
       if (systemIdentity && rows.length) {
         for (const invocation of rows) {
           await emitRoomEvent({ identity: systemIdentity, repository, client, room: access.room, body: { kind: 'invocation_stopped', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: 'stopped' }, idempotencyKey: `evt_stopped_${invocation.invocation_id}`, now, inboxDepthLimit, registered: registry, stream });

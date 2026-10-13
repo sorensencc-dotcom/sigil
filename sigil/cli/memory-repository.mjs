@@ -488,11 +488,15 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       Object.assign(row, { status, reason: reason ?? row.reason, reply_message_id: replyMessageId, finished_at: (now instanceof Date ? now : new Date(now)).toISOString() });
       return { ...row };
     },
-    async cancelRoomInvocations(roomId, { now = new Date() } = {}) {
+    // Mirrors postgres-repository.mjs: scoped to the owner's agents or the subject's rows when either is given.
+    async cancelRoomInvocations(roomId, { ownerHumanId = null, subjectHumanId = null, now = new Date() } = {}) {
       const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      const scoped = ownerHumanId !== null || subjectHumanId !== null;
       const cancelled = [];
       for (const row of roomInvocations.values()) {
         if (row.room_id !== roomId || (row.status !== 'queued' && row.status !== 'running')) continue;
+        const inScope = (ownerHumanId !== null && registry.get(row.endpoint_id)?.owner_id === ownerHumanId) || (subjectHumanId !== null && row.subject_human_id === subjectHumanId);
+        if (scoped && !inScope) continue;
         undoMapSet(roomInvocations, row.invocation_id);
         Object.assign(row, { status: 'cancelled', reason: 'stopped', finished_at: timestamp });
         cancelled.push({ ...row });

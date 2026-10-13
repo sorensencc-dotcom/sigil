@@ -19,7 +19,10 @@ const registry = new Map([
   ['ep_claude', { owner_id: 'usr_chris', status: 'active', kind: 'agent' }],
   ['ep_codex', { owner_id: 'usr_chris', status: 'active', kind: 'agent' }],
   ['ep_guest', { owner_id: 'usr_guest', status: 'active', kind: 'human' }],
+  ['ep_guest_agent', { owner_id: 'usr_guest', status: 'active', kind: 'agent' }],
 ]);
+// The operator is the human owning the --room-human-identity endpoint (ep_web).
+const humanSigner = { endpointId: 'ep_web', ownerId: 'usr_chris' };
 
 function call(port, method, path, authorization, body) {
   const payload = body === undefined ? '' : JSON.stringify(body);
@@ -39,7 +42,7 @@ async function withRoom(fn) {
   const frames = [];
   const stream = { notifyRoom: (endpointId, frame) => { frames.push([endpointId, frame]); return true; } };
   const repository = createMemoryRepository({ registry });
-  const server = createRelayServer({ registry, repository, stream, authenticate: async (request) => principals[request.headers.authorization] ?? null });
+  const server = createRelayServer({ registry, repository, stream, humanSigner, authenticate: async (request) => principals[request.headers.authorization] ?? null });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     const port = server.address().port;
@@ -185,7 +188,7 @@ test('add member: an endpoint known only to the repository is added; system and 
     ['ep_foreign', { owner_id: 'usr_other', status: 'active', kind: 'agent' }],
   ]);
   const repository = createMemoryRepository({ registry: repoRegistry });
-  const server = createRelayServer({ registry, repository, authenticate: async (request) => principals[request.headers.authorization] ?? null });
+  const server = createRelayServer({ registry, repository, humanSigner, authenticate: async (request) => principals[request.headers.authorization] ?? null });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     const port = server.address().port;
@@ -236,5 +239,119 @@ test('invokable-by: removing and re-adding an agent resets it to owner', async (
     assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer web', { endpoint_id: 'ep_claude', response_mode: 'joins' })).status, 201);
     const claude = (await call(port, 'GET', `/v1/rooms/${roomId}/members`, 'Bearer web')).body.items.find((m) => m.endpoint_id === 'ep_claude');
     assert.equal(claude.invokable_by, 'owner');
+  });
+});
+
+// Task 14: owner-scoped agent controls. A room_manager role alone grants no
+// control over another human's agent; removing humans stays manager-only.
+async function addGuestWithAgent(repository, roomId, role = 'room_manager') {
+  await repository.addRoomMember({ conversationId: roomId, endpointId: 'ep_guest', role, addedByHumanId: 'usr_chris' });
+  await repository.addRoomMember({ conversationId: roomId, endpointId: 'ep_guest_agent', role: 'member', responseMode: 'mentions_only', addedByHumanId: 'usr_guest' });
+}
+
+test('agent controls: a guest room_manager cannot change response-mode of or remove an agent they do not own; the owner can', async () => {
+  await withRoom(async ({ port, roomId, repository }) => {
+    await addGuestWithAgent(repository, roomId);
+    const mode = await call(port, 'POST', modePath(roomId, 'ep_claude'), 'Bearer guest', { response_mode: 'router' });
+    assert.deepEqual([mode.status, mode.body.code], [403, 'ROUTE_NOT_AUTHORIZED']);
+    assert.equal((await repository.lookupRoomMember(roomId, 'ep_claude')).response_mode, 'joins');
+    const removed = await call(port, 'POST', `/v1/rooms/${roomId}/members/ep_claude/remove`, 'Bearer guest');
+    assert.deepEqual([removed.status, removed.body.code], [403, 'ROUTE_NOT_AUTHORIZED']);
+    assert.ok(await repository.lookupRoomMember(roomId, 'ep_claude'));
+    // The operator, a manager too, does not own the guest's agent.
+    const operatorMode = await call(port, 'POST', modePath(roomId, 'ep_guest_agent'), 'Bearer web', { response_mode: 'router' });
+    assert.deepEqual([operatorMode.status, operatorMode.body.code], [403, 'ROUTE_NOT_AUTHORIZED']);
+    const operatorRemove = await call(port, 'POST', `/v1/rooms/${roomId}/members/ep_guest_agent/remove`, 'Bearer web');
+    assert.deepEqual([operatorRemove.status, operatorRemove.body.code], [403, 'ROUTE_NOT_AUTHORIZED']);
+    // Each owner controls their own agent.
+    assert.equal((await call(port, 'POST', modePath(roomId, 'ep_guest_agent'), 'Bearer guest', { response_mode: 'joins' })).status, 200);
+    assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/members/ep_guest_agent/remove`, 'Bearer guest')).status, 200);
+    assert.equal((await call(port, 'POST', modePath(roomId, 'ep_claude'), 'Bearer web', { response_mode: 'router' })).status, 200);
+    assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/members/ep_claude/remove`, 'Bearer web')).status, 200);
+  });
+});
+
+test('agent controls: removing a human member stays manager-only', async () => {
+  await withRoom(async ({ port, roomId, repository }) => {
+    await addGuestWithAgent(repository, roomId);
+    const member = await call(port, 'POST', `/v1/rooms/${roomId}/members/ep_mgr/remove`, 'Bearer alice');
+    assert.deepEqual([member.status, member.body.code], [403, 'ROUTE_NOT_AUTHORIZED']);
+    // A guest manager removes a human they do not own: humans are not agents.
+    assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/members/ep_alice/remove`, 'Bearer guest')).status, 200);
+  });
+});
+
+// Task 14: guest-scoped stop. Stop cancels rows on agents the caller owns plus
+// rows whose subject is the caller, and nothing else.
+async function seedStopRows(repository, roomId) {
+  const rows = [
+    ['inv_op_on_claude', 'ep_claude', 'usr_chris', 'running'],
+    ['inv_guest_on_claude', 'ep_claude', 'usr_guest', 'queued'],
+    ['inv_guest_on_guest_agent', 'ep_guest_agent', 'usr_guest', 'running'],
+    ['inv_op_on_guest_agent', 'ep_guest_agent', 'usr_chris', 'queued'],
+  ];
+  for (const [invocationId, endpointId, subjectHumanId, status] of rows) {
+    await repository.createRoomInvocation({ invocationId, roomId, workspaceId: 'ws', triggerMessageId: `msg_${invocationId}`, threadRootId: 'msg_root', endpointId, decidedBy: 'mention', status, subjectHumanId });
+  }
+}
+const statuses = async (repository, roomId) => Object.fromEntries((await repository.listRoomInvocations(roomId, { limit: 50 })).map((row) => [row.invocation_id, row.status]));
+
+test('stop: a guest cancels what they started and their own agents, none of the operator-started work on operator agents', async () => {
+  await withRoom(async ({ port, roomId, repository }) => {
+    await addGuestWithAgent(repository, roomId, 'member');
+    await seedStopRows(repository, roomId);
+    const stopped = await call(port, 'POST', `/v1/rooms/${roomId}/stop`, 'Bearer guest', {});
+    assert.equal(stopped.status, 200, JSON.stringify(stopped.body));
+    assert.equal(stopped.body.cancelled, 3);
+    assert.deepEqual(await statuses(repository, roomId), {
+      inv_op_on_claude: 'running', inv_guest_on_claude: 'cancelled', inv_guest_on_guest_agent: 'cancelled', inv_op_on_guest_agent: 'cancelled',
+    });
+  });
+});
+
+test('stop: the operator cancels everything on their agents plus anything they started', async () => {
+  await withRoom(async ({ port, roomId, repository }) => {
+    await addGuestWithAgent(repository, roomId, 'member');
+    await seedStopRows(repository, roomId);
+    const stopped = await call(port, 'POST', `/v1/rooms/${roomId}/stop`, 'Bearer web', {});
+    assert.equal(stopped.status, 200, JSON.stringify(stopped.body));
+    assert.equal(stopped.body.cancelled, 3);
+    assert.deepEqual(await statuses(repository, roomId), {
+      inv_op_on_claude: 'cancelled', inv_guest_on_claude: 'cancelled', inv_guest_on_guest_agent: 'running', inv_op_on_guest_agent: 'cancelled',
+    });
+  });
+});
+
+// Task 14: operator-only room creation. The operator is resolved through the
+// --room-human-identity endpoint's owner_id, so any endpoint of that human qualifies.
+async function withBareServer(signer, fn) {
+  const repository = createMemoryRepository({ registry });
+  const server = createRelayServer({ registry, repository, humanSigner: signer, authenticate: async (request) => principals[request.headers.authorization] ?? null });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try { await fn(server.address().port, repository); } finally { await new Promise((resolve) => server.close(resolve)); }
+}
+
+test('create room: a non-operator endpoint gets 403; the operator and a second endpoint of the operator get 201', async () => {
+  await withBareServer(humanSigner, async (port, repository) => {
+    const guest = await call(port, 'POST', '/v1/rooms', 'Bearer guest', { name: 'guest-room' });
+    assert.deepEqual([guest.status, guest.body.code], [403, 'ROUTE_NOT_AUTHORIZED']);
+    assert.equal((await call(port, 'POST', '/v1/rooms', 'Bearer web', { name: 'operator-room' })).status, 201);
+    const second = await call(port, 'POST', '/v1/rooms', 'Bearer alice', { name: 'second-endpoint-room' });
+    assert.equal(second.status, 201, JSON.stringify(second.body));
+    assert.deepEqual(await repository.listRoomsForEndpoint('ep_guest'), []);
+  });
+});
+
+test('create room: the operator id comes from the identity endpoint row, not the signer field', async () => {
+  await withBareServer({ endpointId: 'ep_web', ownerId: 'usr_guest' }, async (port) => {
+    assert.equal((await call(port, 'POST', '/v1/rooms', 'Bearer guest', { name: 'g' })).status, 403);
+    assert.equal((await call(port, 'POST', '/v1/rooms', 'Bearer alice', { name: 'a' })).status, 201);
+  });
+});
+
+test('create room: without --room-human-identity nobody creates rooms (503 NO_OPERATOR_IDENTITY)', async () => {
+  await withBareServer(null, async (port) => {
+    const refused = await call(port, 'POST', '/v1/rooms', 'Bearer web', { name: 'no-operator' });
+    assert.deepEqual([refused.status, refused.body.code], [503, 'NO_OPERATOR_IDENTITY']);
   });
 });

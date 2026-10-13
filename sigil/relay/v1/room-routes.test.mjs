@@ -20,6 +20,8 @@ const registry = new Map([
   ['ep_router', { owner_id: 'usr_chris', status: 'active', kind: 'agent' }],
   ['ep_other_agent', { owner_id: 'usr_other', status: 'active', kind: 'agent' }],
 ]);
+// Room creation is operator-only: the operator owns ep_web (--room-human-identity).
+const humanSigner = { endpointId: 'ep_web', ownerId: 'usr_chris' };
 
 function call(port, method, path, authorization, body) {
   const payload = body === undefined ? '' : JSON.stringify(body);
@@ -36,7 +38,7 @@ function call(port, method, path, authorization, body) {
 
 async function withServer(fn) {
   const repository = createMemoryRepository({ registry });
-  const server = createRelayServer({ registry, repository, authenticate: async (request) => principals[request.headers.authorization] ?? null });
+  const server = createRelayServer({ registry, repository, humanSigner, authenticate: async (request) => principals[request.headers.authorization] ?? null });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try { await fn(server.address().port, repository); } finally { await new Promise((resolve) => server.close(resolve)); }
 }
@@ -230,7 +232,7 @@ test('Stop emits one invocation_stopped event per cancelled invocation', async (
   const roomSystemIdentity = createIdentity({ ownerId: 'relay_system', endpointId: 'ep_relay_system', kind: 'system' });
   const repository = createMemoryRepository({ registry });
   await repository.ensureRoomSystemEndpoint({ identity: roomSystemIdentity, now: new Date() });
-  const server = createRelayServer({ registry, repository, roomSystemIdentity, authenticate: async (request) => principals[request.headers.authorization] ?? null });
+  const server = createRelayServer({ registry, repository, roomSystemIdentity, humanSigner, authenticate: async (request) => principals[request.headers.authorization] ?? null });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     const port = server.address().port;
@@ -254,7 +256,7 @@ test('a queued invocation refused on promotion emits invocation_refused', async 
   localRegistry.delete('ep_relay_system');
   const repository = createMemoryRepository({ registry: localRegistry });
   await repository.ensureRoomSystemEndpoint({ identity: roomSystemIdentity, now: new Date() });
-  const server = createRelayServer({ registry: localRegistry, repository, roomSystemIdentity, authenticate: async (request) => principals[request.headers.authorization] ?? null });
+  const server = createRelayServer({ registry: localRegistry, repository, roomSystemIdentity, humanSigner, authenticate: async (request) => principals[request.headers.authorization] ?? null });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     const port = server.address().port;
