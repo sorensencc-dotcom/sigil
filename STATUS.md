@@ -13,6 +13,10 @@
 - Known, unchanged: `relay up --p2p` listen-multiaddr test can time out; CLI subprocess tests are flaky under parallel load and pass serially.
 - Next action: final whole-branch review, then the login-spec plan (`docs/superpowers/specs/2026-10-11-sigil-rooms-third-party-login-design.md`).
 
+### Known gap: router pick vs suspension after endpoint revoke
+
+Router pick (`POST /v1/rooms/:id/invocations`, `sigil/relay/v1/room-routes.mjs`) takes `FOR SHARE` on the trigger sender's endpoint before the room lock so a concurrent `suspendHuman` waits and then cancels the picked invocation. `suspendHuman` updates only `active` endpoints, so if the trigger sender's endpoint was already revoked (and the human still has another active endpoint in the room) the suspension does not wait, and a pick landing mid-suspension can start one running invocation under the suspended human that nothing cancels. Exposure: one agent turn. Fix: also `SELECT 1 FROM humans WHERE human_id = $1 FOR SHARE` on the trigger sender's `owner_id` before the endpoint lock (order humans, endpoints, rooms), plus a revoked-endpoint interleaving test through `handleRoomRoute`. The existing race test calls `lockEndpointForShare` and `dispatchToTarget` directly, not the route.
+
 ### Known gaps: memory-only test coverage
 
 The foundation spec's Testing section says every bullet runs against Postgres. The bullets below are covered only by memory-repository or stubbed-handler tests. No Postgres versions exist yet; write them before you rely on Postgres coverage for these rules.
