@@ -387,3 +387,46 @@ test('dispatchToTarget refuses a suspended subject instead of starting a running
   assert.deepEqual([result.invocation.status, result.invocation.reason, result.roomDelivery], ['refused', 'subject_inactive', null]);
   assert.equal((await pool.query(`SELECT count(*)::int AS n FROM room_invocations WHERE subject_human_id = $1 AND status IN ('queued', 'running')`, [ids.guest])).rows[0].n, 0);
 });
+
+// Router-pick ordering (humans -> endpoints -> rooms): with the trigger
+// sender's endpoint held FOR SHARE, a suspension whose humans UPDATE is already
+// open waits, then its room scan sees the pick's running row and cancels it,
+// even though the guest had no live invocation in the room beforehand.
+test('router pick racing a suspension: suspension waits on the sender lock and cancels the picked invocation', { skip: !connectionString }, async (t) => {
+  const { pool, repository, suffix } = await setup(t);
+  const ids = await seedGuest(pool, suffix);
+  const opAgent = await addEndpoint(pool, { endpointId: `ep_opagent3_${suffix}`, owner: ids.op, kind: 'agent' });
+  const now = new Date();
+  const roomId = `room_pick_${suffix}`;
+  await repository.createRoom({ conversationId: roomId, workspaceId: `ws_${ids.op}`, name: `pick_${suffix}`, createdByHumanId: ids.op, ownerEndpointId: ids.opWeb.endpointId, now });
+  await repository.addRoomMember({ conversationId: roomId, endpointId: ids.web.endpointId, role: 'member', addedByHumanId: ids.op, now });
+  await repository.addRoomMember({ conversationId: roomId, endpointId: opAgent.endpointId, role: 'member', responseMode: 'joins', addedByHumanId: ids.op, now });
+  await repository.setRoomMemberInvokableBy({ conversationId: roomId, endpointId: opAgent.endpointId, invokableBy: 'members' });
+
+  // A real trigger message (no mentions) so the pick's delivery has a message row.
+  const trigger = {
+    protocol: 'sigil/1', message_id: `msg_${crypto.randomUUID()}`, conversation_id: roomId, message_type: 'room.message',
+    sender: { endpoint_id: ids.web.endpointId, owner_id: ids.guest }, broadcast_scope: { conversation_id: roomId },
+    body: { text: 'anyone?', mentions: [] }, context_refs: [], capabilities: [], correlation_id: null,
+    idempotency_key: `idem_${crypto.randomUUID()}`, created_at: now.toISOString(), expires_at: new Date(now.getTime() + 3600_000).toISOString(),
+    signature: { algorithm: 'Ed25519', key_id: ids.web.keyId, value: '' },
+  };
+  trigger.signature.value = crypto.sign(null, signedBytes(trigger), ids.web.keys.privateKey).toString('base64url');
+  assert.equal((await acceptEnvelopeAsync(trigger, { repository, registered: new Map(), now })).status, 202);
+
+  let suspension;
+  let settled;
+  await repository.withTransaction(async (client) => {
+    await repository.lockEndpointForShare(client, ids.web.endpointId);
+    suspension = repository.suspendHuman({ humanId: ids.guest, actorHumanId: ids.op });
+    settled = await Promise.race([suspension.then(() => true, () => true), new Promise((resolve) => setTimeout(() => resolve(false), 500))]);
+    await repository.lockRoom(client, roomId);
+    const room = await repository.lookupRoom(roomId, client);
+    const picked = await dispatchToTarget({ room, triggerMessageId: trigger.message_id, threadRootId: trigger.message_id, endpointId: opAgent.endpointId, decidedBy: 'router', subjectHumanId: ids.guest, target: null, repository, client, now, inboxDepthLimit: 100, registered: new Map() });
+    assert.equal(picked.invocation.status, 'running', 'the suspension has not committed, so the pick sees an active subject');
+  });
+  await suspension;
+  assert.equal(settled, false, 'the suspension waits while the pick holds the sender lock');
+  assert.deepEqual((await pool.query(`SELECT invocation_id FROM room_invocations WHERE subject_human_id = $1 AND status IN ('queued', 'running')`, [ids.guest])).rows, []);
+  assert.equal((await pool.query(`SELECT count(*)::int AS n FROM room_invocations WHERE subject_human_id = $1 AND status = 'cancelled'`, [ids.guest])).rows[0].n, 1);
+});

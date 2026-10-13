@@ -351,6 +351,11 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     if (failed && invoke.length > 0) return fail(response, requestId, 400, 'INVALID_REQUEST', 'failed decisions cannot invoke agents');
     const reason = clampReason(body?.reason);
     const outcome = await repository.withTransaction(async (client) => {
+      // Lock order humans -> endpoints -> rooms, as accept does: FOR SHARE on the
+      // trigger sender's endpoint first, so a concurrent suspension waits for this
+      // pick and then cancels the invocation it creates.
+      const preTrigger = repository.lockEndpointForShare ? await repository.lookupRoomMessage(roomId, triggerId, client) : null;
+      if (preTrigger) await repository.lockEndpointForShare(client, preTrigger.envelope.sender.endpoint_id);
       // Serialize per room so a retried decision cannot race its original.
       await repository.lockRoom(client, roomId);
       const trigger = await repository.lookupRoomMessage(roomId, triggerId, client);
