@@ -18,7 +18,10 @@ export function capabilityForOperation(operation) {
   return OPERATION_CAPABILITIES[operation];
 }
 
-export function assertCapability(operation, { packagePermissions = [], connectorGrants = [] } = {}) {
+export function assertCapability(operation, { packagePermissions = [], connectorGrants = [], agentId = null, quarantineManager = null } = {}) {
+  if (quarantineManager && agentId) {
+    quarantineManager.assertNotQuarantined(agentId, operation);
+  }
   const capability = capabilityForOperation(operation);
   if (!capability) throw Object.assign(new Error(`Unknown connector operation: ${operation}`), { code: 'UNKNOWN_OPERATION' });
   if (!allows(packagePermissions, capability) || !allows(connectorGrants, capability)) {
