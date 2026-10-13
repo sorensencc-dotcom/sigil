@@ -10,6 +10,7 @@ import { PostgresRepository } from './postgres-repository.mjs';
 import { acceptEnvelopeAsync } from './accept-envelope.mjs';
 import { signedBytes } from './validate-envelope.mjs';
 import { endpointIsActive } from './room-policy.mjs';
+import { dispatchToTarget } from './room-dispatch.mjs';
 import { createBearerAuthenticator, hashBearerToken } from './transport-auth.mjs';
 import { startAdminListener, createAdminMessageHandler } from './admin-notify.mjs';
 import { cmdHumanSuspend, cmdHumanUnsuspend } from '../../cli/human-commands.mjs';
@@ -362,4 +363,27 @@ test('accept racing a suspension: the suspension waits on the sender lock and ca
   // (b) An accept that starts after the suspension committed is refused.
   const late = await acceptEnvelopeAsync(guestPost(), { repository, registered: new Map(), now });
   assert.deepEqual([late.status, late.body.code], [403, 'ENDPOINT_REVOKED']);
+});
+
+// Whole-branch re-review: agent-reply and router-pick dispatch both go through
+// dispatchToTarget under the room lock, so a subject suspended after the caller
+// read its trigger or completing invocation gets a refusal, never a running row.
+test('dispatchToTarget refuses a suspended subject instead of starting a running invocation', { skip: !connectionString }, async (t) => {
+  const { pool, repository, suffix } = await setup(t);
+  const ids = await seedGuest(pool, suffix);
+  const opAgent = await addEndpoint(pool, { endpointId: `ep_opagent2_${suffix}`, owner: ids.op, kind: 'agent' });
+  const now = new Date();
+  const roomId = `room_subj_${suffix}`;
+  await repository.createRoom({ conversationId: roomId, workspaceId: `ws_${ids.op}`, name: `subj_${suffix}`, createdByHumanId: ids.op, ownerEndpointId: ids.opWeb.endpointId, now });
+  await repository.addRoomMember({ conversationId: roomId, endpointId: ids.web.endpointId, role: 'member', addedByHumanId: ids.op, now });
+  await repository.addRoomMember({ conversationId: roomId, endpointId: opAgent.endpointId, role: 'member', responseMode: 'mentions_only', addedByHumanId: ids.op, now });
+  await repository.setRoomMemberInvokableBy({ conversationId: roomId, endpointId: opAgent.endpointId, invokableBy: 'members' });
+  await repository.suspendHuman({ humanId: ids.guest, actorHumanId: ids.op });
+  const result = await repository.withTransaction(async (client) => {
+    await repository.lockRoom(client, roomId);
+    const room = await repository.lookupRoom(roomId, client);
+    return dispatchToTarget({ room, triggerMessageId: `msg_${suffix}`, threadRootId: `msg_${suffix}`, endpointId: opAgent.endpointId, decidedBy: 'mention', subjectHumanId: ids.guest, target: null, repository, client, now, inboxDepthLimit: 100, registered: new Map() });
+  });
+  assert.deepEqual([result.invocation.status, result.invocation.reason, result.roomDelivery], ['refused', 'subject_inactive', null]);
+  assert.equal((await pool.query(`SELECT count(*)::int AS n FROM room_invocations WHERE subject_human_id = $1 AND status IN ('queued', 'running')`, [ids.guest])).rows[0].n, 0);
 });

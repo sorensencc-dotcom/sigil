@@ -102,6 +102,10 @@ export async function dispatchToTarget({ room, triggerMessageId, threadRootId, e
   const row = { invocationId: `inv_${crypto.randomUUID()}`, roomId, workspaceId: room.workspace_id, triggerMessageId, threadRootId, endpointId, decidedBy, reason, subjectHumanId, now };
   const member = target ?? await repository.lookupRoomMember(roomId, endpointId, client);
   if (!mayInvoke(subjectHumanId, member)) return { invocation: await repository.createRoomInvocation({ ...row, reason: 'not_allowed', status: 'refused' }, client), roomDelivery: null };
+  // Under the room lock, so a suspension that committed after the caller read its
+  // trigger or the invocation it completes cannot be followed by a new run for that subject.
+  const subjectReason = subjectHumanId && repository.lookupInvocationSubject ? await subjectBlocker(roomId, endpointId, subjectHumanId, repository, client) : null;
+  if (subjectReason) return { invocation: await repository.createRoomInvocation({ ...row, reason: subjectReason, status: 'refused' }, client), roomDelivery: null };
   const busy = await repository.lookupRunningInvocation(roomId, endpointId, client);
   const blocker = busy ? null : await deliveryBlocker(endpointId, repository, client, { inboxDepthLimit, registered });
   if (blocker) return { invocation: await repository.createRoomInvocation({ ...row, reason: blocker, status: 'refused' }, client), roomDelivery: null };

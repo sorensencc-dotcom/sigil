@@ -311,7 +311,8 @@ export class PostgresRepository {
   }
   // Accept takes FOR SHARE on the sender's endpoints row before any room lock.
   // suspendHuman and revokeEndpoint UPDATE that row, so an accept either holds
-  // them off until it commits (their later reads see its rows) or waits for
+  // them off until it commits (suspension's later room scan sees its rows; revoke
+  // only orders the commits) or waits for
   // them and then reads the new status. Lock order: humans -> endpoints -> rooms.
   async lockEndpointForShare(client, endpointId) {
     if (client == null) throw new Error('lockEndpointForShare requires transaction client');
