@@ -1,13 +1,7 @@
+import { outboundFetchOptions } from './outbound-fetch.mjs';
+
 function peerError(message, code, extra = {}) {
   return Object.assign(new Error(message), { code, ...extra });
-}
-
-// Mirrors oidc-client.mjs's outboundFetchOptions(): a fixed timeout and a
-// hard no-follow redirect policy so a hung/redirecting peer can't hold the
-// request open or redirect trust to an unvetted URL. AbortSignal.timeout is
-// called fresh per request -- a shared signal fires once and stays aborted.
-function outboundFetchOptions() {
-  return { signal: AbortSignal.timeout(5000), redirect: 'error' };
 }
 
 // http/ws acceptance gates on NODE_ENV !== 'production', which is fail-open
