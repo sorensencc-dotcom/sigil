@@ -113,6 +113,56 @@ export async function cmdAgentSetInvokable(argv) {
   }
 }
 
+const SUSPEND_USAGE = 'usage: sigil human suspend|unsuspend <human_id> [--identity path] [--config path] [--database-url url]';
+
+// The acting operator is recorded on the audit row when an identity resolves;
+// suspension itself needs only database access.
+function optionalActorHumanId(values) {
+  const config = loadConfigFile(values.config ?? DEFAULT_CLI_CONFIG);
+  const { identityPath } = resolveConfig({ flags: { identity: values.identity }, config });
+  return identityPath ? loadIdentity(identityPath).owner_id : null;
+}
+
+// `sigil human suspend|unsuspend <human_id>`: one transaction that changes the
+// human, its endpoints, and (suspend) its sessions and in-flight invocations,
+// then notifies running relays on sigil_admin at commit.
+async function runSuspension(argv, { method, type, verb }) {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    options: { identity: { type: 'string' }, config: { type: 'string' }, 'database-url': { type: 'string' } },
+    allowPositionals: true,
+  });
+  const humanId = positionals[0];
+  if (!humanId || positionals.length > 1) throw new Error(SUSPEND_USAGE);
+  const actorHumanId = optionalActorHumanId(values);
+  const databaseUrl = values['database-url'] ?? process.env.SIGIL_DATABASE_URL;
+  if (!databaseUrl) throw new Error(`sigil human ${verb} requires --database-url (or SIGIL_DATABASE_URL)`);
+
+  const { PostgresRepository } = await import('../relay/v1/postgres-repository.mjs');
+  const { default: pg } = await import('pg');
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  try {
+    const repository = new PostgresRepository({ pool });
+    const result = await repository.withTransaction(async (client) => {
+      const changed = await repository[method]({ humanId, actorHumanId }, client);
+      await publishAdmin(client, { type, human_id: humanId });
+      return changed;
+    });
+    console.log(`${humanId} ${verb}ed; endpoints: ${result.endpoint_ids.join(', ') || '(none)'}`);
+    if (result.invocation_ids) console.log(`cancelled invocations: ${result.invocation_ids.length}`);
+  } finally {
+    await pool.end();
+  }
+}
+
+export function cmdHumanSuspend(argv) {
+  return runSuspension(argv, { method: 'suspendHuman', type: 'human.suspended', verb: 'suspend' });
+}
+
+export function cmdHumanUnsuspend(argv) {
+  return runSuspension(argv, { method: 'unsuspendHuman', type: 'human.unsuspended', verb: 'unsuspend' });
+}
+
 export async function cmdHumanAddToRoom(argv) {
   const { values } = parseArgs({
     args: argv,

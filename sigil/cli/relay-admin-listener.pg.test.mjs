@@ -108,4 +108,51 @@ test('endpoint revoke from a second process closes the live bearer socket and 40
   assert.ok(Date.now() - revokedAt < 5000, 'rejected before the 5 s cache TTL would have expired');
 });
 
-test('human suspend from a second process closes every socket of that human', { skip: 'waits for Task 15 (human suspend command)' }, () => {});
+test('human suspend from a second process closes every socket of that human', { skip: !connectionString, timeout: 60_000 }, async (t) => {
+  assertDisposableTestDatabase(connectionString);
+  const pool = new pg.Pool({ connectionString });
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-admin-suspend-'));
+  let relay = null;
+  const sockets = [];
+  t.after(async () => {
+    for (const socket of sockets) socket.terminate();
+    if (relay) await killChild(relay.child);
+    await rmCwd(cwd);
+    await pool.end();
+  });
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
+
+  // One human, two endpoints: both must close.
+  const owner = 'usr_pat@local';
+  for (const name of ['bot1', 'bot2']) execFileSync(process.execPath, [sigilCli, 'init', name, '--kind', 'agent', '--owner', owner], { cwd, encoding: 'utf8' });
+  const identities = ['bot1', 'bot2'].map((name) => loadIdentity(path.join(cwd, '.sigil', `${name}.identity.json`)));
+
+  relay = startRelay(cwd);
+  const { port, streamPort } = await relay.ready;
+
+  const closes = [];
+  for (const identity of identities) {
+    assert.equal(await get(port, '/v1/inbox', identity.relay_token), 200);
+    const socket = new WebSocket(`ws://127.0.0.1:${streamPort}/v1/stream`, { headers: { authorization: `Bearer ${identity.relay_token}` } });
+    sockets.push(socket);
+    await new Promise((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); });
+    closes.push(new Promise((resolve) => socket.once('close', (code, reason) => resolve({ code, reason: reason.toString() }))));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.ok(sockets.every((socket) => socket.readyState === WebSocket.OPEN), `sockets should stay open while live: ${relay.out.text}`);
+
+  await run(process.execPath, [sigilCli, 'human', 'suspend', owner, '--database-url', connectionString]);
+  const suspendedAt = Date.now();
+
+  const results = await Promise.race([Promise.all(closes), new Promise((_, reject) => setTimeout(() => reject(new Error(`sockets not closed within 2 s: ${relay.out.text}`)), 2000))]);
+  assert.deepEqual(results, [{ code: 1008, reason: 'unauthorized' }, { code: 1008, reason: 'unauthorized' }]);
+  for (const identity of identities) assert.equal(await get(port, '/v1/inbox', identity.relay_token), 401);
+  assert.ok(Date.now() - suspendedAt < 5000, 'rejected before the 5 s cache TTL would have expired');
+
+  await run(process.execPath, [sigilCli, 'human', 'unsuspend', owner, '--database-url', connectionString]);
+  const deadline = Date.now() + 5000;
+  while (await get(port, '/v1/inbox', identities[0].relay_token) !== 200) {
+    if (Date.now() > deadline) throw new Error('unsuspend did not restore access');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+});

@@ -940,6 +940,79 @@ export class PostgresRepository {
     };
     return client ? run(client) : this.withTransaction(run);
   }
+  // Foundation spec, "Suspension". The humans row is the first write: a
+  // returning login takes FOR SHARE on it, so a login in flight either commits
+  // its session before the sweep below (and is revoked by it) or reads
+  // 'suspended'. Only endpoints that are 'active' now are suspended, and they
+  // are marked so unsuspend restores exactly those.
+  async suspendHuman({ humanId, actorHumanId = null }, client = null) {
+    const run = async (tx) => {
+      const now = new Date().toISOString();
+      const human = await tx.query(
+        `UPDATE humans SET status = 'suspended' WHERE human_id = $1 AND status IN ('active', 'suspended') RETURNING human_id`,
+        [humanId]
+      );
+      if (!human.rows[0]) throw await this.#humanStatusError(humanId, tx);
+      const endpoints = await tx.query(
+        `UPDATE endpoints SET status = 'suspended', suspended_by_human_id = $1
+          WHERE owner_id = $1 AND status = 'active' RETURNING endpoint_id`,
+        [humanId]
+      );
+      await tx.query('UPDATE human_sessions SET revoked_at = $2 WHERE human_id = $1 AND revoked_at IS NULL', [humanId, now]);
+      // Cancel in-flight work the human started, room by room, through the
+      // same subject-scoped path as Stop. Rooms are locked in id order, the
+      // rooms row first as on accept.
+      const rooms = await tx.query(
+        `SELECT DISTINCT room_id FROM room_invocations WHERE subject_human_id = $1 AND status IN ('queued', 'running') ORDER BY room_id`,
+        [humanId]
+      );
+      const invocationIds = [];
+      for (const { room_id: roomId } of rooms.rows) {
+        await this.lockRoom(tx, roomId);
+        const cancelled = await this.cancelRoomInvocations(roomId, { subjectHumanId: humanId, now }, tx);
+        invocationIds.push(...cancelled.map((row) => row.invocation_id));
+      }
+      const endpointIds = endpoints.rows.map((row) => row.endpoint_id);
+      await this.recordAuditEvent({
+        eventType: 'human.suspended', subjectId: humanId, actorId: actorHumanId, actorHumanId,
+        objectType: 'human', objectId: humanId, outcome: 'success',
+        payload: { endpoint_ids: endpointIds, invocation_ids: invocationIds }, now, client: tx,
+      });
+      return { endpoint_ids: endpointIds, invocation_ids: invocationIds };
+    };
+    return client ? run(client) : this.withTransaction(run);
+  }
+  // Restores only endpoints this human's suspension flipped and that are
+  // still 'suspended'. Revoked sessions stay revoked.
+  async unsuspendHuman({ humanId, actorHumanId = null }, client = null) {
+    const run = async (tx) => {
+      const now = new Date().toISOString();
+      const human = await tx.query(
+        `UPDATE humans SET status = 'active' WHERE human_id = $1 AND status IN ('active', 'suspended') RETURNING human_id`,
+        [humanId]
+      );
+      if (!human.rows[0]) throw await this.#humanStatusError(humanId, tx);
+      const endpoints = await tx.query(
+        `UPDATE endpoints SET status = CASE WHEN status = 'suspended' THEN 'active' ELSE status END, suspended_by_human_id = NULL
+          WHERE owner_id = $1 AND suspended_by_human_id = $1
+          RETURNING endpoint_id, status`,
+        [humanId]
+      );
+      const endpointIds = endpoints.rows.filter((row) => row.status === 'active').map((row) => row.endpoint_id);
+      await this.recordAuditEvent({
+        eventType: 'human.unsuspended', subjectId: humanId, actorId: actorHumanId, actorHumanId,
+        objectType: 'human', objectId: humanId, outcome: 'success', payload: { endpoint_ids: endpointIds }, now, client: tx,
+      });
+      return { endpoint_ids: endpointIds };
+    };
+    return client ? run(client) : this.withTransaction(run);
+  }
+  async #humanStatusError(humanId, client) {
+    const { rows } = await client.query('SELECT status FROM humans WHERE human_id = $1', [humanId]);
+    return rows[0]
+      ? Object.assign(new Error(`human "${humanId}" is ${rows[0].status}`), { code: 'HUMAN_REVOKED' })
+      : Object.assign(new Error(`human "${humanId}" not found`), { code: 'HUMAN_NOT_FOUND' });
+  }
   async persistAcceptedEnvelope(row, client) {
     if (client) return this.#insertAcceptedEnvelope(row, client);
     try {

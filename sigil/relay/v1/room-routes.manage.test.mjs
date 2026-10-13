@@ -322,6 +322,38 @@ test('stop: the operator cancels everything on their agents plus anything they s
   });
 });
 
+// Task 15: removing a human from a room cancels the queued and running
+// invocations they started in that room, and nothing in any other room.
+test('remove member: removing a human cancels their invocations in that room only', async () => {
+  await withRoom(async ({ port, roomId, repository }) => {
+    await addGuestWithAgent(repository, roomId, 'member');
+    await seedStopRows(repository, roomId);
+    const otherRoom = (await call(port, 'POST', '/v1/rooms', 'Bearer web', { name: 'other' })).body.room.conversation_id;
+    await repository.addRoomMember({ conversationId: otherRoom, endpointId: 'ep_guest', role: 'member', addedByHumanId: 'usr_chris' });
+    await repository.createRoomInvocation({ invocationId: 'inv_guest_elsewhere', roomId: otherRoom, workspaceId: 'ws', triggerMessageId: 'msg_elsewhere', threadRootId: 'msg_root', endpointId: 'ep_codex', decidedBy: 'mention', status: 'queued', subjectHumanId: 'usr_guest' });
+
+    const removed = await call(port, 'POST', `/v1/rooms/${roomId}/members/ep_guest/remove`, 'Bearer web');
+    assert.equal(removed.status, 200, JSON.stringify(removed.body));
+    assert.deepEqual(await statuses(repository, roomId), {
+      inv_op_on_claude: 'running', inv_guest_on_claude: 'cancelled', inv_guest_on_guest_agent: 'cancelled', inv_op_on_guest_agent: 'queued',
+    });
+    assert.deepEqual(await statuses(repository, otherRoom), { inv_guest_elsewhere: 'queued' });
+  });
+});
+
+test('remove member: removing an agent, or one endpoint of a human still in the room, cancels nothing', async () => {
+  await withRoom(async ({ port, roomId, repository }) => {
+    await addGuestWithAgent(repository, roomId, 'member');
+    await seedStopRows(repository, roomId);
+    assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/members/ep_claude/remove`, 'Bearer web')).status, 200);
+    // ep_alice is usr_chris's second human endpoint; ep_web keeps usr_chris in the room.
+    assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/members/ep_alice/remove`, 'Bearer web')).status, 200);
+    assert.deepEqual(await statuses(repository, roomId), {
+      inv_op_on_claude: 'running', inv_guest_on_claude: 'queued', inv_guest_on_guest_agent: 'running', inv_op_on_guest_agent: 'queued',
+    });
+  });
+});
+
 // Task 14: operator-only room creation. The operator is resolved through the
 // --room-human-identity endpoint's owner_id, so any endpoint of that human qualifies.
 async function withBareServer(signer, fn) {

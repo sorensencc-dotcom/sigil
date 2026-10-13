@@ -242,7 +242,22 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     // A manager removes humans; an agent also needs the caller to own it.
     const targetIsAgent = await repository.withTransaction((client) => isAgentMember(target, repository, client, registry));
     if (targetIsAgent && (!target.owner_id || target.owner_id !== principal.human_id)) return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', "Only the agent's owner can remove it");
-    await repository.removeRoomMember({ conversationId: roomId, endpointId: targetEndpointId, now });
+    await repository.withTransaction(async (client) => {
+      // Take the rooms row lock first, the same order as accept (assignRoomSequence).
+      await repository.lockRoom(client, roomId);
+      await repository.removeRoomMember({ conversationId: roomId, endpointId: targetEndpointId, now }, client);
+      // A human who leaves the room loses the work they started in it, the
+      // way Stop cancels it. Not when another human endpoint of theirs stays.
+      if (!target.owner_id || !(await memberIsHuman(target, repository, client, registry))) return;
+      for (const member of await repository.listRoomMembers(roomId, client)) {
+        if (member.owner_id === target.owner_id && await memberIsHuman(member, repository, client, registry)) return;
+      }
+      const rows = await repository.cancelRoomInvocations(roomId, { subjectHumanId: target.owner_id, now }, client);
+      if (!systemIdentity) return;
+      for (const invocation of rows) {
+        await emitRoomEvent({ identity: systemIdentity, repository, client, room: access.room, body: { kind: 'invocation_stopped', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: 'stopped' }, idempotencyKey: `evt_stopped_${invocation.invocation_id}`, now, inboxDepthLimit, registered: registry, stream });
+      }
+    });
     await notifyRoomChange(roomId, 'members');
     return send(response, requestId, 200, { code: 'OK', removed: true });
   }
