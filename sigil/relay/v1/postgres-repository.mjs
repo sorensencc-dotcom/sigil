@@ -5,6 +5,7 @@ import { assertAssurance, boundedDirectoryExpiry } from './auth-policy.mjs';
 import { withTransaction } from './with-transaction.mjs';
 import { generateInviteCode, hashMatchTarget } from './directory-trust.mjs';
 import { identityKeys } from '../../cli/identity.mjs';
+import { loadSessionRow } from './oauth/session-auth.mjs';
 
 function rowToPeerRecord(row) {
   return {
@@ -328,6 +329,11 @@ export class PostgresRepository {
         WHERE e.endpoint_id = $1 AND e.origin_domain IS NULL`,
       [endpointId]);
     return result.rows[0] ? { ...result.rows[0] } : null;
+  }
+  // The stream server's per-socket session read (login spec): the same row the
+  // cookie authenticator uses, so identity_status and last_seen_at are present.
+  async sessionLiveness(sessionId, client = this.pool) {
+    return loadSessionRow(this, sessionId, client);
   }
   async loadWrappedSigningKey(keyId, client = this.pool) {
     const result = await client.query('SELECT wrapped_private_key FROM human_signing_keys WHERE key_id = $1', [keyId]);
