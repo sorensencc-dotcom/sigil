@@ -1,5 +1,18 @@
 # Status
 
+## Session update: 2026-10-13 multi-human foundation Task 17 (docs and full verification)
+
+- Branch `docs/sigil-rooms-third-party-login-spec` in `C:\dev\.worktrees\sigil-third-party-login`, plan `docs/superpowers/plans/2026-10-12-sigil-rooms-multi-human-foundation.md`. Tasks 1-17 done; nothing pushed, no PR.
+- Docs: README "Multi-human rooms" (wrap key, `--reconcile-kind`, `--public-origin`, trust change, operator commands, invocation policy, residual risk, room controls, known limitations), CHANGELOG Unreleased, and the `relay up` help text.
+- Test fixes (stale fixtures, no production change): `sigil/ingress/v1/build-task-request.test.mjs` (registry entry needs a `keys` Map), `sigil/relay/v1/http-server.test.mjs` directory invites (registry row needs `kind: 'human'` to get `human_id`), `sigil/relay/v1/postgres-repository.integration.test.mjs` (two tests stored `decode('00')` as the public key, which the Postgres trust lookup now reads; they returned 500).
+- New tests for spec Testing bullets: legacy no-`kind` row and `--reconcile-kind` (`registry-seed.pg`), shadow sender refused on local accept (`accept-federated-envelope.pg`), fixed-size `sigil_admin` payloads for a human with 120 endpoints and sessions (`human-suspension.pg`), `human add --room` from a second process reaching a live relay socket (`relay-admin-listener.pg`).
+- Verification, `SIGIL_TEST_DATABASE_URL=postgres://sigil:sigil_password@127.0.0.1:55432/sigil_test`:
+  - `npm test` with the URL set runs Postgres files in parallel and they reset the shared schema: 1855 tests, 1617 pass, 236 fail (206 `pg_type_typname_nsp_index`, 99 "already exists"). Not a valid run; use the two runs below.
+  - `npm test` without the URL (Postgres tests skip): 1858 tests, 1606 pass, 3 fail, 3 cancelled, 246 skipped. All six are 30 s subprocess timeouts under load from an unrelated concurrent `npm test`; rerun serially (`agent-cli`, `cli-runner`, `rooms-exit`, `rooms-router-exit`, `agent-daemon`, `contract-signing`): 38 pass, 0 fail.
+  - The 58 Postgres test files, `node --test --test-concurrency=1`, in two halves: 151 tests, 150 pass, 0 fail, 1 skipped (multi-worker control race, needs provisioned fixtures); 125 tests, 125 pass, 0 fail.
+- Known, unchanged: `relay up --p2p` listen-multiaddr test can time out; CLI subprocess tests are flaky under parallel load and pass serially.
+- Next action: final whole-branch review, then the login-spec plan (`docs/superpowers/specs/2026-10-11-sigil-rooms-third-party-login-design.md`).
+
 ## Session update: 2026-10-10 Tincan listener pushed
 
 - Branch `feat/sigil-tincan-bridge` in `C:\dev\.worktrees\sigil-tincan`. Listener commit `3a7214c feat(tincan): serve dispatch on the tailnet` is on origin (`778b9d9..3a7214c`). This note is the resume record on top of it.

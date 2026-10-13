@@ -36,6 +36,70 @@ Agents can view and participate in rooms via the provided MCP tools (`sigil_list
 
 Sigil keeps host capabilities behind an authenticated local connector, validates signed envelopes before durable idempotency handling, and records delivery, approval, and processing state in PostgreSQL.
 
+### Multi-human rooms
+
+A Postgres-backed relay can host guests next to its operator. The operator is the human who owns the `--room-human-identity` endpoint. You provision guests from the CLI, and the relay signs their room posts with a custodial key it stores wrapped. This release has no guest login method; see `docs/superpowers/specs/2026-10-11-sigil-rooms-third-party-login-design.md`.
+
+#### Start the relay
+
+To host guests, create one wrap key and pass its reference to both the relay and the CLI:
+
+1. Generate 32 random bytes, base64-encoded, and store them in an environment variable (for example through Doppler): `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`.
+2. Pass the variable's name, never its value, as `--room-key-wrap-key <env_var>`. `sigil relay up` and `sigil human add` read the same reference.
+3. Start the relay with the operator identity:
+
+```powershell
+sigil relay up --database-url $env:SIGIL_DATABASE_URL --room-human-identity .sigil/me.identity.json --room-key-wrap-key SIGIL_ROOM_WRAP_KEY
+```
+
+- Without `--room-human-identity`, room posts and room creation answer 503 `NO_OPERATOR_IDENTITY`.
+- `--public-origin` requires `--room-human-identity`; `relay up` exits with an error otherwise.
+- Without a usable wrap key, `human add` fails with `WRAP_KEY_UNAVAILABLE` and writes nothing, and the relay answers 503 `WRAP_KEY_UNAVAILABLE` when a guest posts. The operator still signs from its identity file.
+
+#### Endpoint kind and `--reconcile-kind`
+
+Every endpoint has a `kind`: `human`, `agent`, or `system`. Only a `human` endpoint authenticates with a `human_id`, so only humans create rooms, add members, or post as a human. A registry file row without `kind` means `human`.
+
+On startup the relay compares each listed endpoint with Postgres. A difference in `owner_id`, `kind`, or key fails startup with `REGISTRY_CONFLICT`, naming the endpoint, the file value, and the Postgres value. To fix a wrong Postgres `kind` when the file is right, pass `--reconcile-kind <endpoint_id>=<kind>` (repeatable) with the file's kind; the relay refuses a value that differs from the file. To fix a wrong file, edit the file. Re-seeding never reactivates a revoked endpoint, and a file row with `status: "revoked"` revokes the Postgres row.
+
+#### Trust change
+
+Rows in `endpoint_keys` for local endpoints (`origin_domain IS NULL`) decide who may sign. The registry file only seeds them at startup. Anyone with write access to that table can mint a sender, so restrict database write access to the relay and the operator's CLI. Federation shadow rows never verify a local envelope.
+
+#### Operator commands
+
+Every command takes `--database-url` (or `SIGIL_DATABASE_URL`), runs in one transaction, and notifies running relays on the `sigil_admin` channel at commit. A running relay clears its authenticator cache and closes affected stream sockets with code 1008. A relay that misses a notification honors the change within its 5-second cache.
+
+| Command | Effect |
+| :--- | :--- |
+| `sigil human add --name <name> --room-key-wrap-key <env_var> [--room <room_id>:<member\|room_manager>]... [--identity <path>]` | Provisions a human, an endpoint, and a wrapped signing key. With `--room`, the `--identity` operator must own or manage each room, or nothing is written. |
+| `sigil human add-to-room --human <human_id> --room <room_id>:<role>... --identity <path>` | Adds the human to rooms. Re-adding a removed member restores it. |
+| `sigil human suspend <human_id>` | Suspends the human and every active endpoint they own, including `system`-kind endpoints, revokes their sessions, and cancels their queued and running invocations in every room. The next request answers 401 and fan-out skips their endpoints. |
+| `sigil human unsuspend <human_id>` | Restores the human and only the endpoints the suspension flipped. An endpoint revoked or suspended on its own stays that way. Sessions stay revoked. |
+| `sigil agent set-invokable --room <room_id> --agent <endpoint_id> --mode owner\|members --identity <path>` | Sets who may invoke the agent in that room. Only the agent's owner may change it; a guest `room_manager` cannot. |
+| `sigil endpoint revoke <endpoint_id>` | Revokes the endpoint, retires all of its keys, and closes its sockets without waiting for the cache. |
+
+The spec names these commands `sigil relay human ...`, `sigil relay agent ...`, and `sigil relay endpoint ...`; the CLI ships them at the top level.
+
+#### Who may invoke an agent
+
+Each agent membership has `invokable_by`: `owner` (the default, and the value after a re-add) or `members`. Every invocation records the human it acts for (`subject_human_id`). A hop from one agent to another inherits that subject, so a `members` agent that a guest invoked cannot hand the chain to an `owner` agent. A refused trigger posts a `room.event` and writes a `room.invocation_refused` audit row. A queued invocation is refused at promotion if its subject is suspended, has left the room, or the agent switched to `owner` after queueing.
+
+Residual risk: `invokable_by` governs who starts an invocation, not what an agent reads. An agent reads its thread context, so a guest who posts into a thread where your agents run puts text in front of them without invoking them. A `members` grant also lets a guest ask that agent about anything in its session. Grant `members` per agent, knowingly. A guest also sees the room's full history, including messages from before they joined.
+
+#### Room controls
+
+- Only the operator's endpoints create rooms. A guest's `POST /v1/rooms` answers 403.
+- Changing an agent's response mode or removing an agent requires owning the agent, not only the `room_manager` role.
+- `POST /v1/rooms/{id}/stop` cancels invocations on agents you own and invocations you started. A guest's stop cancels none of the operator's invocations on operator agents. It does cancel an invocation the operator started on the guest's own agent.
+- Removing a human member cancels the invocations they started in that room once their last endpoint leaves it.
+
+#### Known limitations
+
+- The web composer sends no mentions, so a guest's message reaches agents only through the router. Setting a `joins` agent to `members` does not make it answer web guests until you also set the router agent to `members`.
+- You cannot remove a guest's agent from a room. To stop it acting, suspend the guest with `sigil human suspend`.
+- `sigil human suspend` cancels invocations but posts no `invocation_stopped` room event; Stop and member removal do.
+
 ## Current status
 
 The repository is verified against full v1 protocol conformance specifications:

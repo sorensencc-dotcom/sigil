@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Added
+- **Multi-human rooms foundation.** A Postgres-backed relay hosts guests next to its operator (the owner of the `--room-human-identity` endpoint). New CLI commands: `sigil human add` (relay-custodial signing key wrapped with AES-256-GCM under `--room-key-wrap-key <env_var>`), `sigil human add-to-room`, `sigil human suspend|unsuspend`, `sigil agent set-invokable`, and `sigil endpoint revoke`. Each command notifies running relays on the `sigil_admin` channel at commit; relays clear their 5-second authenticator cache and close affected stream sockets with 1008. Per-agent `invokable_by` (`owner` or `members`) decides who may start an invocation; every invocation records `subject_human_id`, hops inherit it, and refusals post a `room.event` and a `room.invocation_refused` audit row. Room rosters show endpoint display names, and the web roster lets an agent's owner set who may invoke it. Migration `033_multi_human_foundation.sql`. Operator guide: README "Multi-human rooms".
+- `sigil relay up --reconcile-kind <endpoint_id>=<kind>` repairs a Postgres endpoint `kind` that differs from the registry file after a `REGISTRY_CONFLICT`.
+
+### Changed
+- Rows in `endpoint_keys` for local endpoints now decide who may sign; the registry file only seeds them at startup. Endpoints carry multiple keys (`active`, `retiring`, `retired`) selected by `key_id`, and a federated sender's new key retires its previous shadow key.
+- Every endpoint row has a `kind` (`human`, `agent`, or `system`); only `human` endpoints authenticate with a `human_id`. Startup fails with `REGISTRY_CONFLICT` when the registry file and Postgres disagree on owner, kind, or key, and re-seeding never reactivates a revoked endpoint.
+- `--public-origin` now requires `--room-human-identity`. Without an operator identity, room posts and room creation answer 503 `NO_OPERATOR_IDENTITY`.
+- Only the operator's endpoints create rooms. Changing an agent's response mode, removing an agent, or changing who may invoke it requires owning the agent. `POST /v1/rooms/{id}/stop` cancels invocations on agents the caller owns plus invocations the caller started.
 - Added `packages/sigil-rooms-web` (`@sorensencc/sigil-rooms-web`), a browser client for Sigil rooms with paste-token login, room list, timeline, send, ack, and live updates through `room.updated`. Start it with `node packages/sigil-rooms-web/bin/sigil-rooms-web.mjs`. Threads, Stop, and roster modes are phase 4b-2. Root `npm run test:web` runs its typecheck, tests, and build.
 - Added `GET /v1/messages/{message_id}/receipts`, a sender-only read of every recipient's receipt state, so a sender can find out after disconnecting.
 - `delivery.receipt` frames now carry `recipient_endpoint_id` and `mapped_state`. A room message sends one frame per recipient with that recipient's real delivery ID.
