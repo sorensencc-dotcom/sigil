@@ -342,10 +342,10 @@ async function cmdRelayUp(argv) {
   const publicPortRaw = opt(args, ['public-port']);
   const publicPort = publicPortRaw === undefined ? undefined : Number(publicPortRaw);
   if (publicPort !== undefined && (!Number.isInteger(publicPort) || publicPort < 0 || publicPort > 65535)) throw new Error(`sigil relay up: --public-port must be an integer 0-65535, got "${publicPortRaw}"`);
-  const enableMockOAuth = Boolean(args.values['enable-mock-oauth']) || process.env.SIGIL_ENABLE_MOCK_OAUTH === '1';
+  const enableMockOAuth = Boolean(args.values['enable-mock-oauth']);
   if (publicOrigin) {
     validateOAuthConfig({
-      publicOrigin, port, publicPort,
+      databaseUrl, publicOrigin, port, publicPort,
       roomKeyWrapKey: opt(args, ['room-key-wrap-key']), roomHumanIdentity: humanIdentityPath,
       providers: [{ name: 'github', issuer: 'https://github.com' }],
       oidcIssuerAllowlist: new Set((await repository.listOidcIssuerAllowlist()).map((entry) => entry.issuer)),
@@ -358,7 +358,7 @@ async function cmdRelayUp(argv) {
       env: process.env, enableMockOAuth, logger: relayLogger,
     });
     publicServer = publicStack.listener;
-  } else if (enableMockOAuth && args.values['enable-mock-oauth']) {
+  } else if (enableMockOAuth) {
     throw new Error('sigil relay up: --enable-mock-oauth requires --public-origin');
   }
   const stream = createStreamServer({ server: streamHttpServer, authenticate: bearerAuth, ticketStore, allowedOrigins, logger: relayLogger, repository, publicServer, publicOrigin: publicOrigin ?? null });

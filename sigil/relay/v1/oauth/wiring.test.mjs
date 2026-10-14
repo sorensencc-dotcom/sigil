@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
-import { validateOAuthConfig, resolvePublicPort, buildOAuthStack, readBody } from './wiring.mjs';
+import { MOCK_OAUTH_ISSUER, validateOAuthConfig, resolvePublicPort, buildOAuthStack, readBody } from './wiring.mjs';
 
 const GOOD = {
+  databaseUrl: 'postgres://x/y',
   publicOrigin: 'https://rooms.test', port: 4000, publicPort: undefined,
   roomKeyWrapKey: 'SIGIL_WRAP', roomHumanIdentity: '/tmp/id.json',
   providers: [{ name: 'github', issuer: 'https://github.com' }], oidcIssuerAllowlist: new Set(['https://other.example']),
@@ -50,10 +51,38 @@ test('buildOAuthStack names the missing GitHub env variable', () => {
   assert.ok(stack.flowStore);
 });
 
-test('buildOAuthStack: mock oauth needs no credentials but real mode does', () => {
-  const base = { repository: {}, publicOrigin: 'https://rooms.test', wrapKey: Buffer.alloc(32), operatorHumanId: 'h', ticketStore: {}, stream: {}, roomRouteContext: () => ({}) };
-  const stack = buildOAuthStack({ ...base, env: { SIGIL_MOCK_OAUTH_BASE_URL: 'http://127.0.0.1:1' }, enableMockOAuth: true });
-  assert.ok(stack.providers.github);
+const MOCK_BASE = { repository: {}, publicOrigin: 'https://rooms.test', wrapKey: Buffer.alloc(32), operatorHumanId: 'h', ticketStore: {}, stream: {}, roomRouteContext: () => ({}) };
+
+test('validateOAuthConfig requires --database-url', () => {
+  assert.throws(() => validateOAuthConfig({ ...GOOD, databaseUrl: undefined }), /--database-url/);
+});
+
+test('mock oauth: fixed mock credentials, mock issuer, real secret never sent', async () => {
+  const stack = buildOAuthStack({ ...MOCK_BASE, enableMockOAuth: true, env: { SIGIL_MOCK_OAUTH_BASE_URL: 'http://127.0.0.1:9', GITHUB_OAUTH_CLIENT_ID: 'real-id', GITHUB_OAUTH_CLIENT_SECRET: 'REAL-SECRET' } });
+  const github = stack.providers.github;
+  assert.equal(github.issuer, MOCK_OAUTH_ISSUER);
+  assert.ok(!github.authorizeUrl({ state: 's', codeChallenge: 'c', redirectUri: 'r' }).includes('real-id'));
+});
+
+test('mock oauth: identity uses the mock issuer and exchange sends mock-secret', async () => {
+  const requests = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => { requests.push({ url: String(url), body: String(init?.body ?? '') }); return { ok: true, json: async () => ({ access_token: 't', id: 7 }) }; };
+  try {
+    const { providers } = buildOAuthStack({ ...MOCK_BASE, enableMockOAuth: true, env: { SIGIL_MOCK_OAUTH_BASE_URL: 'http://localhost:9', GITHUB_OAUTH_CLIENT_SECRET: 'REAL-SECRET' } });
+    await providers.github.exchangeCode({ code: 'c', codeVerifier: 'v', redirectUri: 'r' });
+    const identity = await providers.github.resolveIdentity({ accessToken: 't' });
+    assert.equal(identity.issuer, MOCK_OAUTH_ISSUER);
+    assert.ok(requests.every((r) => r.url.startsWith('http://localhost:9')));
+    assert.ok(requests.every((r) => !r.body.includes('REAL-SECRET')));
+    assert.ok(requests[0].body.includes('mock-secret'));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('mock oauth: non-loopback or missing base URL rejected', () => {
+  for (const base of [undefined, 'https://evil.example', 'http://127.0.0.1.evil.example', 'ftp://127.0.0.1', 'garbage']) {
+    assert.throws(() => buildOAuthStack({ ...MOCK_BASE, enableMockOAuth: true, env: { SIGIL_MOCK_OAUTH_BASE_URL: base } }), /SIGIL_MOCK_OAUTH_BASE_URL/);
+  }
 });
 
 test('readBody rejects on overflow and returns small bodies', async () => {

@@ -8,7 +8,7 @@ const DEFAULT_ENDPOINTS = {
 const ISSUER = 'https://github.com';
 const providerError = (message) => Object.assign(new Error(message), { code: 'PROVIDER_ERROR' });
 
-export function createGitHubProvider({ clientId, clientSecret, endpoints = DEFAULT_ENDPOINTS, fetchImpl = fetch } = {}) {
+export function createGitHubProvider({ clientId, clientSecret, endpoints = DEFAULT_ENDPOINTS, fetchImpl = fetch, issuer = ISSUER } = {}) {
   const call = async (url, init) => {
     let response;
     try { response = await fetchImpl(url, { ...init, ...outboundFetchOptions() }); }
@@ -18,7 +18,7 @@ export function createGitHubProvider({ clientId, clientSecret, endpoints = DEFAU
   };
   return {
     name: 'github',
-    issuer: ISSUER,
+    issuer,
     authorizeUrl({ state, codeChallenge, redirectUri }) {
       const url = new URL(endpoints.authorize);
       url.searchParams.set('client_id', clientId);
@@ -37,7 +37,7 @@ export function createGitHubProvider({ clientId, clientSecret, endpoints = DEFAU
     async resolveIdentity({ accessToken }) {
       const json = await call(`${endpoints.api}/user`, { headers: { accept: 'application/json', authorization: `Bearer ${accessToken}`, 'user-agent': 'sigil-relay' } });
       if (!Number.isSafeInteger(json.id)) throw providerError('provider returned no numeric id');
-      return { issuer: ISSUER, subject: String(json.id), displayName: typeof json.name === 'string' && json.name ? json.name : undefined };
+      return { issuer, subject: String(json.id), displayName: typeof json.name === 'string' && json.name ? json.name : undefined };
     },
   };
 }

@@ -20,10 +20,13 @@ export async function readBody(request, maxBytes = 1024 * 1024) {
   return raw;
 }
 
-export function validateOAuthConfig({ publicOrigin, port, publicPort, roomKeyWrapKey, roomHumanIdentity, providers = [], oidcIssuerAllowlist = new Set() }) {
+export const MOCK_OAUTH_ISSUER = 'https://mock-oauth.sigil.invalid';
+
+export function validateOAuthConfig({ databaseUrl, publicOrigin, port, publicPort, roomKeyWrapKey, roomHumanIdentity, providers = [], oidcIssuerAllowlist = new Set() }) {
   let url;
   try { url = new URL(publicOrigin); } catch { url = null; }
   if (!url || url.protocol !== 'https:') throw new Error('sigil relay up: --public-origin must be an https: origin');
+  if (!databaseUrl) throw new Error('sigil relay up: --public-origin requires --database-url (or SIGIL_DATABASE_URL); the cookie login needs Postgres');
   if (!port && publicPort === undefined) throw new Error('sigil relay up: --public-origin requires --port (or --public-port) so the public listener has a stable port');
   if (!port) throw new Error('sigil relay up: --public-origin requires a non-zero --port');
   if (!roomKeyWrapKey) throw new Error('sigil relay up: --public-origin requires --room-key-wrap-key');
@@ -37,12 +40,17 @@ export function validateOAuthConfig({ publicOrigin, port, publicPort, roomKeyWra
 
 function buildGitHubProvider({ env, enableMockOAuth }) {
   if (enableMockOAuth) {
-    // Test-only: point the provider at a local mock server.
-    const base = env.SIGIL_MOCK_OAUTH_BASE_URL;
-    if (!base) throw new Error('sigil relay up: --enable-mock-oauth requires SIGIL_MOCK_OAUTH_BASE_URL');
+    // Test-only: fixed fake credentials (never real env secrets), distinct issuer,
+    // and a loopback-only mock server.
+    let base;
+    try { base = new URL(env.SIGIL_MOCK_OAUTH_BASE_URL ?? ''); } catch { base = null; }
+    if (!base || !['http:', 'https:'].includes(base.protocol) || !['127.0.0.1', 'localhost', '[::1]'].includes(base.hostname)) {
+      throw new Error('sigil relay up: --enable-mock-oauth requires SIGIL_MOCK_OAUTH_BASE_URL to be a loopback http(s) URL (127.0.0.1, localhost, or [::1])');
+    }
+    const root = base.origin;
     return createGitHubProvider({
-      clientId: env.GITHUB_OAUTH_CLIENT_ID ?? 'mock-client', clientSecret: env.GITHUB_OAUTH_CLIENT_SECRET ?? 'mock-secret',
-      endpoints: { authorize: `${base}/authorize`, tokenUrl: `${base}/token`, api: base },
+      clientId: 'mock-client', clientSecret: 'mock-secret', issuer: MOCK_OAUTH_ISSUER,
+      endpoints: { authorize: `${root}/authorize`, tokenUrl: `${root}/token`, api: root },
     });
   }
   for (const name of ['GITHUB_OAUTH_CLIENT_ID', 'GITHUB_OAUTH_CLIENT_SECRET']) {
