@@ -21,11 +21,25 @@ export function defaultStreamUrl(relayUrl) {
   return `${scheme}//${url.hostname}:${port}`;
 }
 
-export function createWebServer({ distDir, relayUrl, streamUrl }) {
+export function createWebServer({ distDir, relayUrl, streamUrl, authMode = 'token', publicOrigin }) {
+  if (authMode !== 'token' && authMode !== 'cookie') {
+    throw new Error(`--auth-mode must be "cookie" or "token", got "${authMode}"`);
+  }
+  let connectSrc = `'self' ${relayUrl} ${streamUrl}`;
+  if (authMode === 'cookie') {
+    let origin;
+    try {
+      origin = new URL(publicOrigin);
+    } catch {
+      throw new Error('--public-origin is required with --auth-mode cookie and must be an https URL');
+    }
+    if (origin.protocol !== 'https:') throw new Error('--public-origin must be an https URL');
+    connectSrc = `'self' wss://${origin.host}`;
+  }
   const root = path.resolve(distDir);
   const csp = [
     "default-src 'self'",
-    `connect-src 'self' ${relayUrl} ${streamUrl}`,
+    `connect-src ${connectSrc}`,
     "img-src 'self' data:",
     "style-src 'self' 'unsafe-inline'",
     "frame-ancestors 'none'",
@@ -49,7 +63,7 @@ export function createWebServer({ distDir, relayUrl, streamUrl }) {
     }
     if (pathname === '/config.json') {
       response.writeHead(200, headers({ 'content-type': TYPES['.json'], 'cache-control': 'no-store' }));
-      return response.end(JSON.stringify({ relayUrl, streamUrl }));
+      return response.end(JSON.stringify(authMode === 'cookie' ? { authMode } : { relayUrl, streamUrl }));
     }
     let target = path.resolve(root, `.${pathname}`);
     if (target !== root && !target.startsWith(root + path.sep)) {
@@ -64,7 +78,9 @@ export function createWebServer({ distDir, relayUrl, streamUrl }) {
       target = path.join(root, 'index.html');
     }
     const type = TYPES[path.extname(target)] ?? 'application/octet-stream';
-    response.writeHead(200, headers({ 'content-type': type }));
+    const extra = { 'content-type': type };
+    if (target === path.join(root, 'index.html')) extra['referrer-policy'] = 'same-origin';
+    response.writeHead(200, headers(extra));
     if (request.method === 'HEAD') return response.end();
     const stream = fs.createReadStream(target);
     stream.on('error', () => response.destroy());

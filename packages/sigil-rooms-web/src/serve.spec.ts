@@ -2,6 +2,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
+import { spawnSync } from 'node:child_process';
 import { Readable } from 'node:stream';
 import fs from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -75,5 +76,79 @@ describe('web server', () => {
     await fetch(`${base}/assets/app.js`).then((r) => r.text()).catch(() => undefined);
     const after = await fetch(`${base}/config.json`);
     expect(after.status).toBe(200);
+  });
+});
+
+describe('cookie auth mode', () => {
+  let cookieServer: import('node:http').Server;
+  let cookieBase: string;
+  let dist: string;
+  beforeEach(async () => {
+    dist = mkdtempSync(path.join(tmpdir(), 'web-dist-cookie-'));
+    writeFileSync(path.join(dist, 'index.html'), '<!doctype html><title>x</title>');
+    cookieServer = createWebServer({ distDir: dist, authMode: 'cookie', publicOrigin: 'https://rooms.test' });
+    await new Promise<void>((resolve) => cookieServer.listen(0, '127.0.0.1', resolve));
+    cookieBase = `http://127.0.0.1:${(cookieServer.address() as AddressInfo).port}`;
+  });
+  afterEach(async () => { await new Promise((resolve) => cookieServer.close(resolve)); });
+
+  it('serves config.json with only authMode', async () => {
+    const res = await fetch(`${cookieBase}/config.json`);
+    expect(await res.json()).toEqual({ authMode: 'cookie' });
+  });
+
+  it('limits connect-src to self and the public origin websocket host', async () => {
+    const csp = (await fetch(`${cookieBase}/`)).headers.get('content-security-policy')!;
+    expect(csp).toContain("connect-src 'self' wss://rooms.test;");
+    expect(csp).not.toContain('127.0.0.1');
+  });
+
+  it('serves index.html for /login and /invite with same-origin referrer policy', async () => {
+    for (const route of ['/', '/login', '/invite', '/index.html']) {
+      const res = await fetch(`${cookieBase}${route}`);
+      expect(await res.text()).toContain('<title>x</title>');
+      expect(res.headers.get('referrer-policy')).toBe('same-origin');
+    }
+  });
+
+  it('still rejects POST', async () => {
+    expect((await fetch(`${cookieBase}/login`, { method: 'POST' })).status).toBe(405);
+  });
+
+  it('rejects a non-https public origin and a missing one', () => {
+    expect(() => createWebServer({ distDir: dist, authMode: 'cookie' })).toThrow(/public-origin/);
+    expect(() => createWebServer({ distDir: dist, authMode: 'cookie', publicOrigin: 'http://rooms.test' })).toThrow(/public-origin/);
+    expect(() => createWebServer({ distDir: dist, authMode: 'bogus', relayUrl: 'http://a', streamUrl: 'ws://a' })).toThrow(/auth-mode/);
+  });
+});
+
+describe('token mode headers', () => {
+  it('sends same-origin referrer policy on index.html, never no-referrer', async () => {
+    for (const route of ['/', '/login', '/invite']) {
+      const res = await fetch(`${base}${route}`);
+      expect(res.headers.get('referrer-policy')).toBe('same-origin');
+    }
+    const asset = await fetch(`${base}/assets/app.js`);
+    expect(asset.headers.get('referrer-policy')).not.toBe('no-referrer');
+  });
+});
+
+describe('sigil-rooms-web CLI flags', () => {
+  const bin = path.resolve(__dirname, '../bin/sigil-rooms-web.mjs');
+  const run = (args: string[]) => spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8', timeout: 10000 });
+  it('exits non-zero naming --public-origin when cookie mode lacks it', () => {
+    const result = run(['--auth-mode', 'cookie']);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('--public-origin');
+  });
+  it('exits non-zero naming --auth-mode for an unknown mode', () => {
+    const result = run(['--auth-mode', 'bogus']);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('--auth-mode');
+  });
+  it('exits non-zero naming --public-origin for a non-https origin', () => {
+    const result = run(['--auth-mode', 'cookie', '--public-origin', 'http://rooms.test']);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('--public-origin');
   });
 });
