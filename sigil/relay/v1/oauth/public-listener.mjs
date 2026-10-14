@@ -2,11 +2,11 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { checkCookieCsrf } from './csrf.mjs';
 
-const json = (response, status, body) => {
+export const json = (response, status, body) => {
   response.writeHead(status, { 'content-type': 'application/json' });
   response.end(JSON.stringify(body));
 };
-const notFound = (response) => json(response, 404, { code: 'NOT_FOUND', message: 'Not found', details: {} });
+export const notFound = (response) => json(response, 404, { code: 'NOT_FOUND', message: 'Not found', details: {} });
 
 // Returns the matched route name or null. Matches exact segments on the parsed path.
 export function matchPublicRoute(method, rawUrl) {
