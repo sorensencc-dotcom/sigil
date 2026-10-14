@@ -29,6 +29,7 @@ import { createBearerAuthenticator } from '../relay/v1/transport-auth.mjs';
 import { seedRegistry } from './registry-seed.mjs';
 import { createRoomHumanSigner } from '../relay/v1/room-human-signer.mjs';
 import { loadWrapKey } from '../relay/v1/key-wrap.mjs';
+import { validateOAuthConfig, resolvePublicPort, buildOAuthStack } from '../relay/v1/oauth/wiring.mjs';
 import { RelayClient } from '../connectors/v1/relay-client.mjs';
 import { LocalOutbox } from '../connectors/v1/local-outbox.mjs';
 import { loadConfigFile, resolveConfig } from './config-resolver.mjs';
@@ -36,7 +37,7 @@ import { formatInboxItem, INBOX_WAIT_EXIT_CODES, waitForOneInboxMessage, isRetry
 import { appendInboxLedger, readInboxLedger } from './ledger.mjs';
 import { signContract, verifyContract } from './contract-signing.mjs';
 import { checkRelayConnectivity } from './doctor.mjs';
-import { resolveRateLimits } from '../relay/v1/relay-config.mjs';
+import { resolveRateLimits, DEFAULT_INBOX_DEPTH_LIMIT } from '../relay/v1/relay-config.mjs';
 import { createRelayMetrics } from '../relay/v1/metrics.mjs';
 import { cmdAgentSetInvokable, cmdHumanAdd, cmdHumanAddToRoom, cmdHumanSuspend, cmdHumanUnsuspend } from './human-commands.mjs';
 import { provisionIngressEndpoint } from './agentmail-provision.mjs';
@@ -57,7 +58,7 @@ Commands:
                                                             Run the agent daemon; --room-bridge answers room.message deliveries via a local CLI, or via a local Ollama router (--router-* flags: model, Ollama URL, timeout, context messages, sole-agent fallback on|off, default on)
   agentmail provision --identity path --installation-id id [--registry path] [--audit-output path]
                                                             Explicitly provision non-mailbox ep_ingress; creates no grants or inbox mapping
-  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] [--relay-request-freshness-ms N] [--room-system-identity path] [--browser-origin origin]... [--room-human-identity path] [--public-origin origin] [--room-key-wrap-key env_var] [--reconcile-kind endpoint_id=kind]... [--p2p [--p2p-identity path] [--p2p-listen multiaddr] [--p2p-no-mdns]] Run a local relay; --room-system-identity is a dedicated identity file (endpoint ep_relay_system, owner relay_system) that signs room.event envelopes, without it rooms emit no events and the router route answers 503 --browser-origin is an exact origin a browser may call from (repeatable; default none); --room-human-identity is the human identity file the relay signs POST /v1/rooms/{id}/messages with (its key must match the registry key; without it the route answers 503); --public-origin requires --room-human-identity; --room-key-wrap-key names the environment variable holding the 32-byte base64 key that unwraps provisioned humans' signing keys (pass the same name to "human add"); --reconcile-kind sets one endpoint's Postgres kind to the registry file's kind after a REGISTRY_CONFLICT. If you front the relay with a proxy, do not log request URLs for /v1/stream: they carry single-use tickets (blocks; Ctrl+C to stop; set SIGIL_STREAM_SEQ_ENABLED=1 to stamp stream sequences)
+  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] [--relay-request-freshness-ms N] [--room-system-identity path] [--browser-origin origin]... [--room-human-identity path] [--public-origin origin] [--public-port N] [--enable-mock-oauth] [--room-key-wrap-key env_var] [--reconcile-kind endpoint_id=kind]... [--p2p [--p2p-identity path] [--p2p-listen multiaddr] [--p2p-no-mdns]] Run a local relay; --room-system-identity is a dedicated identity file (endpoint ep_relay_system, owner relay_system) that signs room.event envelopes, without it rooms emit no events and the router route answers 503 --browser-origin is an exact origin a browser may call from (repeatable; default none); --room-human-identity is the human identity file the relay signs POST /v1/rooms/{id}/messages with (its key must match the registry key; without it the route answers 503); --public-origin requires --room-human-identity; --room-key-wrap-key names the environment variable holding the 32-byte base64 key that unwraps provisioned humans' signing keys (pass the same name to "human add"); --reconcile-kind sets one endpoint's Postgres kind to the registry file's kind after a REGISTRY_CONFLICT. If you front the relay with a proxy, do not log request URLs for /v1/stream: they carry single-use tickets (blocks; Ctrl+C to stop; set SIGIL_STREAM_SEQ_ENABLED=1 to stamp stream sequences)
   relay well-known generate --identity path --domain domain --endpoint url [--ws-endpoint url] [--output path]
                                                             Emit this relay's .well-known/sigil discovery document from a designated endpoint identity
   oidc-issuer add <issuer> --client-id id [--label text] [--assurance level] [--database-url url]
@@ -196,7 +197,7 @@ export function startOidcIssuerAllowlistPolling({ repository, allowlistSet, inte
 }
 
 async function cmdRelayUp(argv) {
-  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' }, 'oidc-issuer-refresh-interval-ms': { type: 'string' }, domain: { type: 'string' }, 'federation-mode': { type: 'string' }, 'federation-identity': { type: 'string' }, 'room-system-identity': { type: 'string' }, 'browser-origin': { type: 'string', multiple: true }, 'room-human-identity': { type: 'string' }, 'room-key-wrap-key': { type: 'string' }, 'public-origin': { type: 'string' }, 'reconcile-kind': { type: 'string', multiple: true }, 'relay-request-freshness-ms': { type: 'string' }, p2p: { type: 'boolean' }, 'p2p-listen': { type: 'string' }, 'p2p-identity': { type: 'string' }, 'p2p-no-mdns': { type: 'boolean' } } });
+  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' }, 'oidc-issuer-refresh-interval-ms': { type: 'string' }, domain: { type: 'string' }, 'federation-mode': { type: 'string' }, 'federation-identity': { type: 'string' }, 'room-system-identity': { type: 'string' }, 'browser-origin': { type: 'string', multiple: true }, 'room-human-identity': { type: 'string' }, 'room-key-wrap-key': { type: 'string' }, 'public-origin': { type: 'string' }, 'public-port': { type: 'string' }, 'enable-mock-oauth': { type: 'boolean' }, 'reconcile-kind': { type: 'string', multiple: true }, 'relay-request-freshness-ms': { type: 'string' }, p2p: { type: 'boolean' }, 'p2p-listen': { type: 'string' }, 'p2p-identity': { type: 'string' }, 'p2p-no-mdns': { type: 'boolean' } } });
   const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
   if (opt(args, ['public-origin']) !== undefined && !opt(args, ['room-human-identity'])) throw new Error('sigil relay up: --public-origin requires --room-human-identity');
   const reconcileKind = new Map();
@@ -317,7 +318,8 @@ async function cmdRelayUp(argv) {
     warn: (entry) => console.warn(JSON.stringify(entry)),
     error: (entry) => console.error(JSON.stringify(entry)),
   });
-  const allowedOrigins = args.values['browser-origin'] ?? [];
+  const publicOrigin = opt(args, ['public-origin']);
+  const allowedOrigins = [...(args.values['browser-origin'] ?? []), ...(publicOrigin ? [publicOrigin] : [])];
   const ticketStore = createTicketStore();
   let humanSigner = null;
   const humanIdentityPath = opt(args, ['room-human-identity']);
@@ -333,7 +335,33 @@ async function cmdRelayUp(argv) {
   // Postgres mode: owner, kind, and liveness come from Postgres through a 5 s
   // cache that sigil_admin notifications clear. Memory mode reads the registry.
   const bearerAuth = createBearerAuthenticator(tokenHashes, registry, { repository: pool ? repository : null });
-  const stream = createStreamServer({ server: streamHttpServer, authenticate: bearerAuth, ticketStore, allowedOrigins, logger: relayLogger, repository });
+  // The public (cookie-only) listener must exist before the stream server so
+  // /v1/stream shares its http.Server; the stack reaches `stream` lazily.
+  let publicStack = null;
+  let publicServer = null;
+  const publicPortRaw = opt(args, ['public-port']);
+  const publicPort = publicPortRaw === undefined ? undefined : Number(publicPortRaw);
+  if (publicPort !== undefined && (!Number.isInteger(publicPort) || publicPort < 0 || publicPort > 65535)) throw new Error(`sigil relay up: --public-port must be an integer 0-65535, got "${publicPortRaw}"`);
+  const enableMockOAuth = Boolean(args.values['enable-mock-oauth']) || process.env.SIGIL_ENABLE_MOCK_OAUTH === '1';
+  if (publicOrigin) {
+    validateOAuthConfig({
+      publicOrigin, port, publicPort,
+      roomKeyWrapKey: opt(args, ['room-key-wrap-key']), roomHumanIdentity: humanIdentityPath,
+      providers: [{ name: 'github', issuer: 'https://github.com' }],
+      oidcIssuerAllowlist: new Set((await repository.listOidcIssuerAllowlist()).map((entry) => entry.issuer)),
+    });
+    const operatorEntry = await repository.lookupTrustedEndpoint(loadIdentity(humanIdentityPath).endpoint_id);
+    publicStack = buildOAuthStack({
+      repository, publicOrigin, wrapKey: loadWrapKey(opt(args, ['room-key-wrap-key'])), operatorHumanId: operatorEntry.owner_id,
+      ticketStore, stream: { closeSession: (sessionId) => stream.closeSession(sessionId) },
+      roomRouteContext: () => ({ repository, registry, now: () => new Date(), stream, inboxDepthLimit: DEFAULT_INBOX_DEPTH_LIMIT, systemIdentity: roomSystemIdentity, logger: relayLogger, ticketStore, humanSigner, buildAcceptOptions }),
+      env: process.env, enableMockOAuth, logger: relayLogger,
+    });
+    publicServer = publicStack.listener;
+  } else if (enableMockOAuth && args.values['enable-mock-oauth']) {
+    throw new Error('sigil relay up: --enable-mock-oauth requires --public-origin');
+  }
+  const stream = createStreamServer({ server: streamHttpServer, authenticate: bearerAuth, ticketStore, allowedOrigins, logger: relayLogger, repository, publicServer, publicOrigin: publicOrigin ?? null });
   let adminListener = null;
   if (pool) {
     const { startAdminListener, createAdminMessageHandler } = await import('../relay/v1/admin-notify.mjs');
@@ -355,6 +383,11 @@ async function cmdRelayUp(argv) {
   acceptOptionsHolder.build = buildAcceptOptions;
   await new Promise((resolve) => streamHttpServer.listen(streamPort, '127.0.0.1', resolve));
   const streamAddress = streamHttpServer.address();
+  let publicAddress = null;
+  if (publicServer) {
+    await new Promise((resolve) => publicServer.listen(resolvePublicPort({ port, publicPort }), '127.0.0.1', resolve));
+    publicAddress = publicServer.address();
+  }
 
   // Optional libp2p transport (spec §8), started alongside the existing
   // HTTP/WS relay rather than replacing it. Off by default -- without
@@ -470,6 +503,15 @@ async function cmdRelayUp(argv) {
   if (enableMockOidc) console.log('WARNING: mock-OIDC login is enabled (--enable-mock-oidc). This is for local development and CI only -- never expose this relay to untrusted networks.');
   console.log(`Sigil relay listening on http://127.0.0.1:${address.port}`);
   console.log(`Sigil stream (push notify) on ws://127.0.0.1:${streamAddress.port}/v1/stream`);
+  if (publicAddress) {
+    console.log(`Public origin: ${publicOrigin}`);
+    console.log(`Cookie-only listener: 127.0.0.1:${publicAddress.port}`);
+    console.log('Proxy table (dedicated hostname required):');
+    console.log(`  /v1/*        -> 127.0.0.1:${publicAddress.port}   (includes the /v1/stream upgrade)`);
+    console.log('  everything else -> sigil-rooms-web --auth-mode cookie');
+    console.log('Set-Cookie, Origin, and Host must pass through unchanged.');
+    if (enableMockOAuth) console.log('WARNING: mock OAuth is enabled (--enable-mock-oauth). This is for CI only -- never expose this relay to untrusted networks.');
+  }
   console.log(`Registered endpoints: ${[...registry.keys()].join(', ')}`);
   console.log(databaseUrl ? `Persisting to PostgreSQL database (${databaseUrl.replace(/:[^:@]+@/, ':***@')}). Ctrl+C to stop.` : 'In-memory only -- state is lost when this process exits. Ctrl+C to stop.');
   await new Promise((resolve) => {
@@ -478,6 +520,7 @@ async function cmdRelayUp(argv) {
       await adminListener?.close();
       if (p2pHost) await p2pHost.stop();
       await new Promise((done) => server.close(() => done()));
+      if (publicServer) { const closing = new Promise((done) => publicServer.close(() => done())); publicServer.closeAllConnections?.(); await closing; }
       await new Promise((done) => streamHttpServer.close(() => done()));
       resolve();
     };
