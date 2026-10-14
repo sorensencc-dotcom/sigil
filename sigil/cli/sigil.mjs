@@ -40,6 +40,7 @@ import { checkRelayConnectivity } from './doctor.mjs';
 import { resolveRateLimits, DEFAULT_INBOX_DEPTH_LIMIT } from '../relay/v1/relay-config.mjs';
 import { createRelayMetrics } from '../relay/v1/metrics.mjs';
 import { cmdAgentSetInvokable, cmdHumanAdd, cmdHumanAddToRoom, cmdHumanSuspend, cmdHumanUnsuspend } from './human-commands.mjs';
+import { cmdIdentityRevoke, cmdInviteCreate, cmdInviteList, cmdInviteRevoke } from './oauth-commands.mjs';
 import { provisionIngressEndpoint } from './agentmail-provision.mjs';
 import { createAgentMailDeployment } from '../ingress/v1/agentmail-bootstrap.mjs';
 
@@ -1888,6 +1889,10 @@ export async function main() {
     else if (command === 'federation') await cmdFederation(process.argv.slice(3));
     else if (command === 'route') await cmdRoute(process.argv.slice(3));
     else if (command === 'endpoint') await cmdEndpoint(process.argv.slice(3));
+    else if (command === 'relay' && sub === 'invite' && rest[0] === 'create') await cmdInviteCreate(rest.slice(1));
+    else if (command === 'relay' && sub === 'invite' && rest[0] === 'list') await cmdInviteList(rest.slice(1));
+    else if (command === 'relay' && sub === 'invite' && rest[0] === 'revoke') await cmdInviteRevoke(rest.slice(1));
+    else if (command === 'relay' && sub === 'identity' && rest[0] === 'revoke') await cmdIdentityRevoke(rest.slice(1));
     else if (command === 'human' && sub === 'add') await cmdHumanAdd(rest);
     else if (command === 'human' && sub === 'add-to-room') await cmdHumanAddToRoom(rest);
     else if (command === 'human' && sub === 'suspend') await cmdHumanSuspend(rest);
