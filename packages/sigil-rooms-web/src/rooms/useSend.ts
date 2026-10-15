@@ -19,7 +19,7 @@ function isRetryable(error: unknown): boolean {
 }
 
 export function useSend(roomId: string) {
-  const { client } = useAuth();
+  const { client, mode } = useAuth();
   const queryClient = useQueryClient();
   // Rows and errors are stored per room, so switching rooms never shows another room's rows.
   const [rowsByRoom, setRowsByRoom] = useState<Record<string, PendingMessage[]>>({});
@@ -67,7 +67,7 @@ export function useSend(roomId: string) {
           queryFn: () => fetchHistory(client, queryClient, room),
           staleTime: 0,
         });
-        if (!getSender()) {
+        if (mode !== 'cookie' && !getSender()) {
           const mine = rows.find((row) => row.message_id === messageId);
           if (mine) {
             setSender(mine.envelope.sender.endpoint_id);
@@ -78,7 +78,7 @@ export function useSend(roomId: string) {
         // The row keeps its messageId and drops out of the merge once a later refresh includes it.
       }
     },
-    [client, patch, queryClient],
+    [client, mode, patch, queryClient],
   );
 
   const send = useCallback(

@@ -4,12 +4,12 @@ import { useAuth } from '../auth/AuthContext';
 import { LiveSocket } from './socket';
 
 export function useLive(): 'live' | 'off' {
-  const { client, streamUrl, token } = useAuth();
+  const { client, streamUrl, isLoggedIn } = useAuth();
   const queryClient = useQueryClient();
   const [status, setStatus] = useState<'live' | 'off'>('off');
 
   useEffect(() => {
-    if (!token) return;
+    if (!isLoggedIn) return;
     const socket = new LiveSocket({
       streamUrl,
       getTicket: async () => (await client.wsTicket()).ticket,
@@ -34,7 +34,7 @@ export function useLive(): 'live' | 'off' {
     });
     socket.start();
     return () => socket.stop();
-  }, [client, streamUrl, token, queryClient]);
+  }, [client, streamUrl, isLoggedIn, queryClient]);
 
   useEffect(() => {
     if (status === 'live') return;

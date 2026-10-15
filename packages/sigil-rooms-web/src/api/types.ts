@@ -72,3 +72,10 @@ export interface StopResult {
   code: string;
   cancelled: number;
 }
+
+export interface Session {
+  human_id: string;
+  endpoint_id: string;
+  display_name: string;
+  is_operator: boolean;
+}

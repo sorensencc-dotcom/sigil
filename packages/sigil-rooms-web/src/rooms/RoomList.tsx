@@ -5,7 +5,9 @@ import { NewRoomForm } from './NewRoomForm';
 import { usePins } from './usePins';
 
 export function RoomList({ selectedId, onSelect }: { selectedId: string | null; onSelect: (roomId: string) => void }) {
-  const { client } = useAuth();
+  const { client, mode, session } = useAuth();
+  // Cookie mode: only the operator creates rooms; the relay enforces the same rule.
+  const canCreate = mode === 'token' || session?.is_operator === true;
   const query = useQuery({ queryKey: ['rooms'], queryFn: () => client.listRooms() });
   const { pins, toggle } = usePins();
   const rooms = [...(query.data ?? [])].sort((a, b) => Number(pins.includes(b.conversation_id)) - Number(pins.includes(a.conversation_id)));
@@ -38,7 +40,7 @@ export function RoomList({ selectedId, onSelect }: { selectedId: string | null; 
   }
   return (
     <>
-      <NewRoomForm onCreated={onSelect} />
+      {canCreate ? <NewRoomForm onCreated={onSelect} /> : null}
       {list}
     </>
   );
