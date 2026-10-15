@@ -1,0 +1,21 @@
+.github/workflows/ci.yml
+  s_9bd789f95c4543::t_95ac5658bc88f0 71-74
+ci-workflow.test.mjs
+  s_9bd789f95c4543::t_de3dc3a1916381 1-17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fb97120d9780df9db7880c9e84d07f3f917db082",
+  "prompts": {},
+  "sessions": {
+    "s_9bd789f95c4543": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8bf426f1-7494-45d0-a298-d2255f93f2e8",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
