@@ -1,5 +1,14 @@
 # Status
 
+## Session update: 2026-10-14 third-party (GitHub) login Task 15 (e2e, Origin check, docs)
+
+- Branch `feat/sigil-rooms-third-party-login` in `C:dev.worktreessigil-third-party-login`, plan `docs/superpowers/plans/2026-10-13-sigil-rooms-third-party-login.md`. Tasks 0-15 implemented; unpushed, no PR; final whole-branch review pending.
+- New: `sigil/integration/oauth-login.e2e.test.mjs` (real `relay up --enable-mock-oauth`, static server in cookie mode, fake GitHub, loopback TLS proxy from `sigil/integration/fixtures/loopback-tls-proxy.mjs`), `packages/sigil-rooms-web/e2e/cookie-origin.e2e.ts` (Playwright: the form POST to `start` carries Origin equal to `--public-origin`), and the real-provider checklist `docs/superpowers/plans/2026-10-13-oauth-login-manual-smoke.md`.
+- The e2e found two production bugs, both fixed: ws tickets from the cookie listener had no `session_id` (logout did not close the socket), and the cookie listener passed `now` as a function so room writes failed with Invalid time value.
+- Still deferred: router-pick vs revoke race (see below); a targeted (`--human`) invite that reactivates a revoked identity consumes the invite but adds no rooms; `/approve` through the proxy returns the SPA shell (static fallback), not the relay page.
+- Manual smoke against real GitHub (open items 1 and 4) not run yet.
+- Next action: final whole-branch review, then push and PR (ask first).
+
 ## Session update: 2026-10-13 multi-human foundation Task 17 (docs and full verification)
 
 - Branch `docs/sigil-rooms-third-party-login-spec` in `C:\dev\.worktrees\sigil-third-party-login`, plan `docs/superpowers/plans/2026-10-12-sigil-rooms-multi-human-foundation.md`. Tasks 1-17 done; nothing pushed, no PR.
