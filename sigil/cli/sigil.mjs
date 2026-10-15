@@ -355,7 +355,7 @@ async function cmdRelayUp(argv) {
     publicStack = buildOAuthStack({
       repository, publicOrigin, wrapKey: loadWrapKey(opt(args, ['room-key-wrap-key'])), operatorHumanId: operatorEntry.owner_id,
       ticketStore, stream: { closeSession: (sessionId) => stream.closeSession(sessionId) },
-      roomRouteContext: () => ({ repository, registry, now: () => new Date(), stream, inboxDepthLimit: DEFAULT_INBOX_DEPTH_LIMIT, systemIdentity: roomSystemIdentity, logger: relayLogger, ticketStore, humanSigner, buildAcceptOptions }),
+      roomRouteContext: () => ({ repository, registry, now: new Date(), stream, inboxDepthLimit: DEFAULT_INBOX_DEPTH_LIMIT, systemIdentity: roomSystemIdentity, logger: relayLogger, ticketStore, humanSigner, buildAcceptOptions }),
       env: process.env, enableMockOAuth, logger: relayLogger,
     });
     publicServer = publicStack.listener;
