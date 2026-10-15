@@ -1,5 +1,17 @@
 # Status
 
+## Session update: 2026-10-15 third-party login merged (PR #53)
+
+- PR #53 (`feat/sigil-rooms-third-party-login`) merged to `main` as `dce8139`; all 8 checks green. Supersedes the 2026-10-14 entry below (Tasks 0-15 done, now merged).
+- CI fixes before merge: `sigil/cli/relay-up-p2p.test.mjs` now clears its start-timeout timers (Node 22 file process outlived the 30s per-file timeout); CI builds `packages/sigil-rooms-web/dist` before `npm run test:live` (guard in root `ci-workflow.test.mjs`); the 033 dup-key migration test deletes its rows in `finally` so migration 034 does not refuse in the shared DB.
+- Still open, none blocking:
+  - `relay-admin-listener.pg` hangs (3088s once), fails identically on main `013480e`, and pollutes the shared DB for later suites.
+  - Deferred minors: e2e wrong-Origin WS check hangs instead of failing if the socket opens (needs reject-on-open plus timeout); logout close code unasserted; README `--human` row omits `[--room] [--endpoint]`; `20d62bc` (Date vs function `now`) covered by e2e only.
+  - Spec says `/approve` via the proxy returns 404; implementation returns the SPA shell with 200. Amend the spec or make the static server return 404.
+  - Router-pick vs revoke race and the targeted-invite reactivation gap (see entries below) remain deferred.
+  - Manual smoke against real GitHub not run.
+- Cleanup: worktree `C:\dev\.worktrees\sigil-third-party-login` and its branch still exist; remove by hand.
+
 ## Session update: 2026-10-14 third-party (GitHub) login Task 15 (e2e, Origin check, docs)
 
 - Branch `feat/sigil-rooms-third-party-login` in `C:dev.worktreessigil-third-party-login`, plan `docs/superpowers/plans/2026-10-13-sigil-rooms-third-party-login.md`. Tasks 0-15 implemented; unpushed, no PR; final whole-branch review pending.
