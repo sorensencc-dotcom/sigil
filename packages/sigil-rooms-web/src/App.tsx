@@ -6,7 +6,7 @@ import { TokenGate } from './auth/TokenGate';
 import { loadConfig, type WebConfig } from './config';
 import { describeError, ErrorBanner } from './errors/ErrorBanner';
 import { useLive } from './live/useLive';
-import { InvitePage } from './pages/InvitePage';
+import { captureInviteFragment, InvitePage } from './pages/InvitePage';
 import { LoginPage } from './pages/LoginPage';
 import { Composer } from './rooms/Composer';
 import { RoomHeader } from './rooms/RoomHeader';
@@ -115,6 +115,8 @@ function Shell({ theme, onThemeChange }: { theme: string; onThemeChange: (next: 
 }
 
 export function App() {
+  // Runs before any render branch so a signed-in visit to /invite#<token> still clears the secret from the URL.
+  useState(() => captureInviteFragment());
   const [config, setConfig] = useState<WebConfig | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [theme, setTheme] = useState<string>(() => {

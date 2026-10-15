@@ -3,8 +3,19 @@ import { START_URL } from './startUrl';
 
 // The invite token lives only in the URL fragment, which the browser never sends to a server.
 // It is held in memory for the form post and the fragment is cleared right away.
+let heldInvite = '';
+
+/** Moves an /invite fragment into memory and clears it from the address bar. Safe to call repeatedly. */
+export function captureInviteFragment(): string {
+  if (window.location.pathname === '/invite' && window.location.hash.length > 1) {
+    heldInvite = window.location.hash.slice(1);
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+  }
+  return heldInvite;
+}
+
 export function InvitePage() {
-  const [invite] = useState(() => window.location.hash.replace(/^#/, ""));
+  const [invite] = useState(() => captureInviteFragment());
   useEffect(() => {
     window.history.replaceState(null, '', window.location.pathname + window.location.search);
   }, []);

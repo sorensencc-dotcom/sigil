@@ -43,6 +43,24 @@ describe('App', () => {
     expect(screen.queryByRole('button', { name: 'Continue with GitHub' })).toBeNull();
   });
 
+  it('clears the /invite fragment even when already signed in', async () => {
+    stubFetch({ authMode: 'cookie' }, { status: 200, body: { human_id: 'h', endpoint_id: 'ep', display_name: 'Ada', is_operator: false } });
+    window.history.replaceState(null, '', '/invite#secret_tok');
+    render(<App />);
+    expect(await screen.findByText('No rooms yet.')).toBeInTheDocument();
+    expect(window.location.hash).toBe('');
+    expect(window.location.href).not.toContain('secret_tok');
+  });
+
+  it('signed-out /invite#x still posts the captured token after the hash is cleared', async () => {
+    stubFetch({ authMode: 'cookie' }, { status: 401 });
+    window.history.replaceState(null, '', '/invite#tok_x');
+    render(<App />);
+    await screen.findByRole('button', { name: 'Continue with GitHub' });
+    expect(window.location.hash).toBe('');
+    expect((document.querySelector('input[name="invite"]') as HTMLInputElement).value).toBe('tok_x');
+  });
+
   it('routes /invite in cookie mode', async () => {
     stubFetch({ authMode: 'cookie' }, { status: 401 });
     window.history.replaceState(null, '', '/invite#abc');
