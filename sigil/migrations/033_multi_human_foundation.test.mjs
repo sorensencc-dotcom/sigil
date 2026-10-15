@@ -51,5 +51,12 @@ test('033 fails naming a local endpoint with two active keys', { skip: !connecti
   await pool.query(`INSERT INTO humans (human_id,status,created_at) VALUES ($1,'active',NOW())`, [`h_${s}`]);
   await pool.query(`INSERT INTO endpoints (endpoint_id,owner_id,runtime,installation_id,display_name,status,created_at) VALUES ($1,$2,'claude',$3,$1,'active',NOW())`, [`dup_${s}`, `h_${s}`, `i_${s}`]);
   for (const k of ['a', 'b']) await pool.query(`INSERT INTO endpoint_keys (key_id,endpoint_id,algorithm,public_key,status,valid_from) VALUES ($1,$2,'Ed25519',$3,'active',NOW())`, [`k${k}_${s}`, `dup_${s}`, Buffer.alloc(32, 1)]);
-  await assert.rejects(applyMigrations(connectionString), (e) => e.message.includes(`dup_${s}`));
+  try {
+    await assert.rejects(applyMigrations(connectionString), (e) => e.message.includes(`dup_${s}`));
+  } finally {
+    // The rows violate 034's one-active-key rule; leaving them makes every later suite's applyMigrations() refuse.
+    await pool.query(`DELETE FROM endpoint_keys WHERE endpoint_id = $1`, [`dup_${s}`]);
+    await pool.query(`DELETE FROM endpoints WHERE endpoint_id = $1`, [`dup_${s}`]);
+    await pool.query(`DELETE FROM humans WHERE human_id = $1`, [`h_${s}`]);
+  }
 });
