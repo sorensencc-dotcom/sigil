@@ -26,6 +26,7 @@ export function validateOAuthConfig({ databaseUrl, publicOrigin, port, publicPor
   let url;
   try { url = new URL(publicOrigin); } catch { url = null; }
   if (!url || url.protocol !== 'https:') throw new Error('sigil relay up: --public-origin must be an https: origin');
+  if (url.origin !== publicOrigin) throw new Error(`sigil relay up: --public-origin must be a bare origin (no path or trailing slash), e.g. ${url.origin}`);
   if (!databaseUrl) throw new Error('sigil relay up: --public-origin requires --database-url (or SIGIL_DATABASE_URL); the cookie login needs Postgres');
   if (!port && publicPort === undefined) throw new Error('sigil relay up: --public-origin requires --port (or --public-port) so the public listener has a stable port');
   if (!port) throw new Error('sigil relay up: --public-origin requires a non-zero --port');

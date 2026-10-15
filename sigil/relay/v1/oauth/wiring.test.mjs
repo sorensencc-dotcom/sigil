@@ -19,6 +19,11 @@ test('validateOAuthConfig rejects http: origin naming --public-origin', () => {
   assert.throws(() => validateOAuthConfig({ ...GOOD, publicOrigin: 'not a url' }), /--public-origin/);
 });
 
+test('validateOAuthConfig rejects an origin with a path or trailing slash', () => {
+  assert.throws(() => validateOAuthConfig({ ...GOOD, publicOrigin: 'https://rooms.test/' }), /--public-origin.*origin/);
+  assert.throws(() => validateOAuthConfig({ ...GOOD, publicOrigin: 'https://rooms.test/app' }), /--public-origin.*origin/);
+});
+
 test('validateOAuthConfig requires --port', () => {
   assert.throws(() => validateOAuthConfig({ ...GOOD, port: 0 }), /--port/);
   assert.throws(() => validateOAuthConfig({ ...GOOD, port: undefined }), /--port/);
