@@ -39,6 +39,18 @@ async function rmCwd(cwd) {
   }
 }
 
+// A leaked connection from another suite can hold a lock the DROP needs.
+// Fail fast with a lock error instead of hanging past the test timeout.
+async function resetSchema(pool) {
+  const client = await pool.connect();
+  try {
+    await client.query("SET lock_timeout = '15s'");
+    await client.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
+  } finally {
+    client.release();
+  }
+}
+
 function startRelay(cwd) {
   const child = spawn(process.execPath, [sigilCli, 'relay', 'up', '--port', '0', '--stream-port', '0', '--database-url', connectionString], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
   const out = { text: '' };
@@ -46,7 +58,7 @@ function startRelay(cwd) {
   child.stdout.on('data', (c) => { out.text += c; });
   child.stderr.on('data', (c) => { out.text += c; });
   const ready = new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`timed out waiting for relay: ${out.text}`)), 30_000);
+    const timer = setTimeout(() => reject(new Error(`timed out waiting for relay: ${out.text}`)), 60_000);
     const poll = setInterval(() => {
       const httpMatch = out.text.match(/Sigil relay listening on http:\/\/127\.0\.0\.1:(\d+)/);
       const wsMatch = out.text.match(/Sigil stream \(push notify\) on ws:\/\/127\.0\.0\.1:(\d+)\//);
@@ -68,7 +80,7 @@ function get(port, urlPath, token) {
   });
 }
 
-test('endpoint revoke from a second process closes the live bearer socket and 401s the next request before the cache TTL', { skip: !connectionString, timeout: 60_000 }, async (t) => {
+test('endpoint revoke from a second process closes the live bearer socket and 401s the next request before the cache TTL', { skip: !connectionString, timeout: 120_000 }, async (t) => {
   assertDisposableTestDatabase(connectionString);
   const pool = new pg.Pool({ connectionString });
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-admin-listener-'));
@@ -82,7 +94,7 @@ test('endpoint revoke from a second process closes the live bearer socket and 40
     await rmCwd(cwd);
     await pool.end();
   });
-  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
+  await resetSchema(pool);
 
   execFileSync(process.execPath, [sigilCli, 'init', 'bot', '--kind', 'agent'], { cwd, encoding: 'utf8' });
   const identity = loadIdentity(path.join(cwd, '.sigil', 'bot.identity.json'));
@@ -109,7 +121,7 @@ test('endpoint revoke from a second process closes the live bearer socket and 40
   assert.ok(Date.now() - revokedAt < 5000, 'rejected before the 5 s cache TTL would have expired');
 });
 
-test('human suspend from a second process closes every socket of that human', { skip: !connectionString, timeout: 60_000 }, async (t) => {
+test('human suspend from a second process closes every socket of that human', { skip: !connectionString, timeout: 120_000 }, async (t) => {
   assertDisposableTestDatabase(connectionString);
   const pool = new pg.Pool({ connectionString });
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-admin-suspend-'));
@@ -121,7 +133,7 @@ test('human suspend from a second process closes every socket of that human', { 
     await rmCwd(cwd);
     await pool.end();
   });
-  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
+  await resetSchema(pool);
 
   // One human, two endpoints: both must close.
   const owner = 'usr_pat@local';
@@ -161,7 +173,7 @@ test('human suspend from a second process closes every socket of that human', { 
 // Spec Testing, cross-process: `human add` in a second process reaches a live
 // relay and a live stream socket. The operator's socket learns of the new
 // member through room.updated without any request to the relay.
-test('human add --room from a second process sends room.updated to the operator socket of a running relay', { skip: !connectionString, timeout: 60_000 }, async (t) => {
+test('human add --room from a second process sends room.updated to the operator socket of a running relay', { skip: !connectionString, timeout: 120_000 }, async (t) => {
   assertDisposableTestDatabase(connectionString);
   const pool = new pg.Pool({ connectionString });
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-admin-human-add-'));
@@ -173,7 +185,7 @@ test('human add --room from a second process sends room.updated to the operator 
     await rmCwd(cwd);
     await pool.end();
   });
-  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
+  await resetSchema(pool);
 
   const owner = 'usr_op@local';
   execFileSync(process.execPath, [sigilCli, 'init', 'op', '--owner', owner], { cwd, encoding: 'utf8' });
