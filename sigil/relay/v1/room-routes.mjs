@@ -79,7 +79,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     if ((await isAgentCaller(repository, registry, principal)) || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'An authenticated human context is required');
     if (!ticketStore) return fail(response, requestId, 503, 'TICKETS_UNAVAILABLE', 'Browser tickets are not configured');
     try {
-      const { ticket, expires_at } = ticketStore.issue({ endpoint_id: principal.endpoint_id, owner_id: principal.owner_id, human_id: principal.human_id });
+      const { ticket, expires_at } = ticketStore.issue({ endpoint_id: principal.endpoint_id, owner_id: principal.owner_id, human_id: principal.human_id, session_id: principal.session_id ?? null });
       response.setHeader('cache-control', 'no-store');
       return send(response, requestId, 200, { code: 'OK', ticket, expires_at });
     } catch (error) {

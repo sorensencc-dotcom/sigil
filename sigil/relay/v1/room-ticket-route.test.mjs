@@ -85,3 +85,16 @@ test('a browser origin on the allowlist gets CORS headers and a preflight 204 be
     assert.equal(pre.headers['access-control-allow-origin'], 'https://app.example');
   });
 });
+
+test('a ticket issued to a cookie session carries that session id so logout can revoke it', async () => {
+  principals['Bearer cookie-web'] = { endpoint_id: 'ep_web', owner_id: 'usr_chris', human_id: 'usr_chris', session_id: 'sess_hash_1' };
+  try {
+    const ticketStore = createTicketStore();
+    await withServer({ ticketStore }, async (port) => {
+      const res = await call(port, 'POST', '/v1/rooms/ws-ticket', 'Bearer cookie-web');
+      assert.equal(res.status, 200);
+      assert.equal(ticketStore.revokeSession('sess_hash_1'), 1);
+      assert.equal(ticketStore.redeem(res.body.ticket), null);
+    });
+  } finally { delete principals['Bearer cookie-web']; }
+});
