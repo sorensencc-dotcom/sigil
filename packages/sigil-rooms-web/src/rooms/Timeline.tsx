@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { ApiError } from '../api/client';
 import { ErrorBanner } from '../errors/ErrorBanner';
-import { getSender } from '../auth/tokenStore';
+import { useSelfEndpoint } from '../auth/AuthContext';
 import { mergeRows, type PendingMessage } from './mergeRows';
 import { RowView } from './RowView';
 import { ackWatermark, isTopLevel, replyCounts, rowsById, threadRootOf } from './threads';
@@ -25,6 +25,7 @@ export function Timeline({
   onOpenThread?: (rootId: string) => void;
 }) {
   const { items, isLoading, error } = useHistory(roomId);
+  const sender = useSelfEndpoint();
   const byId = useMemo(() => rowsById(items), [items]);
   const counts = useMemo(() => replyCounts(items, byId), [items, byId]);
   const rows = useMemo(
@@ -49,7 +50,6 @@ export function Timeline({
 
   if (error && items.length === 0) return <ErrorBanner error={error} />;
   if (isLoading) return <p>Loading messages…</p>;
-  const sender = getSender();
   return (
     <section aria-label="Messages" className="timeline" ref={scroller}>
       {error ? <ErrorBanner error={error} /> : null}

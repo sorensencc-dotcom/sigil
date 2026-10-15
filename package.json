@@ -18,6 +18,8 @@
     "sigil/connectors/v1/*.sql",
     "sigil/ingress/v1/*.mjs",
     "sigil/relay/v1/*.mjs",
+    "sigil/relay/v1/oauth/*.mjs",
+    "sigil/relay/v1/oauth/providers/*.mjs",
     "sigil/relay/v1/transport-libp2p/*.mjs",
     "sigil/bridges/v1/*.mjs",
     "sigil/contracts/v1/*.json",

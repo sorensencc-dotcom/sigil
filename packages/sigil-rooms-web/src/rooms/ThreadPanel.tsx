@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { getSender } from '../auth/tokenStore';
+import { useSelfEndpoint } from '../auth/AuthContext';
 import { Composer } from './Composer';
 import { mergeRows, type PendingMessage } from './mergeRows';
 import { RowView } from './RowView';
@@ -29,7 +29,7 @@ export function ThreadPanel({
     () => mergeRows(threadReplies(items, byId, rootId), pending.filter((message) => message.threadRootId === rootId)),
     [items, byId, rootId, pending],
   );
-  const sender = getSender();
+  const sender = useSelfEndpoint();
   return (
     <aside className="thread" aria-label="Thread">
       <header className="thread-head">

@@ -11,13 +11,33 @@ const { values } = parseArgs({
     port: { type: 'string', default: '5173' },
     'relay-url': { type: 'string', default: 'http://127.0.0.1:7777' },
     'stream-url': { type: 'string' },
+    'auth-mode': { type: 'string', default: 'token' },
+    'public-origin': { type: 'string' },
     dist: { type: 'string', default: path.resolve(here, '../dist') },
   },
 });
 
+const authMode = values['auth-mode'];
+if (authMode !== 'token' && authMode !== 'cookie') {
+  console.error('sigil-rooms-web: --auth-mode must be "cookie" or "token".');
+  process.exit(1);
+}
+let publicOrigin;
+if (authMode === 'cookie') {
+  try {
+    publicOrigin = new URL(values['public-origin']);
+  } catch {
+    publicOrigin = undefined;
+  }
+  if (!publicOrigin || publicOrigin.protocol !== 'https:') {
+    console.error('sigil-rooms-web: --public-origin <https url> is required with --auth-mode cookie.');
+    process.exit(1);
+  }
+}
+
 const port = Number(values.port);
 const relayUrl = values['relay-url'].replace(/\/$/, '');
-const streamUrl = (values['stream-url'] ?? defaultStreamUrl(relayUrl)).replace(/\/$/, '');
+const streamUrl = (values['stream-url'] ?? (authMode === 'cookie' ? '' : defaultStreamUrl(relayUrl))).replace(/\/$/, '');
 const distDir = path.resolve(values.dist);
 
 if (!fs.existsSync(path.join(distDir, 'index.html'))) {
@@ -25,7 +45,7 @@ if (!fs.existsSync(path.join(distDir, 'index.html'))) {
   process.exit(1);
 }
 
-const server = createWebServer({ distDir, relayUrl, streamUrl });
+const server = createWebServer({ distDir, relayUrl, streamUrl, authMode, publicOrigin: values['public-origin'] });
 server.on('error', (error) => {
   console.error(`sigil-rooms-web: ${error.message}`);
   process.exit(1);
@@ -33,6 +53,8 @@ server.on('error', (error) => {
 server.listen(port, '127.0.0.1', () => {
   const origin = `http://127.0.0.1:${server.address().port}`;
   console.log(`Open ${origin}`);
-  console.log(`Start the relay with: sigil relay up --port ${new URL(relayUrl).port} --browser-origin ${origin} --room-human-identity <identity.json>`);
-  console.log('Open exactly that origin: localhost and 127.0.0.1 are different origins to the relay.');
+  if (authMode === 'token') {
+    console.log(`Start the relay with: sigil relay up --port ${new URL(relayUrl).port} --browser-origin ${origin} --room-human-identity <identity.json>`);
+    console.log('Open exactly that origin: localhost and 127.0.0.1 are different origins to the relay.');
+  }
 });

@@ -61,6 +61,7 @@ test('sigil relay up --p2p logs a listen multiaddr', { timeout: 90_000 }, async 
     sigilCli, 'relay', 'up', '--port', '0', '--p2p',
     '--p2p-identity', path.join('.sigil', 'alice.identity.json'),
   ], { cwd });
+  let timer;
   try {
     const output = await new Promise((resolve, reject) => {
       let buf = '';
@@ -72,10 +73,11 @@ test('sigil relay up --p2p logs a listen multiaddr', { timeout: 90_000 }, async 
       child.on('exit', (code) => reject(new Error(`sigil relay up exited early with code ${code}: ${buf}`)));
       // libp2p startup can exceed five seconds on Windows under a cold Node process,
       // and past 25s when the full suite runs in parallel (pre-push hook).
-      setTimeout(() => reject(new Error(`timed out waiting for a p2p listen multiaddr: ${buf}`)), 80_000);
+      timer = setTimeout(() => reject(new Error(`timed out waiting for a p2p listen multiaddr: ${buf}`)), 80_000);
     });
     assert.match(output, /\/ip4\/127\.0\.0\.1\/tcp\/\d+\/p2p\/\w+/);
   } finally {
+    clearTimeout(timer); // a live 80s/15s timer keeps this file's process alive past the runner's 30s per-file cap
     await new Promise((resolve) => { child.once('exit', resolve); child.kill(); });
     for (let attempt = 0; ; attempt++) {
       try { fs.rmSync(cwd, { recursive: true, force: true }); break; }
@@ -87,6 +89,7 @@ test('sigil relay up --p2p logs a listen multiaddr', { timeout: 90_000 }, async 
 test('sigil relay up without --p2p never starts a libp2p host (no p2p listen line)', async () => {
   const cwd = tmpCwdWithRegistry();
   const child = spawn(process.execPath, [sigilCli, 'relay', 'up', '--port', '0'], { cwd });
+  let timer;
   try {
     const output = await new Promise((resolve, reject) => {
       let buf = '';
@@ -96,10 +99,11 @@ test('sigil relay up without --p2p never starts a libp2p host (no p2p listen lin
       };
       child.stdout.on('data', onData);
       child.on('exit', (code) => reject(new Error(`sigil relay up exited early with code ${code}: ${buf}`)));
-      setTimeout(() => reject(new Error(`timed out waiting for relay to start: ${buf}`)), 15_000);
+      timer = setTimeout(() => reject(new Error(`timed out waiting for relay to start: ${buf}`)), 15_000);
     });
     assert.doesNotMatch(output, /sigil relay p2p listening on/);
   } finally {
+    clearTimeout(timer); // a live 80s/15s timer keeps this file's process alive past the runner's 30s per-file cap
     await new Promise((resolve) => { child.once('exit', resolve); child.kill(); });
     for (let attempt = 0; ; attempt++) {
       try { fs.rmSync(cwd, { recursive: true, force: true }); break; }

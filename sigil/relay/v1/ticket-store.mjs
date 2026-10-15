@@ -6,7 +6,7 @@ const digest = (ticket) => crypto.createHash('sha256').update(ticket, 'utf8').di
 // HTTP server (issues) and the stream server (redeems), so a ticket issued on
 // one port redeems on the other. A relay restart invalidates every ticket.
 export function createTicketStore({ now = () => new Date(), ttlMs = 60_000, maxPerEndpoint = 8 } = {}) {
-  const entries = new Map(); // sha256(ticket) -> { endpoint_id, owner_id, human_id, expiresAt }
+  const entries = new Map(); // sha256(ticket) -> { endpoint_id, owner_id, human_id, session_id, expiresAt }
 
   const sweep = () => {
     const t = now().getTime();
@@ -14,14 +14,14 @@ export function createTicketStore({ now = () => new Date(), ttlMs = 60_000, maxP
   };
 
   return {
-    issue({ endpoint_id, owner_id, human_id }) {
+    issue({ endpoint_id, owner_id, human_id, session_id = null }) {
       sweep();
       let outstanding = 0;
       for (const entry of entries.values()) if (entry.endpoint_id === endpoint_id) outstanding += 1;
       if (outstanding >= maxPerEndpoint) throw Object.assign(new Error('too many outstanding tickets'), { code: 'TICKET_CAP' });
       const ticket = crypto.randomBytes(32).toString('base64url');
       const expiresAt = now().getTime() + ttlMs;
-      entries.set(digest(ticket), { endpoint_id, owner_id, human_id, expiresAt });
+      entries.set(digest(ticket), { endpoint_id, owner_id, human_id, session_id, expiresAt });
       return { ticket, expires_at: new Date(expiresAt).toISOString() };
     },
     redeem(ticket) {
@@ -31,7 +31,13 @@ export function createTicketStore({ now = () => new Date(), ttlMs = 60_000, maxP
       if (!entry) return null;
       entries.delete(key);
       if (entry.expiresAt <= now().getTime()) return null;
-      return { endpoint_id: entry.endpoint_id, owner_id: entry.owner_id, human_id: entry.human_id };
+      return { endpoint_id: entry.endpoint_id, owner_id: entry.owner_id, human_id: entry.human_id, session_id: entry.session_id };
+    },
+    revokeSession(sessionId) {
+      if (!sessionId) return 0;
+      let n = 0;
+      for (const [key, entry] of entries) if (entry.session_id === sessionId) { entries.delete(key); n += 1; }
+      return n;
     },
   };
 }

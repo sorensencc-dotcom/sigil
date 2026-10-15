@@ -20,7 +20,7 @@ test('issue returns a base64url ticket and an expiry 60 seconds out', () => {
 test('redeem returns the principal once, then null (single use)', () => {
   const store = createTicketStore();
   const { ticket } = store.issue(principal);
-  assert.deepEqual(store.redeem(ticket), principal);
+  assert.deepEqual(store.redeem(ticket), { ...principal, session_id: null });
   assert.equal(store.redeem(ticket), null);
 });
 
@@ -56,4 +56,24 @@ test('redeeming frees a cap slot', () => {
   const tickets = Array.from({ length: 8 }, () => store.issue(principal).ticket);
   store.redeem(tickets[0]);
   assert.ok(store.issue(principal).ticket);
+});
+
+test('issue with session_id round-trips through redeem', () => {
+  const store = createTicketStore();
+  const { ticket } = store.issue({ ...principal, session_id: 'sess_1' });
+  assert.deepEqual(store.redeem(ticket), { ...principal, session_id: 'sess_1' });
+});
+
+test('revokeSession drops that session\'s unredeemed tickets and leaves others', () => {
+  const store = createTicketStore();
+  const a = store.issue({ ...principal, session_id: 'sess_a' }).ticket;
+  const a2 = store.issue({ ...principal, session_id: 'sess_a' }).ticket;
+  const b = store.issue({ ...principal, session_id: 'sess_b' }).ticket;
+  const none = store.issue(principal).ticket;
+  assert.equal(store.revokeSession('sess_a'), 2);
+  assert.equal(store.redeem(a), null);
+  assert.equal(store.redeem(a2), null);
+  assert.equal(store.redeem(b).session_id, 'sess_b');
+  assert.equal(store.redeem(none).session_id, null);
+  assert.equal(store.revokeSession(null), 0);
 });

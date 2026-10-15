@@ -1,12 +1,13 @@
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ApiError } from './api/client';
-import { AuthProvider, useAuth } from './auth/AuthContext';
-import { getSender } from './auth/tokenStore';
+import { AuthProvider, useAuth, useSelfEndpoint } from './auth/AuthContext';
 import { TokenGate } from './auth/TokenGate';
 import { loadConfig, type WebConfig } from './config';
 import { describeError, ErrorBanner } from './errors/ErrorBanner';
 import { useLive } from './live/useLive';
+import { captureInviteFragment, InvitePage } from './pages/InvitePage';
+import { LoginPage } from './pages/LoginPage';
 import { Composer } from './rooms/Composer';
 import { RoomHeader } from './rooms/RoomHeader';
 import { RoomList } from './rooms/RoomList';
@@ -20,6 +21,7 @@ const DEFAULT_THEME = 'rewrite-labs';
 
 function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
   const { client } = useAuth();
+  const sender = useSelfEndpoint();
   const rooms = useQuery({ queryKey: ['rooms'], queryFn: () => client.listRooms() });
   const roomName = rooms.data?.find((room) => room.conversation_id === roomId)?.name ?? roomId;
   const { pending, send, retry, sendError } = useSend(roomId);
@@ -38,7 +40,7 @@ function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
       : null;
   return (
     <div className="room">
-      <RoomHeader roomId={roomId} name={roomName} sender={getSender()} onGone={onGone} />
+      <RoomHeader roomId={roomId} name={roomName} sender={sender} onGone={onGone} />
       <div className="room-body">
         <div className="room-main">
           <Timeline roomId={roomId} pending={pending} onVisibleSeq={reportSeq} onGone={onGone} seenThreadRoots={seenRoots} onOpenThread={openThreadRoot} />
@@ -71,7 +73,7 @@ function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
 }
 
 function Shell({ theme, onThemeChange }: { theme: string; onThemeChange: (next: string) => void }) {
-  const { token, login, signOut, rejected } = useAuth();
+  const { mode, isLoggedIn, loading, login, signOut, rejected } = useAuth();
   const [roomId, setRoomId] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const live = useLive();
@@ -79,7 +81,10 @@ function Shell({ theme, onThemeChange }: { theme: string; onThemeChange: (next: 
     setRoomId(null);
     void queryClient.invalidateQueries({ queryKey: ['rooms'] });
   }, [queryClient]);
-  if (!token) return <TokenGate onSubmit={login} rejected={rejected} theme={theme} onThemeChange={onThemeChange} />;
+  if (mode === 'cookie') {
+    if (loading) return <p>Loading…</p>;
+    if (!isLoggedIn) return window.location.pathname === '/invite' ? <InvitePage /> : <LoginPage />;
+  } else if (!isLoggedIn) return <TokenGate onSubmit={login} rejected={rejected} theme={theme} onThemeChange={onThemeChange} />;
   return (
     <main className="app">
       <header className="topbar">
@@ -110,6 +115,8 @@ function Shell({ theme, onThemeChange }: { theme: string; onThemeChange: (next: 
 }
 
 export function App() {
+  // Runs before any render branch so a signed-in visit to /invite#<token> still clears the secret from the URL.
+  useState(() => captureInviteFragment());
   const [config, setConfig] = useState<WebConfig | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [theme, setTheme] = useState<string>(() => {
@@ -146,7 +153,11 @@ export function App() {
   if (!config) return <p>Loading…</p>;
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider baseUrl={config.relayUrl} streamUrl={config.streamUrl}>
+      <AuthProvider
+        mode={config.authMode}
+        baseUrl={config.authMode === 'token' ? config.relayUrl : ''}
+        streamUrl={config.authMode === 'token' ? config.streamUrl : undefined}
+      >
         <Shell theme={theme} onThemeChange={setTheme} />
       </AuthProvider>
     </QueryClientProvider>

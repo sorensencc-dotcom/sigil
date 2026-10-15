@@ -81,6 +81,39 @@ Every command takes `--database-url` (or `SIGIL_DATABASE_URL`), runs in one tran
 
 The spec names these commands `sigil relay human ...`, `sigil relay agent ...`, and `sigil relay endpoint ...`; the CLI ships them at the top level.
 
+#### Sign in with GitHub (one origin)
+
+A guest signs in from a browser with a GitHub account and an invite link, and gets an `HttpOnly` cookie session instead of a pasted token. Spec: `docs/superpowers/specs/2026-10-11-sigil-rooms-third-party-login-design.md`. Real-provider checklist: `docs/superpowers/plans/2026-10-13-oauth-login-manual-smoke.md`.
+
+Topology: one dedicated HTTPS hostname. Your proxy sends `/v1/*` (including the `/v1/stream` WebSocket upgrade) to the relay's cookie-only listener and everything else to the static web server. The proxy must pass `Set-Cookie`, `Origin`, and `Host` through unchanged. The bearer-only routes (`/v1/envelopes`, `/v1/identities`, `/v1/endpoint-tokens`, `/v1/federation/*`, `/v1/health`, approvals) are not served on that listener.
+
+`relay up` flags and environment:
+
+| Flag or variable | Effect |
+| :--- | :--- |
+| `--public-origin <https origin>` | Turns on the cookie listener. Requires `--database-url`, `--port`, `--room-key-wrap-key`, and `--room-human-identity`. Also an allowed browser `Origin` for the stream. |
+| `--public-port <n>` | Port of the cookie-only listener on 127.0.0.1. Default: `--port` plus 2. |
+| `--enable-mock-oauth` | CI only. Replaces GitHub with a loopback fake at `SIGIL_MOCK_OAUTH_BASE_URL` and a distinct issuer. Requires `--public-origin`. |
+| `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` | Credentials of your GitHub OAuth App. The callback URL is `<public-origin>/v1/auth/oauth/github/callback`. |
+
+Start the web client with `node packages/sigil-rooms-web/bin/sigil-rooms-web.mjs --auth-mode cookie --public-origin <https origin> --port <n>`. Token mode stays the default.
+
+Operator commands (each takes `--database-url`; `--identity` names the operator):
+
+| Command | Effect |
+| :--- | :--- |
+| `sigil relay invite create --name <name> --room <room_id>:<member\|room_manager>... --public-origin <origin>` | Prints a single-use link valid for 24 hours. The token lives in the URL fragment and only its SHA-256 is stored. |
+| `sigil relay invite create --self --provider github --login <login> --public-origin <origin>` | Prints a 10-minute link that signs the operator in as the existing operator human. Resolves the login through `api.github.com`. |
+| `sigil relay invite create --human <human_id> --provider github --login <login> [--endpoint <id>] [--room <id>:<role> ...] --public-origin <origin>` | Pins the link to an existing human. |
+| `sigil relay invite list` and `sigil relay invite revoke <invite_id>` | Lists invites with their state; revokes an unused one. |
+| `sigil relay identity revoke --provider github (--login <login> \| --subject <id>)` | Revokes the GitHub identity and its sessions, and closes its open streams. The person needs a new invite to return. |
+
+Sessions expire after 8 hours idle or 7 days absolute. Logout and revocation close live sockets. `start` is protected by an exact `Origin` check (a browser form cannot send the `X-Sigil-CSRF` header); every other cookie-authenticated write needs both `Origin` and `X-Sigil-CSRF`.
+
+Known limitation: a targeted (`--human`) invite that reactivates a revoked identity is consumed but adds no rooms. Use `sigil human add-to-room` afterward.
+
+A `--human ... --room` invite sent to an active guest is ignored on login: it is not consumed and adds no rooms. Use `sigil human add-to-room` instead.
+
 #### Who may invoke an agent
 
 Each agent membership has `invokable_by`: `owner` (the default, and the value after a re-add) or `members`. Every invocation records the human it acts for (`subject_human_id`). A hop from one agent to another inherits that subject, so a `members` agent that a guest invoked cannot hand the chain to an `owner` agent. A refused trigger posts a `room.event` and writes a `room.invocation_refused` audit row. A queued invocation is refused at promotion if its subject is suspended, has left the room, or the agent switched to `owner` after queueing.

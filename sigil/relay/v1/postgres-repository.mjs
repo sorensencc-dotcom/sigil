@@ -5,6 +5,7 @@ import { assertAssurance, boundedDirectoryExpiry } from './auth-policy.mjs';
 import { withTransaction } from './with-transaction.mjs';
 import { generateInviteCode, hashMatchTarget } from './directory-trust.mjs';
 import { identityKeys } from '../../cli/identity.mjs';
+import { loadSessionRow } from './oauth/session-auth.mjs';
 
 function rowToPeerRecord(row) {
   return {
@@ -328,6 +329,11 @@ export class PostgresRepository {
         WHERE e.endpoint_id = $1 AND e.origin_domain IS NULL`,
       [endpointId]);
     return result.rows[0] ? { ...result.rows[0] } : null;
+  }
+  // The stream server's per-socket session read (login spec): the same row the
+  // cookie authenticator uses, so identity_status and last_seen_at are present.
+  async sessionLiveness(sessionId, client = this.pool) {
+    return loadSessionRow(this, sessionId, client);
   }
   async loadWrappedSigningKey(keyId, client = this.pool) {
     const result = await client.query('SELECT wrapped_private_key FROM human_signing_keys WHERE key_id = $1', [keyId]);
@@ -1174,12 +1180,12 @@ export class PostgresRepository {
       return { delivery_id: deliveryId, duplicate: false, delivery: result.rows[0] };
     });
   }
-  async createOidcIdentity({ issuer, subject, humanId, status = 'active', now = new Date() } = {}) {
+  async createOidcIdentity({ issuer, subject, humanId, status = 'active', now = new Date(), client = this.pool, verifiedVia = null, endpointId = null } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
-    const result = await this.pool.query(
-      `INSERT INTO oidc_identities (issuer, subject, human_id, status, created_at)
-       VALUES ($1, $2, $3, $4, $5) RETURNING issuer, subject, human_id, status, created_at`,
-      [issuer, subject, humanId, status, timestamp]
+    const result = await client.query(
+      `INSERT INTO oidc_identities (issuer, subject, human_id, status, created_at, verified_via, endpoint_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING issuer, subject, human_id, status, created_at, verified_via, endpoint_id`,
+      [issuer, subject, humanId, status, timestamp, verifiedVia, endpointId]
     );
     return result.rows[0];
   }
@@ -1236,15 +1242,15 @@ export class PostgresRepository {
       return { ...updated.rows[0], duplicate: false };
     });
   }
-  async createHumanSession({ sessionId, humanId, authenticationMethod, assurance, deviceContext = {}, issuedAt = new Date(), expiresAt, now = new Date(), client = this.pool } = {}) {
+  async createHumanSession({ sessionId, humanId, authenticationMethod, assurance, deviceContext = {}, issuedAt = new Date(), expiresAt, now = new Date(), client = this.pool, endpointId = null, lastSeenAt = null, identityIssuer = null, identitySubject = null } = {}) {
     assertAssurance(assurance);
     const issued = issuedAt instanceof Date ? issuedAt.toISOString() : new Date(issuedAt).toISOString();
     const expires = expiresAt instanceof Date ? expiresAt.toISOString() : new Date(expiresAt).toISOString();
     const result = await client.query(
-      `INSERT INTO human_sessions (session_id, human_id, authentication_method, assurance, device_context, issued_at, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING session_id, human_id, authentication_method, assurance, device_context, issued_at, version, expires_at, revoked_at`,
-      [sessionId, humanId, authenticationMethod, assurance, JSON.stringify(deviceContext), issued, expires]
+      `INSERT INTO human_sessions (session_id, human_id, authentication_method, assurance, device_context, issued_at, expires_at, endpoint_id, last_seen_at, identity_issuer, identity_subject)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING session_id, human_id, authentication_method, assurance, device_context, issued_at, version, expires_at, revoked_at, endpoint_id, last_seen_at, identity_issuer, identity_subject`,
+      [sessionId, humanId, authenticationMethod, assurance, JSON.stringify(deviceContext), issued, expires, endpointId, lastSeenAt ? new Date(lastSeenAt).toISOString() : null, identityIssuer, identitySubject]
     );
     return result.rows[0];
   }

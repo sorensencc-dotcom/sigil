@@ -1,19 +1,9 @@
 import crypto from 'node:crypto';
 import { normalizeIssuer } from './issuer-normalization.mjs';
+import { outboundFetchOptions } from './outbound-fetch.mjs';
 
 function invalidToken(message) {
   return Object.assign(new Error(message), { code: 'INVALID_ID_TOKEN' });
-}
-
-// Both outbound fetches (discovery + JWKS) get a fixed timeout and a hard
-// no-follow redirect policy: without these, a hung IdP holds the request
-// open indefinitely, and fetch's default redirect:'follow' would let an
-// allow-listed issuer's endpoint redirect to an arbitrary internal URL,
-// defeating the SSRF allow-list guard. AbortSignal.timeout(...) is called
-// fresh per request -- a single shared signal would fire once and then be
-// permanently "already aborted" for every call after its first 5s.
-function outboundFetchOptions() {
-  return { signal: AbortSignal.timeout(5000), redirect: 'error' };
 }
 
 export async function discoverIssuer(issuer, { fetchImpl = fetch } = {}) {

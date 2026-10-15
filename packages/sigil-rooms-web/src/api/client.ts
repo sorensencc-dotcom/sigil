@@ -1,4 +1,4 @@
-import type { AckResult, HistoryPage, InvokableBy, Member, ResponseMode, Room, SendResult, StopResult, TicketResult } from './types';
+import type { AckResult, Session, HistoryPage, InvokableBy, Member, ResponseMode, Room, SendResult, StopResult, TicketResult } from './types';
 
 export class ApiError extends Error {
   readonly code: string;
@@ -14,8 +14,10 @@ export class ApiError extends Error {
 }
 
 export interface ClientOptions {
+  /** 'cookie' sends the session cookie (same-origin, relative URLs, CSRF header) and never a bearer token. */
+  mode?: 'token' | 'cookie';
   baseUrl: string;
-  getToken: () => string | null;
+  getToken?: () => string | null;
   onUnauthorized?: () => void;
   fetchImpl?: typeof fetch;
 }
@@ -32,22 +34,37 @@ export interface ApiClient {
   stopRoom(roomId: string): Promise<StopResult>;
   ack(roomId: string, upToRoomSeq: string): Promise<AckResult>;
   wsTicket(): Promise<TicketResult>;
+  me(): Promise<Session>;
+  logout(): Promise<void>;
 }
 
-export function createClient({ baseUrl, getToken, onUnauthorized, fetchImpl = (...args) => fetch(...args) }: ClientOptions): ApiClient {
+export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized, fetchImpl = (...args) => fetch(...args) }: ClientOptions): ApiClient {
   async function request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
-    const token = getToken();
-    if (!token) throw new ApiError('UNAUTHENTICATED', 401, 'No token');
     let response: Response;
     try {
-      // Only authorization and content-type: the relay's CORS allows exactly those.
-      response = await fetchImpl(`${baseUrl}${path}`, {
-        method,
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
-    } catch {
-      throw new ApiError('NETWORK', 0, `Can't reach relay at ${baseUrl}. Check --browser-origin.`);
+      if (mode === 'cookie') {
+        // The session cookie is HttpOnly and travels on its own; the CSRF header is required on every non-GET.
+        const headers: Record<string, string> = { 'content-type': 'application/json' };
+        if (method !== 'GET') headers['X-Sigil-CSRF'] = '1';
+        response = await fetchImpl(path, {
+          method,
+          credentials: 'same-origin',
+          headers,
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+      } else {
+        const token = getToken?.() ?? null;
+        if (!token) throw new ApiError('UNAUTHENTICATED', 401, 'No token');
+        // Only authorization and content-type: the relay's CORS allows exactly those.
+        response = await fetchImpl(`${baseUrl}${path}`, {
+          method,
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+      }
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      throw new ApiError('NETWORK', 0, mode === 'cookie' ? "Can't reach the server." : `Can't reach relay at ${baseUrl}. Check --browser-origin.`);
     }
     const text = await response.text();
     let parsed: any = null;
@@ -97,6 +114,12 @@ export function createClient({ baseUrl, getToken, onUnauthorized, fetchImpl = (.
     },
     wsTicket() {
       return request<TicketResult>('POST', '/v1/rooms/ws-ticket');
+    },
+    me() {
+      return request<Session>('GET', '/v1/auth/me');
+    },
+    async logout() {
+      await request<unknown>('POST', '/v1/auth/logout');
     },
   };
 }

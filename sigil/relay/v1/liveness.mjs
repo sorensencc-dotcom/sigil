@@ -9,7 +9,9 @@ export function isSocketLive(snapshot, session = null, now = Date.now()) {
   if (snapshot.human_status != null && snapshot.human_status !== 'active') return false;
   if (session) {
     if (session.revoked_at) return false;
-    if (!(Date.parse(session.expires_at) > now)) return false;
+    if (!(new Date(session.expires_at).getTime() > now)) return false;
+    if (session.identity_status !== undefined && session.identity_status !== 'active') return false;
+    if (session.last_seen_at && now - new Date(session.last_seen_at).getTime() >= 8 * 3600_000) return false;
   }
   return true;
 }
