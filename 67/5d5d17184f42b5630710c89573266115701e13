@@ -1,0 +1,19 @@
+sigil/cli/relay-up-p2p.test.mjs
+  s_9bd789f95c4543::t_621c68065058b9 64,76,80,92,102,106
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "675d5d17184f42b5630710c89573266115701e13",
+  "prompts": {},
+  "sessions": {
+    "s_9bd789f95c4543": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8bf426f1-7494-45d0-a298-d2255f93f2e8",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
