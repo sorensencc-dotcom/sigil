@@ -163,8 +163,8 @@ export async function cmdIdentityRevoke(argv, { fetchImpl, apiBase, log = consol
     if (!updated.rows[0]) throw new Error(`no OAuth-verified github identity with subject ${subject}`);
     const humanId = updated.rows[0].human_id;
     const sessions = await client.query(
-      `UPDATE human_sessions SET revoked_at = $3 WHERE identity_issuer = $1 AND identity_subject = $2 AND revoked_at IS NULL AND expires_at > $3`,
-      [GITHUB_ISSUER, subject, stamp]);
+      `UPDATE human_sessions SET revoked_at = now() WHERE identity_issuer = $1 AND identity_subject = $2 AND revoked_at IS NULL AND expires_at > now()`,
+      [GITHUB_ISSUER, subject]);
     await client.query(
       `INSERT INTO audit_events (event_id, event_type, subject_id, actor_human_id, object_type, object_id, outcome, created_at)
        VALUES ($1,'oidc_identity.revoked',$2,$3,'oidc_identity',$4,'success',$5)`,
