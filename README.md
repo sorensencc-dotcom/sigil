@@ -104,13 +104,15 @@ Operator commands (each takes `--database-url`; `--identity` names the operator)
 | :--- | :--- |
 | `sigil relay invite create --name <name> --room <room_id>:<member\|room_manager>... --public-origin <origin>` | Prints a single-use link valid for 24 hours. The token lives in the URL fragment and only its SHA-256 is stored. |
 | `sigil relay invite create --self --provider github --login <login> --public-origin <origin>` | Prints a 10-minute link that signs the operator in as the existing operator human. Resolves the login through `api.github.com`. |
-| `sigil relay invite create --human <human_id> --provider github --login <login> --public-origin <origin>` | Pins the link to an existing human. |
+| `sigil relay invite create --human <human_id> --provider github --login <login> [--endpoint <id>] [--room <id>:<role> ...] --public-origin <origin>` | Pins the link to an existing human. |
 | `sigil relay invite list` and `sigil relay invite revoke <invite_id>` | Lists invites with their state; revokes an unused one. |
 | `sigil relay identity revoke --provider github (--login <login> \| --subject <id>)` | Revokes the GitHub identity and its sessions, and closes its open streams. The person needs a new invite to return. |
 
 Sessions expire after 8 hours idle or 7 days absolute. Logout and revocation close live sockets. `start` is protected by an exact `Origin` check (a browser form cannot send the `X-Sigil-CSRF` header); every other cookie-authenticated write needs both `Origin` and `X-Sigil-CSRF`.
 
 Known limitation: a targeted (`--human`) invite that reactivates a revoked identity is consumed but adds no rooms. Use `sigil human add-to-room` afterward.
+
+A `--human ... --room` invite sent to an active guest is ignored on login: it is not consumed and adds no rooms. Use `sigil human add-to-room` instead.
 
 #### Who may invoke an agent
 
