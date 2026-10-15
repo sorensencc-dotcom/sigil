@@ -1,0 +1,20 @@
+sigil/migrations/033_multi_human_foundation.test.mjs
+  s_9bd789f95c4543::t_62e5d03dd968b2 58-60
+  s_9bd789f95c4543::t_7be7549c3ee286 54-57,61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d11b6de95bb1714088cd0fee7a8ea28ce7ab5feb",
+  "prompts": {},
+  "sessions": {
+    "s_9bd789f95c4543": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8bf426f1-7494-45d0-a298-d2255f93f2e8",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
