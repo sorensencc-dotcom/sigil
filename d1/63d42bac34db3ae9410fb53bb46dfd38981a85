@@ -1,0 +1,22 @@
+sigil/relay/v1/floor-warden-e2e.pg.test.mjs
+  s_cf48dae32d5dd9::t_c955fb5754047c 183-186
+  s_cf48dae32d5dd9::t_6f2cb0065c53e0 96
+  s_cf48dae32d5dd9::t_8916371a806b27 1-95,97-182,187-215,217-526
+  s_cf48dae32d5dd9::t_29ae24e641c32e 216
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d163d42bac34db3ae9410fb53bb46dfd38981a85",
+  "prompts": {},
+  "sessions": {
+    "s_cf48dae32d5dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b2d6e6eb-486c-43c6-b0b9-03b0bd947fd1",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
