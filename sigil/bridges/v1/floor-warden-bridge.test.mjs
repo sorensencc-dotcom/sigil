@@ -493,3 +493,32 @@ test('halt: a rejected halt POST is logged and recorded, and not retried', async
   assert.ok(s.sessions.get('room_1').floor_warden.halts.inv_1);
   assert.ok(s.logs.some((line) => /rejected the halt frame for inv_1 with HTTP 400/.test(line)));
 });
+
+// ---- fix round 2 ------------------------------------------------------------
+
+test('deadline: a failRoomInvocation that always rejects stops after maxAttempts even while polls succeed, and keeps the record', async (t) => {
+  const s = setup(t);
+  await s.make().handle({ envelope: envelopeFor(s.relay, 'msg_t') });
+  let failCalls = 0;
+  s.relay.failRoomInvocation = async () => { failCalls += 1; throw Object.assign(new Error('Invocation not found'), { code: 'INVOCATION_NOT_FOUND', status: 404 }); };
+  t.mock.timers.tick(TIMEOUT);
+  await flush();
+  for (let i = 0; i < 12; i += 1) { t.mock.timers.tick(POLL); await flush(); }
+  assert.equal(failCalls, 5);
+  assert.equal(s.logs.filter((line) => /stopped watching inv_1/.test(line)).length, 1);
+  assert.ok(s.sessions.get('room_1').floor_warden.forwards.inv_1, 'recover() can retry it');
+  const before = s.relay.calls.length;
+  t.mock.timers.tick(TIMEOUT * 2);
+  await flush();
+  assert.equal(s.relay.calls.length, before, 'poll and deadline are both disarmed');
+  assert.equal(failCalls, 5);
+});
+
+test('recover() still walks /v1/rooms when the session store cannot list its rooms', async (t) => {
+  const s = setup(t, { invocations: [inv('inv_1', 'room_1', 'msg_t', { startedAt: T0 - 20 * MIN })] });
+  s.sessions.rooms = () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); };
+  await s.make().recover();
+  await flush();
+  assert.deepEqual(s.relay.failed, [['room_1', 'REPLY_TIMEOUT', 'inv_1']]);
+  assert.ok(s.logs.some((line) => /session store room list/.test(line)));
+});

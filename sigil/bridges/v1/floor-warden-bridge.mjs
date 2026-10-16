@@ -131,7 +131,7 @@ export function createFloorWardenBridge({
   function arm(roomId, invocationId, deadlineAt) {
     disarm(invocationId);
     if (closed) return;
-    const watch = { roomId, busy: false, haltAttempts: 0, errors: 0, deadline: null, poll: null };
+    const watch = { roomId, busy: false, haltAttempts: 0, errors: 0, deadlineErrors: 0, deadline: null, poll: null };
     watch.deadline = setTimeout(() => onDeadline(invocationId), Math.max(0, deadlineAt - Date.now()));
     watch.poll = setInterval(() => onPoll(invocationId), pollIntervalMs);
     watches.set(invocationId, watch);
@@ -142,13 +142,15 @@ export function createFloorWardenBridge({
     return running.some((row) => row.invocation_id === invocationId);
   }
 
-  // Consecutive relay errors across the poll and the deadline. At maxAttempts
-  // the watch stops (one warning) but the forward record stays in the session
-  // store, so recover() retries it after a restart. Returns true when stopped.
-  function watchError(invocationId, watch, what, error) {
-    watch.errors += 1;
+  // Relay errors, counted per path: `errors` for consecutive poll reads (a
+  // good read resets it) and `deadlineErrors` for the deadline check and its
+  // failRoomInvocation, which the poll never resets. At maxAttempts on either
+  // counter the watch stops (one warning) but the forward record stays in the
+  // session store, so recover() retries it after a restart. Returns true when stopped.
+  function watchError(invocationId, watch, what, error, counter = 'errors') {
+    watch[counter] += 1;
     warn(`floor warden: ${what} for ${invocationId}: ${error?.message ?? String(error)}`);
-    if (watch.errors < maxAttempts) return false;
+    if (watch[counter] < maxAttempts) return false;
     warn(`floor warden: stopped watching ${invocationId} after ${maxAttempts} consecutive relay errors; recover() retries it`);
     disarm(invocationId);
     return true;
@@ -166,7 +168,7 @@ export function createFloorWardenBridge({
       // Not running: the poll decides between nothing and a halt frame.
     } catch (error) {
       if (closed || watches.get(invocationId) !== watch) return;
-      if (watchError(invocationId, watch, 'deadline check', error)) return;
+      if (watchError(invocationId, watch, 'deadline check', error, 'deadlineErrors')) return;
       watch.deadline = setTimeout(() => onDeadline(invocationId), pollIntervalMs);
     }
   }
@@ -394,7 +396,8 @@ export function createFloorWardenBridge({
     let listed = [];
     try { listed = (await listRooms()).map((room) => room.conversation_id); } catch (error) { warn(`floor warden: recover room list: ${error.message}`); }
     // Rooms the bot left still hold forward records; the store lists them.
-    const stored = typeof sessions.rooms === 'function' ? sessions.rooms() : [];
+    let stored = [];
+    try { if (typeof sessions.rooms === 'function') stored = sessions.rooms(); } catch (error) { warn(`floor warden: recover session store room list: ${error?.message ?? String(error)}`); }
     for (const roomId of new Set([...listed, ...stored])) {
       try {
         const fw = roomValue(roomId).floor_warden;
