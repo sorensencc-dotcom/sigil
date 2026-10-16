@@ -1118,15 +1118,12 @@ async function buildFloorWardenRoomBridge({ args, identity, relayUrl }) {
   if (!botId) throw new Error('Floor Warden bot id missing: the identity file has no bot_id (re-create it with sigil bot add) and --floor-warden-bot-id was not given');
   const replyTimeoutMs = positiveIntFlag(args, 'reply-timeout-ms', 15 * 60_000);
 
-  const util = await import('node:util');
+  const { createRedactingLogger } = await import('./redacting-logger.mjs');
   const secrets = [webhookUrl, webhookUrl.replace(/\/+$/, ''), parsedUrl.href, key, identity.relay_token];
   if (parsedUrl.pathname.length > 1) secrets.push(parsedUrl.pathname + parsedUrl.search, parsedUrl.pathname, parsedUrl.pathname.slice(1));
   if (parsedUrl.search.length > 1) secrets.push(parsedUrl.search);
   for (const part of [parsedUrl.username, parsedUrl.password]) if (part) secrets.push(part);
-  const scrubList = [...new Set(secrets.filter((s) => typeof s === 'string' && s.length >= 4))].sort((a, b) => b.length - a.length);
-  const scrub = (text) => scrubList.reduce((out, secret) => out.split(secret).join('[redacted]'), text);
-  const format = (value) => (typeof value === 'string' ? value : util.inspect(value, { depth: 4 }));
-  const logger = Object.fromEntries(['log', 'info', 'warn', 'error', 'debug'].map((level) => [level, (...values) => console[level](scrub(values.map(format).join(' ')))]));
+  const { logger } = createRedactingLogger({ secrets });
 
   const { createFloorWardenBridge } = await import('../bridges/v1/floor-warden-bridge.mjs');
   const { createSessionStore } = await import('../bridges/v1/session-store.mjs');

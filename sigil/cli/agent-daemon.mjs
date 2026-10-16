@@ -54,7 +54,7 @@ export function createAgentDaemon({
 
   // A receive-only identity (written by `sigil bot add`) holds a relay token
   // and no private key: the relay signs for it. The signing outbox is built on
-  // first use, so such an identity never reaches identityKeys().
+  // demand, so such an identity never reaches identityKeys().
   const receiveOnly = identity.receive_only === true;
   let outbox = null;
   function signingOutbox() {
@@ -71,6 +71,8 @@ export function createAgentDaemon({
     }
     return outbox;
   }
+  // Any other identity must sign, so a missing or corrupt key still stops the daemon at startup.
+  if (!receiveOnly) signingOutbox();
   const relay = new RelayClient({ baseUrl: relayUrl, token: identity.relay_token });
 
   let running = false;

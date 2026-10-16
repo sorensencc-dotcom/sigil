@@ -14,6 +14,7 @@ import { spawn, spawnSync, execSync } from 'node:child_process';
 import { createAgentDaemon } from './agent-daemon.mjs';
 import { createIdentity, saveIdentity } from './identity.mjs';
 import { createFloorWardenBridge } from '../bridges/v1/floor-warden-bridge.mjs';
+import { createRedactingLogger } from './redacting-logger.mjs';
 import { createSessionStore } from '../bridges/v1/session-store.mjs';
 import { RelayClient } from '../connectors/v1/relay-client.mjs';
 
@@ -164,7 +165,7 @@ test('daemon acks a task.request on a receive-only identity without a reply, a w
     assert.equal(typeof realExecute, 'function');
     const result = await daemon.processItem({ delivery_id: 'del_task_1', envelope: taskEnvelope() });
     assert.equal(result.outcome, 'acknowledged');
-    workerRan = relay.calls.some((c) => c.path.endsWith('/processing') && c.body?.state === 'processing_failed');
+    workerRan = relay.calls.some((c) => c.path.endsWith('/processing'));
   });
   assert.equal(workerRan, false, 'worker never ran');
   assert.ok(relay.calls.some((c) => c.path === '/v1/deliveries/del_task_1/ack'), 'delivery acked');
@@ -561,4 +562,37 @@ test('daemon start runs the bridge recover() and stop closes it', async () => {
   assert.ok(relay.calls.some((c) => c.path === '/v1/rooms'), 'recover listed rooms');
   assert.ok(relay.calls.some((c) => c.path === `/v1/rooms/${ROOM}/invocations`), 'recover read running invocations');
   assert.equal(closed, 1);
+});
+
+// ---- fix round 1 -------------------------------------------------------------------
+
+test('daemon still throws at construction for a keyless identity that is not receive-only', () => {
+  const identity = receiveOnlyIdentity();
+  delete identity.receive_only;
+  assert.throws(() => createAgentDaemon({ identity, relayUrl: 'http://relay.invalid', logger: captureLogger().logger }));
+  const corrupt = { ...createIdentity({ ownerId: 'alice', endpointId: 'ep_alice_bad', kind: 'agent' }), private_key_pem: 'not a pem' };
+  assert.throws(() => createAgentDaemon({ identity: corrupt, relayUrl: 'http://relay.invalid', logger: captureLogger().logger }));
+  assert.doesNotThrow(() => createAgentDaemon({ identity: receiveOnlyIdentity(), relayUrl: 'http://relay.invalid', logger: captureLogger().logger }));
+});
+
+test('redacting logger scrubs a secret holding quote characters from errors, causes, nested objects and long strings', () => {
+  const key = `k'e"y\`-${random()}`;
+  const urlPath = `/hooks/it's-${random()}`;
+  const lines = [];
+  const sink = { log: (l) => lines.push(l), info: (l) => lines.push(l), warn: (l) => lines.push(l), error: (l) => lines.push(l), debug: (l) => lines.push(l) };
+  const { logger } = createRedactingLogger({ secrets: [key, urlPath], sink });
+  const err = Object.assign(new Error(`boom ${key}`), { detail: { url: `https://x.test${urlPath}` }, cause: new Error(`cause ${urlPath} ${key}`) });
+  logger.error('failed:', err);
+  logger.warn({ nested: { deep: [`a ${key} b`, { k: urlPath }] } });
+  logger.info({ long: `${'x'.repeat(9_995)}${key}${'y'.repeat(50)}` });
+  logger.log(`plain ${key}`);
+  const text = lines.join('\n');
+  assert.equal(lines.length, 4);
+  assert.ok(!text.includes(key), 'key leaked');
+  assert.ok(!text.includes(urlPath), 'path leaked');
+  for (const fragment of [key.slice(0, 6), key.slice(7), urlPath.slice(8)]) assert.ok(!text.includes(fragment), `fragment leaked: ${fragment}`);
+  assert.ok(!text.includes(util.inspect(key).slice(1, -1)), 'inspect-escaped key leaked');
+  assert.match(text, /\[redacted\]/);
+  assert.match(text, /boom/);
+  assert.match(text, /cause/);
 });
