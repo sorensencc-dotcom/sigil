@@ -1,0 +1,19 @@
+docs/superpowers/plans/2026-10-16-floor-warden-bridge-verification-notes.md
+  s_e636ac0c41889c::t_2dc73fc6ea3328 1-48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a7ffa0f1fe693a4933b216497b718b7ab767f947",
+  "prompts": {},
+  "sessions": {
+    "s_e636ac0c41889c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1efb2915-6195-49cd-aaa5-ea6648e9e650",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
