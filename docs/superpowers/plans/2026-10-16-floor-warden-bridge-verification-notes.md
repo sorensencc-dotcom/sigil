@@ -20,10 +20,10 @@ Task 5 prints this line after `bot add`: "restart relay after `bot add` so it lo
 
 ## Daemon ack rule (assumption 6)
 
-The room branch is `sigil/cli/agent-daemon.mjs:192-202`.
+The room branch is `sigil/cli/agent-daemon.mjs:213-226`.
 
-- If `onRoomMessage` returns, the daemon acks the delivery with `outcome: 'acknowledged'` (`:201`). It returns `room_<outcome>`, and the `?? 'failed'` fallback covers a missing `outcome`. The bridge's `forwarded`, `failed` and `skipped` are all acked.
-- If `onRoomMessage` throws, the daemon logs the error, skips the ack and returns `room_unacked` (`:198-202`). `poll` records this as `leftUnacked` (`:221`), and the delivery returns on the next poll.
+- If `onRoomMessage` returns, the daemon acks the delivery with `outcome: 'acknowledged'` (`:224`). It returns `room_<outcome>`, and the `?? 'failed'` fallback covers a missing `outcome`. The bridge's `forwarded`, `failed` and `skipped` are all acked.
+- If `onRoomMessage` throws, the daemon logs the error, skips the ack and returns `room_unacked` (`:218-222`). `poll` records this as `leftUnacked` (`:242`), and the delivery returns on the next poll.
 
 The bridge must never throw once it knows the invocation. It must throw only when it cannot look the invocation up.
 
