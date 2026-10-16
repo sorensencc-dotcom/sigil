@@ -39,6 +39,8 @@ import { buildForwardPayload, buildHaltPayload, PAYLOAD_MAX_BYTES } from './floo
 const DEFAULT_MAX_TURNS = 6;
 const PAGE = 500;
 const RETRY = 'FLOOR_WARDEN_RETRY';
+// RFC 7230 token: the characters an HTTP header field name may use.
+const HEADER_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 
 function parseKeyHeader(spec) {
   const raw = String(spec ?? 'Authorization: Bearer');
@@ -46,7 +48,7 @@ function parseKeyHeader(spec) {
   const name = (colon === -1 ? raw : raw.slice(0, colon)).trim().toLowerCase();
   let scheme = colon === -1 ? '' : raw.slice(colon + 1).trim();
   if (colon === -1 && name === 'authorization') scheme = 'Bearer';
-  if (!name) throw Object.assign(new Error('Floor Warden key header name is empty'), { code: 'INVALID_CONFIG' });
+  if (!HEADER_TOKEN.test(name)) throw Object.assign(new Error('Floor Warden key header name is not a valid HTTP header name'), { code: 'INVALID_CONFIG' });
   return { name, scheme };
 }
 
@@ -75,7 +77,17 @@ export function createFloorWardenBridge({
 
   const secrets = (() => {
     const list = [webhook.url, webhook.url.replace(/\/+$/, ''), encodeURI(webhook.url), webhook.key];
-    try { const u = new URL(webhook.url); if (u.pathname.length > 1) list.push(u.pathname + u.search, u.pathname); if (u.search.length > 1) list.push(u.search); } catch { /* not a URL: the whole string is listed */ }
+    try {
+      const u = new URL(webhook.url);
+      list.push(u.href, u.href.replace(/\/+$/, ''));
+      if (u.pathname.length > 1) list.push(u.pathname + u.search, u.pathname);
+      if (u.search.length > 1) list.push(u.search);
+      for (const part of [u.username, u.password]) {
+        if (!part) continue;
+        list.push(part);
+        try { list.push(decodeURIComponent(part)); } catch { /* not percent-encoded */ }
+      }
+    } catch { /* not a URL: the whole string is listed */ }
     return [...new Set(list.filter((s) => typeof s === 'string' && s.length >= 4))].sort((a, b) => b.length - a.length);
   })();
   const scrub = (text) => secrets.reduce((out, secret) => out.split(secret).join('[redacted]'), String(text ?? ''));
@@ -119,7 +131,7 @@ export function createFloorWardenBridge({
   function arm(roomId, invocationId, deadlineAt) {
     disarm(invocationId);
     if (closed) return;
-    const watch = { roomId, busy: false, haltAttempts: 0, deadline: null, poll: null };
+    const watch = { roomId, busy: false, haltAttempts: 0, errors: 0, deadline: null, poll: null };
     watch.deadline = setTimeout(() => onDeadline(invocationId), Math.max(0, deadlineAt - Date.now()));
     watch.poll = setInterval(() => onPoll(invocationId), pollIntervalMs);
     watches.set(invocationId, watch);
@@ -130,18 +142,32 @@ export function createFloorWardenBridge({
     return running.some((row) => row.invocation_id === invocationId);
   }
 
+  // Consecutive relay errors across the poll and the deadline. At maxAttempts
+  // the watch stops (one warning) but the forward record stays in the session
+  // store, so recover() retries it after a restart. Returns true when stopped.
+  function watchError(invocationId, watch, what, error) {
+    watch.errors += 1;
+    warn(`floor warden: ${what} for ${invocationId}: ${error?.message ?? String(error)}`);
+    if (watch.errors < maxAttempts) return false;
+    warn(`floor warden: stopped watching ${invocationId} after ${maxAttempts} consecutive relay errors; recover() retries it`);
+    disarm(invocationId);
+    return true;
+  }
+
   async function onDeadline(invocationId) {
     const watch = watches.get(invocationId);
     if (!watch || closed) return;
     try {
       if (await isRunning(watch.roomId, invocationId)) {
         if (closed || watches.get(invocationId) !== watch) return;
-        await fail(watch.roomId, invocationId, 'REPLY_TIMEOUT');
+        // Rethrows: the record and timers stay until the relay confirms.
+        await failConfirmed(watch.roomId, invocationId, 'REPLY_TIMEOUT');
       }
       // Not running: the poll decides between nothing and a halt frame.
     } catch (error) {
-      warn(`floor warden: deadline check for ${invocationId}: ${error.message}`);
-      if (watches.get(invocationId) === watch && !closed) watch.deadline = setTimeout(() => onDeadline(invocationId), pollIntervalMs);
+      if (closed || watches.get(invocationId) !== watch) return;
+      if (watchError(invocationId, watch, 'deadline check', error)) return;
+      watch.deadline = setTimeout(() => onDeadline(invocationId), pollIntervalMs);
     }
   }
 
@@ -150,7 +176,9 @@ export function createFloorWardenBridge({
     if (!watch || watch.busy || closed) return;
     watch.busy = true;
     try {
-      if (await isRunning(watch.roomId, invocationId)) return;
+      const running = await isRunning(watch.roomId, invocationId);
+      watch.errors = 0;
+      if (running) return;
       const all = await relay.listRoomInvocations(watch.roomId, { endpointId: self });
       if (closed || watches.get(invocationId) !== watch) return;
       const row = all.find((item) => item.invocation_id === invocationId);
@@ -165,7 +193,7 @@ export function createFloorWardenBridge({
       }
       finish(watch.roomId, invocationId);
     } catch (error) {
-      warn(`floor warden: invocation poll for ${invocationId}: ${error.message}`);
+      if (!closed && watches.get(invocationId) === watch) watchError(invocationId, watch, 'invocation poll', error);
     } finally {
       watch.busy = false;
     }
@@ -200,6 +228,11 @@ export function createFloorWardenBridge({
       warn(`floor warden: room lookup for ${roomId}: ${error.message}`);
       return null;
     }
+  }
+
+  async function failConfirmed(roomId, invocationId, reason) {
+    await relay.failRoomInvocation(roomId, reason, invocationId);
+    finish(roomId, invocationId);
   }
 
   async function fail(roomId, invocationId, reason) {
@@ -238,9 +271,9 @@ export function createFloorWardenBridge({
     try {
       return await forward(envelope, roomId, invocation);
     } catch (error) {
-      if (error.code === RETRY) throw error;
-      logger.error?.(scrub(`floor warden bridge: ${error.message}`));
-      return fail(roomId, invocation.invocation_id, error.code ?? 'BRIDGE_ERROR');
+      if (error?.code === RETRY) throw error;
+      logger.error?.(scrub(`floor warden bridge: ${error?.message ?? String(error)}`));
+      return fail(roomId, invocation.invocation_id, (typeof error?.code === 'string' && error.code) || 'BRIDGE_ERROR');
     }
   }
 
@@ -358,8 +391,11 @@ export function createFloorWardenBridge({
   // forward, else started_at), re-arms the younger ones, and sends any halt
   // frame a restart lost between the cancel and the poll.
   async function recover() {
-    for (const room of await listRooms()) {
-      const roomId = room.conversation_id;
+    let listed = [];
+    try { listed = (await listRooms()).map((room) => room.conversation_id); } catch (error) { warn(`floor warden: recover room list: ${error.message}`); }
+    // Rooms the bot left still hold forward records; the store lists them.
+    const stored = typeof sessions.rooms === 'function' ? sessions.rooms() : [];
+    for (const roomId of new Set([...listed, ...stored])) {
       try {
         const fw = roomValue(roomId).floor_warden;
         const running = await relay.listRoomInvocations(roomId, { endpointId: self, status: 'running' });
@@ -369,8 +405,9 @@ export function createFloorWardenBridge({
           runningIds.add(invocationId);
           const startedAt = Date.parse(fw.forwards[invocationId]?.forwarded_at ?? invocation.started_at ?? invocation.created_at ?? '');
           const deadlineAt = Number.isFinite(startedAt) ? startedAt + replyTimeoutMs : Date.now() + replyTimeoutMs;
-          if (Date.now() >= deadlineAt) await fail(roomId, invocationId, 'REPLY_TIMEOUT');
-          else arm(roomId, invocationId, deadlineAt);
+          if (Date.now() >= deadlineAt) {
+            await failConfirmed(roomId, invocationId, 'REPLY_TIMEOUT').catch((error) => warn(`floor warden: recover failRoomInvocation for ${invocationId}: ${error.message}`));
+          } else arm(roomId, invocationId, deadlineAt);
         }
         const pending = Object.keys(fw.forwards).filter((id) => !runningIds.has(id) && !fw.halts[id]);
         if (!pending.length) continue;

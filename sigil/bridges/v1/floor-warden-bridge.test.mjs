@@ -369,3 +369,127 @@ test('close() clears every timer', async (t) => {
   assert.equal(s.relay.calls.length, before);
   assert.equal(s.relay.failed.length, 0);
 });
+
+// ---- fix round 1 ------------------------------------------------------------
+
+test('deadline: a failRoomInvocation that rejects once is retried and the forward record is kept until it succeeds', async (t) => {
+  const s = setup(t);
+  await s.make().handle({ envelope: envelopeFor(s.relay, 'msg_t') });
+  const original = s.relay.failRoomInvocation.bind(s.relay);
+  let calls = 0;
+  s.relay.failRoomInvocation = async (...args) => {
+    calls += 1;
+    if (calls === 1) throw Object.assign(new Error('relay blip'), { code: 'DELIVERY_UNAVAILABLE' });
+    return original(...args);
+  };
+  t.mock.timers.tick(TIMEOUT);
+  await flush();
+  assert.equal(calls, 1);
+  assert.equal(s.relay.failed.length, 0);
+  assert.ok(s.sessions.get('room_1').floor_warden.forwards.inv_1, 'forward record kept while the failure is unconfirmed');
+  t.mock.timers.tick(POLL);
+  await flush();
+  assert.deepEqual(s.relay.failed, [['room_1', 'REPLY_TIMEOUT', 'inv_1']]);
+  assert.equal(s.sessions.get('room_1').floor_warden.forwards.inv_1, undefined);
+  const before = s.relay.calls.length;
+  t.mock.timers.tick(TIMEOUT * 2);
+  await flush();
+  assert.equal(s.relay.calls.length, before, 'nothing armed after the confirmed failure');
+});
+
+test('persistent relay read errors stop the watch after maxAttempts, log one warning, and keep the forward record', async (t) => {
+  const s = setup(t);
+  await s.make().handle({ envelope: envelopeFor(s.relay, 'msg_t') });
+  let reads = 0;
+  s.relay.listRoomInvocations = async () => { reads += 1; throw Object.assign(new Error('Room not found'), { code: 'ROOM_NOT_FOUND', status: 404 }); };
+  for (let i = 0; i < 12; i += 1) { t.mock.timers.tick(POLL); await flush(); }
+  assert.equal(reads, 5);
+  assert.equal(s.logs.filter((line) => /stopped watching inv_1/.test(line)).length, 1);
+  t.mock.timers.tick(TIMEOUT * 2);
+  await flush();
+  assert.equal(reads, 5, 'deadline and poll are both disarmed');
+  assert.ok(s.sessions.get('room_1').floor_warden.forwards.inv_1, 'recover() can retry it');
+  assert.equal(s.relay.failed.length, 0);
+});
+
+test('recover() also walks rooms recorded in the session store that /v1/rooms no longer lists', async (t) => {
+  const messages = [...baseMessages('room_gone'), haltEvent('room_gone', 5, 'msg_gone_halt')];
+  const s = setup(t, { rooms: [], messages, invocations: [inv('inv_gone', 'room_gone', 'msg_t', { status: 'cancelled' })] });
+  s.sessions.set('room_gone', { session_id: null, last_seq_by_thread: {}, floor_warden: { attempts: {}, halts: {}, forwards: { inv_gone: { thread_root_id: 'msg_root', trigger_message_id: 'msg_t', trigger_room_seq: 4, forwarded_at: new Date(T0 - MIN).toISOString() } } } });
+  await s.make().recover();
+  await flush();
+  assert.equal(s.posts.length, 1);
+  assert.equal(s.posts[0].body.delivery_key, 'halt:inv_gone');
+});
+
+test('scrub covers the normalized href and URL credentials', async (t) => {
+  // Fixture credentials, set through the URL API so no literal userinfo URL sits in the source.
+  const built = new URL('https://Hooks.Example.test/r/abc-path-123?sig=zzzz9999');
+  built.username = 'fwuser9';
+  built.password = ['fwpass', 'fixture9'].join('-');
+  const url = built.href;
+  const parsed = new URL(url);
+  const s = setup(t, { respond: (n, p) => { throw new TypeError(`fetch failed ${parsed.href} user=${parsed.username} pass=${parsed.password}`); }, maxAttempts: 2 });
+  const bridge = s.make({ webhook: { url, key: KEY } });
+  const envelope = envelopeFor(s.relay, 'msg_t');
+  let thrown;
+  await bridge.handle({ envelope }).catch((error) => { thrown = error; });
+  await bridge.handle({ envelope });
+  for (const text of [thrown.message, ...s.logs]) {
+    for (const secret of [parsed.href, 'fwuser9', 'fwpass-fixture9', '/r/abc-path-123', 'zzzz9999']) assert.ok(!text.includes(secret), `leaked ${secret}: ${text}`);
+  }
+});
+
+test('an invalid key header name throws INVALID_CONFIG at construction', (t) => {
+  const s = setup(t);
+  for (const keyHeader of ['Bad Header: Bearer', 'X(y)', ': Bearer', 'X-Key\r\nInjected', 'X,Key']) {
+    assert.throws(() => s.make({ webhook: { url: WEBHOOK, key: KEY, keyHeader } }), (error) => error.code === 'INVALID_CONFIG', keyHeader);
+  }
+  assert.doesNotThrow(() => s.make({ webhook: { url: WEBHOOK, key: KEY, keyHeader: "X-Floor_Key.v1!#$%&'*+^`|~: Token" } }));
+});
+
+for (const [label, thrownValue, reason] of [['null', null, 'BRIDGE_ERROR'], ['undefined', undefined, 'BRIDGE_ERROR'], ['an error without a code', new Error('boom'), 'BRIDGE_ERROR'], ['a relay error with a code', Object.assign(new Error('relay down'), { code: 'DELIVERY_UNAVAILABLE' }), 'DELIVERY_UNAVAILABLE']]) {
+  test(`a relay read that throws ${label} after the invocation is known fails it with ${reason}`, async (t) => {
+    const s = setup(t);
+    s.relay.listRoomMembers = async () => { throw thrownValue; };
+    const result = await s.make().handle({ envelope: envelopeFor(s.relay, 'msg_t') });
+    assert.deepEqual(result, { outcome: 'failed', reason });
+    assert.deepEqual(s.relay.failed, [['room_1', reason, 'inv_1']]);
+    assert.equal(s.posts.length, 0);
+  });
+}
+
+test('halt: a halt POST that needs a retry is resent on the next poll and recorded once it succeeds', async (t) => {
+  const statuses = [200, 503, 200];
+  const s = setup(t, { respond: (n) => ({ status: statuses[n - 1] ?? 200 }) });
+  await s.make().handle({ envelope: envelopeFor(s.relay, 'msg_t') });
+  s.relay.invocations[0].status = 'cancelled';
+  s.relay.messages.push(haltEvent('room_1', 5, 'msg_halt'));
+  t.mock.timers.tick(POLL);
+  await flush();
+  assert.equal(s.posts.length, 2);
+  assert.equal(s.sessions.get('room_1').floor_warden.halts.inv_1, undefined);
+  t.mock.timers.tick(POLL);
+  await flush();
+  assert.equal(s.posts.length, 3);
+  assert.equal(s.posts[2].body.delivery_key, 'halt:inv_1');
+  assert.ok(s.sessions.get('room_1').floor_warden.halts.inv_1);
+  t.mock.timers.tick(POLL * 5);
+  await flush();
+  assert.equal(s.posts.length, 3);
+});
+
+test('halt: a rejected halt POST is logged and recorded, and not retried', async (t) => {
+  const statuses = [200, 400];
+  const s = setup(t, { respond: (n) => ({ status: statuses[n - 1] ?? 200 }) });
+  await s.make().handle({ envelope: envelopeFor(s.relay, 'msg_t') });
+  s.relay.invocations[0].status = 'cancelled';
+  s.relay.messages.push(haltEvent('room_1', 5, 'msg_halt'));
+  t.mock.timers.tick(POLL);
+  await flush();
+  t.mock.timers.tick(POLL * 5);
+  await flush();
+  assert.equal(s.posts.length, 2);
+  assert.ok(s.sessions.get('room_1').floor_warden.halts.inv_1);
+  assert.ok(s.logs.some((line) => /rejected the halt frame for inv_1 with HTTP 400/.test(line)));
+});
