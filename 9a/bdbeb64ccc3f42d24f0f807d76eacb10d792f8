@@ -1,0 +1,23 @@
+sigil/bridges/v1/floor-warden-bridge.mjs
+  s_45bddb49f83c59::t_6ad8247b1d0211 1-395
+sigil/bridges/v1/floor-warden-bridge.test.mjs
+  s_45bddb49f83c59::t_db052e3d931741 87-88
+  s_45bddb49f83c59::t_d650634531d603 90
+  s_45bddb49f83c59::t_b7e0e7bd6e442a 1-86,89,91-371
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9abdbeb64ccc3f42d24f0f807d76eacb10d792f8",
+  "prompts": {},
+  "sessions": {
+    "s_45bddb49f83c59": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "588abe99-cc40-463e-afdb-05d0681cc5b4",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
