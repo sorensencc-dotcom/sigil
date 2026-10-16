@@ -78,7 +78,7 @@ export async function emitCapReached({ systemIdentity, repository, client, room,
   const epoch = await repository.lookupCapEpoch(room.conversation_id, invocation.thread_root_id, client);
   await emitRoomEvent({
     identity: systemIdentity, repository, client, room,
-    body: { kind: 'agent_cap_reached', endpoint_ids: [invocation.endpoint_id], reason: clampReason(`agent turn cap of ${room.max_agent_turns} reached in this thread`) },
+    body: { kind: 'agent_cap_reached', endpoint_ids: [invocation.endpoint_id], thread_root_id: invocation.thread_root_id, reason: clampReason(`agent turn cap of ${room.max_agent_turns} reached in this thread`) },
     idempotencyKey: `evt_cap_${invocation.thread_root_id}_${epoch}`, now, inboxDepthLimit, registered, stream,
   });
 }

@@ -3,7 +3,7 @@
 export const ROOM_EVENT_KINDS = new Set(['router_decision', 'invocation_refused', 'invocation_stopped', 'router_failed', 'agent_cap_reached', 'room_halted', 'invocation_failed']);
 export const ROOM_EVENT_REASON_MAX = 280;
 export const ROOM_EVENT_ENDPOINTS_MAX = 50;
-const ALLOWED_FIELDS = new Set(['kind', 'invocation_id', 'endpoint_ids', 'reason']);
+const ALLOWED_FIELDS = new Set(['kind', 'invocation_id', 'endpoint_ids', 'reason', 'thread_root_id']);
 
 function fail(field, reason) {
   throw Object.assign(new Error(`Invalid room.event body: ${reason}`), { code: 'INVALID_ENVELOPE', details: { field, reason } });
@@ -17,6 +17,7 @@ export function validateRoomEventBody(body) {
     fail('endpoint_ids', 'must be an array of non-empty strings');
   }
   if ('invocation_id' in body && (typeof body.invocation_id !== 'string' || !body.invocation_id)) fail('invocation_id', 'must be a non-empty string');
+  if ('thread_root_id' in body && (typeof body.thread_root_id !== 'string' || !body.thread_root_id)) fail('thread_root_id', 'must be a non-empty string');
   if ('reason' in body && (typeof body.reason !== 'string' || body.reason.length > ROOM_EVENT_REASON_MAX)) fail('reason', `must be a string of at most ${ROOM_EVENT_REASON_MAX} characters`);
 }
 

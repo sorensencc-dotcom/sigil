@@ -112,6 +112,7 @@ test('cap: the refused handoff posts exactly one agent_cap_reached naming the en
   assert.equal(caps.length, 1);
   assert.deepEqual(caps[0].body.endpoint_ids, [refused[0].endpoint_id]);
   assert.match(caps[0].body.reason, /6/, 'the reason states the cap');
+  assert.equal(caps[0].body.thread_root_id, root, 'the event names the thread so a client can continue it');
   assert.equal(caps[0].sender.endpoint_id, 'ep_relay_system');
   assert.equal((await roomEvents(w, 'invocation_refused')).length, 1);
 });

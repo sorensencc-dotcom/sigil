@@ -27,6 +27,7 @@ export interface ApiClient {
   createRoom(name: string): Promise<Room>;
   history(roomId: string, afterSeq: string, limit?: number): Promise<HistoryPage>;
   sendMessage(roomId: string, text: string, idempotencyKey: string, threadRootId?: string): Promise<SendResult>;
+  continueThread(roomId: string, threadRootId: string): Promise<SendResult>;
   listMembers(roomId: string): Promise<Member[]>;
   renameRoom(roomId: string, name: string): Promise<Room>;
   setResponseMode(roomId: string, endpointId: string, mode: ResponseMode): Promise<Member>;
@@ -91,6 +92,13 @@ export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized
         text,
         idempotency_key: idempotencyKey,
         ...(threadRootId ? { thread_root_id: threadRootId } : {}),
+      });
+    },
+    continueThread(roomId, threadRootId) {
+      // A fresh key per click: a double click posts twice, which the relay answers with 409 once the budget refilled.
+      return request<SendResult>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/continue`, {
+        thread_root_id: threadRootId,
+        idempotency_key: `continue-${globalThis.crypto.randomUUID()}`,
       });
     },
     async listMembers(roomId) {

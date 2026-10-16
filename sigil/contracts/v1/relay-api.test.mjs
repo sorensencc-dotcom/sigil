@@ -45,7 +45,7 @@ test('error responses have stable machine-readable shape', () => {
 test('every rooms route declares DATABASE_UNAVAILABLE and every room error code is a contract error', () => {
   const states = JSON.parse(fs.readFileSync(new URL('./errors-and-states.json', import.meta.url)));
   const rooms = api.routes.filter((route) => route.path === '/v1/rooms' || route.path.startsWith('/v1/rooms/'));
-  assert.equal(rooms.length, 16);
+  assert.equal(rooms.length, 17);
   for (const route of rooms) {
     // ws-ticket is served before the repository check and never touches the database.
     if (route.path === '/v1/rooms/ws-ticket') continue;
@@ -134,6 +134,17 @@ test('relay API lists the Floor Warden reply route with its spec codes', () => {
   for (const code of ['BOT_NOT_ON_ROSTER', 'BOT_NOT_A_MEMBER', 'BOT_SIGNING_UNAVAILABLE', 'FLOOR_WARDEN_UNAVAILABLE', 'MESSAGE_NOT_FOUND', 'ROOM_NOT_INVOKED']) {
     assert.ok(states.errors.includes(code), code);
   }
+});
+
+test('relay API lists the Continue route', () => {
+  const route = api.routes.find((item) => item.method === 'POST' && item.path === '/v1/rooms/{room_id}/continue');
+  assert.ok(route, 'continue route listed');
+  assert.deepEqual(route.success, [200, 201]);
+  assert.deepEqual(route.request_fields, ['thread_root_id', 'idempotency_key']);
+  assert.deepEqual(route.response_fields, ['code', 'message_id', 'room_seq']);
+  for (const code of ['HUMAN_CONTEXT_REQUIRED', 'NO_OPERATOR_IDENTITY', 'INVALID_REQUEST', 'ROOM_NOT_FOUND', 'NOTHING_TO_CONTINUE']) assert.ok(route.errors.includes(code), code);
+  const states = JSON.parse(fs.readFileSync(new URL('./errors-and-states.json', import.meta.url)));
+  for (const code of ['NOTHING_TO_CONTINUE', 'NO_OPERATOR_IDENTITY']) assert.ok(states.errors.includes(code), code);
 });
 
 test('relay API lists the response-mode route', () => {
