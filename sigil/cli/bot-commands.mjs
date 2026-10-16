@@ -31,7 +31,8 @@ async function withRepository(databaseUrl, fn) {
 
 // `sigil bot add`: one transaction creates the agent endpoint, its active key,
 // the relay-held wrapped signing key, and the roster row. The private key lives
-// only in memory; the identity file holds a relay token and no private key.
+// only in memory; the identity file holds a relay token and no private key,
+// plus bot_id, which `agent run --room-bridge floor-warden` reads.
 // The file is written last inside the transaction, so a failure rolls back the
 // database and removes the file.
 export async function cmdBotAdd(argv) {
@@ -109,6 +110,7 @@ export async function cmdBotAdd(argv) {
           public_key_pem: publicKeyPem,
           relay_token: relayToken,
           receive_only: true,
+          bot_id: botId,
         }, null, 2), { flag: 'wx', mode: 0o600 });
       } catch (error) {
         // EEXIST means the file is someone else's; any other failure may leave a partial token behind.

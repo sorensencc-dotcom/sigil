@@ -65,6 +65,7 @@ test('bot add creates endpoint, key, wrapped signing key, roster row, and a keyl
   assert.equal(identity.owner_id, OWNER);
   assert.equal(identity.kind, 'agent');
   assert.equal(identity.receive_only, true);
+  assert.equal(identity.bot_id, 'bot_test_one', 'agent run --room-bridge floor-warden reads the bot id from the identity');
   assert.ok(identity.relay_token && identity.relay_token.length >= 32);
   assert.ok(!raw.includes('private_key_pem'));
   assert.ok(!raw.includes('PRIVATE KEY'));
