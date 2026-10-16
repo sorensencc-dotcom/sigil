@@ -1,0 +1,19 @@
+sigil/relay/v1/accept-options.test.mjs
+  s_cf48dae32d5dd9::t_a49304ab8702e0 50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "82aaa0defa9ee2e749fecc0c56284d92dd50e6d4",
+  "prompts": {},
+  "sessions": {
+    "s_cf48dae32d5dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b2d6e6eb-486c-43c6-b0b9-03b0bd947fd1",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
