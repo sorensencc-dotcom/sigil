@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync, execFileSync } from 'node:child_process';
+import { spawnSync, execFileSync, execSync, spawn } from 'node:child_process';
 
 const sigilCli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'sigil.mjs');
 
@@ -47,4 +47,29 @@ test('relay up refuses a missing reply token variable by name', () => {
   assert.equal(result.status, 1, out);
   assert.match(out, /FLOOR_WARDEN_TOKEN_UNSET/);
   assert.match(out, /SIGIL_TEST_UNSET_FWT/);
+});
+
+test('relay up wires the Floor Warden reply handler behind the reply token', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-relay-flags-test-'));
+  execFileSync(process.execPath, [sigilCli, 'init', 'alice'], { cwd, encoding: 'utf8' });
+  const token = 't'.repeat(40);
+  const child = spawn(process.execPath, [sigilCli, 'relay', 'up', '--port', '0', '--stream-port', '0', '--floor-warden-reply-token-env', 'SIGIL_TEST_FWT'], { cwd, env: { ...process.env, SIGIL_TEST_FWT: token } });
+  try {
+    const port = await new Promise((resolve, reject) => {
+      let buf = '';
+      const timer = setTimeout(() => reject(new Error(`relay did not start: ${buf}`)), 15_000);
+      child.stdout.on('data', (chunk) => { buf += chunk; const m = buf.match(/Sigil relay listening on http:\/\/127\.0\.0\.1:(\d+)/); if (m) { clearTimeout(timer); resolve(Number(m[1])); } });
+      child.stderr.on('data', (chunk) => { buf += chunk; });
+      child.on('exit', (code) => { clearTimeout(timer); reject(new Error(`relay exited ${code}: ${buf}`)); });
+    });
+    const res = await fetch(`http://127.0.0.1:${port}/v1/rooms/room_x/replies`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ room_id: 'room_x', target_bot_id: 'bot_nobody', sender: 'ep_test_bot', in_reply_to: 'msg_x', text: 'hi', idempotency_key: 'k1' }),
+    });
+    const body = await res.json();
+    assert.equal(res.status, 403, JSON.stringify(body));
+    assert.equal(body.code, 'BOT_NOT_ON_ROSTER');
+  } finally {
+    if (process.platform === 'win32' && child.pid) { try { execSync(`taskkill /F /T /PID ${child.pid}`, { stdio: 'ignore' }); } catch {} } else child.kill('SIGTERM');
+  }
 });

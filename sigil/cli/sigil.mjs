@@ -30,6 +30,7 @@ import { seedRegistry } from './registry-seed.mjs';
 import { createRoomHumanSigner } from '../relay/v1/room-human-signer.mjs';
 import { loadWrapKey } from '../relay/v1/key-wrap.mjs';
 import { loadReplyTokens } from '../relay/v1/floor-warden-token.mjs';
+import { createRoomBotSigner } from '../relay/v1/room-bot-signer.mjs';
 import { validateOAuthConfig, resolvePublicPort, buildOAuthStack } from '../relay/v1/oauth/wiring.mjs';
 import { RelayClient } from '../connectors/v1/relay-client.mjs';
 import { LocalOutbox } from '../connectors/v1/local-outbox.mjs';
@@ -329,14 +330,15 @@ async function cmdRelayUp(argv) {
   if (replyTokenNextEnv && !replyTokenEnv) throw new Error('sigil relay up: --floor-warden-reply-token-next-env requires --floor-warden-reply-token-env');
   if (replyTokenEnv) {
     try {
-      // The handler arrives with the reply route implementation; until then a
-      // valid reply token answers 503.
-      floorWardenReplies = { tokens: loadReplyTokens(process.env, replyTokenEnv, replyTokenNextEnv), handler: undefined };
+      floorWardenReplies = { tokens: loadReplyTokens(process.env, replyTokenEnv, replyTokenNextEnv) };
     } catch (error) { throw error.code ? new Error(`${error.code}: ${error.message}`) : error; }
   }
   const botWrapKeyRef = opt(args, ['room-bot-key-wrap-key']);
   const roomBotWrapKey = botWrapKeyRef ? loadWrapKey(botWrapKeyRef) : undefined;
-  void roomBotWrapKey;
+  // Without the bot wrap key the relay still runs; the signer then throws
+  // WRAP_KEY_UNAVAILABLE and the reply route answers 503 BOT_SIGNING_UNAVAILABLE.
+  // createRelayServer binds the handler to this signer and its accept path.
+  if (floorWardenReplies) floorWardenReplies.botSigner = createRoomBotSigner({ repository, wrapKey: roomBotWrapKey });
   const publicOrigin = opt(args, ['public-origin']);
   const allowedOrigins = [...(args.values['browser-origin'] ?? []), ...(publicOrigin ? [publicOrigin] : [])];
   const ticketStore = createTicketStore();

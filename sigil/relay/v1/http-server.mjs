@@ -10,6 +10,7 @@ import { mapReceiptState, toReceiptRow } from './receipt-state.mjs';
 import { sendReceiptFrame } from './receipt-notify.mjs';
 import { createBearerAuthenticator } from './transport-auth.mjs';
 import { handleRoomRoute } from './room-routes.mjs';
+import { createFloorWardenReplyHandler } from './floor-warden-replies.mjs';
 import { applyBrowserCors, isBrowserRoute } from './browser-cors.mjs';
 import { createApprovalChallenge, coseKeyToPublicKey, parseAttestationObject, verifyPackedAttestation, verifyWebAuthnApproval, verifyWebAuthnAssertion } from './approval-ceremony.mjs';
 import { renderApprovalPage } from './approval-ui.mjs';
@@ -109,6 +110,10 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
   const jwksCache = createJwksCache({ fetchImpl: oidcFetchImpl });
   const discoveryCache = createDiscoveryCache({ fetchImpl: oidcFetchImpl });
   const authenticateRequest = authenticate ?? (tokenHashes ? createBearerAuthenticator(tokenHashes, registry) : null);
+  // An injected handler wins; otherwise a configured bot signer gets the real
+  // handler bound to this server's repository and accept path.
+  const replyHandler = floorWardenReplies?.handler
+    ?? (floorWardenReplies?.botSigner ? createFloorWardenReplyHandler({ repository, botSigner: floorWardenReplies.botSigner, buildAcceptOptions }) : null);
   const resolveHumanCredential = lookupHumanCredential ?? repository?.lookupHumanCredential?.bind(repository);
   const assertionRateLimits = new Map();
   const MAX_STORED_LIMITS = 5000;
@@ -261,8 +266,18 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         if (endpointPrincipal) return sendReply(403, 'ROUTE_NOT_AUTHORIZED', 'This route accepts only the Floor Warden reply token');
         return sendReply(401, 'UNAUTHENTICATED', 'Authentication required');
       }
-      if (typeof floorWardenReplies.handler !== 'function') return sendReply(503, 'FLOOR_WARDEN_UNAVAILABLE', 'Floor Warden replies are not available');
-      const result = await floorWardenReplies.handler({ request, response, requestId, roomId: decodeURIComponent(replyMatch[1]), now, readBody });
+      if (typeof replyHandler !== 'function') return sendReply(503, 'FLOOR_WARDEN_UNAVAILABLE', 'Floor Warden replies are not available');
+      let replyRoomId;
+      try { replyRoomId = decodeURIComponent(replyMatch[1]); } catch { return sendReply(400, 'INVALID_REQUEST', 'Malformed room ID in path'); }
+      let result;
+      try {
+        result = await replyHandler({ request, response, requestId, roomId: replyRoomId, now, readBody });
+      } catch (error) {
+        // No error text reaches the caller: it could name internal state.
+        logger?.error?.({ event: 'floor_warden_reply_failed', request_id: requestId, code: error?.code ?? null });
+        if (response.headersSent) return response.end();
+        return sendReply(500, 'INTERNAL', 'Internal error');
+      }
       if (result?.handled) return;
       response.writeHead(result?.status ?? 500, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(JSON.stringify({ request_id: requestId, ...(result?.body ?? {}) }));
