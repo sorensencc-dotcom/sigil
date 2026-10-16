@@ -16,6 +16,7 @@ const principals = {
   'Bearer web': { endpoint_id: 'ep_web', owner_id: 'usr_chris', human_id: 'usr_chris' },
   'Bearer web2': { endpoint_id: 'ep_web2', owner_id: 'usr_chris', human_id: 'usr_chris' },
   'Bearer claude': { endpoint_id: 'ep_claude', owner_id: 'usr_chris' },
+  'Bearer web2nohuman': { endpoint_id: 'ep_web2', owner_id: 'usr_chris' },
   'Bearer stranger': { endpoint_id: 'ep_stranger', owner_id: 'usr_other', human_id: 'usr_other' },
 };
 
@@ -32,7 +33,7 @@ function call(port, method, path, authorization, body) {
   });
 }
 
-async function withWorld(fn, { signer = true, spy = false, custody = null } = {}) {
+async function withWorld(fn, { signer = true } = {}) {
   const human = createIdentity({ ownerId: 'usr_chris', endpointId: 'ep_web', kind: 'human' });
   const web2 = createIdentity({ ownerId: 'usr_chris', endpointId: 'ep_web2', kind: 'human' });
   const registry = new Map([
@@ -51,21 +52,11 @@ async function withWorld(fn, { signer = true, spy = false, custody = null } = {}
   }
   const systemIdentity = createIdentity({ ownerId: 'relay_system', endpointId: 'ep_relay_system', kind: 'system' });
   await repository.ensureRoomSystemEndpoint({ identity: systemIdentity, now: NOW });
-  const frames = [];
-  const stream = { notify() {}, notifyReceipt() {}, notifyRoom: (id, frame) => { frames.push([id, frame]); return true; } };
-  const calls = [];
-  let humanSigner = signer ? createRoomHumanSigner({ identity: human, repository }) : null;
-  if (humanSigner && custody) {
-    const real = humanSigner;
-    humanSigner = { ...real, signForEndpoint: async (id) => (id === 'ep_web2' ? custody({ web2, human }) : real.signForEndpoint(id)) };
-  }
-  if (humanSigner && spy) {
-    const inner = humanSigner;
-    humanSigner = { ...inner, signForEndpoint: (id) => { calls.push(id); return inner.signForEndpoint(id); } };
-  }
+  const stream = { notify() {}, notifyReceipt() {}, notifyRoom: () => true };
+  const humanSigner = signer ? createRoomHumanSigner({ identity: human, repository }) : null;
   const server = createRelayServer({ registry, repository, stream, now: () => NOW, roomSystemIdentity: systemIdentity, ...(humanSigner ? { humanSigner } : {}), authenticate: async (request) => principals[request.headers.authorization] ?? null });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  try { await fn({ port: server.address().port, repository, registry, frames, calls, human, web2 }); } finally { await new Promise((resolve) => server.close(resolve)); }
+  try { await fn({ port: server.address().port, repository }); } finally { await new Promise((resolve) => server.close(resolve)); }
 }
 
 
@@ -190,5 +181,43 @@ test('a replay of the same idempotency_key returns the first result and posts no
     assert.equal(second.status, 200);
     assert.equal(second.body.message_id, first.body.message_id);
     assert.equal((await roomMessages(w)).length, before);
+  });
+});
+
+function spyResets(w) {
+  const resets = [];
+  const original = w.repository.resetAgentTurns.bind(w.repository);
+  w.repository.resetAgentTurns = (...args) => { resets.push(args); return original(...args); };
+  return resets;
+}
+
+test('refills the thread budget when the caller is the subject of every active invocation', async () => {
+  await withWorld(async (w) => {
+    const threadId = await root(w);
+    await refuse(w, 'ep_claude', threadId);
+    const resets = spyResets(w);
+    const res = await cont(w, 'room_1', { thread_root_id: threadId, idempotency_key: 'c1' });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    assert.equal(resets.filter(([room, thread]) => room === 'room_1' && thread === threadId).length, 1);
+  });
+});
+
+test('does not refill when another human is the subject of an active invocation in the thread', async () => {
+  await withWorld(async (w) => {
+    const threadId = await root(w);
+    await refuse(w, 'ep_claude', threadId);
+    await w.repository.createRoomInvocation({ invocationId: 'inv_other', roomId: 'room_1', workspaceId: 'ws_usr_chris', triggerMessageId: 'msg_other', threadRootId: threadId, endpointId: 'ep_theirs', decidedBy: 'mention', status: 'running', subjectHumanId: 'usr_other', now: NOW });
+    const resets = spyResets(w);
+    const res = await cont(w, 'room_1', { thread_root_id: threadId, idempotency_key: 'c1' });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    assert.equal(resets.length, 0);
+  });
+});
+
+test('a caller with no human_id gets 403 HUMAN_CONTEXT_REQUIRED', async () => {
+  await withWorld(async (w) => {
+    const res = await cont(w, 'room_1', { thread_root_id: 'msg_x', idempotency_key: 'c1' }, 'Bearer web2nohuman');
+    assert.equal(res.status, 403);
+    assert.equal(res.body.code, 'HUMAN_CONTEXT_REQUIRED');
   });
 });
