@@ -4,10 +4,11 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { loadWrapKey, wrapPrivateKey } from '../relay/v1/key-wrap.mjs';
 import { loadIdentity } from './identity.mjs';
+import { addEndpointToRegistry } from './registry-store.mjs';
 import { loadConfigFile, resolveConfig } from './config-resolver.mjs';
 
 const DEFAULT_CLI_CONFIG = '.sigil/config.json';
-const ADD_USAGE = 'usage: sigil bot add --bot-id <id> --endpoint <endpoint_id> --name <display name> [--identity path] [--config path] [--out path] [--database-url url] [--room-bot-key-wrap-key env_var]';
+const ADD_USAGE = 'usage: sigil bot add --bot-id <id> --endpoint <endpoint_id> --name <display name> [--identity path] [--config path] [--out path] [--registry path] [--database-url url] [--room-bot-key-wrap-key env_var]';
 const DISABLE_USAGE = 'usage: sigil bot disable --bot-id <id> [--database-url url]';
 
 function operatorOwnerId(values) {
@@ -43,6 +44,7 @@ export async function cmdBotAdd(argv) {
       identity: { type: 'string' },
       config: { type: 'string' },
       out: { type: 'string' },
+      registry: { type: 'string' },
       'database-url': { type: 'string' },
       'room-bot-key-wrap-key': { type: 'string' },
     },
@@ -55,6 +57,7 @@ export async function cmdBotAdd(argv) {
   if (!databaseUrl) throw new Error('sigil bot add requires --database-url (or SIGIL_DATABASE_URL)');
   const wrapKey = loadWrapKey(values['room-bot-key-wrap-key']);
   const outPath = path.resolve(values.out ?? path.join('.sigil', `${endpointId}.json`));
+  const registryPath = path.resolve(values.registry ?? path.join('.sigil', 'registry.json'));
   if (fs.existsSync(outPath)) throw new Error(`identity file ${outPath} already exists; choose another --out`);
 
   const { applyMigrations } = await import('../scripts/apply-migrations.mjs');
@@ -65,7 +68,10 @@ export async function cmdBotAdd(argv) {
   const relayToken = crypto.randomBytes(24).toString('base64url');
   const now = new Date();
   const ts = now.toISOString();
-  let written = false;
+  // Snapshot so a failed add restores the registry exactly (null = file did not exist).
+  const registrySnapshot = fs.existsSync(registryPath) ? fs.readFileSync(registryPath) : null;
+  let identityWritten = false;
+  let registryTouched = false;
   try {
     await withRepository(databaseUrl, (repository) => repository.withTransaction(async (client) => {
       try {
@@ -91,25 +97,41 @@ export async function cmdBotAdd(argv) {
         throw error;
       }
       fs.mkdirSync(path.dirname(outPath), { recursive: true });
-      fs.writeFileSync(outPath, JSON.stringify({
-        owner_id: ownerId,
-        endpoint_id: endpointId,
-        key_id: keyId,
-        kind: 'agent',
-        status: 'active',
-        public_key_pem: publicKey.export({ type: 'spki', format: 'pem' }),
-        relay_token: relayToken,
-        receive_only: true,
-      }, null, 2), { flag: 'wx', mode: 0o600 });
-      written = true;
+      const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' });
+      try {
+        // mode 0600 is advisory: NTFS does not enforce POSIX modes, so the token file is only as private as its directory.
+        fs.writeFileSync(outPath, JSON.stringify({
+          owner_id: ownerId,
+          endpoint_id: endpointId,
+          key_id: keyId,
+          kind: 'agent',
+          status: 'active',
+          public_key_pem: publicKeyPem,
+          relay_token: relayToken,
+          receive_only: true,
+        }, null, 2), { flag: 'wx', mode: 0o600 });
+      } catch (error) {
+        // EEXIST means the file is someone else's; any other failure may leave a partial token behind.
+        if (error.code !== 'EEXIST') fs.rmSync(outPath, { force: true });
+        throw error;
+      }
+      identityWritten = true;
+      // The relay builds its bearer-token hashes from this registry file at startup.
+      registryTouched = true;
+      addEndpointToRegistry(registryPath, { owner_id: ownerId, endpoint_id: endpointId, key_id: keyId, kind: 'agent', public_key_pem: publicKeyPem, relay_token: relayToken });
     }));
   } catch (error) {
-    if (written) fs.rmSync(outPath, { force: true });
+    if (identityWritten) fs.rmSync(outPath, { force: true });
+    if (registryTouched) {
+      if (registrySnapshot === null) fs.rmSync(registryPath, { force: true });
+      else fs.writeFileSync(registryPath, registrySnapshot);
+    }
     throw error;
   }
   console.log(`bot_id: ${botId}`);
   console.log(`endpoint_id: ${endpointId}`);
   console.log(`identity: ${outPath}`);
+  console.log(`registry: ${registryPath}`);
   console.log('restart relay after `bot add` so it loads the new token');
 }
 
