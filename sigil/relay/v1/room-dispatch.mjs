@@ -67,6 +67,34 @@ export async function emitRefusal({ systemIdentity, repository, client, room, in
     body: { kind: 'invocation_refused', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: clampReason(refusalText(invocation)) },
     idempotencyKey: `evt_refused_${invocation.invocation_id}`, now, inboxDepthLimit, registered, stream,
   });
+  if (invocation.reason === 'hop_budget') await emitCapReached({ systemIdentity, repository, client, room, invocation, now, inboxDepthLimit, registered, stream });
+}
+
+// One agent_cap_reached per (thread, cap epoch): a human post that refills the
+// budget starts a new epoch, so the next cap hit posts again. The scoped
+// idempotency key makes every later refusal in the same epoch a no-op.
+export async function emitCapReached({ systemIdentity, repository, client, room, invocation, now, inboxDepthLimit, registered, stream = null }) {
+  if (!systemIdentity || !invocation.thread_root_id) return;
+  const epoch = await repository.lookupCapEpoch(room.conversation_id, invocation.thread_root_id, client);
+  await emitRoomEvent({
+    identity: systemIdentity, repository, client, room,
+    body: { kind: 'agent_cap_reached', endpoint_ids: [invocation.endpoint_id], reason: clampReason(`agent turn cap of ${room.max_agent_turns} reached in this thread`) },
+    idempotencyKey: `evt_cap_${invocation.thread_root_id}_${epoch}`, now, inboxDepthLimit, registered, stream,
+  });
+}
+
+// One room_halted per Stop or leave, after the per-invocation invocation_stopped
+// events. The key hashes the sorted cancelled invocation ids, so a retry that
+// cancels the same rows posts nothing new. Cancelling nothing posts nothing.
+export async function emitRoomHalted({ systemIdentity, repository, client, room, rows, reason, now, inboxDepthLimit, registered, stream = null }) {
+  if (!systemIdentity || !rows.length) return;
+  const ids = rows.map((row) => row.invocation_id).sort();
+  const digest = crypto.createHash('sha256').update(ids.join(',')).digest('hex').slice(0, 32);
+  await emitRoomEvent({
+    identity: systemIdentity, repository, client, room,
+    body: { kind: 'room_halted', endpoint_ids: [...new Set(rows.map((row) => row.endpoint_id))].sort(), reason },
+    idempotencyKey: `evt_halt_${digest}`, now, inboxDepthLimit, registered, stream,
+  });
 }
 
 // Why a queued row may no longer start, or null. The subject must still be an

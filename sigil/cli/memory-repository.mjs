@@ -547,6 +547,9 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       roomThreads.set(key, { ...roomThreads.get(key), agent_turns: current + 1, updated_at: (now instanceof Date ? now : new Date(now)).toISOString() });
       return { allowed: true, agent_turns: current + 1 };
     },
+    async lookupCapEpoch(roomId, threadRootId) {
+      return roomThreads.get(JSON.stringify([roomId, threadRootId]))?.cap_epoch ?? 0;
+    },
     async resetAgentTurns(roomId, threadRootId, { now = new Date() } = {}) {
       const key = JSON.stringify([roomId, threadRootId]);
       const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();

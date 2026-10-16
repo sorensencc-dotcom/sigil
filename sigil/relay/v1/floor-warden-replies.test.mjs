@@ -516,3 +516,18 @@ test('the unknown-field message truncates a long field name', async () => {
     assert.ok(res.body.message.length < 200, res.body.message);
   });
 });
+
+test('a late reply for an invocation that Stop cancelled answers 403 ROOM_NOT_INVOKED', async () => {
+  await withWorld(async (w) => {
+    const trigger = await invoked(w);
+    assert.ok(await running(w));
+    const stopped = await post(w.port, `/v1/rooms/${ROOM}/stop`, 'Bearer web', {});
+    assert.equal(stopped.status, 200, JSON.stringify(stopped.body));
+    assert.equal(stopped.body.cancelled, 1);
+    const late = await w.reply({ in_reply_to: trigger });
+    assert.equal(late.status, 403);
+    assert.equal(late.body.code, 'ROOM_NOT_INVOKED');
+    const row = (await w.repository.listRoomInvocations(ROOM, { endpointId: BOT_EP }))[0];
+    assert.equal(row.status, 'cancelled', 'the late reply does not revive the invocation');
+  });
+});

@@ -1,6 +1,6 @@
 // Body shape for message_type: 'room.event' (rooms design, phase 3). Only the
 // relay emits these; clients cannot post them (room-policy.mjs refuses the type).
-export const ROOM_EVENT_KINDS = new Set(['router_decision', 'invocation_refused', 'invocation_stopped', 'router_failed']);
+export const ROOM_EVENT_KINDS = new Set(['router_decision', 'invocation_refused', 'invocation_stopped', 'router_failed', 'agent_cap_reached', 'room_halted', 'invocation_failed']);
 export const ROOM_EVENT_REASON_MAX = 280;
 export const ROOM_EVENT_ENDPOINTS_MAX = 50;
 const ALLOWED_FIELDS = new Set(['kind', 'invocation_id', 'endpoint_ids', 'reason']);

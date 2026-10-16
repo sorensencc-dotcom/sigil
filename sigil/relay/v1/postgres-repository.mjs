@@ -2118,6 +2118,10 @@ export class PostgresRepository {
     const current = await client.query('SELECT agent_turns FROM room_threads WHERE room_id = $1 AND thread_root_id = $2', [roomId, threadRootId]);
     return { allowed: false, agent_turns: current.rows[0]?.agent_turns ?? 0 };
   }
+  async lookupCapEpoch(roomId, threadRootId, client = this.pool) {
+    const result = await client.query('SELECT cap_epoch FROM room_threads WHERE room_id = $1 AND thread_root_id = $2', [roomId, threadRootId]);
+    return result.rows[0]?.cap_epoch ?? 0;
+  }
   async resetAgentTurns(roomId, threadRootId, { now = new Date() } = {}, client = this.pool) {
     const result = await client.query(
       `INSERT INTO room_threads (room_id, thread_root_id, agent_turns, updated_at, cap_epoch, last_reset_at) VALUES ($1, $2, 0, $3, 1, $3)

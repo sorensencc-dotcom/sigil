@@ -1,7 +1,7 @@
 // sigil/relay/v1/room-routes.mjs
 import crypto from 'node:crypto';
 import { emitRoomEvent } from './room-events.mjs';
-import { promoteNextInvocation, dispatchToTarget, emitRefusal } from './room-dispatch.mjs';
+import { promoteNextInvocation, dispatchToTarget, emitRefusal, emitRoomHalted } from './room-dispatch.mjs';
 import { isAgentMember, isRouterMember, memberIsHuman } from './room-policy.mjs';
 import { lookupTrustedEntry } from './trusted-endpoint.mjs';
 import { clampReason } from '../../contracts/v1/room-event-schema.mjs';
@@ -257,6 +257,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
       for (const invocation of rows) {
         await emitRoomEvent({ identity: systemIdentity, repository, client, room: access.room, body: { kind: 'invocation_stopped', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: 'stopped' }, idempotencyKey: `evt_stopped_${invocation.invocation_id}`, now, inboxDepthLimit, registered: registry, stream });
       }
+      await emitRoomHalted({ systemIdentity, repository, client, room: access.room, rows, reason: 'left', now, inboxDepthLimit, registered: registry, stream });
     });
     await notifyRoomChange(roomId, 'members');
     return send(response, requestId, 200, { code: 'OK', removed: true });
@@ -414,6 +415,9 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
       // A late failure from an older bridge turn must not fail a newer invocation.
       if (expectedId !== null && running.invocation_id !== expectedId) return null;
       const invocation = await repository.finishInvocation(running.invocation_id, { status: 'failed', reason, now }, client);
+      if (systemIdentity) {
+        await emitRoomEvent({ identity: systemIdentity, repository, client, room: access.room, body: { kind: 'invocation_failed', invocation_id: running.invocation_id, endpoint_ids: [principal.endpoint_id], reason: clampReason(reason) }, idempotencyKey: `evt_failed_${running.invocation_id}`, now, inboxDepthLimit, registered: registry, stream });
+      }
       const promoted = await promoteNextInvocation({ roomId, endpointId: principal.endpoint_id, repository, client, now, inboxDepthLimit, registered: registry, systemIdentity, room: access.room, stream });
       return { invocation, promoted };
     });
@@ -439,6 +443,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
         for (const invocation of rows) {
           await emitRoomEvent({ identity: systemIdentity, repository, client, room: access.room, body: { kind: 'invocation_stopped', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: 'stopped' }, idempotencyKey: `evt_stopped_${invocation.invocation_id}`, now, inboxDepthLimit, registered: registry, stream });
         }
+        await emitRoomHalted({ systemIdentity, repository, client, room: access.room, rows, reason: 'stopped', now, inboxDepthLimit, registered: registry, stream });
       }
       return rows;
     });
