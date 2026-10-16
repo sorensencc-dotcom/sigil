@@ -1,0 +1,28 @@
+sigil/bridges/v1/floor-warden-bridge.mjs
+  s_45bddb49f83c59::t_5aa74bd169b6a3 43
+  s_45bddb49f83c59::t_904583990746ae 82
+  s_45bddb49f83c59::t_ed0750a157a475 42,51,80-81,83-90,134,145-156,163-164,168-170,179-181,196,233-237,274-276,394-398,408-410
+sigil/bridges/v1/session-store.mjs
+  s_45bddb49f83c59::t_ed0750a157a475 17
+sigil/bridges/v1/floor-warden-bridge.test.mjs
+  s_45bddb49f83c59::t_bab5d4d320a074 426-428,430
+  s_45bddb49f83c59::t_5ecc85e486c545 445
+  s_45bddb49f83c59::t_f06e662f0dc8d1 429,439
+  s_45bddb49f83c59::t_b0f1edbf299e1d 372-425,431-438,440-444,446-495
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2c1980f86a2be0f0049f3365709486a8587662a4",
+  "prompts": {},
+  "sessions": {
+    "s_45bddb49f83c59": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "588abe99-cc40-463e-afdb-05d0681cc5b4",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
