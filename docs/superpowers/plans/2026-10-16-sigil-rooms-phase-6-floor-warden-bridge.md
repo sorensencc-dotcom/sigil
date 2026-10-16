@@ -304,7 +304,7 @@ git commit -m "feat(sigil): add the Floor Warden reply token and the reply route
 - Create: `relay/v1/floor-warden-replies.mjs`
 - Modify: `relay/v1/floor-warden-replies.test.mjs`, `relay/v1/http-server.mjs` (wire the handler)
 
-**Interfaces:** Produces `handleFloorWardenReply` covering spec "Reply route" steps 3-7, 9 and 10. Idempotency (step 8) is Task 8.
+**Interfaces:** Produces `handleFloorWardenReply` covering spec "Reply route" steps 3-6, 8, 9 and 10. Idempotency (step 7, which runs before the invocation check at step 8) is Task 8.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -349,11 +349,11 @@ git commit -m "feat(sigil): accept Floor Warden replies and sign them as the bot
 - Modify: `relay/v1/floor-warden-replies.mjs`, `contracts/v1/relay-api.json`, `contracts/v1/relay-api.test.mjs`
 - Create: `relay/v1/floor-warden-replies.pg.test.mjs`
 
-**Interfaces:** Completes spec "Reply route" step 8 and the audit rule. Adds the route to the contract.
+**Interfaces:** Completes spec "Reply route" step 7 and the audit rule. Insert the lookup before the running-invocation check that Task 7 wrote. Adds the route to the contract.
 
 - [ ] **Step 1: Write failing tests**
 
-- Replay of the same key returns `202` with the first `message_id` and `room_seq` and `duplicate: true`, writes no second envelope, and does not require a running invocation (the first reply completed it).
+- Replay of the same key returns `202` with the first `message_id` and `room_seq` and `duplicate: true`, writes no second envelope, and does not require a running invocation (the first reply completed it, so the lookup must run before the `ROOM_NOT_INVOKED` check).
 - A replay with different `text` still returns the first result.
 - The same key in two rooms does not collide (key scope includes the room).
 - A second reply under a new key after completion answers `403 ROOM_NOT_INVOKED`.
@@ -442,7 +442,7 @@ Use a fake relay, a fake `fetch`, a temp session store and fake timers.
 - `408`, `429`, `500`, `503` and a network error throw, leaving the delivery unacked; the retry sends the same `delivery_key`; the watermark did not advance; after 5 attempts for one invocation the bridge fails it with `FLOOR_WARDEN_UNREACHABLE`.
 - No reply URL: fails with `REPLY_URL_UNSET` and makes no POST.
 - Reply deadline: after `replyTimeoutMs` with the invocation still running, the bridge calls `failRoomInvocation` with `REPLY_TIMEOUT`; if the invocation completed first, no failure call is made and the timer is cleared.
-- `recover()` fails running invocations older than the deadline and re-arms timers for younger ones.
+- `recover()` fails running invocations older than the deadline and re-arms timers for younger ones, and sends a halt frame for any invocation cancelled after its recorded forward whose halt is not yet in the session store.
 - Halt: when a forwarded invocation disappears from `running` and its status is `cancelled`, the bridge POSTs one halt frame with `delivery_key: halt:<id>` and the `room_halted` event's `room_seq` and message id, once only; a `completed` invocation sends nothing.
 - A thrown `fetch` error message that contains the webhook URL is scrubbed before it reaches the logger or the failure reason.
 - `close()` clears all timers.
@@ -521,6 +521,7 @@ git commit -m "feat(sigil): run the Floor Warden bridge from sigil agent run wit
 
 - Schema: the three kinds validate; an unknown kind still fails; `reason` clamping still applies.
 - Cap: with `max_agent_turns` 2, a third agent handoff in one thread is refused with `hop_budget` and the room gets exactly one `agent_cap_reached` event naming the refused endpoint and the cap; a fourth refusal in the same epoch adds `invocation_refused` but no second cap event; after a human post resets the budget and the cap is hit again, a new cap event appears (new epoch). The event commits in the same transaction as the refused row.
+- Halt: member removal that cancels work emits `room_halted` with reason `left`, through the same helper.
 - Halt: Stop that cancels two invocations emits two `invocation_stopped` events and one `room_halted` event listing both endpoints; Stop that cancels nothing emits no `room_halted`; the event is signed by `ep_relay_system`; a retried Stop does not emit a second one (idempotency key from the cancelled invocation ids).
 - Failure: `POST .../invocations/fail` emits `invocation_failed` with the clamped reason; a stale `invocation_id` that matches nothing emits nothing.
 - Late reply after halt: a bot reply through the reply route for a cancelled invocation answers `403 ROOM_NOT_INVOKED` (extend the Task 8 harness).
@@ -533,7 +534,7 @@ Expected: FAIL.
 
 - [ ] **Step 3: Implement**
 
-Add an `emitCapReached` helper beside `emitRefusal` in `room-dispatch.mjs`, called when `dispatchToTarget` returns a `hop_budget` refusal, with idempotency key `evt_cap_<thread_root_id>_<cap_epoch>`. Emit `room_halted` in the Stop handler after the per-invocation events, key `evt_halt_<sorted cancelled ids hashed>`. Emit `invocation_failed` in the fail handler inside its transaction.
+Add an `emitCapReached` helper beside `emitRefusal` in `room-dispatch.mjs`, called when `dispatchToTarget` returns a `hop_budget` refusal, with idempotency key `evt_cap_<thread_root_id>_<cap_epoch>`. Emit `room_halted` from one helper called at both cancel sites (Stop at `room-routes.mjs` ~line 430 and member removal ~line 250) after the per-invocation events, key `evt_halt_<sorted cancelled ids hashed>`. Emit `invocation_failed` in the fail handler inside its transaction.
 
 - [ ] **Step 4: Run to confirm pass**
 

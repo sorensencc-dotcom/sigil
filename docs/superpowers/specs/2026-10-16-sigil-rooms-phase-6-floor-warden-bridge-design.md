@@ -109,7 +109,7 @@ One JSON object per forward. Fields from other room members are untrusted data a
 | No reply URL configured | Fail with `REPLY_URL_UNSET` before any POST. |
 | Deadline passes (default 15 minutes, `--reply-timeout-ms`) | Fail with `REPLY_TIMEOUT`. A later reply gets `403 ROOM_NOT_INVOKED`. |
 
-The deadline survives a restart: on start the bridge lists its running invocations and fails those whose `started_at` is older than the deadline. Invocation failures use the existing `POST /v1/rooms/{room_id}/invocations/fail` route, which now emits a visible event (see Loop guards).
+The deadline survives a restart: on start the bridge lists its running invocations and fails those whose `started_at` is older than the deadline. A halt frame is sent by an in-process poll after the delivery is acked, so a restart between the cancel and the poll would lose it. `recover()` therefore also lists invocations cancelled since the stored forward time and sends any halt frame not yet recorded in the session store. Invocation failures use the existing `POST /v1/rooms/{room_id}/invocations/fail` route, which now emits a visible event (see Loop guards).
 
 The webhook call authenticates with the sender key from the routine panel. The header form is an assumption (assumption 1).
 
@@ -123,8 +123,8 @@ The webhook call authenticates with the sender key from the routine panel. The h
 4. `floor_warden_bots` has an active row for `target_bot_id` whose `endpoint_id` equals `sender`: otherwise `403 BOT_NOT_ON_ROSTER`.
 5. Room exists: `404 ROOM_NOT_FOUND`. The bot's endpoint is an active member: `403 BOT_NOT_A_MEMBER`.
 6. `in_reply_to` is a message in the room: `404 MESSAGE_NOT_FOUND`. The thread root is `body.thread_root_id ?? message_id` of that message.
-7. The bot has a running invocation whose trigger is `in_reply_to`: otherwise `403 ROOM_NOT_INVOKED`. This is the code the accept path already returns for an agent that posts uninvoked.
-8. A stored `idempotency_key` replays the first result (see Idempotency).
+7. A stored `idempotency_key` replays the first result (see Idempotency). This check runs before the invocation check because the first reply completed the invocation, so a legitimate replay finds none running.
+8. The bot has a running invocation whose trigger is `in_reply_to`: otherwise `403 ROOM_NOT_INVOKED`. This is the code the accept path already returns for an agent that posts uninvoked.
 9. Sign `room.message` with `{text, thread_root_id, mentions: []}`, `correlation_id = in_reply_to`, and the bot's key, then call `acceptEnvelopeAsync`. A `401` from accept for `UNKNOWN_ENDPOINT` or `INVALID_SIGNATURE` is a relay fault and becomes `500 INTERNAL`, as in the human send route. Other accept errors pass through.
 10. `202 {request_id, message_id, room_seq, duplicate}`.
 
@@ -150,7 +150,7 @@ No secret is written to `.sigil/*.json` by this phase except the bot relay token
 
 ### Idempotency
 
-- **Floor Warden to relay.** The key is `<in_reply_to>:<target_bot_id>`, 1-128 characters. The route stores it in `idempotency_keys` under the bot endpoint, scoped `room:<room_id>:fw_reply:<key>`. A replay returns the first `message_id` and `room_seq` with `duplicate: true` and ignores any change in `text`. A racing duplicate that loses the insert re-reads the winner, as the human send route does.
+- **Floor Warden to relay.** The key is `<in_reply_to>:<target_bot_id>`, 1-128 characters. The route stores it in `idempotency_keys` under the bot endpoint, scoped `room:<room_id>:fw_reply:<key>`. A replay returns the first `message_id` and `room_seq` with `duplicate: true` and ignores any change in `text`. It needs no running invocation (reply route step 7 runs before step 8). A racing duplicate that loses the insert re-reads the winner, as the human send route does.
 - **Accept path.** Completing an invocation is single-shot. A second reply under a different key answers `403 ROOM_NOT_INVOKED`.
 - **Relay to Floor Warden.** `delivery_key` is the invocation id. A retry after a failure resends the same key. The routine may not dedupe (assumption 2), so the reply idempotency above is the real guarantee: at most one reply is posted per invocation.
 
@@ -160,7 +160,7 @@ Already in the relay and unchanged: `max_agent_turns` (default 6) agent turns pe
 
 1. **A cap that is visible.** When the budget refuses a handoff, the relay posts one `room.event` of kind `agent_cap_reached` per thread per budget epoch, naming the cap and the refused agents. Hermes bots capped silently and a handoff looked abandoned. The event keeps that from happening. `room_threads` gains `cap_epoch`, which `resetAgentTurns` increments, and `last_reset_at`.
 2. **Continue.** `POST /v1/rooms/{room_id}/continue` with `{thread_root_id, idempotency_key}`. A human member only. The relay posts a signed human `room.message` ("Continue.") into the thread, as the caller, mentioning the endpoints refused for `hop_budget` since `last_reset_at`. Because it is an ordinary human message it refills the budget under the existing rule (only if the caller is the subject of every active invocation in the thread) and dispatches through `mayInvoke`. Nothing is reset behind the room's back, and the resume is signed and attributable. No refused agents: `409 NOTHING_TO_CONTINUE`. The web client shows a Continue button on the cap row.
-3. **Signed halt.** Stop already cancels invocations and emits `invocation_stopped` per row. It now also emits one `room_halted` event per Stop that cancelled work, signed by the relay system identity, with `endpoint_ids` for the cancelled agents. Its `room_seq` is the line: work started before it is void. The relay enforces this (a late reply gets `403 ROOM_NOT_INVOKED`). The Floor Warden bridge, which cannot kill a cloud bot, sends the `halt` frame so the routine can drop queued work. "In-band" here means an event in the room's sequence, not a message an agent must choose to obey.
+3. **Signed halt.** Work is cancelled at two sites in `room-routes.mjs`: the Stop route and member removal (a human who leaves loses the work they started). Each emits `invocation_stopped` per row. Both now go through one helper that also emits one `room_halted` event per call that cancelled work (`reason` `stopped` or `left`), signed by the relay system identity, with `endpoint_ids` for the cancelled agents. Its `room_seq` is the line: work started before it is void. The relay enforces this (a late reply gets `403 ROOM_NOT_INVOKED`). The Floor Warden bridge, which cannot kill a cloud bot, sends the `halt` frame so the routine can drop queued work. "In-band" here means an event in the room's sequence, not a message an agent must choose to obey.
 4. **Visible failure.** `POST .../invocations/fail` emits `invocation_failed` with the clamped reason, so a bridge failure or a reply timeout is a row in the room. This helps every bridge, not only this one.
 5. **Bot replies are leaves.** A bot reply carries no mentions, so a bot cannot hand off to another agent in phase 6. A later opt-in can parse mentions from bot text.
 
