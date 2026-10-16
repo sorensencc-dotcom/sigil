@@ -1,0 +1,30 @@
+sigil/cli/relay-up-flags.test.mjs
+  s_45bddb49f83c59::t_f530441e080f09 36-50
+sigil/relay/v1/floor-warden-token.test.mjs
+  s_45bddb49f83c59::t_143c421b3c8731 1-38
+sigil/cli/sigil.mjs
+  s_45bddb49f83c59::t_c9add6c0b93a0b 32,64,205,326-339,510
+sigil/relay/v1/http-server.mjs
+  s_45bddb49f83c59::t_df3229329393dd 97,248-268
+  s_45bddb49f83c59::t_cd03f9a82a4836 269-270
+sigil/relay/v1/floor-warden-replies.test.mjs
+  s_45bddb49f83c59::t_9a5d23928e20d2 1-87
+sigil/relay/v1/floor-warden-token.mjs
+  s_45bddb49f83c59::t_df3229329393dd 1-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7fa02d6127d639c761e8d7629d226ecfd746b419",
+  "prompts": {},
+  "sessions": {
+    "s_45bddb49f83c59": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "588abe99-cc40-463e-afdb-05d0681cc5b4",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
