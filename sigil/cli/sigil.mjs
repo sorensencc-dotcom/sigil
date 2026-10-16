@@ -39,6 +39,7 @@ import { signContract, verifyContract } from './contract-signing.mjs';
 import { checkRelayConnectivity } from './doctor.mjs';
 import { resolveRateLimits, DEFAULT_INBOX_DEPTH_LIMIT } from '../relay/v1/relay-config.mjs';
 import { createRelayMetrics } from '../relay/v1/metrics.mjs';
+import { cmdBotAdd, cmdBotDisable } from './bot-commands.mjs';
 import { cmdAgentSetInvokable, cmdHumanAdd, cmdHumanAddToRoom, cmdHumanSuspend, cmdHumanUnsuspend } from './human-commands.mjs';
 import { cmdIdentityRevoke, cmdInviteCreate, cmdInviteList, cmdInviteRevoke } from './oauth-commands.mjs';
 import { provisionIngressEndpoint } from './agentmail-provision.mjs';
@@ -80,6 +81,8 @@ Commands:
   human add-to-room --human <human_id> --room <room_id>:<member|room_manager>... [--identity path] [--database-url url]   Add a provisioned human to rooms; the --identity operator must own or manage each room
   human suspend <human_id> [--identity path] [--database-url url]   Suspend a human: their active endpoints, sessions, and in-flight invocations; running relays close their sockets
   human unsuspend <human_id> [--identity path] [--database-url url]   Restore a suspended human and the endpoints the suspension flipped
+  bot add --bot-id <id> --endpoint <endpoint_id> --name <display name> [--identity path] [--out path] [--database-url url] [--room-bot-key-wrap-key env_var]   Create a Floor Warden bot endpoint with a relay-held signing key and a receive-only identity file
+  bot disable --bot-id <id> [--database-url url]   Disable a Floor Warden bot (idempotent)
   agent set-invokable --room <room_id> --agent <endpoint_id> --mode owner|members [--identity path] [--database-url url]   Set who may invoke an agent in a room; only the agent's owner (--identity) may change it
   endpoint revoke <endpoint_id> [--database-url url]       Revoke an endpoint and retire all of its signing keys
   federation outbox list [--database-url url]              List queue-mode federation forward jobs: state counts, then one row per job (no envelope bodies)
@@ -1897,6 +1900,8 @@ export async function main() {
     else if (command === 'human' && sub === 'add-to-room') await cmdHumanAddToRoom(rest);
     else if (command === 'human' && sub === 'suspend') await cmdHumanSuspend(rest);
     else if (command === 'human' && sub === 'unsuspend') await cmdHumanUnsuspend(rest);
+    else if (command === 'bot' && sub === 'add') await cmdBotAdd(rest);
+    else if (command === 'bot' && sub === 'disable') await cmdBotDisable(rest);
     else usage();
   } catch (error) {
     console.error(`sigil: ${error.message}`);
