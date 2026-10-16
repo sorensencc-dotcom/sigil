@@ -94,7 +94,7 @@ export function createOnPersisted(stream, { repository = null, logger = null } =
   };
 }
 
-export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain, federationMode, federationIdentity, fetchImpl, relayRequestFreshnessMs, stream_seq, resendMetrics, logger, agentmailIngress, agentmailControl, roomSystemIdentity, buildAcceptOptions: injectedBuildAcceptOptions, allowedOrigins = [], ticketStore = null, humanSigner = null } = {}) {
+export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain, federationMode, federationIdentity, fetchImpl, relayRequestFreshnessMs, stream_seq, resendMetrics, logger, agentmailIngress, agentmailControl, roomSystemIdentity, buildAcceptOptions: injectedBuildAcceptOptions, allowedOrigins = [], ticketStore = null, humanSigner = null, floorWardenReplies = null } = {}) {
   // B3: one clamped relay-request freshness window for this server. It bounds
   // how long a captured signed peer request stays replayable and doubles as the
   // nonce row's expiry horizon (expiresAt = signed_at + freshnessMs).
@@ -243,6 +243,29 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       const result = await handler({ rawBody: Buffer.from(raw), headers, inboxId: decodeURIComponent(agentmailMatch[1]), requestId, now });
       response.writeHead(result.status ?? 500, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(result.body ? JSON.stringify(result.body) : JSON.stringify(result));
+    }
+
+    // Floor Warden reply route. Authenticated by its own reply token, so it
+    // sits before the generic bearer gate. Absent (404) unless configured.
+    const replyMatch = parsedUrl.pathname.match(/^\/v1\/rooms\/([^/]+)\/replies$/);
+    if (request.method === 'POST' && replyMatch) {
+      const sendReply = (status, code, message) => {
+        response.writeHead(status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code, message, details: {} }));
+      };
+      if (!floorWardenReplies?.tokens) return sendReply(404, 'NOT_FOUND', 'Not found');
+      const header = request.headers.authorization;
+      const presented = typeof header === 'string' && header.startsWith('Bearer ') ? header.slice(7) : '';
+      if (!floorWardenReplies.tokens.matches(presented)) {
+        const endpointPrincipal = presented && authenticateRequest ? await authenticateRequest(request) : null;
+        if (endpointPrincipal) return sendReply(403, 'ROUTE_NOT_AUTHORIZED', 'This route accepts only the Floor Warden reply token');
+        return sendReply(401, 'UNAUTHENTICATED', 'Authentication required');
+      }
+      if (typeof floorWardenReplies.handler !== 'function') return sendReply(503, 'FLOOR_WARDEN_UNAVAILABLE', 'Floor Warden replies are not available');
+      const result = await floorWardenReplies.handler({ request, response, requestId, roomId: decodeURIComponent(replyMatch[1]), now, readBody });
+      if (result?.handled) return;
+      response.writeHead(result?.status ?? 500, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+      return response.end(JSON.stringify({ request_id: requestId, ...(result?.body ?? {}) }));
     }
 
     // Unauthenticated at the transport layer: trust is the peer relay's

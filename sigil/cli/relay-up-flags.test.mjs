@@ -33,3 +33,18 @@ test('relay up help documents --room-key-wrap-key and --reconcile-kind', () => {
   assert.match(out, /--room-key-wrap-key/);
   assert.match(out, /--reconcile-kind/);
 });
+
+test('relay up help documents the Floor Warden flags', () => {
+  const help = spawnSync(process.execPath, [sigilCli, '--help'], { encoding: 'utf8', timeout: 20_000 });
+  const out = `${help.stdout}${help.stderr}`;
+  assert.match(out, /--floor-warden-reply-token-env/);
+  assert.match(out, /--floor-warden-reply-token-next-env/);
+  assert.match(out, /--room-bot-key-wrap-key/);
+});
+
+test('relay up refuses a missing reply token variable by name', () => {
+  const { result, out } = run(['--floor-warden-reply-token-env', 'SIGIL_TEST_UNSET_FWT']);
+  assert.equal(result.status, 1, out);
+  assert.match(out, /FLOOR_WARDEN_TOKEN_UNSET/);
+  assert.match(out, /SIGIL_TEST_UNSET_FWT/);
+});
