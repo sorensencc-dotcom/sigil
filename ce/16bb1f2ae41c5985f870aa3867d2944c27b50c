@@ -1,0 +1,20 @@
+docs/superpowers/plans/2026-10-16-phase-5-verification-notes.md
+  s_b7d4c95b830830::t_0cc28462266080 30-31,35-41
+  s_b7d4c95b830830::t_f9eba2a597b604 130
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ce16bb1f2ae41c5985f870aa3867d2944c27b50c",
+  "prompts": {},
+  "sessions": {
+    "s_b7d4c95b830830": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a14618-4e32-7582-92d8-ad60dd8cc670",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
