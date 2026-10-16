@@ -114,7 +114,7 @@ function post(port, path, authorization, body) {
   });
 }
 
-async function withWorld(fn, { botSigner: injectedSigner = null, handler, noWrapKey = false } = {}) {
+async function withWorld(fn, { botSigner: injectedSigner = null, handler, noWrapKey = false, wrapRepository = (r) => r } = {}) {
   const human = createIdentity({ ownerId: 'usr_op', endpointId: 'ep_web', kind: 'human' });
   const bot = crypto.generateKeyPairSync('ed25519');
   const botKeyId = 'key_ep_test_bot';
@@ -137,8 +137,11 @@ async function withWorld(fn, { botSigner: injectedSigner = null, handler, noWrap
   const stream = { notify() {}, notifyReceipt() {}, notifyRoom: (id, frame) => { frames.push([id, frame]); return true; } };
   const botSigner = injectedSigner ?? createRoomBotSigner({ repository, wrapKey: noWrapKey ? undefined : wrapKey });
   const floorWardenReplies = { tokens: loadReplyTokens({ FWT: REPLY }, 'FWT'), botSigner, ...(handler ? { handler } : {}) };
+  const logs = [];
+  const capture = (level) => (...args) => { logs.push([level, ...args]); };
+  const logger = { info: capture('info'), warn: capture('warn'), error: capture('error'), debug: capture('debug') };
   const server = createRelayServer({
-    registry, repository, stream, now: () => NOW, roomSystemIdentity: systemIdentity, floorWardenReplies,
+    registry, repository: wrapRepository(repository), stream, now: () => NOW, roomSystemIdentity: systemIdentity, floorWardenReplies, logger,
     humanSigner: createRoomHumanSigner({ identity: human, repository }),
     authenticate: async (request) => (request.headers.authorization === 'Bearer web' ? { endpoint_id: 'ep_web', owner_id: 'usr_op', human_id: 'usr_op' } : null),
   });
@@ -150,7 +153,7 @@ async function withWorld(fn, { botSigner: injectedSigner = null, handler, noWrap
     return res.body.message_id;
   };
   const reply = (fields = {}, { path = `/v1/rooms/${ROOM}/replies`, raw } = {}) => post(port, path, `Bearer ${REPLY}`, raw ?? { room_id: ROOM, target_bot_id: BOT_ID, sender: BOT_EP, text: 'bot answer', idempotency_key: `k_${crypto.randomUUID()}`, ...fields });
-  try { await fn({ port, repository, registry, frames, say, reply, botPublicKey: bot.publicKey }); } finally { await new Promise((r) => server.close(r)); }
+  try { await fn({ port, repository, registry, frames, say, reply, logs, botPublicKey: bot.publicKey }); } finally { await new Promise((r) => server.close(r)); }
 }
 
 const invoked = async (w) => w.say('hi bot', { mentions: [BOT_EP] });
@@ -345,4 +348,136 @@ test('a configured route whose signer has no wrap key answers 503 BOT_SIGNING_UN
     assert.equal(res.status, 503);
     assert.equal(res.body.code, 'BOT_SIGNING_UNAVAILABLE');
   }, { noWrapKey: true });
+});
+
+// ---- Idempotency, single-shot completion, and audit (spec "Reply route" step 7, "Idempotency") ----
+
+const roomMessages = async (w, roomId = ROOM) => (await w.repository.listRoomMessages(roomId)).filter((m) => m.envelope?.sender?.endpoint_id === BOT_EP);
+const replyAudits = (w) => w.repository._debugGetAuditEvents().filter((e) => e.event_type === 'room.floor_warden_reply');
+
+test('a replay of the same key returns the first result with duplicate true and needs no running invocation', async () => {
+  await withWorld(async (w) => {
+    const trigger = await invoked(w);
+    const first = await w.reply({ in_reply_to: trigger, idempotency_key: 'k_same' });
+    assert.equal(first.status, 202, JSON.stringify(first.body));
+    assert.equal(first.body.duplicate, false);
+    assert.equal(await running(w), null, 'the first reply completed the invocation');
+
+    const again = await w.reply({ in_reply_to: trigger, idempotency_key: 'k_same' });
+    assert.equal(again.status, 202, JSON.stringify(again.body));
+    assert.deepEqual({ message_id: again.body.message_id, room_seq: again.body.room_seq, duplicate: again.body.duplicate }, { message_id: first.body.message_id, room_seq: first.body.room_seq, duplicate: true });
+    assert.equal((await roomMessages(w)).length, 1, 'no second envelope');
+  });
+});
+
+test('a replay with different text still returns the first result', async () => {
+  await withWorld(async (w) => {
+    const trigger = await invoked(w);
+    const first = await w.reply({ in_reply_to: trigger, idempotency_key: 'k_text', text: 'first text' });
+    const changed = await w.reply({ in_reply_to: trigger, idempotency_key: 'k_text', text: 'second text' });
+    assert.equal(changed.status, 202, JSON.stringify(changed.body));
+    assert.equal(changed.body.message_id, first.body.message_id);
+    assert.equal(changed.body.duplicate, true);
+    const stored = await roomMessages(w);
+    assert.equal(stored.length, 1);
+    assert.equal(stored[0].envelope.body.text, 'first text');
+  });
+});
+
+test('the same key in two rooms does not collide', async () => {
+  await withWorld(async (w) => {
+    const ROOM2 = 'room_2';
+    await w.repository.createRoom({ conversationId: ROOM2, workspaceId: 'ws_usr_op', name: ROOM2, createdByHumanId: 'usr_op', ownerEndpointId: 'ep_web', now: NOW });
+    await w.repository.addRoomMember({ conversationId: ROOM2, endpointId: BOT_EP, role: 'member', responseMode: 'mentions_only', addedByHumanId: 'usr_op', now: NOW });
+    const t1 = await invoked(w);
+    const said = await post(w.port, `/v1/rooms/${ROOM2}/messages`, 'Bearer web', { text: 'hi bot 2', mentions: [BOT_EP], idempotency_key: crypto.randomUUID() });
+    assert.equal(said.status, 201, JSON.stringify(said.body));
+    const a = await w.reply({ in_reply_to: t1, idempotency_key: 'k_shared' });
+    const b = await w.reply({ room_id: ROOM2, in_reply_to: said.body.message_id, idempotency_key: 'k_shared' }, { path: `/v1/rooms/${ROOM2}/replies` });
+    assert.equal(a.status, 202, JSON.stringify(a.body));
+    assert.equal(b.status, 202, JSON.stringify(b.body));
+    assert.equal(b.body.duplicate, false);
+    assert.notEqual(a.body.message_id, b.body.message_id);
+    assert.equal((await roomMessages(w, ROOM2)).length, 1);
+  });
+});
+
+test('a second reply under a new key after completion answers 403 ROOM_NOT_INVOKED', async () => {
+  await withWorld(async (w) => {
+    const trigger = await invoked(w);
+    assert.equal((await w.reply({ in_reply_to: trigger, idempotency_key: 'k_one' })).status, 202);
+    const second = await w.reply({ in_reply_to: trigger, idempotency_key: 'k_two' });
+    assert.equal(second.status, 403);
+    assert.equal(second.body.code, 'ROOM_NOT_INVOKED');
+    assert.equal((await roomMessages(w)).length, 1);
+  });
+});
+
+test('a late reply whose pre-check saw the old invocation cannot complete the promoted one', async () => {
+  // Simulates the race: the handler's unlocked step 8 read still sees invocation A
+  // running, but by the time accept runs, A is completed and B (same thread) runs.
+  let staleNext = null;
+  const wrapRepository = (repo) => new Proxy(repo, {
+    get(target, prop) {
+      if (prop === 'lookupRunningInvocation') {
+        return async (...args) => {
+          if (staleNext) { const row = staleNext; staleNext = null; return row; }
+          return target.lookupRunningInvocation(...args);
+        };
+      }
+      const value = target[prop];
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  await withWorld(async (w) => {
+    const triggerA = await invoked(w);
+    const triggerB = await w.say('follow up', { mentions: [BOT_EP], thread_root_id: triggerA });
+    const invA = await running(w);
+    assert.equal(invA.trigger_message_id, triggerA);
+    assert.equal((await w.reply({ in_reply_to: triggerA, idempotency_key: 'k_a1' })).status, 202);
+    const invB = await running(w);
+    assert.equal(invB.trigger_message_id, triggerB);
+
+    staleNext = invA;
+    const late = await w.reply({ in_reply_to: triggerA, idempotency_key: 'k_a2', text: 'late answer to A' });
+    assert.equal(late.status, 403, JSON.stringify(late.body));
+    assert.equal(late.body.code, 'ROOM_NOT_INVOKED');
+    const stillB = await running(w);
+    assert.equal(stillB?.invocation_id, invB.invocation_id, 'B is still running');
+    assert.equal((await roomMessages(w)).length, 1);
+  }, { wrapRepository });
+});
+
+test('every accepted or refused call writes one room.floor_warden_reply audit row without token or text', async () => {
+  await withWorld(async (w) => {
+    const trigger = await invoked(w);
+    const SECRET_TEXT = 'very private reply body 7f3a';
+    const ok = await w.reply({ in_reply_to: trigger, idempotency_key: 'k_audit', text: SECRET_TEXT });
+    const dup = await w.reply({ in_reply_to: trigger, idempotency_key: 'k_audit', text: SECRET_TEXT });
+    const notInvoked = await w.reply({ in_reply_to: trigger, idempotency_key: 'k_audit2', text: SECRET_TEXT });
+    const notRostered = await w.reply({ in_reply_to: trigger, target_bot_id: 'bot_nobody', text: SECRET_TEXT });
+    const bad = await w.reply({}, { raw: JSON.stringify({ text: SECRET_TEXT }) });
+    assert.deepEqual([ok.status, dup.status, notInvoked.status, notRostered.status, bad.status], [202, 202, 403, 403, 400]);
+
+    const rows = replyAudits(w);
+    assert.equal(rows.length, 5, JSON.stringify(rows));
+    const [r1, r2, r3, r4, r5] = rows;
+    assert.deepEqual([r1.subject_id, r1.endpoint_id, r1.conversation_id, r1.object_id, r1.outcome], [BOT_ID, BOT_EP, ROOM, ok.body.message_id, 'accepted']);
+    assert.deepEqual([r2.object_id, r2.outcome], [ok.body.message_id, 'duplicate']);
+    assert.deepEqual([r3.subject_id, r3.endpoint_id, r3.conversation_id, r3.outcome, r3.reason], [BOT_ID, BOT_EP, ROOM, 'refused', 'ROOM_NOT_INVOKED']);
+    assert.deepEqual([r4.outcome, r4.reason, r4.conversation_id], ['refused', 'BOT_NOT_ON_ROSTER', null]);
+    assert.deepEqual([r5.outcome, r5.reason], ['refused', 'INVALID_REQUEST']);
+
+    const dump = JSON.stringify(w.repository._debugGetAuditEvents()) + JSON.stringify(w.logs.map((l) => l.map((x) => (x instanceof Error ? { message: x.message, stack: x.stack } : x))));
+    assert.equal(dump.includes(REPLY), false, 'no token in audit or logs');
+    assert.equal(dump.includes(SECRET_TEXT), false, 'no reply text in audit or logs');
+  });
+});
+
+test('the unknown-field message truncates a long field name', async () => {
+  await withWorld(async (w) => {
+    const res = await w.reply({}, { raw: JSON.stringify({ ['f'.repeat(500)]: 1 }) });
+    assert.equal(res.status, 400);
+    assert.ok(res.body.message.length < 200, res.body.message);
+  });
 });

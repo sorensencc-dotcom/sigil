@@ -23,10 +23,18 @@ export function threadRootOf(envelope) {
   return envelope.body?.thread_root_id ?? envelope.message_id;
 }
 
-export async function assertAgentMayPost(envelope, senderMember, repository, client) {
+// expectedTriggerMessageId is set only by the Floor Warden reply route: its
+// reply answers one trigger, so it must not complete a newer invocation that
+// was promoted in the same thread after the route's own unlocked check.
+// If this read still sees an older running row, finishInvocation's
+// status-guarded update under the accept transaction refuses it instead.
+export async function assertAgentMayPost(envelope, senderMember, repository, client, { expectedTriggerMessageId = null } = {}) {
   if (!memberIsAgent(senderMember)) return null;
   const running = await repository.lookupRunningInvocation(envelope.conversation_id, envelope.sender.endpoint_id, client);
   if (!running) throw reject('ROOM_NOT_INVOKED', 'Agents may post only while invoked', { conversation_id: envelope.conversation_id });
+  if (expectedTriggerMessageId !== null && running.trigger_message_id !== expectedTriggerMessageId) {
+    throw reject('ROOM_NOT_INVOKED', 'The running invocation answers a different trigger', { conversation_id: envelope.conversation_id });
+  }
   if (threadRootOf(envelope) !== running.thread_root_id) {
     throw reject('ROUTE_NOT_AUTHORIZED', 'An agent reply must stay in its invocation thread', { thread_root_id: running.thread_root_id });
   }
