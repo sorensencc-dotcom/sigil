@@ -1,0 +1,21 @@
+docs/superpowers/plans/2026-10-16-sigil-hybrid-rooms-direct-messages.md
+  s_1228935becb106::t_11eab3e79460cd 1-692
+docs/superpowers/specs/2026-10-16-sigil-hybrid-rooms-direct-messages-design.md
+  s_1228935becb106::t_707d27c57be834 1-553
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0ed4f6eadef734a36c21a937f7ae8a7661bf1aa4",
+  "prompts": {},
+  "sessions": {
+    "s_1228935becb106": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-acd419c9ce754dc6b",
+        "model": "unknown"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
