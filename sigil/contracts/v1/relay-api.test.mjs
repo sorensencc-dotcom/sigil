@@ -129,7 +129,11 @@ test('relay API lists the Floor Warden reply route with its spec codes', () => {
     'MESSAGE_NOT_FOUND', 'ROOM_NOT_INVOKED', 'BOT_SIGNING_UNAVAILABLE', 'ENDPOINT_REVOKED', 'FLOOR_WARDEN_UNAVAILABLE', 'INTERNAL', 'DATABASE_UNAVAILABLE',
   ]) assert.ok(route.errors.includes(code), code);
   assert.match(route.notes, /reply token/);
-  assert.match(route.notes, /room\.floor_warden_reply/);
+  assert.match(route.notes, /passes the reply-token gate writes a room\.floor_warden_reply/);
+  const states = JSON.parse(fs.readFileSync(new URL('./errors-and-states.json', import.meta.url)));
+  for (const code of ['BOT_NOT_ON_ROSTER', 'BOT_NOT_A_MEMBER', 'BOT_SIGNING_UNAVAILABLE', 'FLOOR_WARDEN_UNAVAILABLE', 'MESSAGE_NOT_FOUND', 'ROOM_NOT_INVOKED']) {
+    assert.ok(states.errors.includes(code), code);
+  }
 });
 
 test('relay API lists the response-mode route', () => {

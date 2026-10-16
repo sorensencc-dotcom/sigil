@@ -289,13 +289,48 @@ test('500 INTERNAL when accept answers 401 INVALID_SIGNATURE', async () => {
   }, { botSigner });
 });
 
-test('a throwing handler answers 500 INTERNAL', async () => {
+test('a throwing handler answers 503 DATABASE_UNAVAILABLE with no error text in the body or the logs', async () => {
   await withWorld(async (w) => {
     const res = await w.reply({ in_reply_to: 'msg_x' });
-    assert.equal(res.status, 500);
-    assert.equal(res.body.code, 'INTERNAL');
+    assert.equal(res.status, 503);
+    assert.equal(res.body.code, 'DATABASE_UNAVAILABLE');
     assert.equal(JSON.stringify(res.body).includes('boom-secret'), false);
+    assert.ok(w.logs.length > 0, 'the failure is logged');
+    assert.equal(JSON.stringify(w.logs).includes('boom-secret'), false);
   }, { handler: async () => { throw new Error('boom-secret'); } });
+});
+
+test('an audit insert that fails after commit answers 503, and the retry answers duplicate and writes the row', async () => {
+  let failAudit = true;
+  const wrapRepository = (repo) => new Proxy(repo, {
+    get(target, prop) {
+      if (prop === 'recordAuditEvent') {
+        return async (...args) => {
+          if (failAudit) { failAudit = false; throw new Error('audit store down boom-secret'); }
+          return target.recordAuditEvent(...args);
+        };
+      }
+      const value = target[prop];
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  await withWorld(async (w) => {
+    const trigger = await invoked(w);
+    const first = await w.reply({ in_reply_to: trigger, idempotency_key: 'k_audit_down' });
+    assert.equal(first.status, 503);
+    assert.equal(first.body.code, 'DATABASE_UNAVAILABLE');
+    assert.equal(JSON.stringify(w.logs).includes('boom-secret'), false);
+    const stored = await roomMessages(w);
+    assert.equal(stored.length, 1, 'the reply committed before the audit insert failed');
+    assert.equal(replyAudits(w).length, 0);
+
+    const retry = await w.reply({ in_reply_to: trigger, idempotency_key: 'k_audit_down' });
+    assert.equal(retry.status, 202, JSON.stringify(retry.body));
+    assert.deepEqual([retry.body.message_id, retry.body.duplicate], [stored[0].message_id, true]);
+    const rows = replyAudits(w);
+    assert.equal(rows.length, 1);
+    assert.deepEqual([rows[0].outcome, rows[0].object_id], ['duplicate', stored[0].message_id]);
+  }, { wrapRepository });
 });
 
 test('success: 202, signed agent message from the bot, invocation completed, queue promoted, humans notified', async () => {

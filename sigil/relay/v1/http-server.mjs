@@ -273,10 +273,13 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       try {
         result = await replyHandler({ request, response, requestId, roomId: replyRoomId, now, readBody });
       } catch (error) {
-        // No error text reaches the caller: it could name internal state.
+        // A thrown error is a store failure, answered like the sibling rooms
+        // routes. The relay-signature fault is an explicit 500 INTERNAL result
+        // from the handler, not a throw. No error text reaches the caller or
+        // the log: it could name internal state.
         logger?.error?.({ event: 'floor_warden_reply_failed', request_id: requestId, code: error?.code ?? null });
         if (response.headersSent) return response.end();
-        return sendReply(500, 'INTERNAL', 'Internal error');
+        return sendReply(503, 'DATABASE_UNAVAILABLE', 'Rooms temporarily unavailable');
       }
       if (result?.handled) return;
       response.writeHead(result?.status ?? 500, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });

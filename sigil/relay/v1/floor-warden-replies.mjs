@@ -50,6 +50,8 @@ async function runReply({ request, requestId, roomId, now, readBody, repository,
   const parsed = parseReplyBody(raw, roomId);
   if (parsed.error) return parsed.error;
   const { reply } = parsed;
+  // Caller-claimed and unverified until step 4 passes: on refusal rows these
+  // name what the caller asserted, not a checked identity.
   facts.botId = clip(reply.targetBotId, AUDIT_ID_MAX);
   facts.endpointId = clip(reply.sender, AUDIT_ID_MAX);
 
