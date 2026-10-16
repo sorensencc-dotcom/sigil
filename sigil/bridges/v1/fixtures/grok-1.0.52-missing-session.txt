@@ -1,0 +1,6 @@
+CLI version: grok 1.0.52
+exit_code: 1
+stderr:
+Session "a2bcd905-4106-4f8d-8653-92ae1b17d3c5" not found locally, restoring conversation from remote...
+  [0.000s] 🔎 Fetching session record — Loading restore metadata from the registry
+Error: Failed to restore session from remote: fetching session record: session get failed: 404 Not Found

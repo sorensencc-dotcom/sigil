@@ -1,0 +1,7 @@
+CLI version: grok 1.0.52 (0920c8169e27)
+{
+  "text": "ok",
+  "stopReason": "end_turn",
+  "sessionId": "6f2f7f90-97a2-45f0-8e95-f827d11bac41",
+  "cwd": "<TEMP_DIR>"
+}
