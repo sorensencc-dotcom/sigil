@@ -339,6 +339,43 @@ export class PostgresRepository {
     const result = await client.query('SELECT wrapped_private_key FROM human_signing_keys WHERE key_id = $1', [keyId]);
     return result.rows[0]?.wrapped_private_key ?? null;
   }
+  async lookupFloorWardenBot(botId, client = this.pool) {
+    const result = await client.query('SELECT bot_id, endpoint_id, display_name, status FROM floor_warden_bots WHERE bot_id = $1', [botId]);
+    return result.rows[0] ?? null;
+  }
+  async insertFloorWardenBot(row, client = this.pool) {
+    const createdAt = row.created_at ?? new Date();
+    try {
+      await client.query(
+        'INSERT INTO floor_warden_bots (bot_id, endpoint_id, display_name, status, created_at) VALUES ($1,$2,$3,$4,$5)',
+        [row.bot_id, row.endpoint_id, row.display_name, row.status, createdAt instanceof Date ? createdAt.toISOString() : new Date(createdAt).toISOString()],
+      );
+    } catch (error) {
+      if (error.code === '23505') throw Object.assign(new Error('A Floor Warden bot with this bot_id or endpoint_id already exists'), { code: 'BOT_EXISTS' });
+      throw error;
+    }
+  }
+  async loadWrappedBotSigningKey(keyId, client = this.pool) {
+    const result = await client.query('SELECT wrapped_private_key FROM bot_signing_keys WHERE key_id = $1', [keyId]);
+    return result.rows[0]?.wrapped_private_key ?? null;
+  }
+  async insertBotSigningKey({ keyId, wrapped, now = new Date() }, client = this.pool) {
+    await client.query(
+      'INSERT INTO bot_signing_keys (key_id, wrapped_private_key, created_at) VALUES ($1,$2,$3)',
+      [keyId, wrapped, now instanceof Date ? now.toISOString() : new Date(now).toISOString()],
+    );
+  }
+  async listCapRefusedEndpoints(roomId, threadRootId, client = this.pool) {
+    const result = await client.query(
+      `SELECT i.endpoint_id FROM room_invocations i
+         LEFT JOIN room_threads t ON t.room_id = i.room_id AND t.thread_root_id = i.thread_root_id
+        WHERE i.room_id = $1 AND i.thread_root_id = $2 AND i.status = 'refused' AND i.reason = 'hop_budget'
+          AND (t.last_reset_at IS NULL OR i.created_at > t.last_reset_at)
+        GROUP BY i.endpoint_id ORDER BY MIN(i.created_at), i.endpoint_id`,
+      [roomId, threadRootId],
+    );
+    return result.rows.map((r) => r.endpoint_id);
+  }
   // No `client = this.pool` default here, unlike the other lookups above --
   // design §3 requires this one to always run on the transaction's client
   // since it takes a row lock; a lock taken on a throwaway pool connection
@@ -2082,11 +2119,13 @@ export class PostgresRepository {
     return { allowed: false, agent_turns: current.rows[0]?.agent_turns ?? 0 };
   }
   async resetAgentTurns(roomId, threadRootId, { now = new Date() } = {}, client = this.pool) {
-    await client.query(
-      `INSERT INTO room_threads (room_id, thread_root_id, agent_turns, updated_at) VALUES ($1, $2, 0, $3)
-       ON CONFLICT (room_id, thread_root_id) DO UPDATE SET agent_turns = 0, updated_at = $3`,
+    const result = await client.query(
+      `INSERT INTO room_threads (room_id, thread_root_id, agent_turns, updated_at, cap_epoch, last_reset_at) VALUES ($1, $2, 0, $3, 1, $3)
+       ON CONFLICT (room_id, thread_root_id) DO UPDATE SET agent_turns = 0, updated_at = $3, cap_epoch = room_threads.cap_epoch + 1, last_reset_at = $3
+       RETURNING cap_epoch`,
       [roomId, threadRootId, now instanceof Date ? now.toISOString() : new Date(now).toISOString()],
     );
+    return result.rows[0].cap_epoch;
   }
   async createRoomDelivery({ messageId, endpointId, now = new Date() }, client = this.pool) {
     const deliveryId = `del_${crypto.randomUUID()}`;

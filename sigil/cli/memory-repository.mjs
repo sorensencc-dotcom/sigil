@@ -72,6 +72,8 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
   const workspaces = new Map(); // workspace_id -> row (migration 027)
   const rooms = new Map(); // conversation_id -> room row (migration 027)
   const roomMembers = new Map(); // conversation_id -> Map(endpoint_id -> member row incl. removed_at)
+  const floorWardenBots = new Map(); // bot_id -> row (migration 035)
+  const botSigningKeys = new Map(); // key_id -> { wrapped, created_at } (migration 035)
   const roomInvocations = new Map(); // invocation_id -> row (migration 028)
   const roomThreads = new Map(); // JSON [room_id, thread_root_id] -> { agent_turns, updated_at } (migration 028)
   const humanStatuses = new Map(); // human_id -> status; absent means 'active' (the memory repo has no humans table)
@@ -242,6 +244,32 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       return row.keys instanceof Map ? { ...row, kind: row.kind ?? 'human' } : entryFromRegistryRow(row);
     },
     async loadWrappedSigningKey() { return null; },
+    async lookupFloorWardenBot(botId) {
+      const row = floorWardenBots.get(botId);
+      return row ? { bot_id: row.bot_id, endpoint_id: row.endpoint_id, display_name: row.display_name, status: row.status } : null;
+    },
+    async insertFloorWardenBot(row) {
+      if (floorWardenBots.has(row.bot_id) || [...floorWardenBots.values()].some((b) => b.endpoint_id === row.endpoint_id)) {
+        throw Object.assign(new Error('A Floor Warden bot with this bot_id or endpoint_id already exists'), { code: 'BOT_EXISTS' });
+      }
+      undoMapSet(floorWardenBots, row.bot_id);
+      floorWardenBots.set(row.bot_id, { ...row });
+    },
+    async loadWrappedBotSigningKey(keyId) {
+      const row = botSigningKeys.get(keyId);
+      return row ? Buffer.from(row.wrapped) : null;
+    },
+    async insertBotSigningKey({ keyId, wrapped, now = new Date() }) {
+      undoMapSet(botSigningKeys, keyId);
+      botSigningKeys.set(keyId, { wrapped: Buffer.from(wrapped), created_at: (now instanceof Date ? now : new Date(now)).toISOString() });
+    },
+    async listCapRefusedEndpoints(roomId, threadRootId) {
+      const since = roomThreads.get(JSON.stringify([roomId, threadRootId]))?.last_reset_at ?? null;
+      return [...new Set([...roomInvocations.values()]
+        .filter((r) => r.room_id === roomId && r.thread_root_id === threadRootId && r.status === 'refused' && r.reason === 'hop_budget' && (since === null || r.created_at > since))
+        .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.invocation_id.localeCompare(b.invocation_id))
+        .map((r) => r.endpoint_id))];
+    },
     async ensureRoomSystemEndpoint({ identity }) {
       const publicKey = identityKeys(identity).publicKey;
       const existing = registry.get(identity.endpoint_id);
@@ -516,12 +544,16 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       const current = roomThreads.get(key)?.agent_turns ?? 0;
       if (current >= maxTurns) return { allowed: false, agent_turns: current };
       undoMapSet(roomThreads, key);
-      roomThreads.set(key, { agent_turns: current + 1, updated_at: (now instanceof Date ? now : new Date(now)).toISOString() });
+      roomThreads.set(key, { ...roomThreads.get(key), agent_turns: current + 1, updated_at: (now instanceof Date ? now : new Date(now)).toISOString() });
       return { allowed: true, agent_turns: current + 1 };
     },
     async resetAgentTurns(roomId, threadRootId, { now = new Date() } = {}) {
-      undoMapSet(roomThreads, JSON.stringify([roomId, threadRootId]));
-      roomThreads.set(JSON.stringify([roomId, threadRootId]), { agent_turns: 0, updated_at: (now instanceof Date ? now : new Date(now)).toISOString() });
+      const key = JSON.stringify([roomId, threadRootId]);
+      const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+      const capEpoch = (roomThreads.get(key)?.cap_epoch ?? 0) + 1;
+      undoMapSet(roomThreads, key);
+      roomThreads.set(key, { agent_turns: 0, updated_at: timestamp, cap_epoch: capEpoch, last_reset_at: timestamp });
+      return capEpoch;
     },
     async createRoomDelivery({ messageId, endpointId, now = new Date() }) {
       const deliveryId = `del_${messageId}_${endpointId}`;
