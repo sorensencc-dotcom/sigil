@@ -1,0 +1,39 @@
+sigil/relay/v1/floor-warden-replies.test.mjs
+  s_45bddb49f83c59::t_801a796c8375ca 352-483
+  s_45bddb49f83c59::t_dfa0eefa283feb 156
+  s_45bddb49f83c59::t_a95a8cde3b53ec 117
+  s_45bddb49f83c59::t_140de4a2ec3a29 140-142,144
+sigil/relay/v1/floor-warden-replies.pg.test.mjs
+  s_45bddb49f83c59::t_10515c1fd6285f 38
+  s_45bddb49f83c59::t_07f9ba351e77f2 176-177
+  s_45bddb49f83c59::t_0af724d9c1b268 1-37,39-53,55-175,178-180
+  s_45bddb49f83c59::t_ab0200d4865566 54
+sigil/contracts/v1/relay-api.test.mjs
+  s_45bddb49f83c59::t_71135448c7f180 48
+  s_45bddb49f83c59::t_82881e586155cc 121-134
+sigil/relay/v1/room-dispatch.mjs
+  s_45bddb49f83c59::t_d29c80b6d4a56f 26-31,35-37
+sigil/relay/v1/accept-envelope.mjs
+  s_45bddb49f83c59::t_5911ddc52dc21d 412
+sigil/relay/v1/floor-warden-replies.mjs
+  s_45bddb49f83c59::t_fa9b93a6ca6b8c 3-8,21-22,25,33,44-47,53-54,64,72-86,89-90,92,100-101,112,115-126,135,140-150
+  s_45bddb49f83c59::t_d3b6bf07898282 151-152
+sigil/contracts/v1/relay-api.json
+  s_45bddb49f83c59::t_1a101240f0045d 22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "50de4723d161fa398901e3bcc5df656c877f72b9",
+  "prompts": {},
+  "sessions": {
+    "s_45bddb49f83c59": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "588abe99-cc40-463e-afdb-05d0681cc5b4",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
