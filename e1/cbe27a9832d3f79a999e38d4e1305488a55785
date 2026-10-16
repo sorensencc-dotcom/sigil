@@ -1,0 +1,31 @@
+sigil/relay/v1/floor-warden-replies.test.mjs
+  s_45bddb49f83c59::t_883151de07af8b 292,295-296,298-299,303-333
+  s_45bddb49f83c59::t_d4ce347cc7c1fd 334-335
+sigil/contracts/v1/relay-api.json
+  s_45bddb49f83c59::t_8b68892319b5de 22
+sigil/relay/v1/http-server.mjs
+  s_45bddb49f83c59::t_713c41b3eace8b 276-279,282
+sigil/relay/v1/floor-warden-replies.mjs
+  s_45bddb49f83c59::t_3594dc77616f62 53-54
+sigil/contracts/v1/errors-and-states.json
+  s_45bddb49f83c59::t_abc59e1091e614 39-44
+sigil/contracts/v1/relay-api.test.mjs
+  s_45bddb49f83c59::t_3b3eb8fe85d783 132-133,135-136
+  s_45bddb49f83c59::t_87bdf498e896e8 134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e1cbe27a9832d3f79a999e38d4e1305488a55785",
+  "prompts": {},
+  "sessions": {
+    "s_45bddb49f83c59": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "588abe99-cc40-463e-afdb-05d0681cc5b4",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
