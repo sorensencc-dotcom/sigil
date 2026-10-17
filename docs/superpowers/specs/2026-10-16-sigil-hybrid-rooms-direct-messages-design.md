@@ -1,6 +1,7 @@
 # Sigil hybrid messaging: rooms plus direct messages through a live session directory - design
 
 Status: draft for review, 2026-10-16.
+Follow-up: [Decided answers](2026-10-16-sigil-hybrid-dm-decisions.md) supersede the explicitly answered questions and liveness proposals below; other questions remain open.
 Parent spec: `docs/superpowers/specs/2026-10-02-sigil-rooms-design.md` (rooms stay as designed there).
 Builds on: delivery receipts (`docs/superpowers/specs/2026-10-05-sigil-delivery-receipts-design.md`), endpoint directory trust (`docs/specs/sigil-endpoint-directory-trust-spec-v1.0.md`), the host inbox wait convention (`docs/meta/sigil-host-inbox-wait-convention.md`), and rooms phases 5 and 6 (PR #57, PR #56).
 Companion plan: `docs/superpowers/plans/2026-10-16-sigil-hybrid-rooms-direct-messages.md`.
