@@ -1,0 +1,26 @@
+sigil/relay/v1/floor-warden-replies.mjs
+  s_cf48dae32d5dd9::t_60a3241965b2ea 20
+sigil/relay/v1/floor-warden-replies.test.mjs
+  s_cf48dae32d5dd9::t_1d60238af470ee 117,138,388-394
+  s_cf48dae32d5dd9::t_24de1816b840cc 395-396
+sigil/relay/v1/room-bot-signer.mjs
+  s_cf48dae32d5dd9::t_60a3241965b2ea 24-29
+sigil/relay/v1/room-bot-signer.test.mjs
+  s_cf48dae32d5dd9::t_60a3241965b2ea 88,91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d2928b7a3b40b2c8b1f02b7d95cb774094746ccf",
+  "prompts": {},
+  "sessions": {
+    "s_cf48dae32d5dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b2d6e6eb-486c-43c6-b0b9-03b0bd947fd1",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
