@@ -26,6 +26,14 @@ test('unknown and inherited object keys cannot select a CLI', () => {
   }
 });
 
+test('unknown CLI kinds reject before evaluating caller options', () => {
+  const options = {
+    get env() { throw new Error('unknown kinds must not read environment options'); },
+    get command() { throw new Error('unknown kinds must not read command options'); },
+  };
+  assert.throws(() => createCli('nope', options), { code: 'UNKNOWN_BRIDGE_KIND' });
+});
+
 test('registry exposes immutable per-kind auth prefixes', () => {
   assert.deepEqual(envPrefixesFor('claude'), ['ANTHROPIC_', 'CLAUDE_']);
   assert.deepEqual(envPrefixesFor('codex'), ['CODEX_', 'OPENAI_']);
@@ -84,6 +92,46 @@ test('registry filters inherited environments by kind when no env is supplied', 
   }
 });
 
+for (const [kind, allowed] of [
+  ['claude', ['ANTHROPIC_REGISTRY_SUBPROCESS', 'CLAUDE_REGISTRY_SUBPROCESS']],
+  ['codex', ['CODEX_REGISTRY_SUBPROCESS', 'OPENAI_REGISTRY_SUBPROCESS']],
+]) {
+  test(`${kind} registry isolates the real child environment and parses its resumed result`, async () => {
+    const fake = new URL('./fixtures/fake-agent-cli.mjs', import.meta.url);
+    const bootstrap = `
+      import assert from 'node:assert/strict';
+      assert.deepEqual(Object.keys(process.env).filter((name) => name.endsWith('_REGISTRY_SUBPROCESS')).sort(), ${JSON.stringify(allowed)});
+      assert.equal(process.env.FAKE_EXIT, undefined);
+      await import(${JSON.stringify(fake.href)});
+    `;
+    const cli = createCli(kind, {
+      command: process.execPath,
+      commandArgs: ['--input-type=module', '--eval', bootstrap, '--', 'fixture', kind],
+      env: {
+        ANTHROPIC_REGISTRY_SUBPROCESS: 'fixture', CLAUDE_REGISTRY_SUBPROCESS: 'fixture',
+        CODEX_REGISTRY_SUBPROCESS: 'fixture', OPENAI_REGISTRY_SUBPROCESS: 'fixture',
+        SIGIL_REGISTRY_SUBPROCESS: 'fixture', GITHUB_REGISTRY_SUBPROCESS: 'fixture',
+        FAKE_EXIT: '7',
+      },
+      timeoutMs: 5000,
+    });
+    assert.deepEqual(await cli.run({ prompt: '[seq 1] first\n[seq 2] second', sessionId: 'sess_test_registry' }), {
+      text: `${kind} turn after 2 messages, resumed=true @nobody`, sessionId: 'sess_test_registry',
+    });
+  });
+}
+
+test('registry adapters preserve cancellation before a missing command can start', async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const command = fileURLToPath(new URL('./fixtures/nonexistent-registry-command', import.meta.url));
+  for (const kind of CLI_KINDS) {
+    await assert.rejects(createCli(kind, { command, env: {}, timeoutMs: 5000 }).run({
+      prompt: 'fixture prompt', signal: controller.signal,
+    }), { code: 'CLI_CANCELLED' });
+  }
+});
+
 test('wake dispatcher accepts every registry kind plus router and rejects unknown kinds before spawn', async () => {
   assert.deepEqual(BRIDGES, new Set([...CLI_KINDS, 'router']));
   const calls = [];
@@ -94,6 +142,23 @@ test('wake dispatcher accepts every registry kind plus router and rejects unknow
   }
   await assert.rejects(dispatcher.wakeAgent({ bridgeType: 'nope' }), { code: 'INVALID_REQUEST' });
   assert.equal(calls.length, CLI_KINDS.length + 1);
+});
+
+test('wake dispatcher keeps running registry agents idempotent and rejects unknown kinds before checking', async () => {
+  const checked = [];
+  const dispatcher = createWakeDispatcher({
+    checkRunningFn: async (endpointId) => { checked.push(endpointId); return true; },
+    spawnFn: async () => { assert.fail('a running agent must not spawn again'); },
+  });
+  for (const bridgeType of CLI_KINDS) {
+    const endpointId = `ep_test_registry_${bridgeType}`;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      assert.deepEqual(await dispatcher.wakeAgent({ endpointId, bridgeType }), { alreadyRunning: true, endpointId });
+    }
+  }
+  assert.deepEqual(checked, ['ep_test_registry_claude', 'ep_test_registry_claude', 'ep_test_registry_codex', 'ep_test_registry_codex']);
+  await assert.rejects(dispatcher.wakeAgent({ endpointId: 'ep_test_registry_unknown', bridgeType: 'nope' }), { code: 'INVALID_REQUEST' });
+  assert.equal(checked.length, 4);
 });
 
 test('actual agent run validates registry kinds before any daemon or provider can start', () => {
