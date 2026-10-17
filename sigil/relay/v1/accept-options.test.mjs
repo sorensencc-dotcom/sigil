@@ -47,7 +47,7 @@ for (const file of CALL_SITES) {
 }
 
 test('no other non-test module calls acceptEnvelopeAsync', () => {
-  const allowed = new Set([...CALL_SITES, 'relay/v1/accept-envelope.mjs']);
+  const allowed = new Set([...CALL_SITES, 'relay/v1/accept-envelope.mjs', 'relay/v1/floor-warden-replies.mjs']);
   const found = [];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

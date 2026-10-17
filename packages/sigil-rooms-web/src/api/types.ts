@@ -7,11 +7,13 @@ export interface Room {
   max_agent_turns: number;
 }
 
+export type RoomEventKind = 'router_decision' | 'invocation_refused' | 'invocation_stopped' | 'router_failed' | 'agent_cap_reached' | 'room_halted' | 'invocation_failed';
+
 export interface RoomEnvelope {
   message_id: string;
   message_type: string;
   sender: { endpoint_id: string; owner_id: string };
-  body: { text?: string; kind?: string; reason?: string; endpoint_ids?: string[]; thread_root_id?: string };
+  body: { text?: string; kind?: RoomEventKind | (string & {}); reason?: string; endpoint_ids?: string[]; invocation_id?: string; thread_root_id?: string };
   created_at: string;
 }
 

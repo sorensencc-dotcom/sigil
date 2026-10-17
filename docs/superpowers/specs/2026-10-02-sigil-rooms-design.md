@@ -239,5 +239,5 @@ The Gemini drafts contain the following items. None of them appears in the Hyper
 ## Open questions
 
 1. **Vendor claims.** The Cowork, ChatGPT, and Muse connector claims need checking against current vendor documentation.
-2. **Floor Warden reply path.** Decided 2026-10-02. The Floor Warden calls `POST /v1/rooms/{room_id}/replies` on Sigil. The phase 8 rooms MCP is not the reply path, and the inbound "Sigil rooms" routine stays inbound only (no second webhook). Still open: copy that routine's webhook URL and sender key from the routine panel into Sigil.
+2. **Floor Warden reply path.** Decided 2026-10-02. The Floor Warden calls `POST /v1/rooms/{room_id}/replies` on Sigil. The phase 8 rooms MCP is not the reply path, and the inbound "Sigil rooms" routine stays inbound only (no second webhook). Still open: copy that routine's webhook URL and sender key from the routine panel into Sigil. Phase 6 builds the bridge and the reply route but does not close this item; see [the phase 6 design](2026-10-16-sigil-rooms-phase-6-floor-warden-bridge-design.md), Assumptions 1 and 3.
 3. **Branch.** Should this work start on its own branch off `main`? The current branch is `fix/verify-contract-revocation-check`.

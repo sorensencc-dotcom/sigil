@@ -29,6 +29,8 @@ import { createBearerAuthenticator } from '../relay/v1/transport-auth.mjs';
 import { seedRegistry } from './registry-seed.mjs';
 import { createRoomHumanSigner } from '../relay/v1/room-human-signer.mjs';
 import { loadWrapKey } from '../relay/v1/key-wrap.mjs';
+import { loadReplyTokens } from '../relay/v1/floor-warden-token.mjs';
+import { createRoomBotSigner } from '../relay/v1/room-bot-signer.mjs';
 import { validateOAuthConfig, resolvePublicPort, buildOAuthStack } from '../relay/v1/oauth/wiring.mjs';
 import { RelayClient } from '../connectors/v1/relay-client.mjs';
 import { LocalOutbox } from '../connectors/v1/local-outbox.mjs';
@@ -39,6 +41,7 @@ import { signContract, verifyContract } from './contract-signing.mjs';
 import { checkRelayConnectivity } from './doctor.mjs';
 import { resolveRateLimits, DEFAULT_INBOX_DEPTH_LIMIT } from '../relay/v1/relay-config.mjs';
 import { createRelayMetrics } from '../relay/v1/metrics.mjs';
+import { cmdBotAdd, cmdBotDisable } from './bot-commands.mjs';
 import { cmdAgentSetInvokable, cmdHumanAdd, cmdHumanAddToRoom, cmdHumanSuspend, cmdHumanUnsuspend } from './human-commands.mjs';
 import { cmdIdentityRevoke, cmdInviteCreate, cmdInviteList, cmdInviteRevoke } from './oauth-commands.mjs';
 import { provisionIngressEndpoint } from './agentmail-provision.mjs';
@@ -55,11 +58,11 @@ Commands:
   init <name> [--owner <owner_id> | --federation-owner <federated_id>] [--registry path] [--domain domain]      Create a local identity and register it (domain defaults to "local"; --federation-owner allows an owner id whose domain differs from --domain)
   sign-contract --contract path --identity path [--output path]          Sign a TorqueQuery agent dispatch contract
   verify-contract --contract path --registry path                        Verify a signed TorqueQuery agent dispatch contract
-  agent run --identity path --relay-url url [--worker path] [--room-bridge claude|codex|router] [--room-sessions path] [--agent-command cmd] [--agent-cwd dir] [--router-model m] [--router-ollama-url u] [--router-timeout-ms n] [--router-context-messages n] [--router-sole-agent-fallback on|off]
-                                                            Run the agent daemon; --room-bridge answers room.message deliveries via a local CLI, or via a local Ollama router (--router-* flags: model, Ollama URL, timeout, context messages, sole-agent fallback on|off, default on)
+  agent run --identity path --relay-url url [--worker path] [--room-bridge claude|codex|router|floor-warden] [--room-sessions path] [--agent-command cmd] [--agent-cwd dir] [--router-model m] [--router-ollama-url u] [--router-timeout-ms n] [--router-context-messages n] [--router-sole-agent-fallback on|off] [--floor-warden-url-env N --floor-warden-key-env N [--floor-warden-key-header name] --floor-warden-reply-url url [--floor-warden-bot-id id] [--reply-timeout-ms n]]
+                                                            Run the agent daemon; --room-bridge answers room.message deliveries via a local CLI, or via a local Ollama router (--router-* flags: model, Ollama URL, timeout, context messages, sole-agent fallback on|off, default on), or forwards them to the Floor Warden webhook (--room-bridge floor-warden: webhook URL and key read from the named environment variables; a receive-only identity from sigil bot add is enough)
   agentmail provision --identity path --installation-id id [--registry path] [--audit-output path]
                                                             Explicitly provision non-mailbox ep_ingress; creates no grants or inbox mapping
-  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] [--relay-request-freshness-ms N] [--room-system-identity path] [--browser-origin origin]... [--room-human-identity path] [--public-origin origin] [--public-port N] [--enable-mock-oauth] [--room-key-wrap-key env_var] [--reconcile-kind endpoint_id=kind]... [--p2p [--p2p-identity path] [--p2p-listen multiaddr] [--p2p-no-mdns]] Run a local relay; --room-system-identity is a dedicated identity file (endpoint ep_relay_system, owner relay_system) that signs room.event envelopes, without it rooms emit no events and the router route answers 503 --browser-origin is an exact origin a browser may call from (repeatable; default none); --room-human-identity is the human identity file the relay signs POST /v1/rooms/{id}/messages with (its key must match the registry key; without it the route answers 503); --public-origin requires --room-human-identity; --room-key-wrap-key names the environment variable holding the 32-byte base64 key that unwraps provisioned humans' signing keys (pass the same name to "human add"); --reconcile-kind sets one endpoint's Postgres kind to the registry file's kind after a REGISTRY_CONFLICT. If you front the relay with a proxy, do not log request URLs for /v1/stream: they carry single-use tickets (blocks; Ctrl+C to stop; set SIGIL_STREAM_SEQ_ENABLED=1 to stamp stream sequences)
+  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] [--relay-request-freshness-ms N] [--room-system-identity path] [--browser-origin origin]... [--room-human-identity path] [--public-origin origin] [--public-port N] [--enable-mock-oauth] [--room-key-wrap-key env_var] [--floor-warden-reply-token-env env_var [--floor-warden-reply-token-next-env env_var]] [--room-bot-key-wrap-key env_var] [--reconcile-kind endpoint_id=kind]... [--p2p [--p2p-identity path] [--p2p-listen multiaddr] [--p2p-no-mdns]] Run a local relay; --room-system-identity is a dedicated identity file (endpoint ep_relay_system, owner relay_system) that signs room.event envelopes, without it rooms emit no events and the router route answers 503 --browser-origin is an exact origin a browser may call from (repeatable; default none); --room-human-identity is the human identity file the relay signs POST /v1/rooms/{id}/messages with (its key must match the registry key; without it the route answers 503); --public-origin requires --room-human-identity; --room-key-wrap-key names the environment variable holding the 32-byte base64 key that unwraps provisioned humans' signing keys (pass the same name to "human add"); --floor-warden-reply-token-env names the environment variable holding the Floor Warden reply token (at least 32 characters; the reply route POST /v1/rooms/{id}/replies exists only when this is set; --floor-warden-reply-token-next-env names a second variable accepted during rotation); --room-bot-key-wrap-key names the environment variable holding the 32-byte base64 key that unwraps room bots' signing keys; --reconcile-kind sets one endpoint's Postgres kind to the registry file's kind after a REGISTRY_CONFLICT. If you front the relay with a proxy, do not log request URLs for /v1/stream: they carry single-use tickets (blocks; Ctrl+C to stop; set SIGIL_STREAM_SEQ_ENABLED=1 to stamp stream sequences)
   relay well-known generate --identity path --domain domain --endpoint url [--ws-endpoint url] [--output path]
                                                             Emit this relay's .well-known/sigil discovery document from a designated endpoint identity
   oidc-issuer add <issuer> --client-id id [--label text] [--assurance level] [--database-url url]
@@ -80,6 +83,8 @@ Commands:
   human add-to-room --human <human_id> --room <room_id>:<member|room_manager>... [--identity path] [--database-url url]   Add a provisioned human to rooms; the --identity operator must own or manage each room
   human suspend <human_id> [--identity path] [--database-url url]   Suspend a human: their active endpoints, sessions, and in-flight invocations; running relays close their sockets
   human unsuspend <human_id> [--identity path] [--database-url url]   Restore a suspended human and the endpoints the suspension flipped
+  bot add --bot-id <id> --endpoint <endpoint_id> --name <display name> [--identity path] [--out path] [--database-url url] [--room-bot-key-wrap-key env_var]   Create a Floor Warden bot endpoint with a relay-held signing key and a receive-only identity file
+  bot disable --bot-id <id> [--database-url url]   Disable a Floor Warden bot (idempotent)
   agent set-invokable --room <room_id> --agent <endpoint_id> --mode owner|members [--identity path] [--database-url url]   Set who may invoke an agent in a room; only the agent's owner (--identity) may change it
   endpoint revoke <endpoint_id> [--database-url url]       Revoke an endpoint and retire all of its signing keys
   federation outbox list [--database-url url]              List queue-mode federation forward jobs: state counts, then one row per job (no envelope bodies)
@@ -198,7 +203,7 @@ export function startOidcIssuerAllowlistPolling({ repository, allowlistSet, inte
 }
 
 async function cmdRelayUp(argv) {
-  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' }, 'oidc-issuer-refresh-interval-ms': { type: 'string' }, domain: { type: 'string' }, 'federation-mode': { type: 'string' }, 'federation-identity': { type: 'string' }, 'room-system-identity': { type: 'string' }, 'browser-origin': { type: 'string', multiple: true }, 'room-human-identity': { type: 'string' }, 'room-key-wrap-key': { type: 'string' }, 'public-origin': { type: 'string' }, 'public-port': { type: 'string' }, 'enable-mock-oauth': { type: 'boolean' }, 'reconcile-kind': { type: 'string', multiple: true }, 'relay-request-freshness-ms': { type: 'string' }, p2p: { type: 'boolean' }, 'p2p-listen': { type: 'string' }, 'p2p-identity': { type: 'string' }, 'p2p-no-mdns': { type: 'boolean' } } });
+  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' }, 'oidc-issuer-refresh-interval-ms': { type: 'string' }, domain: { type: 'string' }, 'federation-mode': { type: 'string' }, 'federation-identity': { type: 'string' }, 'room-system-identity': { type: 'string' }, 'browser-origin': { type: 'string', multiple: true }, 'room-human-identity': { type: 'string' }, 'room-key-wrap-key': { type: 'string' }, 'floor-warden-reply-token-env': { type: 'string' }, 'floor-warden-reply-token-next-env': { type: 'string' }, 'room-bot-key-wrap-key': { type: 'string' }, 'public-origin': { type: 'string' }, 'public-port': { type: 'string' }, 'enable-mock-oauth': { type: 'boolean' }, 'reconcile-kind': { type: 'string', multiple: true }, 'relay-request-freshness-ms': { type: 'string' }, p2p: { type: 'boolean' }, 'p2p-listen': { type: 'string' }, 'p2p-identity': { type: 'string' }, 'p2p-no-mdns': { type: 'boolean' } } });
   const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
   if (opt(args, ['public-origin']) !== undefined && !opt(args, ['room-human-identity'])) throw new Error('sigil relay up: --public-origin requires --room-human-identity');
   const reconcileKind = new Map();
@@ -319,6 +324,21 @@ async function cmdRelayUp(argv) {
     warn: (entry) => console.warn(JSON.stringify(entry)),
     error: (entry) => console.error(JSON.stringify(entry)),
   });
+  let floorWardenReplies = null;
+  const replyTokenEnv = opt(args, ['floor-warden-reply-token-env']);
+  const replyTokenNextEnv = opt(args, ['floor-warden-reply-token-next-env']);
+  if (replyTokenNextEnv && !replyTokenEnv) throw new Error('sigil relay up: --floor-warden-reply-token-next-env requires --floor-warden-reply-token-env');
+  if (replyTokenEnv) {
+    try {
+      floorWardenReplies = { tokens: loadReplyTokens(process.env, replyTokenEnv, replyTokenNextEnv) };
+    } catch (error) { throw error.code ? new Error(`${error.code}: ${error.message}`) : error; }
+  }
+  const botWrapKeyRef = opt(args, ['room-bot-key-wrap-key']);
+  const roomBotWrapKey = botWrapKeyRef ? loadWrapKey(botWrapKeyRef) : undefined;
+  // Without the bot wrap key the relay still runs; the signer then throws
+  // WRAP_KEY_UNAVAILABLE and the reply route answers 503 BOT_SIGNING_UNAVAILABLE.
+  // createRelayServer binds the handler to this signer and its accept path.
+  if (floorWardenReplies) floorWardenReplies.botSigner = createRoomBotSigner({ repository, wrapKey: roomBotWrapKey });
   const publicOrigin = opt(args, ['public-origin']);
   const allowedOrigins = [...(args.values['browser-origin'] ?? []), ...(publicOrigin ? [publicOrigin] : [])];
   const ticketStore = createTicketStore();
@@ -489,7 +509,7 @@ async function cmdRelayUp(argv) {
     const addr = server?.address();
     return addr ? `http://127.0.0.1:${addr.port}` : `http://127.0.0.1:${port}`;
   };
-  server = createRelayServer({ buildAcceptOptions, roomSystemIdentity, registry, repository, authenticate: bearerAuth, stream, ticketStore, allowedOrigins, humanSigner, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity, relayRequestFreshnessMs, stream_seq: { enabled: streamSequenceEnabled }, logger: relayLogger, resendMetrics: relayMetrics, agentmailIngress: agentmailDeployment?.agentmailIngress, agentmailControl: agentmailDeployment?.agentmailControl });
+  server = createRelayServer({ floorWardenReplies, buildAcceptOptions, roomSystemIdentity, registry, repository, authenticate: bearerAuth, stream, ticketStore, allowedOrigins, humanSigner, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity, relayRequestFreshnessMs, stream_seq: { enabled: streamSequenceEnabled }, logger: relayLogger, resendMetrics: relayMetrics, agentmailIngress: agentmailDeployment?.agentmailIngress, agentmailControl: agentmailDeployment?.agentmailControl });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   const address = server.address();
   let federationReaperTimer;
@@ -1058,29 +1078,97 @@ async function cmdVerifyContract(argv) {
   console.log(JSON.stringify(valid ? { valid: true, key_id: contract.signature.key_id } : { valid: false, reason: 'SIGNATURE_INVALID' }));
   if (!valid) process.exitCode = 1;
 }
+const AGENT_RUN_USAGE = 'usage: sigil agent run --identity path --relay-url url [--worker path] [--room-bridge claude|codex|router|floor-warden] [--room-sessions path] [--agent-command cmd] [--agent-cwd dir] [--router-model m] [--router-ollama-url u] [--router-timeout-ms n] [--router-context-messages n] [--router-sole-agent-fallback on|off] [--floor-warden-url-env N --floor-warden-key-env N [--floor-warden-key-header name] --floor-warden-reply-url url [--floor-warden-bot-id id] [--reply-timeout-ms n]]';
+
+function positiveIntFlag(args, flag, fallback) {
+  const raw = opt(args, [flag]);
+  if (raw == null) return fallback;
+  if (!/^[1-9]\d*$/.test(raw) || !Number.isSafeInteger(Number(raw))) throw new Error(`--${flag} must be a positive integer`);
+  return Number(raw);
+}
+
+// `--room-bridge floor-warden` (spec "CLI", "Secrets and token storage"). The
+// webhook URL and sender key come from environment variables named by flags,
+// never argv. Errors name the missing flag or variable and never print a value.
+// The returned logger scrubs the URL, its path, the key, and the relay token
+// from every line the daemon or the bridge writes; the origin may appear.
+async function buildFloorWardenRoomBridge({ args, identity, relayUrl }) {
+  const urlEnv = opt(args, ['floor-warden-url-env']);
+  const keyEnv = opt(args, ['floor-warden-key-env']);
+  const replyUrl = opt(args, ['floor-warden-reply-url']);
+  if (!urlEnv) throw new Error('--room-bridge floor-warden requires --floor-warden-url-env <ENV_VAR> naming the environment variable that holds the webhook URL');
+  if (!keyEnv) throw new Error('--room-bridge floor-warden requires --floor-warden-key-env <ENV_VAR> naming the environment variable that holds the webhook sender key');
+  if (!replyUrl) throw new Error('--room-bridge floor-warden requires --floor-warden-reply-url <public relay URL>');
+  const webhookUrl = process.env[urlEnv];
+  if (!webhookUrl) throw new Error(`environment variable ${urlEnv} (named by --floor-warden-url-env) is not set`);
+  let parsedUrl = null;
+  try { parsedUrl = new URL(webhookUrl); } catch { /* reported below without the value */ }
+  if (!parsedUrl || (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:')) throw new Error(`environment variable ${urlEnv} (named by --floor-warden-url-env) is not an http(s) URL`);
+  const key = process.env[keyEnv];
+  if (!key) throw new Error(`environment variable ${keyEnv} (named by --floor-warden-key-env) is not set`);
+  let parsedReply = null;
+  try { parsedReply = new URL(replyUrl); } catch { /* reported below */ }
+  if (!parsedReply || (parsedReply.protocol !== 'https:' && parsedReply.protocol !== 'http:')) throw new Error('--floor-warden-reply-url must be an http(s) URL');
+  // `sigil bot add` writes bot_id into the receive-only identity; the flag is
+  // the fallback for an identity file that lacks it.
+  const identityBotId = typeof identity.bot_id === 'string' && identity.bot_id ? identity.bot_id : null;
+  const flagBotId = opt(args, ['floor-warden-bot-id']) || null;
+  if (identityBotId && flagBotId && identityBotId !== flagBotId) throw new Error('--floor-warden-bot-id does not match the bot_id in the identity file');
+  const botId = identityBotId ?? flagBotId;
+  if (!botId) throw new Error('Floor Warden bot id missing: the identity file has no bot_id (re-create it with sigil bot add) and --floor-warden-bot-id was not given');
+  const replyTimeoutMs = positiveIntFlag(args, 'reply-timeout-ms', 15 * 60_000);
+
+  const { createRedactingLogger } = await import('./redacting-logger.mjs');
+  const secrets = [webhookUrl, webhookUrl.replace(/\/+$/, ''), parsedUrl.href, key, identity.relay_token];
+  if (parsedUrl.pathname.length > 1) secrets.push(parsedUrl.pathname + parsedUrl.search, parsedUrl.pathname, parsedUrl.pathname.slice(1));
+  if (parsedUrl.search.length > 1) secrets.push(parsedUrl.search);
+  for (const part of [parsedUrl.username, parsedUrl.password]) if (part) secrets.push(part);
+  const { logger } = createRedactingLogger({ secrets });
+
+  const { createFloorWardenBridge } = await import('../bridges/v1/floor-warden-bridge.mjs');
+  const { createSessionStore } = await import('../bridges/v1/session-store.mjs');
+  const sessionsPath = opt(args, ['room-sessions']) ?? path.join('.sigil', `room-sessions-${identity.endpoint_id.replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
+  const bridge = createFloorWardenBridge({
+    identity,
+    bot: { bot_id: botId },
+    relay: new RelayClient({ baseUrl: relayUrl, token: identity.relay_token }),
+    sessions: createSessionStore(sessionsPath),
+    webhook: { url: webhookUrl, key, keyHeader: opt(args, ['floor-warden-key-header']) },
+    replyUrl,
+    replyTimeoutMs,
+    logger,
+  });
+  return { bridge, logger, botId, origin: parsedUrl.origin, sessionsPath };
+}
+
 async function cmdAgentRun(argv) {
-  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, worker: { type: 'string' }, config: { type: 'string' }, 'room-bridge': { type: 'string' }, 'room-sessions': { type: 'string' }, 'agent-command': { type: 'string' }, 'agent-cwd': { type: 'string' }, 'router-model': { type: 'string' }, 'router-ollama-url': { type: 'string' }, 'router-timeout-ms': { type: 'string' }, 'router-context-messages': { type: 'string' }, 'router-sole-agent-fallback': { type: 'string' } } });
+  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, worker: { type: 'string' }, config: { type: 'string' }, 'room-bridge': { type: 'string' }, 'room-sessions': { type: 'string' }, 'agent-command': { type: 'string' }, 'agent-cwd': { type: 'string' }, 'router-model': { type: 'string' }, 'router-ollama-url': { type: 'string' }, 'router-timeout-ms': { type: 'string' }, 'router-context-messages': { type: 'string' }, 'router-sole-agent-fallback': { type: 'string' }, 'floor-warden-url-env': { type: 'string' }, 'floor-warden-key-env': { type: 'string' }, 'floor-warden-key-header': { type: 'string' }, 'floor-warden-reply-url': { type: 'string' }, 'floor-warden-bot-id': { type: 'string' }, 'reply-timeout-ms': { type: 'string' } } });
   const config = loadConfigFile(opt(args, ['config']) ?? DEFAULT_CLI_CONFIG);
   const resolved = resolveConfig({ flags: { relayUrl: opt(args, ['relay-url']), streamUrl: opt(args, ['stream-url']), identity: opt(args, ['identity']) }, config });
-  if (!resolved.identityPath) throw new Error('usage: sigil agent run --identity path --relay-url url [--worker path] [--room-bridge claude|codex|router] [--room-sessions path] [--agent-command cmd] [--agent-cwd dir] [--router-model m] [--router-ollama-url u] [--router-timeout-ms n] [--router-context-messages n] [--router-sole-agent-fallback on|off]');
+  if (!resolved.identityPath) throw new Error(AGENT_RUN_USAGE);
   const identity = loadIdentity(resolved.identityPath);
   const bridgeKind = opt(args, ['room-bridge']);
   let onRoomMessage = null;
+  let onStart = null;
+  let onStop = null;
+  let daemonLogger = console;
   if (bridgeKind) {
-    if (bridgeKind !== 'claude' && bridgeKind !== 'codex' && bridgeKind !== 'router') throw new Error('--room-bridge must be claude, codex, or router');
-    if (bridgeKind === 'router') {
+    if (bridgeKind !== 'claude' && bridgeKind !== 'codex' && bridgeKind !== 'router' && bridgeKind !== 'floor-warden') throw new Error('--room-bridge must be claude, codex, router, or floor-warden');
+    if ((bridgeKind === 'claude' || bridgeKind === 'codex') && identity.receive_only === true) throw new Error(`--room-bridge ${bridgeKind} signs its replies and needs an identity with a private key; this identity is receive-only (made by sigil bot add)`);
+    if (bridgeKind === 'floor-warden') {
+      const floorWarden = await buildFloorWardenRoomBridge({ args, identity, relayUrl: resolved.relayUrl });
+      onRoomMessage = floorWarden.bridge.handle;
+      onStart = () => floorWarden.bridge.recover();
+      onStop = () => floorWarden.bridge.close();
+      daemonLogger = floorWarden.logger;
+      console.log(`Room bridge: floor-warden (bot ${floorWarden.botId}, webhook ${floorWarden.origin}, sessions in ${floorWarden.sessionsPath})`);
+    } else if (bridgeKind === 'router') {
       const { createRoomRouter, createOllamaClient } = await import('../bridges/v1/room-router.mjs');
       const model = opt(args, ['router-model']) ?? 'qwen2.5:7b';
       const fallbackFlag = opt(args, ['router-sole-agent-fallback']) ?? 'on';
       if (fallbackFlag !== 'on' && fallbackFlag !== 'off') throw new Error('--router-sole-agent-fallback must be on or off');
-      const positiveInt = (flag, fallback) => {
-        const raw = opt(args, [flag]);
-        if (raw == null) return fallback;
-        if (!/^[1-9]\d*$/.test(raw) || !Number.isSafeInteger(Number(raw))) throw new Error(`--${flag} must be a positive integer`);
-        return Number(raw);
-      };
-      const timeoutMs = positiveInt('router-timeout-ms', 20000);
-      const contextMessages = positiveInt('router-context-messages', 12);
+      const timeoutMs = positiveIntFlag(args, 'router-timeout-ms', 20000);
+      const contextMessages = positiveIntFlag(args, 'router-context-messages', 12);
       const router = createRoomRouter({
         identity,
         relay: new RelayClient({ baseUrl: resolved.relayUrl, token: identity.relay_token }),
@@ -1121,13 +1209,22 @@ async function cmdAgentRun(argv) {
     workerCommand: process.execPath,
     workerArgs: [workerScript],
     autoReply: true,
-    onRoomMessage
+    logger: daemonLogger,
+    onRoomMessage,
+    onStart,
+    onStop
   });
   console.log(`Sigil autonomous agent daemon running for ${identity.endpoint_id} (${identity.owner_id}).`);
   console.log(`Relay: ${resolved.relayUrl}`);
   console.log(`Worker: ${workerScript}`);
   console.log('Listening for inbound task envelopes. Press Ctrl+C to stop.');
   daemon.start();
+  if (onStop) {
+    // Stop disarms the bridge's reply deadlines and halt polls; recover() re-arms them on the next start.
+    const shutdown = () => { daemon.stop(); process.exit(0); };
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
+  }
   await new Promise(() => {});
 }
 
@@ -1897,6 +1994,8 @@ export async function main() {
     else if (command === 'human' && sub === 'add-to-room') await cmdHumanAddToRoom(rest);
     else if (command === 'human' && sub === 'suspend') await cmdHumanSuspend(rest);
     else if (command === 'human' && sub === 'unsuspend') await cmdHumanUnsuspend(rest);
+    else if (command === 'bot' && sub === 'add') await cmdBotAdd(rest);
+    else if (command === 'bot' && sub === 'disable') await cmdBotDisable(rest);
     else usage();
   } catch (error) {
     console.error(`sigil: ${error.message}`);

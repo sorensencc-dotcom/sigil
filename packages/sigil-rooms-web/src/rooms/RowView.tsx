@@ -6,7 +6,7 @@ function Stamp({ at }: { at: string }) {
   return <time dateTime={at}>{date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>;
 }
 
-export function RowView({ row, sender, replies = 0, onReply }: { row: Row; sender: string | null; replies?: number; onReply?: () => void }) {
+export function RowView({ row, sender, replies = 0, onReply, onContinue }: { row: Row; sender: string | null; replies?: number; onReply?: () => void; onContinue?: (threadRootId: string) => void }) {
   if (row.pending) {
     return (
       <li data-mine="true" data-pending={row.pending.status}>
@@ -17,8 +17,17 @@ export function RowView({ row, sender, replies = 0, onReply }: { row: Row; sende
   }
   const envelope = row.item!.envelope;
   if (envelope.message_type === 'room.event') {
-    const { kind, reason } = envelope.body;
-    return <li data-kind="event"><em>{kind}{reason ? `: ${reason}` : ''}</em></li>;
+    const { kind, reason, thread_root_id: threadRootId } = envelope.body;
+    return (
+      <li data-kind="event">
+        <em>{kind}{reason ? `: ${reason}` : ''}</em>
+        {kind === 'agent_cap_reached' && onContinue && threadRootId ? (
+          <div className="row-actions">
+            <button type="button" className="ghost" onClick={() => onContinue(threadRootId)}>Continue</button>
+          </div>
+        ) : null}
+      </li>
+    );
   }
   const mine = sender !== null && envelope.sender.endpoint_id === sender;
   return (

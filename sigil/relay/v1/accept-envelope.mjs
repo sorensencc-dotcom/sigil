@@ -409,7 +409,7 @@ async function acceptWithRepository(envelope, options) {
     const prior = await repository.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key, client);
     if (prior && prior.canonical_hash !== result.canonical_hash) throw reject('DUPLICATE_MESSAGE', 'Idempotency key conflicts with an existing body');
     if (prior) return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: prior.message_id, duplicate: true } };
-    const completing = roomPlan ? await assertAgentMayPost(envelope, roomPlan.senderMember, repository, client) : null;
+    const completing = roomPlan ? await assertAgentMayPost(envelope, roomPlan.senderMember, repository, client, { expectedTriggerMessageId: options.expectedTriggerMessageId ?? null }) : null;
     // High-risk capability + approval gate already ran once for this
     // transaction via enforceCapabilityRiskGate above (line 247) -- it uses
     // the same sha256(signedBytes(envelope)) hash as result.canonical_hash,

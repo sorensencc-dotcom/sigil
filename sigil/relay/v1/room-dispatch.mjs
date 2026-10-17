@@ -23,10 +23,18 @@ export function threadRootOf(envelope) {
   return envelope.body?.thread_root_id ?? envelope.message_id;
 }
 
-export async function assertAgentMayPost(envelope, senderMember, repository, client) {
+// expectedTriggerMessageId is set only by the Floor Warden reply route: its
+// reply answers one trigger, so it must not complete a newer invocation that
+// was promoted in the same thread after the route's own unlocked check.
+// If this read still sees an older running row, finishInvocation's
+// status-guarded update under the accept transaction refuses it instead.
+export async function assertAgentMayPost(envelope, senderMember, repository, client, { expectedTriggerMessageId = null } = {}) {
   if (!memberIsAgent(senderMember)) return null;
   const running = await repository.lookupRunningInvocation(envelope.conversation_id, envelope.sender.endpoint_id, client);
   if (!running) throw reject('ROOM_NOT_INVOKED', 'Agents may post only while invoked', { conversation_id: envelope.conversation_id });
+  if (expectedTriggerMessageId !== null && running.trigger_message_id !== expectedTriggerMessageId) {
+    throw reject('ROOM_NOT_INVOKED', 'The running invocation answers a different trigger', { conversation_id: envelope.conversation_id });
+  }
   if (threadRootOf(envelope) !== running.thread_root_id) {
     throw reject('ROUTE_NOT_AUTHORIZED', 'An agent reply must stay in its invocation thread', { thread_root_id: running.thread_root_id });
   }
@@ -58,6 +66,34 @@ export async function emitRefusal({ systemIdentity, repository, client, room, in
     identity: systemIdentity, repository, client, room,
     body: { kind: 'invocation_refused', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: clampReason(refusalText(invocation)) },
     idempotencyKey: `evt_refused_${invocation.invocation_id}`, now, inboxDepthLimit, registered, stream,
+  });
+  if (invocation.reason === 'hop_budget') await emitCapReached({ systemIdentity, repository, client, room, invocation, now, inboxDepthLimit, registered, stream });
+}
+
+// One agent_cap_reached per (thread, cap epoch): a human post that refills the
+// budget starts a new epoch, so the next cap hit posts again. The scoped
+// idempotency key makes every later refusal in the same epoch a no-op.
+export async function emitCapReached({ systemIdentity, repository, client, room, invocation, now, inboxDepthLimit, registered, stream = null }) {
+  if (!systemIdentity || !invocation.thread_root_id) return;
+  const epoch = await repository.lookupCapEpoch(room.conversation_id, invocation.thread_root_id, client);
+  await emitRoomEvent({
+    identity: systemIdentity, repository, client, room,
+    body: { kind: 'agent_cap_reached', endpoint_ids: [invocation.endpoint_id], thread_root_id: invocation.thread_root_id, reason: clampReason(`agent turn cap of ${room.max_agent_turns} reached in this thread`) },
+    idempotencyKey: `evt_cap_${invocation.thread_root_id}_${epoch}`, now, inboxDepthLimit, registered, stream,
+  });
+}
+
+// One room_halted per Stop or leave, after the per-invocation invocation_stopped
+// events. The key hashes the sorted cancelled invocation ids, so a retry that
+// cancels the same rows posts nothing new. Cancelling nothing posts nothing.
+export async function emitRoomHalted({ systemIdentity, repository, client, room, rows, reason, now, inboxDepthLimit, registered, stream = null }) {
+  if (!systemIdentity || !rows.length) return;
+  const ids = rows.map((row) => row.invocation_id).sort();
+  const digest = crypto.createHash('sha256').update(ids.join(',')).digest('hex').slice(0, 32);
+  await emitRoomEvent({
+    identity: systemIdentity, repository, client, room,
+    body: { kind: 'room_halted', endpoint_ids: [...new Set(rows.map((row) => row.endpoint_id))].sort(), reason },
+    idempotencyKey: `evt_halt_${digest}`, now, inboxDepthLimit, registered, stream,
   });
 }
 
