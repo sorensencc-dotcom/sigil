@@ -1,0 +1,23 @@
+sigil/contracts/v1/relay-api.test.mjs
+  s_834a96433b2920::t_e0136131004549 158-170
+sigil/contracts/v1/errors-and-states.json
+  s_834a96433b2920::t_e0136131004549 25-29
+sigil/contracts/v1/relay-api.json
+  s_834a96433b2920::t_e0136131004549 21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "69ecbac7cfdedf67433bead224ff391db1e41f6b",
+  "prompts": {},
+  "sessions": {
+    "s_834a96433b2920": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0fb73b57-22bb-47e1-8b81-629159c188d5",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
