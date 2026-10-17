@@ -21,7 +21,12 @@ export function createRoomBotSigner({ repository, wrapKey }) {
       const wrapped = active ? await repository.loadWrappedBotSigningKey(active.key_id) : null;
       if (!wrapped) throw Object.assign(new Error(`no signing key for endpoint "${endpointId}"`), { code: 'NO_SIGNING_KEY' });
       if (!wrapKey) throw Object.assign(new Error(`no wrap key configured to sign for endpoint "${endpointId}"`), { code: 'WRAP_KEY_UNAVAILABLE' });
-      const privateKey = unwrapPrivateKey({ wrapKey, endpointId, keyId: active.key_id, wrapped });
+      let privateKey;
+      try {
+        privateKey = unwrapPrivateKey({ wrapKey, endpointId, keyId: active.key_id, wrapped });
+      } catch (cause) {
+        throw Object.assign(new Error(`could not unwrap the signing key for endpoint "${endpointId}"`), { code: 'KEY_UNWRAP_FAILED', cause });
+      }
       const memo = `${endpointId}:${active.key_id}`;
       if (!checked.has(memo)) {
         if (!spki(crypto.createPublicKey(privateKey)).equals(spki(active.public_key))) {

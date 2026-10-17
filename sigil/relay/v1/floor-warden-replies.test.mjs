@@ -114,7 +114,7 @@ function post(port, path, authorization, body) {
   });
 }
 
-async function withWorld(fn, { botSigner: injectedSigner = null, handler, noWrapKey = false, wrapRepository = (r) => r } = {}) {
+async function withWorld(fn, { botSigner: injectedSigner = null, handler, noWrapKey = false, signerWrapKey = null, wrapRepository = (r) => r } = {}) {
   const human = createIdentity({ ownerId: 'usr_op', endpointId: 'ep_web', kind: 'human' });
   const bot = crypto.generateKeyPairSync('ed25519');
   const botKeyId = 'key_ep_test_bot';
@@ -135,7 +135,7 @@ async function withWorld(fn, { botSigner: injectedSigner = null, handler, noWrap
   await repository.ensureRoomSystemEndpoint({ identity: systemIdentity, now: NOW });
   const frames = [];
   const stream = { notify() {}, notifyReceipt() {}, notifyRoom: (id, frame) => { frames.push([id, frame]); return true; } };
-  const botSigner = injectedSigner ?? createRoomBotSigner({ repository, wrapKey: noWrapKey ? undefined : wrapKey });
+  const botSigner = injectedSigner ?? createRoomBotSigner({ repository, wrapKey: noWrapKey ? undefined : (signerWrapKey ?? wrapKey) });
   const floorWardenReplies = { tokens: loadReplyTokens({ FWT: REPLY }, 'FWT'), botSigner, ...(handler ? { handler } : {}) };
   const logs = [];
   const capture = (level) => (...args) => { logs.push([level, ...args]); };
@@ -383,6 +383,15 @@ test('a configured route whose signer has no wrap key answers 503 BOT_SIGNING_UN
     assert.equal(res.status, 503);
     assert.equal(res.body.code, 'BOT_SIGNING_UNAVAILABLE');
   }, { noWrapKey: true });
+});
+
+test('a wrong bot wrap key answers 503 BOT_SIGNING_UNAVAILABLE, not DATABASE_UNAVAILABLE', async () => {
+  await withWorld(async (w) => {
+    const res = await w.reply({ in_reply_to: await invoked(w) });
+    assert.equal(res.status, 503);
+    assert.equal(res.body.code, 'BOT_SIGNING_UNAVAILABLE');
+    assert.ok(await running(w));
+  }, { signerWrapKey: crypto.randomBytes(32) });
 });
 
 // ---- Idempotency, single-shot completion, and audit (spec "Reply route" step 7, "Idempotency") ----

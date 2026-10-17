@@ -85,10 +85,10 @@ test('a stored key that differs from the registered public key throws KEY_MISMAT
 
 test('the wrong wrap key, and a swapped endpoint id (AAD), both fail to unwrap', async () => {
   const { p, repository } = setup();
-  await assert.rejects(createRoomBotSigner({ repository, wrapKey: crypto.randomBytes(32) }).signForBot(p.endpointId));
+  await assert.rejects(createRoomBotSigner({ repository, wrapKey: crypto.randomBytes(32) }).signForBot(p.endpointId), (e) => e.code === 'KEY_UNWRAP_FAILED' && !/PRIVATE|BEGIN/.test(e.message));
   // Same wrapped blob and key id registered under a different endpoint id.
   const swapped = fakeRepository(new Map([['ep_other', entry('ep_other', p.keyId, p.publicKey)]]), { bot: new Map([[p.keyId, p.wrapped]]) });
-  await assert.rejects(createRoomBotSigner({ repository: swapped, wrapKey: WRAP_KEY }).signForBot('ep_other'));
+  await assert.rejects(createRoomBotSigner({ repository: swapped, wrapKey: WRAP_KEY }).signForBot('ep_other'), (e) => e.code === 'KEY_UNWRAP_FAILED');
 });
 
 test('trust state is re-read every call while the key match check is memoized', async () => {

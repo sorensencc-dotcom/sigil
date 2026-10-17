@@ -17,7 +17,7 @@ export const REPLY_TEXT_MAX = 16000;
 export const REPLY_IDEMPOTENCY_KEY_MAX = 128;
 const FIELDS = ['room_id', 'target_bot_id', 'sender', 'in_reply_to', 'text', 'idempotency_key'];
 const FIELD_SET = new Set(FIELDS);
-const SIGNING_UNAVAILABLE = new Set(['NO_SIGNING_KEY', 'KEY_MISMATCH', 'WRAP_KEY_UNAVAILABLE']);
+const SIGNING_UNAVAILABLE = new Set(['NO_SIGNING_KEY', 'KEY_MISMATCH', 'WRAP_KEY_UNAVAILABLE', 'KEY_UNWRAP_FAILED', 'WRAPPED_KEY_INVALID']);
 const ECHO_MAX = 64;
 const AUDIT_ID_MAX = 128;
 
