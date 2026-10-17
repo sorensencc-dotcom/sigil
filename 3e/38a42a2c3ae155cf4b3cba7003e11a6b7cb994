@@ -1,0 +1,32 @@
+docs/superpowers/plans/2026-10-16-sigil-rooms-phase-5-more-bridges.md
+  s_d1438a367462bd::t_6f2d369e7f10a7 29,34
+  s_d1438a367462bd::t_066c5a2d4a9623 257-258,260-266
+  s_d1438a367462bd::t_2204b5eafc0d2a 52,584,595,599,614,944,957
+  s_d1438a367462bd::t_cc7fc8001413a7 259
+docs/superpowers/specs/2026-10-16-sigil-rooms-phase-5-more-bridges-design.md
+  s_d1438a367462bd::t_3fa84f66ed72e1 5
+  s_d1438a367462bd::t_d9030037bfb225 245
+  s_d1438a367462bd::t_e3932c98f53022 263-267,269
+  s_d1438a367462bd::t_7d83980e4984e8 281
+  s_d1438a367462bd::t_eedcda8ad8e3d5 190
+docs/superpowers/specs/2026-10-16-sigil-hybrid-rooms-direct-messages-design.md
+  s_d1438a367462bd::t_c74caad4d2a3f0 443-446,451-452,457,461,463-464,467,471,480-481,485,526,551
+docs/superpowers/plans/2026-10-16-sigil-hybrid-rooms-direct-messages.md
+  s_d1438a367462bd::t_12c52bf37eb6a4 27,29,78,82-83,86,88,181,362,372,493,655
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3e38a42a2c3ae155cf4b3cba7003e11a6b7cb994",
+  "prompts": {},
+  "sessions": {
+    "s_d1438a367462bd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b72bf036-a5ca-4230-a1da-fe632473ec48",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
