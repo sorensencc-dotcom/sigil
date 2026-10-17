@@ -1,0 +1,4 @@
+CLI version: hermes 0.21.2 (2026.9.11; a7254e2d)
+exit_code: 0
+stdout:
+API call failed after 3 retries: HTTP 404: model 'llama3.2:latest' not found
