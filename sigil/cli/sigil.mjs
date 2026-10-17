@@ -34,6 +34,7 @@ import { createRoomBotSigner } from '../relay/v1/room-bot-signer.mjs';
 import { validateOAuthConfig, resolvePublicPort, buildOAuthStack } from '../relay/v1/oauth/wiring.mjs';
 import { RelayClient } from '../connectors/v1/relay-client.mjs';
 import { LocalOutbox } from '../connectors/v1/local-outbox.mjs';
+import { CLI_KINDS, createCli, isCliKind } from '../bridges/v1/cli-registry.mjs';
 import { loadConfigFile, resolveConfig } from './config-resolver.mjs';
 import { formatInboxItem, INBOX_WAIT_EXIT_CODES, waitForOneInboxMessage, isRetryableInboxWaitExitCode } from './inbox-wait.mjs';
 import { appendInboxLedger, readInboxLedger } from './ledger.mjs';
@@ -1155,8 +1156,8 @@ async function cmdAgentRun(argv) {
   let onStop = null;
   let daemonLogger = console;
   if (bridgeKind) {
-    if (bridgeKind !== 'claude' && bridgeKind !== 'codex' && bridgeKind !== 'router' && bridgeKind !== 'floor-warden') throw new Error('--room-bridge must be claude, codex, router, or floor-warden');
-    if ((bridgeKind === 'claude' || bridgeKind === 'codex') && identity.receive_only === true) throw new Error(`--room-bridge ${bridgeKind} signs its replies and needs an identity with a private key; this identity is receive-only (made by sigil bot add)`);
+    if (!isCliKind(bridgeKind) && bridgeKind !== 'router' && bridgeKind !== 'floor-warden') throw new Error(`--room-bridge must be ${CLI_KINDS.join(', ')}, router, or floor-warden`);
+    if (isCliKind(bridgeKind) && identity.receive_only === true) throw new Error(`--room-bridge ${bridgeKind} signs its replies and needs an identity with a private key; this identity is receive-only (made by sigil bot add)`);
     if (bridgeKind === 'floor-warden') {
       const floorWarden = await buildFloorWardenRoomBridge({ args, identity, relayUrl: resolved.relayUrl });
       onRoomMessage = floorWarden.bridge.handle;
@@ -1185,10 +1186,8 @@ async function cmdAgentRun(argv) {
     } else {
     const { createRoomBridge } = await import('../bridges/v1/room-bridge.mjs');
     const { createSessionStore } = await import('../bridges/v1/session-store.mjs');
-    const { createClaudeCli } = await import('../bridges/v1/claude-cli.mjs');
-    const { createCodexCli } = await import('../bridges/v1/codex-cli.mjs');
     const cliOptions = { command: opt(args, ['agent-command']) ?? bridgeKind, cwd: opt(args, ['agent-cwd']) ?? process.cwd() };
-    const cli = bridgeKind === 'claude' ? createClaudeCli(cliOptions) : createCodexCli(cliOptions);
+    const cli = createCli(bridgeKind, cliOptions);
     const sessionsPath = opt(args, ['room-sessions']) ?? path.join('.sigil', `room-sessions-${identity.endpoint_id.replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
     const bridge = createRoomBridge({
       identity,
