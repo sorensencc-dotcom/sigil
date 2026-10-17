@@ -1,0 +1,20 @@
+sigil/bridges/v1/floor-warden-bridge.mjs
+  h_5c172e9b435f5a 1-213
+sigil/migrations/035_floor_warden_bridge.sql
+  h_5c172e9b435f5a 1-27
+src/bridge/floor-warden.ts
+  h_5c172e9b435f5a 1-203
+tests/floor-warden-bridge.test.mjs
+  h_5c172e9b435f5a 1-143
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "34fc706893e4b7e3cff7dbfa42daefc40aaf3ba2",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
