@@ -155,3 +155,16 @@ test('relay API lists the response-mode route', () => {
   assert.deepEqual(route.response_fields, ['code', 'member']);
   for (const code of ['HUMAN_CONTEXT_REQUIRED', 'ROUTE_NOT_AUTHORIZED', 'INVALID_REQUEST', 'ROOM_MEMBER_NOT_FOUND', 'ROOM_NOT_FOUND']) assert.ok(route.errors.includes(code), code);
 });
+
+test('every route error code is a contract error', () => {
+  const states = JSON.parse(fs.readFileSync(new URL('./errors-and-states.json', import.meta.url)));
+  const listed = new Set(states.errors);
+  const missing = [...new Set(api.routes.flatMap((route) => route.errors ?? []))].filter((code) => !listed.has(code));
+  assert.deepEqual(missing, []);
+});
+
+test('POST /v1/rooms/{room_id}/messages declares NO_OPERATOR_IDENTITY and ROOM_SEND_UNAVAILABLE', () => {
+  const route = api.routes.find((item) => item.method === 'POST' && item.path === '/v1/rooms/{room_id}/messages');
+  assert.ok(route.errors.includes('NO_OPERATOR_IDENTITY'));
+  assert.ok(route.errors.includes('ROOM_SEND_UNAVAILABLE'));
+});

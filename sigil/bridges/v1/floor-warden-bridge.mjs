@@ -38,6 +38,7 @@ import { buildForwardPayload, buildHaltPayload, PAYLOAD_MAX_BYTES } from './floo
 
 const DEFAULT_MAX_TURNS = 6;
 const PAGE = 500;
+const HALT_RECORD_TTL_MS = 24 * 3600_000;
 const RETRY = 'FLOOR_WARDEN_RETRY';
 // RFC 7230 token: the characters an HTTP header field name may use.
 const HEADER_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
@@ -128,10 +129,10 @@ export function createFloorWardenBridge({
     disarm(invocationId);
     forget(roomId, invocationId);
   }
-  function arm(roomId, invocationId, deadlineAt) {
+  function arm(roomId, invocationId, deadlineAt, reason = 'REPLY_TIMEOUT') {
     disarm(invocationId);
     if (closed) return;
-    const watch = { roomId, busy: false, haltAttempts: 0, errors: 0, deadlineErrors: 0, deadline: null, poll: null };
+    const watch = { roomId, reason, busy: false, haltAttempts: 0, errors: 0, deadlineErrors: 0, deadline: null, poll: null };
     watch.deadline = setTimeout(() => onDeadline(invocationId), Math.max(0, deadlineAt - Date.now()));
     watch.poll = setInterval(() => onPoll(invocationId), pollIntervalMs);
     watches.set(invocationId, watch);
@@ -163,7 +164,7 @@ export function createFloorWardenBridge({
       if (await isRunning(watch.roomId, invocationId)) {
         if (closed || watches.get(invocationId) !== watch) return;
         // Rethrows: the record and timers stay until the relay confirms.
-        await failConfirmed(watch.roomId, invocationId, 'REPLY_TIMEOUT');
+        await failConfirmed(watch.roomId, invocationId, watch.reason);
       }
       // Not running: the poll decides between nothing and a halt frame.
     } catch (error) {
@@ -238,7 +239,15 @@ export function createFloorWardenBridge({
   }
 
   async function fail(roomId, invocationId, reason) {
-    await relay.failRoomInvocation(roomId, reason, invocationId).catch((error) => warn(`floor warden: failRoomInvocation: ${error.message}`));
+    try {
+      await relay.failRoomInvocation(roomId, reason, invocationId);
+    } catch (error) {
+      warn(`floor warden: failRoomInvocation: ${error.message}`);
+      // Unconfirmed: keep the record and hand the retries to a watch whose
+      // deadline is already due, so the invocation is not left running.
+      arm(roomId, invocationId, Date.now(), reason);
+      return { outcome: 'failed', reason };
+    }
     finish(roomId, invocationId);
     return { outcome: 'failed', reason };
   }
@@ -381,6 +390,8 @@ export function createFloorWardenBridge({
     if (result.kind === 'reject') warn(`floor warden: webhook ${origin} rejected the halt frame for ${invocationId} with HTTP ${result.status}`);
     else logger.info?.(`floor warden: sent halt frame for ${invocationId} to ${origin}`);
     update(roomId, (next) => {
+      // halts only stop a resend; entries older than a day can no longer matter.
+      for (const [id, at] of Object.entries(next.floor_warden.halts)) if (Date.now() - Date.parse(at) > HALT_RECORD_TTL_MS) delete next.floor_warden.halts[id];
       next.floor_warden.halts[invocationId] = new Date().toISOString();
       delete next.floor_warden.forwards[invocationId];
       delete next.floor_warden.attempts[invocationId];

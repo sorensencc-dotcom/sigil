@@ -141,14 +141,22 @@ async function runReply({ request, requestId, roomId, now, readBody, repository,
 
 export async function handleFloorWardenReply(ctx) {
   const facts = { botId: null, endpointId: null, roomId: null, messageId: null };
-  const result = await runReply(ctx, facts);
-  const accepted = result.status === 202;
-  await ctx.repository.recordAuditEvent({
+  const audit = (outcome, reason, status) => ctx.repository.recordAuditEvent({
     eventType: 'room.floor_warden_reply', subjectId: facts.botId ?? 'unknown', endpointId: facts.endpointId, conversationId: facts.roomId,
-    objectType: 'room_message', objectId: facts.messageId,
-    outcome: accepted ? (result.body.duplicate ? 'duplicate' : 'accepted') : 'refused', reason: accepted ? null : result.body?.code ?? null,
-    payload: { request_id: ctx.requestId ?? null, status: result.status }, now: ctx.now,
+    objectType: 'room_message', objectId: facts.messageId, outcome, reason,
+    payload: { request_id: ctx.requestId ?? null, status }, now: ctx.now,
   });
+  let result;
+  try {
+    result = await runReply(ctx, facts);
+  } catch (error) {
+    // The http gate answers a throw with 503 DATABASE_UNAVAILABLE; the call
+    // still gets its audit row. A failing audit write must not mask the throw.
+    await audit('refused', 'DATABASE_UNAVAILABLE', 503).catch(() => {});
+    throw error;
+  }
+  const accepted = result.status === 202;
+  await audit(accepted ? (result.body.duplicate ? 'duplicate' : 'accepted') : 'refused', accepted ? null : result.body?.code ?? null, result.status);
   return result;
 }
 
