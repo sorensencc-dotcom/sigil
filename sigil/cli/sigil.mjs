@@ -32,6 +32,7 @@ import { loadWrapKey } from '../relay/v1/key-wrap.mjs';
 import { validateOAuthConfig, resolvePublicPort, buildOAuthStack } from '../relay/v1/oauth/wiring.mjs';
 import { RelayClient } from '../connectors/v1/relay-client.mjs';
 import { LocalOutbox } from '../connectors/v1/local-outbox.mjs';
+import { CLI_KINDS, createCli, isCliKind } from '../bridges/v1/cli-registry.mjs';
 import { loadConfigFile, resolveConfig } from './config-resolver.mjs';
 import { formatInboxItem, INBOX_WAIT_EXIT_CODES, waitForOneInboxMessage, isRetryableInboxWaitExitCode } from './inbox-wait.mjs';
 import { appendInboxLedger, readInboxLedger } from './ledger.mjs';
@@ -1067,7 +1068,7 @@ async function cmdAgentRun(argv) {
   const bridgeKind = opt(args, ['room-bridge']);
   let onRoomMessage = null;
   if (bridgeKind) {
-    if (bridgeKind !== 'claude' && bridgeKind !== 'codex' && bridgeKind !== 'router') throw new Error('--room-bridge must be claude, codex, or router');
+    if (!isCliKind(bridgeKind) && bridgeKind !== 'router') throw new Error(`--room-bridge must be ${CLI_KINDS.join(', ')}, or router`);
     if (bridgeKind === 'router') {
       const { createRoomRouter, createOllamaClient } = await import('../bridges/v1/room-router.mjs');
       const model = opt(args, ['router-model']) ?? 'qwen2.5:7b';
@@ -1095,10 +1096,8 @@ async function cmdAgentRun(argv) {
     } else {
     const { createRoomBridge } = await import('../bridges/v1/room-bridge.mjs');
     const { createSessionStore } = await import('../bridges/v1/session-store.mjs');
-    const { createClaudeCli } = await import('../bridges/v1/claude-cli.mjs');
-    const { createCodexCli } = await import('../bridges/v1/codex-cli.mjs');
     const cliOptions = { command: opt(args, ['agent-command']) ?? bridgeKind, cwd: opt(args, ['agent-cwd']) ?? process.cwd() };
-    const cli = bridgeKind === 'claude' ? createClaudeCli(cliOptions) : createCodexCli(cliOptions);
+    const cli = createCli(bridgeKind, cliOptions);
     const sessionsPath = opt(args, ['room-sessions']) ?? path.join('.sigil', `room-sessions-${identity.endpoint_id.replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
     const bridge = createRoomBridge({
       identity,

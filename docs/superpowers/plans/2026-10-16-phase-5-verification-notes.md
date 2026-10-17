@@ -160,3 +160,13 @@ A temporary self-check parsed both success payloads, asserted observed `ok`, req
 - No relay-assigned acceptance timestamp exists. Task 9 must choose a real column/contract explicitly; Task 10 must use that same choice.
 - Agent authorization is transactional but precedes the existing room row lock; Task 10 must close that interval.
 - Five rename retries can exhaust under a live Windows reader. Preserve old state and surface exhaustion; do not claim five guarantees eventual replacement.
+
+## Task 2 registry call sites
+
+Read against Task 2 base `ce16bb1f2ae41c5985f870aa3867d2944c27b50c` before edits:
+
+- `sigil/bridges/v1/cli-runner.mjs:13-23`: runtime allowlist, four legacy auth prefixes, and `agentEnv`. Direct factory callers: `claude-cli.mjs:44` and `codex-cli.mjs:29`; existing runner coverage: `cli-runner.test.mjs:47`.
+- `sigil/cli/sigil.mjs:1061-1101`: `cmdAgentRun`, room-bridge validation at line 1069, and Claude/Codex factory ternary at line 1101. `main` dispatches at line 1882.
+- `sigil/relay/v1/transport-tincan/wake-dispatcher.mjs:1-13`: `BRIDGES`, validation at line 6, and child argv at line 8. `tincan-relay.mjs:7,105,299-308` imports the set, validates config, and constructs the spawn dispatcher.
+
+Local graft caller tracing used depth 8 for `agentEnv`, `cmdAgentRun`, `createWakeDispatcher`, `createClaudeCli`, and `createCodexCli`, plus exhaustive `agentEnv` and `BRIDGES` searches. Existing direct factories retain legacy default/explicit-env behavior; registry-created adapters filter both supplied and inherited environments to runtime names plus their own auth prefixes. Claude uses `ANTHROPIC_`/`CLAUDE_`; Codex uses `CODEX_`/`OPENAI_`. No new auth prefix or provider probe is authorized.

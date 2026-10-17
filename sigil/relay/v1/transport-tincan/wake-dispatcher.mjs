@@ -1,4 +1,6 @@
-export const BRIDGES = new Set(['claude', 'codex', 'router']);
+import { CLI_KINDS } from '../../../bridges/v1/cli-registry.mjs';
+
+export const BRIDGES = new Set([...CLI_KINDS, 'router']);
 
 export function createWakeDispatcher({ spawnFn, checkRunningFn }) {
   return {

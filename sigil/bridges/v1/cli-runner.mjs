@@ -13,11 +13,11 @@ const DEFAULT_MAX_OUTPUT_BYTES = 4_194_304;
 const ENV_ALLOWLIST = new Set(['PATH', 'PATHEXT', 'SYSTEMROOT', 'COMSPEC', 'TEMP', 'TMP', 'USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA', 'HOMEDRIVE', 'HOMEPATH', 'LANG']);
 const ENV_AUTH_PREFIXES = ['ANTHROPIC_', 'CLAUDE_', 'CODEX_', 'OPENAI_'];
 
-export function agentEnv(source = process.env) {
+export function agentEnv(source = process.env, { extraPrefixes = ENV_AUTH_PREFIXES } = {}) {
   const env = {};
   for (const [name, value] of Object.entries(source)) {
     const upper = name.toUpperCase();
-    if (ENV_ALLOWLIST.has(upper) || ENV_AUTH_PREFIXES.some((prefix) => upper.startsWith(prefix))) env[name] = value;
+    if (ENV_ALLOWLIST.has(upper) || extraPrefixes.some((prefix) => upper.startsWith(prefix))) env[name] = value;
   }
   return env;
 }

@@ -21,6 +21,7 @@
     "sigil/relay/v1/oauth/*.mjs",
     "sigil/relay/v1/oauth/providers/*.mjs",
     "sigil/relay/v1/transport-libp2p/*.mjs",
+    "sigil/relay/v1/transport-tincan/wake-dispatcher.mjs",
     "sigil/bridges/v1/*.mjs",
     "sigil/contracts/v1/*.json",
     "sigil/contracts/v1/*.mjs",
