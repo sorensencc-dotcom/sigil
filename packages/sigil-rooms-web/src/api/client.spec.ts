@@ -65,6 +65,32 @@ describe('api client', () => {
   });
 });
 
+describe('api client: continueThread', () => {
+  it('posts thread_root_id with a fresh idempotency key and returns the send result', async () => {
+    const calls: Array<[string, RequestInit]> = [];
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push([url, init]);
+      return jsonResponse(201, { code: 'OK', message_id: 'm9', room_seq: '9' });
+    });
+    const { client } = make(fetchImpl as unknown as typeof fetch);
+    expect(await client.continueThread('room_1', 'msg_root')).toEqual({ code: 'OK', message_id: 'm9', room_seq: '9' });
+    await client.continueThread('room_1', 'msg_root');
+    expect(calls[0]![0]).toBe('http://relay.test/v1/rooms/room_1/continue');
+    expect(calls[0]![1].method).toBe('POST');
+    const first = JSON.parse(String(calls[0]![1].body)) as { thread_root_id: string; idempotency_key: string };
+    const second = JSON.parse(String(calls[1]![1].body)) as { idempotency_key: string };
+    expect(first.thread_root_id).toBe('msg_root');
+    expect(first.idempotency_key).toMatch(/^continue-/);
+    expect(second.idempotency_key).not.toBe(first.idempotency_key);
+  });
+
+  it('surfaces NOTHING_TO_CONTINUE as an ApiError', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(409, { code: 'NOTHING_TO_CONTINUE', message: 'none' }));
+    const { client } = make(fetchImpl as unknown as typeof fetch);
+    await expect(client.continueThread('room_1', 'msg_root')).rejects.toMatchObject({ code: 'NOTHING_TO_CONTINUE', status: 409 });
+  });
+});
+
 describe('api client: room management', () => {
   it('builds the members, rename, response-mode, stop, and threaded send requests', async () => {
     const calls: Array<[string, RequestInit]> = [];

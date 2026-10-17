@@ -14,6 +14,7 @@ export function createSessionStore(filePath) {
   };
   return {
     get(roomId) { return read()[roomId] ?? null; },
+    rooms() { return Object.keys(read()); },
     set(roomId, value) {
       const all = read();
       all[roomId] = value;

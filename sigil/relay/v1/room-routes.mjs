@@ -1,7 +1,7 @@
 // sigil/relay/v1/room-routes.mjs
 import crypto from 'node:crypto';
 import { emitRoomEvent } from './room-events.mjs';
-import { promoteNextInvocation, dispatchToTarget, emitRefusal } from './room-dispatch.mjs';
+import { promoteNextInvocation, dispatchToTarget, emitRefusal, emitRoomHalted } from './room-dispatch.mjs';
 import { isAgentMember, isRouterMember, memberIsHuman } from './room-policy.mjs';
 import { lookupTrustedEntry } from './trusted-endpoint.mjs';
 import { clampReason } from '../../contracts/v1/room-event-schema.mjs';
@@ -53,6 +53,60 @@ async function membership(repository, roomId, principal) {
 async function isAgentCaller(repository, registry, principal) {
   if (!principal?.endpoint_id) return false;
   return (await lookupTrustedEntry(repository, registry, principal.endpoint_id))?.kind === 'agent';
+}
+
+// The relay-signed human send shared by POST .../messages and POST .../continue,
+// so the two cannot drift. `prepare(body)` runs after the replay check and
+// returns { messageBody } or { reply: [status, code, message] }.
+async function postHumanMessage({ response, requestId, now, principal, repository, registry, humanSigner, buildAcceptOptions, roomId, keyPrefix, body, prepare }) {
+  if (!humanSigner) return fail(response, requestId, 503, 'NO_OPERATOR_IDENTITY', 'Human send is not configured (--room-human-identity)');
+  if (!buildAcceptOptions) return fail(response, requestId, 503, 'ROOM_SEND_UNAVAILABLE', 'Human send is not available');
+  if ((await isAgentCaller(repository, registry, principal)) || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'An authenticated human context is required');
+  if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.idempotency_key !== 'string' || !body.idempotency_key || body.idempotency_key.length > 128) return fail(response, requestId, 400, 'INVALID_REQUEST', 'idempotency_key is required');
+  // The key is scoped to the room, so one key in two rooms never collides.
+  const scopedKey = `${keyPrefix}${body.idempotency_key}`;
+  const stored = async () => {
+    const prior = await repository.lookupIdempotency(principal.endpoint_id, scopedKey);
+    if (!prior) return null;
+    const row = await repository.lookupRoomMessage(roomId, prior.message_id);
+    return row ? { message_id: prior.message_id, room_seq: row.room_seq } : null;
+  };
+  const replay = await stored();
+  if (replay) return send(response, requestId, 200, { code: 'OK', ...replay });
+  const prepared = await prepare(body);
+  if (prepared.reply) return fail(response, requestId, ...prepared.reply);
+  const { messageBody } = prepared;
+
+  let signer;
+  try {
+    signer = await humanSigner.signForEndpoint(principal.endpoint_id);
+  } catch (error) {
+    if (error.code === 'NO_SIGNING_KEY') return fail(response, requestId, 403, 'NO_SIGNING_KEY', 'This endpoint cannot post through the relay');
+    if (error.code === 'KEY_MISMATCH' || error.code === 'WRAP_KEY_UNAVAILABLE') return fail(response, requestId, 503, error.code, 'Relay signing is unavailable for this endpoint');
+    throw error;
+  }
+  const outbox = new LocalOutbox({ privateKey: signer.privateKey, endpoint: signer.endpoint });
+  const created = now instanceof Date ? now : new Date(now);
+  const { envelope } = outbox.queue({
+    protocol: 'sigil/1', message_id: `msg_${crypto.randomUUID()}`, conversation_id: roomId, message_type: 'room.message',
+    sender: { owner_id: signer.endpoint.owner_id, endpoint_id: signer.endpoint.endpoint_id, kind: signer.endpoint.kind },
+    broadcast_scope: { conversation_id: roomId }, body: messageBody, context_refs: [], capabilities: [], correlation_id: null,
+    idempotency_key: scopedKey, created_at: created.toISOString(), expires_at: new Date(created.getTime() + 24 * 3600_000).toISOString(),
+    signature: { algorithm: 'Ed25519', key_id: signer.endpoint.key_id, value: '' },
+  });
+  const result = await acceptEnvelopeAsync(envelope, buildAcceptOptions({ request_id: requestId, now }));
+  if (result.status === 409 && result.body?.code === 'DUPLICATE_MESSAGE') {
+    // A racing retry that lost the idempotency insert (Task 3 translates the
+    // repository signal to 409 DUPLICATE_MESSAGE). Re-read the key and answer
+    // 200 with the winner; if nothing is stored the 409 is a real conflict.
+    const winner = await stored();
+    if (winner) return send(response, requestId, 200, { code: 'OK', ...winner });
+  }
+  // The relay signed with a key its own registry rejects: a relay fault, not the caller's.
+  if (result.status === 401 && (result.body?.code === 'UNKNOWN_ENDPOINT' || result.body?.code === 'INVALID_SIGNATURE')) return fail(response, requestId, 500, 'INTERNAL', 'Relay failed to sign the message');
+  if (result.status !== 202) return send(response, requestId, result.status, result.body);
+  const row = await repository.lookupRoomMessage(roomId, envelope.message_id);
+  return send(response, requestId, result.body.duplicate ? 200 : 201, { code: 'OK', message_id: result.body.message_id, room_seq: row?.room_seq ?? null });
 }
 
 export async function handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream = null, inboxDepthLimit, systemIdentity = null, logger = null, ticketStore = null, humanSigner = null, buildAcceptOptions = null }) {
@@ -118,7 +172,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     return send(response, requestId, 200, { code: 'OK', items: await repository.listRoomsForEndpoint(principal.endpoint_id) });
   }
 
-  const match = path.match(/^\/v1\/rooms\/([^/]+)\/(members|messages|invocations|stop|ack|rename)(?:\/([^/]+)(?:\/(remove|response-mode|invokable-by))?)?$/);
+  const match = path.match(/^\/v1\/rooms\/([^/]+)\/(members|messages|invocations|stop|ack|rename|continue)(?:\/([^/]+)(?:\/(remove|response-mode|invokable-by))?)?$/);
   if (!match) return false;
   const [, roomId, resource, segment, removeAction] = match;
   // Browsers percent-encode '@' in endpoint IDs (ep_claude%40local); the pathname arrives undecoded.
@@ -148,57 +202,27 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
   }
 
   if (request.method === 'POST' && resource === 'messages' && !segment) {
-    if (!humanSigner) return fail(response, requestId, 503, 'NO_OPERATOR_IDENTITY', 'Human send is not configured (--room-human-identity)');
-    if (!buildAcceptOptions) return fail(response, requestId, 503, 'ROOM_SEND_UNAVAILABLE', 'Human send is not available');
-    if ((await isAgentCaller(repository, registry, principal)) || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'An authenticated human context is required');
     const body = await readJson(request, readBody);
-    if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.idempotency_key !== 'string' || !body.idempotency_key || body.idempotency_key.length > 128) return fail(response, requestId, 400, 'INVALID_REQUEST', 'idempotency_key is required');
-    // Only the client's text, thread, and mentions survive: idempotency_key is
-    // transport, and a client `sender` is dropped because the relay chooses it.
-    const { idempotency_key: clientKey, sender: _ignoredSender, ...messageBody } = body;
-    try { validateRoomMessageBody(messageBody); } catch (error) { return fail(response, requestId, 400, 'INVALID_ENVELOPE', error.message); }
+    return postHumanMessage({ response, requestId, now, principal, repository, registry, humanSigner, buildAcceptOptions, roomId, keyPrefix: `room:${roomId}:`, body, prepare: (clientBody) => {
+      // Only the client's text, thread, and mentions survive: idempotency_key is
+      // transport, and a client `sender` is dropped because the relay chooses it.
+      const { idempotency_key: _key, sender: _ignoredSender, ...messageBody } = clientBody;
+      try { validateRoomMessageBody(messageBody); } catch (error) { return { reply: [400, 'INVALID_ENVELOPE', error.message] }; }
+      return { messageBody };
+    } });
+  }
 
-    // The key is scoped to the room, so one key in two rooms never collides.
-    const scopedKey = `room:${roomId}:${clientKey}`;
-    const stored = async () => {
-      const prior = await repository.lookupIdempotency(principal.endpoint_id, scopedKey);
-      if (!prior) return null;
-      const row = await repository.lookupRoomMessage(roomId, prior.message_id);
-      return row ? { message_id: prior.message_id, room_seq: row.room_seq } : null;
-    };
-    const replay = await stored();
-    if (replay) return send(response, requestId, 200, { code: 'OK', ...replay });
-
-    let signer;
-    try {
-      signer = await humanSigner.signForEndpoint(principal.endpoint_id);
-    } catch (error) {
-      if (error.code === 'NO_SIGNING_KEY') return fail(response, requestId, 403, 'NO_SIGNING_KEY', 'This endpoint cannot post through the relay');
-      if (error.code === 'KEY_MISMATCH' || error.code === 'WRAP_KEY_UNAVAILABLE') return fail(response, requestId, 503, error.code, 'Relay signing is unavailable for this endpoint');
-      throw error;
-    }
-    const outbox = new LocalOutbox({ privateKey: signer.privateKey, endpoint: signer.endpoint });
-    const created = now instanceof Date ? now : new Date(now);
-    const { envelope } = outbox.queue({
-      protocol: 'sigil/1', message_id: `msg_${crypto.randomUUID()}`, conversation_id: roomId, message_type: 'room.message',
-      sender: { owner_id: signer.endpoint.owner_id, endpoint_id: signer.endpoint.endpoint_id, kind: signer.endpoint.kind },
-      broadcast_scope: { conversation_id: roomId }, body: messageBody, context_refs: [], capabilities: [], correlation_id: null,
-      idempotency_key: scopedKey, created_at: created.toISOString(), expires_at: new Date(created.getTime() + 24 * 3600_000).toISOString(),
-      signature: { algorithm: 'Ed25519', key_id: signer.endpoint.key_id, value: '' },
-    });
-    const result = await acceptEnvelopeAsync(envelope, buildAcceptOptions({ request_id: requestId, now }));
-    if (result.status === 409 && result.body?.code === 'DUPLICATE_MESSAGE') {
-      // A racing retry that lost the idempotency insert (Task 3 translates the
-      // repository signal to 409 DUPLICATE_MESSAGE). Re-read the key and answer
-      // 200 with the winner; if nothing is stored the 409 is a real conflict.
-      const winner = await stored();
-      if (winner) return send(response, requestId, 200, { code: 'OK', ...winner });
-    }
-    // The relay signed with a key its own registry rejects: a relay fault, not the caller's.
-    if (result.status === 401 && (result.body?.code === 'UNKNOWN_ENDPOINT' || result.body?.code === 'INVALID_SIGNATURE')) return fail(response, requestId, 500, 'INTERNAL', 'Relay failed to sign the message');
-    if (result.status !== 202) return send(response, requestId, result.status, result.body);
-    const row = await repository.lookupRoomMessage(roomId, envelope.message_id);
-    return send(response, requestId, result.body.duplicate ? 200 : 201, { code: 'OK', message_id: result.body.message_id, room_seq: row?.room_seq ?? null });
+  if (request.method === 'POST' && resource === 'continue' && !segment) {
+    const body = await readJson(request, readBody);
+    return postHumanMessage({ response, requestId, now, principal, repository, registry, humanSigner, buildAcceptOptions, roomId, keyPrefix: `room:${roomId}:continue:`, body, prepare: async (clientBody) => {
+      const threadRootId = clientBody.thread_root_id;
+      if (typeof threadRootId !== 'string' || !threadRootId || threadRootId.length > 128) return { reply: [400, 'INVALID_REQUEST', 'thread_root_id is required'] };
+      const refused = await repository.listCapRefusedEndpoints(roomId, threadRootId);
+      if (refused.length === 0) return { reply: [409, 'NOTHING_TO_CONTINUE', 'No agent was refused for the turn limit in this thread'] };
+      // A human post in the thread refills the budget and mentions re-dispatch
+      // the refused agents under the caller, the same as a typed message.
+      return { messageBody: { text: 'Continue.', thread_root_id: threadRootId, mentions: refused.slice(0, 10) } };
+    } });
   }
 
   if (request.method === 'GET' && resource === 'members' && !segment) {
@@ -257,6 +281,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
       for (const invocation of rows) {
         await emitRoomEvent({ identity: systemIdentity, repository, client, room: access.room, body: { kind: 'invocation_stopped', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: 'stopped' }, idempotencyKey: `evt_stopped_${invocation.invocation_id}`, now, inboxDepthLimit, registered: registry, stream });
       }
+      await emitRoomHalted({ systemIdentity, repository, client, room: access.room, rows, reason: 'left', now, inboxDepthLimit, registered: registry, stream });
     });
     await notifyRoomChange(roomId, 'members');
     return send(response, requestId, 200, { code: 'OK', removed: true });
@@ -414,6 +439,9 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
       // A late failure from an older bridge turn must not fail a newer invocation.
       if (expectedId !== null && running.invocation_id !== expectedId) return null;
       const invocation = await repository.finishInvocation(running.invocation_id, { status: 'failed', reason, now }, client);
+      if (systemIdentity) {
+        await emitRoomEvent({ identity: systemIdentity, repository, client, room: access.room, body: { kind: 'invocation_failed', invocation_id: running.invocation_id, endpoint_ids: [principal.endpoint_id], reason: clampReason(reason) }, idempotencyKey: `evt_failed_${running.invocation_id}`, now, inboxDepthLimit, registered: registry, stream });
+      }
       const promoted = await promoteNextInvocation({ roomId, endpointId: principal.endpoint_id, repository, client, now, inboxDepthLimit, registered: registry, systemIdentity, room: access.room, stream });
       return { invocation, promoted };
     });
@@ -439,6 +467,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
         for (const invocation of rows) {
           await emitRoomEvent({ identity: systemIdentity, repository, client, room: access.room, body: { kind: 'invocation_stopped', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: 'stopped' }, idempotencyKey: `evt_stopped_${invocation.invocation_id}`, now, inboxDepthLimit, registered: registry, stream });
         }
+        await emitRoomHalted({ systemIdentity, repository, client, room: access.room, rows, reason: 'stopped', now, inboxDepthLimit, registered: registry, stream });
       }
       return rows;
     });

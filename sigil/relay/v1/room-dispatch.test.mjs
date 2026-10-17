@@ -360,7 +360,7 @@ test('a hop_budget refusal emits an invocation_refused room.event', async () => 
   await driveToHopRefusal(w, { systemIdentity });
   const refused = (await w.repository.listRoomInvocations('room_1')).filter((r) => r.status === 'refused');
   assert.equal(refused.length, 1);
-  const events = (await w.repository.listRoomMessages('room_1', 0n, 100)).filter((item) => item.envelope.message_type === 'room.event');
+  const events = (await w.repository.listRoomMessages('room_1', 0n, 100)).filter((item) => item.envelope.message_type === 'room.event' && item.envelope.body.kind === 'invocation_refused');
   assert.equal(events.length, 1);
   const { body } = events[0].envelope;
   assert.equal(body.kind, 'invocation_refused');

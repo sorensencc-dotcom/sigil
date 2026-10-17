@@ -181,3 +181,26 @@ test('actual agent run validates registry kinds before any daemon or provider ca
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('actual agent run guards every receive-only registry CLI while preserving router and Floor Warden dispatch', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-registry-receive-only-'));
+  try {
+    const identityPath = path.join(directory, 'identity.json');
+    const identity = createIdentity({ ownerId: 'owner_test_registry', endpointId: 'ep_test_registry', kind: 'agent' });
+    identity.receive_only = true;
+    delete identity.private_key_pem;
+    fs.writeFileSync(identityPath, JSON.stringify(identity));
+    const cliPath = fileURLToPath(new URL('../../cli/sigil.mjs', import.meta.url));
+    for (const kind of [...CLI_KINDS, 'router', 'floor-warden']) {
+      const result = spawnSync(process.execPath, [cliPath, 'agent', 'run', '--identity', identityPath, '--config', path.join(directory, 'config.json'), '--relay-url', 'http://127.0.0.1:1', '--room-bridge', kind, '--router-timeout-ms', '0'], { cwd: directory, env: agentEnv(), encoding: 'utf8', timeout: 10000, windowsHide: true });
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, '');
+      if (kind === 'floor-warden') assert.match(result.stderr, /--room-bridge floor-warden requires --floor-warden-url-env/);
+      else if (kind === 'router') assert.match(result.stderr, /--router-timeout-ms must be a positive integer/);
+      else assert.ok(result.stderr.includes(`--room-bridge ${kind} signs its replies and needs an identity with a private key; this identity is receive-only`), result.stderr);
+    }
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

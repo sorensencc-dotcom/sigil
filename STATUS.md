@@ -1,5 +1,19 @@
 # Status
 
+## Session update: 2026-10-16 Floor Warden bridge (phase 6)
+
+- Branch `feat/sigil-rooms-phase6-floor-warden-bridge`, plan `docs/superpowers/plans/2026-10-16-sigil-rooms-phase-6-floor-warden-bridge.md`, spec `docs/superpowers/specs/2026-10-16-sigil-rooms-phase-6-floor-warden-bridge-design.md`. Tasks 1-15 done; merged as PR #59. Follow-ups on `fix/sigil-phase6-followups`.
+- Adds the Floor Warden bridge (`sigil agent run --room-bridge floor-warden`), `sigil bot add` and `sigil bot disable`, relay-held bot signing, and `POST /v1/rooms/{room_id}/replies` (enabled by `--floor-warden-reply-token-env`). README "Floor Warden bridge" documents flags and secret storage.
+- Open assumptions (spec "Assumptions"), none closed against the real routine:
+  - 1: the sender-key header format is unknown; the bridge sends `Authorization: Bearer <key>` unless `--floor-warden-key-header` says otherwise.
+  - 2: the routine may deliver a payload twice; dedupe is not assumed.
+  - 3: the 256 KiB webhook payload limit is a guess.
+  - 4: the owner id comes from the operator identity, not the literal `usr_soren`.
+  - 7: bot signing needs Postgres; memory mode answers `503 BOT_SIGNING_UNAVAILABLE`.
+  - 8: the 15-minute deadline, 5 forward attempts, 20-message context, and 4000-character clip are starting values.
+  - 5 and 6 (token loading, daemon ack) were checked in Task 1; see `docs/superpowers/plans/2026-10-16-floor-warden-bridge-verification-notes.md`.
+- Still open: copy the routine's webhook URL and sender key (parent spec open question 2), the live smoke test (needs the phase 7 tunnel so Grok's cloud can reach the reply route), `ep_chief` and `ep_helix_ci` creation, and Ironbots requests.
+
 ## Session update: 2026-10-15 third-party login merged (PR #53)
 
 - PR #53 (`feat/sigil-rooms-third-party-login`) merged to `main` as `dce8139`; all 8 checks green. Supersedes the 2026-10-14 entry below (Tasks 0-15 done, now merged).

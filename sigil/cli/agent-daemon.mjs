@@ -31,7 +31,9 @@ export function createAgentDaemon({
   pollIntervalMs = 15000,
   heartbeatIntervalMs = 15000,
   missedHeartbeatsLimit = 3,
-  onRoomMessage = null
+  onRoomMessage = null,
+  onStart = null,
+  onStop = null
 } = {}) {
   if (!identity || !relayUrl) throw new Error('identity and relayUrl are required');
 
@@ -50,16 +52,27 @@ export function createAgentDaemon({
     });
   }
 
-  const keys = identityKeys(identity);
-  const outbox = new LocalOutbox({
-    privateKey: keys.privateKey,
-    endpoint: {
-      owner_id: identity.owner_id,
-      endpoint_id: identity.endpoint_id,
-      key_id: identity.key_id,
-      kind: identity.kind
+  // A receive-only identity (written by `sigil bot add`) holds a relay token
+  // and no private key: the relay signs for it. The signing outbox is built on
+  // demand, so such an identity never reaches identityKeys().
+  const receiveOnly = identity.receive_only === true;
+  let outbox = null;
+  function signingOutbox() {
+    if (!outbox) {
+      outbox = new LocalOutbox({
+        privateKey: identityKeys(identity).privateKey,
+        endpoint: {
+          owner_id: identity.owner_id,
+          endpoint_id: identity.endpoint_id,
+          key_id: identity.key_id,
+          kind: identity.kind
+        }
+      });
     }
-  });
+    return outbox;
+  }
+  // Any other identity must sign, so a missing or corrupt key still stops the daemon at startup.
+  if (!receiveOnly) signingOutbox();
   const relay = new RelayClient({ baseUrl: relayUrl, token: identity.relay_token });
 
   let running = false;
@@ -114,6 +127,14 @@ export function createAgentDaemon({
       }
     }
 
+    if (messageType === 'task.request' && receiveOnly) {
+      // No key to sign a task.result with, and no local worker for a relay-held
+      // bot: ack so the delivery does not return on every poll.
+      logger.warn?.(`Receive-only identity ${identity.endpoint_id}: task.request ${envelope.message_id ?? deliveryId} acknowledged without a reply`);
+      if (deliveryId) await relay.acknowledge(deliveryId, { outcome: 'acknowledged' }).catch(() => {});
+      return { delivery_id: deliveryId, outcome: 'acknowledged' };
+    }
+
     if (messageType === 'task.request') {
       try {
         if (deliveryId) {
@@ -145,7 +166,7 @@ export function createAgentDaemon({
             expires_at: new Date(now.getTime() + 24 * 3600_000).toISOString(),
             signature: { algorithm: 'Ed25519', key_id: identity.key_id, value: '' }
           };
-          const queued = outbox.queue(unsignedReply);
+          const queued = signingOutbox().queue(unsignedReply);
 
           if (connectorDb) {
             try {
@@ -160,7 +181,7 @@ export function createAgentDaemon({
           }
 
           await relay.sendEnvelope(queued.envelope);
-          outbox.markAccepted(queued.envelope.message_id);
+          signingOutbox().markAccepted(queued.envelope.message_id);
 
           if (connectorDb) {
             connectorDb.updateOutboxDeliveryState(queued.envelope.message_id, {
@@ -235,7 +256,16 @@ export function createAgentDaemon({
   function start() {
     if (running) return;
     running = true;
-    poll();
+    if (onStart) {
+      // The first poll waits for the start hook (the Floor Warden bridge's
+      // recover()), so recovery does not race the first forward.
+      Promise.resolve()
+        .then(() => onStart())
+        .catch((err) => logger.error?.(`Daemon start hook failed: ${err?.message ?? String(err)}`))
+        .finally(() => { if (running) poll(); });
+    } else {
+      poll();
+    }
 
     if (streamUrl) {
       const connectSocket = () => {
@@ -288,6 +318,10 @@ export function createAgentDaemon({
 
   function stop() {
     running = false;
+    // Always runs (idempotent hooks): a caller may stop a daemon it only polled.
+    if (onStop) {
+      try { onStop(); } catch (err) { logger.error?.(`Daemon stop hook failed: ${err?.message ?? String(err)}`); }
+    }
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
     if (socket) {

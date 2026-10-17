@@ -243,7 +243,7 @@ test('Stop emits one invocation_stopped event per cancelled invocation', async (
     await repository.createRoomInvocation({ ...base, invocationId: 'inv_2', triggerMessageId: 'msg_2', status: 'queued' });
     const stopped = await call(port, 'POST', `/v1/rooms/${roomId}/stop`, 'Bearer chris-web');
     assert.deepEqual([stopped.status, stopped.body.cancelled], [200, 2]);
-    const events = (await repository.listRoomMessages(roomId, 0n, 100)).map((item) => item.envelope).filter((e) => e.message_type === 'room.event');
+    const events = (await repository.listRoomMessages(roomId, 0n, 100)).map((item) => item.envelope).filter((e) => e.message_type === 'room.event' && e.body.kind === 'invocation_stopped');
     assert.deepEqual(events.map((e) => e.body.kind), ['invocation_stopped', 'invocation_stopped']);
     assert.deepEqual(events.map((e) => e.body.invocation_id).sort(), ['inv_1', 'inv_2']);
     for (const event of events) assert.deepEqual(event.body.endpoint_ids, ['ep_claude']);
@@ -271,7 +271,7 @@ test('a queued invocation refused on promotion emits invocation_refused', async 
     assert.equal(failed.status, 200);
     const refused = (await repository.listRoomInvocations(roomId)).find((row) => row.invocation_id === 'inv_2');
     assert.deepEqual([refused.status, refused.reason], ['refused', 'endpoint_inactive']);
-    const events = (await repository.listRoomMessages(roomId, 0n, 100)).map((item) => item.envelope).filter((e) => e.message_type === 'room.event');
+    const events = (await repository.listRoomMessages(roomId, 0n, 100)).map((item) => item.envelope).filter((e) => e.message_type === 'room.event' && e.body.kind === 'invocation_refused');
     assert.equal(events.length, 1);
     assert.deepEqual([events[0].body.kind, events[0].body.invocation_id, events[0].body.reason], ['invocation_refused', 'inv_2', 'endpoint_inactive']);
     assert.deepEqual(events[0].body.endpoint_ids, ['ep_claude']);

@@ -26,6 +26,7 @@ describe('relay-api.json still lists what the client calls', () => {
     route('POST', '/v1/rooms/{room_id}/rename');
     route('POST', '/v1/rooms/{room_id}/members/{endpoint_id}/response-mode');
     route('POST', '/v1/rooms/{room_id}/stop');
+    route('POST', '/v1/rooms/{room_id}/continue');
   });
 
   it('lists the history item fields the client reads', () => {
@@ -38,6 +39,8 @@ describe('relay-api.json still lists what the client calls', () => {
     expect(route('POST', '/v1/rooms/{room_id}/ack').request_fields).toContain('up_to_room_seq');
     expect(route('POST', '/v1/rooms/{room_id}/ack').response_fields).toContain('acknowledged');
     expect(route('POST', '/v1/rooms/ws-ticket').response_fields).toEqual(expect.arrayContaining(['ticket', 'expires_at']));
+    expect(route('POST', '/v1/rooms/{room_id}/continue').request_fields).toEqual(expect.arrayContaining(['thread_root_id', 'idempotency_key']));
+    expect(route('POST', '/v1/rooms/{room_id}/continue').response_fields).toEqual(expect.arrayContaining(['message_id', 'room_seq']));
     expect(route('POST', '/v1/rooms/{room_id}/rename').request_fields).toContain('name');
     expect(route('POST', '/v1/rooms/{room_id}/rename').response_fields).toContain('room');
     expect(route('POST', '/v1/rooms/{room_id}/members/{endpoint_id}/response-mode').request_fields).toContain('response_mode');

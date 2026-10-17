@@ -44,3 +44,8 @@ test('validateRoomEventBody rejects remaining invalid shapes', () => {
   assert.doesNotThrow(() => validateRoomEventBody({ ...ok, invocation_id: 'inv_1', reason: 'x'.repeat(ROOM_EVENT_REASON_MAX) }));
   assert.doesNotThrow(() => validateRoomEventBody({ kind: 'invocation_stopped', endpoint_ids: Array.from({ length: 50 }, (_, i) => `ep_${i}`) }));
 });
+
+test('accepts an optional thread_root_id string and rejects other types', () => {
+  assert.doesNotThrow(() => validateRoomEventBody({ kind: 'agent_cap_reached', endpoint_ids: ['ep_claude'], thread_root_id: 'msg_root' }));
+  for (const bad of ['', 7, null]) assert.throws(() => validateRoomEventBody({ kind: 'agent_cap_reached', endpoint_ids: [], thread_root_id: bad }), (error) => error.details.field === 'thread_root_id');
+});

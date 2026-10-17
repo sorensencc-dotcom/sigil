@@ -133,6 +133,48 @@ Residual risk: `invokable_by` governs who starts an invocation, not what an agen
 - You cannot remove a guest's agent from a room. To stop it acting, suspend the guest with `sigil human suspend`.
 - `sigil human suspend` cancels invocations but posts no `invocation_stopped` room event; Stop and member removal do.
 
+#### Floor Warden bridge
+
+The bridge forwards room messages for Grok bots to one Floor Warden webhook and accepts the answers on a relay reply route.
+
+1. A mention or router pick targets a bot endpoint. The relay creates a running invocation and a room delivery as usual.
+2. `sigil agent run --room-bridge floor-warden` receives the delivery, confirms the invocation is still running, and POSTs the room message to the Floor Warden webhook.
+3. On a `2xx` response the delivery is acked and the invocation stays running under a reply deadline (`--reply-timeout-ms`, default 15 minutes).
+4. The Floor Warden hands the work to the named bot in the Grok Bot app.
+5. The bot's answer arrives as `POST /v1/rooms/{room_id}/replies` with `Authorization: Bearer <floor_warden_reply_token>`.
+6. The relay signs the answer as the bot endpoint with a relay-held key and accepts it through the normal envelope path, which completes the invocation and fans out to members.
+
+Relay flags (`sigil relay up`):
+
+- `--floor-warden-reply-token-env <env_var>` names the variable that holds the reply token (at least 32 characters). The reply route exists only when this flag is set.
+- `--floor-warden-reply-token-next-env <env_var>` names a second variable the relay also accepts, for rotation. It requires the first flag.
+- `--room-bot-key-wrap-key <env_var>` names the variable that holds the 32-byte base64 key that unwraps bot signing keys. Without it the reply route answers `503 BOT_SIGNING_UNAVAILABLE`. Bot signing needs Postgres.
+
+Bot commands:
+
+- `sigil bot add --bot-id <id> --endpoint <endpoint_id> --name <display name> [--identity path] [--out path] [--database-url url] [--room-bot-key-wrap-key env_var]` creates the bot endpoint with a relay-held signing key and writes a receive-only identity file (a relay token and `bot_id`, no private key). Restart the relay after `bot add` so it loads the new token.
+- `sigil bot disable --bot-id <id> [--database-url url]` disables a bot. Running it twice is safe. Disabling does not revoke the bot's relay token: the token can still read rooms until you revoke the bot endpoint. Bot signing keys cannot be rotated; to change one, create a new bot.
+
+Agent flags (`sigil agent run --room-bridge floor-warden`):
+
+- `--floor-warden-url-env <env_var>` and `--floor-warden-key-env <env_var>` name the variables that hold the webhook URL and the webhook sender key.
+- `--floor-warden-key-header <name>` sets the sender-key header name. The default sends `Authorization: Bearer <key>`.
+- `--floor-warden-reply-url <url>` is the public relay URL that the Floor Warden calls back.
+- `--floor-warden-bot-id <id>` is optional when the identity file carries `bot_id`, and it must match that value when both are present.
+- `--reply-timeout-ms <n>` sets the reply deadline.
+- `--room-sessions <path>` sets the session store that holds the per-room watermarks.
+
+Where each secret lives:
+
+| Secret | Location |
+|---|---|
+| Reply token | Environment variable named by `--floor-warden-reply-token-env`. The relay keeps only a SHA-256 digest. |
+| Webhook URL and sender key | Environment variables named by `--floor-warden-url-env` and `--floor-warden-key-env`, read by the agent process. Logs show the origin only. |
+| Bot wrap key | Environment variable named by `--room-bot-key-wrap-key`. |
+| Bot relay token | The receive-only identity file from `sigil bot add`. |
+
+Replies from Grok's cloud reach the relay only through the phase 7 tunnel. Until then, the reply route works for callers that reach the relay directly. Copying the routine's webhook URL and sender key from the routine panel stays an open step; see the [phase 6 design](docs/superpowers/specs/2026-10-16-sigil-rooms-phase-6-floor-warden-bridge-design.md).
+
 ## Current status
 
 The repository is verified against full v1 protocol conformance specifications:
