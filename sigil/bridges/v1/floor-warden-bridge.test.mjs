@@ -522,3 +522,20 @@ test('recover() still walks /v1/rooms when the session store cannot list its roo
   assert.deepEqual(s.relay.failed, [['room_1', 'REPLY_TIMEOUT', 'inv_1']]);
   assert.ok(s.logs.some((line) => /session store room list/.test(line)));
 });
+
+test('fail(): a failRoomInvocation that rejects is retried by a deadline watch instead of being dropped', async (t) => {
+  const s = setup(t);
+  const original = s.relay.failRoomInvocation.bind(s.relay);
+  let calls = 0;
+  s.relay.failRoomInvocation = async (...args) => {
+    calls += 1;
+    if (calls === 1) throw Object.assign(new Error('relay blip'), { code: 'DELIVERY_UNAVAILABLE' });
+    return original(...args);
+  };
+  const result = await s.make({ replyUrl: '' }).handle({ envelope: envelopeFor(s.relay, 'msg_t') });
+  assert.deepEqual(result, { outcome: 'failed', reason: 'REPLY_URL_UNSET' });
+  assert.equal(s.relay.failed.length, 0, 'the first call was rejected');
+  t.mock.timers.tick(POLL);
+  await flush();
+  assert.deepEqual(s.relay.failed, [['room_1', 'REPLY_URL_UNSET', 'inv_1']]);
+});

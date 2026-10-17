@@ -540,3 +540,15 @@ test('a late reply for an invocation that Stop cancelled answers 403 ROOM_NOT_IN
     assert.equal(row.status, 'cancelled', 'the late reply does not revive the invocation');
   });
 });
+
+test('a throw inside the reply handler still writes one refused audit row', async () => {
+  const botSigner = { signForBot: async () => { throw new Error('signer boom-secret'); } };
+  await withWorld(async (w) => {
+    const res = await w.reply({ in_reply_to: await invoked(w) });
+    assert.equal(res.status, 503);
+    const rows = replyAudits(w);
+    assert.equal(rows.length, 1, JSON.stringify(rows));
+    assert.deepEqual([rows[0].subject_id, rows[0].outcome, rows[0].reason], [BOT_ID, 'refused', 'DATABASE_UNAVAILABLE']);
+    assert.equal(JSON.stringify(w.repository._debugGetAuditEvents()).includes('boom-secret'), false);
+  }, { botSigner });
+});

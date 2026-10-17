@@ -73,3 +73,17 @@ test('relay up wires the Floor Warden reply handler behind the reply token', asy
     if (process.platform === 'win32' && child.pid) { try { execSync(`taskkill /F /T /PID ${child.pid}`, { stdio: 'ignore' }); } catch {} } else child.kill('SIGTERM');
   }
 });
+
+test('relay up refuses one wrap key shared by the bot and room signers', () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-relay-flags-test-'));
+  execFileSync(process.execPath, [sigilCli, 'init', 'alice'], { cwd, encoding: 'utf8' });
+  const key = Buffer.alloc(32, 7).toString('base64');
+  const result = spawnSync(
+    process.execPath,
+    [sigilCli, 'relay', 'up', '--port', '0', '--room-human-identity', path.join(cwd, 'missing.json'), '--room-bot-key-wrap-key', 'SIGIL_TEST_BOT_WK', '--room-key-wrap-key', 'SIGIL_TEST_ROOM_WK'],
+    { cwd, encoding: 'utf8', timeout: 20_000, env: { ...process.env, SIGIL_TEST_BOT_WK: key, SIGIL_TEST_ROOM_WK: key } },
+  );
+  const out = `${result.stderr}${result.stdout}`;
+  assert.equal(result.status, 1, out);
+  assert.match(out, /WRAP_KEY_REUSED/);
+});

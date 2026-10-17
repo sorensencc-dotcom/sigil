@@ -128,10 +128,10 @@ export function createFloorWardenBridge({
     disarm(invocationId);
     forget(roomId, invocationId);
   }
-  function arm(roomId, invocationId, deadlineAt) {
+  function arm(roomId, invocationId, deadlineAt, reason = 'REPLY_TIMEOUT') {
     disarm(invocationId);
     if (closed) return;
-    const watch = { roomId, busy: false, haltAttempts: 0, errors: 0, deadlineErrors: 0, deadline: null, poll: null };
+    const watch = { roomId, reason, busy: false, haltAttempts: 0, errors: 0, deadlineErrors: 0, deadline: null, poll: null };
     watch.deadline = setTimeout(() => onDeadline(invocationId), Math.max(0, deadlineAt - Date.now()));
     watch.poll = setInterval(() => onPoll(invocationId), pollIntervalMs);
     watches.set(invocationId, watch);
@@ -163,7 +163,7 @@ export function createFloorWardenBridge({
       if (await isRunning(watch.roomId, invocationId)) {
         if (closed || watches.get(invocationId) !== watch) return;
         // Rethrows: the record and timers stay until the relay confirms.
-        await failConfirmed(watch.roomId, invocationId, 'REPLY_TIMEOUT');
+        await failConfirmed(watch.roomId, invocationId, watch.reason);
       }
       // Not running: the poll decides between nothing and a halt frame.
     } catch (error) {
@@ -238,7 +238,15 @@ export function createFloorWardenBridge({
   }
 
   async function fail(roomId, invocationId, reason) {
-    await relay.failRoomInvocation(roomId, reason, invocationId).catch((error) => warn(`floor warden: failRoomInvocation: ${error.message}`));
+    try {
+      await relay.failRoomInvocation(roomId, reason, invocationId);
+    } catch (error) {
+      warn(`floor warden: failRoomInvocation: ${error.message}`);
+      // Unconfirmed: keep the record and hand the retries to a watch whose
+      // deadline is already due, so the invocation is not left running.
+      arm(roomId, invocationId, Date.now(), reason);
+      return { outcome: 'failed', reason };
+    }
     finish(roomId, invocationId);
     return { outcome: 'failed', reason };
   }

@@ -347,7 +347,12 @@ async function cmdRelayUp(argv) {
   if (humanIdentityPath) {
     try {
       const wrapKeyRef = opt(args, ['room-key-wrap-key']);
-      humanSigner = createRoomHumanSigner({ identity: loadIdentity(humanIdentityPath), repository, wrapKey: wrapKeyRef ? loadWrapKey(wrapKeyRef) : undefined });
+      const roomWrapKey = wrapKeyRef ? loadWrapKey(wrapKeyRef) : undefined;
+      // One leaked key must not unwrap both the human and the bot signing keys.
+      if (roomWrapKey && roomBotWrapKey && roomWrapKey.equals(roomBotWrapKey)) {
+        throw Object.assign(new Error('--room-bot-key-wrap-key and --room-key-wrap-key must hold different keys'), { code: 'WRAP_KEY_REUSED' });
+      }
+      humanSigner = createRoomHumanSigner({ identity: loadIdentity(humanIdentityPath), repository, wrapKey: roomWrapKey });
       await humanSigner.verifyOperator();
     } catch (error) {
       throw error.code ? new Error(`${error.code}: ${error.message}`) : error;
