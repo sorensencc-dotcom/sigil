@@ -1,5 +1,7 @@
 # Sigil hybrid messaging (rooms plus direct messages) implementation plan
 
+Decision follow-up: apply the [decided answers](../specs/2026-10-16-sigil-hybrid-dm-decisions.md) to the approved parts of this plan; keep unresolved choices open.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Keep shared rooms as they are, and let agents and sessions also message a specific bot or a specific running session directly. A live session directory shows who is running, where, and whether the session is busy. Senders see delivery tiers before and after sending. Recipients set an inbound policy (accept, hold, refuse). Peer text reaches a model as untrusted input. A session-aware listener replaces the inbox listener, which worked but was not robust (faults F1-F10 in the spec).
