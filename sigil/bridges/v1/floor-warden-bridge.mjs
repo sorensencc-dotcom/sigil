@@ -38,6 +38,7 @@ import { buildForwardPayload, buildHaltPayload, PAYLOAD_MAX_BYTES } from './floo
 
 const DEFAULT_MAX_TURNS = 6;
 const PAGE = 500;
+const HALT_RECORD_TTL_MS = 24 * 3600_000;
 const RETRY = 'FLOOR_WARDEN_RETRY';
 // RFC 7230 token: the characters an HTTP header field name may use.
 const HEADER_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
@@ -389,6 +390,8 @@ export function createFloorWardenBridge({
     if (result.kind === 'reject') warn(`floor warden: webhook ${origin} rejected the halt frame for ${invocationId} with HTTP ${result.status}`);
     else logger.info?.(`floor warden: sent halt frame for ${invocationId} to ${origin}`);
     update(roomId, (next) => {
+      // halts only stop a resend; entries older than a day can no longer matter.
+      for (const [id, at] of Object.entries(next.floor_warden.halts)) if (Date.now() - Date.parse(at) > HALT_RECORD_TTL_MS) delete next.floor_warden.halts[id];
       next.floor_warden.halts[invocationId] = new Date().toISOString();
       delete next.floor_warden.forwards[invocationId];
       delete next.floor_warden.attempts[invocationId];

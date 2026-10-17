@@ -22,7 +22,7 @@ import { assertDisposableTestDatabase } from '../../scripts/assert-disposable-te
 import { applyMigrations } from '../../scripts/apply-migrations.mjs';
 import { createIdentity, identityKeys, loadIdentity, saveIdentity } from '../../cli/identity.mjs';
 import { createAgentDaemon } from '../../cli/agent-daemon.mjs';
-import { createRedactingLogger } from '../../cli/redacting-logger.mjs';
+import { createRedactingLogger, floorWardenSecrets } from '../../cli/redacting-logger.mjs';
 import { createFloorWardenBridge } from '../../bridges/v1/floor-warden-bridge.mjs';
 import { createSessionStore } from '../../bridges/v1/session-store.mjs';
 import { RelayClient } from '../../connectors/v1/relay-client.mjs';
@@ -152,9 +152,8 @@ function startRelay(cwd, args, env) {
 // bridges with their own session store, recovered on start and closed on stop.
 function startBotDaemon({ identityPath, relayUrl, webhookUrl, webhookKey, dir }) {
   const identity = loadIdentity(identityPath);
-  const parsed = new URL(webhookUrl);
   // The same secrets `sigil agent run --room-bridge floor-warden` hands its logger.
-  const secrets = [webhookUrl, webhookUrl.replace(/\/+$/, ''), parsed.href, webhookKey, identity.relay_token, parsed.pathname, parsed.pathname.slice(1)];
+  const secrets = floorWardenSecrets({ webhookUrl, key: webhookKey, relayToken: identity.relay_token });
   const sink = Object.fromEntries(['log', 'info', 'warn', 'error', 'debug'].map((level) => [level, (line) => logs.push(`bot ${level} ${line}`)]));
   const { logger } = createRedactingLogger({ secrets, sink });
   const bridgeFor = (replyTimeoutMs, sessions) => createFloorWardenBridge({
@@ -393,9 +392,10 @@ test('stop: Stop while the fake holds the payload posts invocation_stopped and r
   const stop = await api('POST', `/v1/rooms/${roomId}/stop`, { body: {} });
   assert.equal(stop.status, 200, JSON.stringify(stop.body));
   assert.equal(stop.body.cancelled, 1);
-  const [stopped] = await events(roomId, 'invocation_stopped');
+  // The relay writes the stop events after it answers, so wait for them.
+  const stopped = await waitFor(async () => (await events(roomId, 'invocation_stopped'))[0], 'invocation_stopped event');
   assert.equal(stopped.envelope.body.invocation_id, inv.invocation_id);
-  const [halted] = await events(roomId, 'room_halted');
+  const halted = await waitFor(async () => (await events(roomId, 'room_halted'))[0], 'room_halted event');
   assert.deepEqual(halted.envelope.body.endpoint_ids, [BOT_EP]);
   assert.equal(halted.envelope.body.reason, 'stopped');
 

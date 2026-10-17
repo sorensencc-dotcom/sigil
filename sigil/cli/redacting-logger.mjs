@@ -39,3 +39,14 @@ export function createRedactingLogger({ secrets, sink = console, minLength = 4 }
   ]));
   return { logger, scrub };
 }
+
+// Every string that identifies the Floor Warden webhook or the relay: the
+// logger redacts these. Shared by the CLI and the e2e test so they cannot drift.
+export function floorWardenSecrets({ webhookUrl, key, relayToken }) {
+  const parsedUrl = new URL(webhookUrl);
+  const secrets = [webhookUrl, webhookUrl.replace(/\/+$/, ''), parsedUrl.href, key, relayToken];
+  if (parsedUrl.pathname.length > 1) secrets.push(parsedUrl.pathname + parsedUrl.search, parsedUrl.pathname, parsedUrl.pathname.slice(1));
+  if (parsedUrl.search.length > 1) secrets.push(parsedUrl.search);
+  for (const part of [parsedUrl.username, parsedUrl.password]) if (part) secrets.push(part);
+  return secrets;
+}

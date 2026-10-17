@@ -539,3 +539,17 @@ test('fail(): a failRoomInvocation that rejects is retried by a deadline watch i
   await flush();
   assert.deepEqual(s.relay.failed, [['room_1', 'REPLY_URL_UNSET', 'inv_1']]);
 });
+
+test('halt: halt records older than a day are pruned when a new one is recorded', async (t) => {
+  const s = setup(t);
+  s.sessions.set('room_1', { floor_warden: { halts: { inv_old: new Date(T0 - 25 * 3600_000).toISOString(), inv_recent: new Date(T0 - 3600_000).toISOString() } } });
+  await s.make().handle({ envelope: envelopeFor(s.relay, 'msg_t') });
+  s.relay.invocations[0].status = 'cancelled';
+  s.relay.messages.push(haltEvent('room_1', 6, 'msg_halt'));
+  t.mock.timers.tick(POLL);
+  await flush();
+  t.mock.timers.tick(POLL * 5);
+  await flush();
+  const halts = s.sessions.get('room_1').floor_warden.halts;
+  assert.deepEqual(Object.keys(halts).sort(), ['inv_1', 'inv_recent']);
+});

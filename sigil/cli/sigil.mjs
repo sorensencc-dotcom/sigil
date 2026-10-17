@@ -1123,11 +1123,8 @@ async function buildFloorWardenRoomBridge({ args, identity, relayUrl }) {
   if (!botId) throw new Error('Floor Warden bot id missing: the identity file has no bot_id (re-create it with sigil bot add) and --floor-warden-bot-id was not given');
   const replyTimeoutMs = positiveIntFlag(args, 'reply-timeout-ms', 15 * 60_000);
 
-  const { createRedactingLogger } = await import('./redacting-logger.mjs');
-  const secrets = [webhookUrl, webhookUrl.replace(/\/+$/, ''), parsedUrl.href, key, identity.relay_token];
-  if (parsedUrl.pathname.length > 1) secrets.push(parsedUrl.pathname + parsedUrl.search, parsedUrl.pathname, parsedUrl.pathname.slice(1));
-  if (parsedUrl.search.length > 1) secrets.push(parsedUrl.search);
-  for (const part of [parsedUrl.username, parsedUrl.password]) if (part) secrets.push(part);
+  const { createRedactingLogger, floorWardenSecrets } = await import('./redacting-logger.mjs');
+  const secrets = floorWardenSecrets({ webhookUrl, key, relayToken: identity.relay_token });
   const { logger } = createRedactingLogger({ secrets });
 
   const { createFloorWardenBridge } = await import('../bridges/v1/floor-warden-bridge.mjs');

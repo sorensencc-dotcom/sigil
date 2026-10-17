@@ -2,7 +2,7 @@
 
 ## Session update: 2026-10-16 Floor Warden bridge (phase 6)
 
-- Branch `feat/sigil-rooms-phase6-floor-warden-bridge`, plan `docs/superpowers/plans/2026-10-16-sigil-rooms-phase-6-floor-warden-bridge.md`, spec `docs/superpowers/specs/2026-10-16-sigil-rooms-phase-6-floor-warden-bridge-design.md`. Tasks 1-15 done; not pushed, no PR.
+- Branch `feat/sigil-rooms-phase6-floor-warden-bridge`, plan `docs/superpowers/plans/2026-10-16-sigil-rooms-phase-6-floor-warden-bridge.md`, spec `docs/superpowers/specs/2026-10-16-sigil-rooms-phase-6-floor-warden-bridge-design.md`. Tasks 1-15 done; merged as PR #59. Follow-ups on `fix/sigil-phase6-followups`.
 - Adds the Floor Warden bridge (`sigil agent run --room-bridge floor-warden`), `sigil bot add` and `sigil bot disable`, relay-held bot signing, and `POST /v1/rooms/{room_id}/replies` (enabled by `--floor-warden-reply-token-env`). README "Floor Warden bridge" documents flags and secret storage.
 - Open assumptions (spec "Assumptions"), none closed against the real routine:
   - 1: the sender-key header format is unknown; the bridge sends `Authorization: Bearer <key>` unless `--floor-warden-key-header` says otherwise.

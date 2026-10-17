@@ -153,7 +153,7 @@ Relay flags (`sigil relay up`):
 Bot commands:
 
 - `sigil bot add --bot-id <id> --endpoint <endpoint_id> --name <display name> [--identity path] [--out path] [--database-url url] [--room-bot-key-wrap-key env_var]` creates the bot endpoint with a relay-held signing key and writes a receive-only identity file (a relay token and `bot_id`, no private key). Restart the relay after `bot add` so it loads the new token.
-- `sigil bot disable --bot-id <id> [--database-url url]` disables a bot. Running it twice is safe.
+- `sigil bot disable --bot-id <id> [--database-url url]` disables a bot. Running it twice is safe. Disabling does not revoke the bot's relay token: the token can still read rooms until you revoke the bot endpoint. Bot signing keys cannot be rotated; to change one, create a new bot.
 
 Agent flags (`sigil agent run --room-bridge floor-warden`):
 
