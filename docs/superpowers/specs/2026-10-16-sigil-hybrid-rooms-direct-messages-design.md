@@ -440,35 +440,35 @@ All of these sit behind `--enable-agent-sessions` (default off). Error bodies fo
 
 ### Facts
 
-- PR #56 (rooms phase 6, the Floor Warden bridge) merged 2026-10-16 as `8492a2a`. It is docs only. Its design and plan claim `035_floor_warden_bridge.sql`.
-- PR #57 (rooms phase 5, more bridges) merged 2026-10-16 as `17742b9`. It is docs only. Its design and plan claim `035_report_only_mode.sql`. That design says phase 5 lands first and that "whichever lands second renumbers".
-- Neither implementation is on main. The highest migration on main is `034_oauth_login.sql`.
-- A local, unpushed branch `feat/sigil-rooms-phase6-floor-warden-bridge` already contains `sigil/migrations/035_floor_warden_bridge.sql`. The 035 collision becomes live if phase 6 is pushed before phase 5.
+- PR #56 (rooms phase 6, the Floor Warden bridge) merged 2026-10-16 as `8492a2a`. It is docs only. Its design and plan claimed `035_floor_warden_bridge.sql`.
+- The phase 6 implementation merged to main 2026-10-17 as PR #59 (`e027579`) and took `sigil/migrations/035_floor_warden_bridge.sql`. It touches `room_threads.cap_epoch`, `floor_warden_bots`, and `bot_signing_keys`.
+- PR #57 (rooms phase 5, more bridges) merged 2026-10-16 as `17742b9`. It is docs only. Its design and plan claimed `035_report_only_mode.sql` and said "whichever lands second renumbers". Phase 6 landed first, so the phase 5 implementation takes `036_report_only_mode.sql`.
+- The phase 6 implementation is on main (035). The phase 5 implementation is not built yet. The highest migration on main is `035_floor_warden_bridge.sql`.
 - `sigil/scripts/apply-migrations.mjs` (line 82) applies `*.sql` files in filename sort order and records each by filename in `_sigil_schema_migrations`. Gaps are harmless. Duplicate numbers technically apply (024 already has two files), but the repo's plans avoid duplicates.
 
 ### Decision
 
-- `035` is reserved for phase 5 (`report_only_mode`).
-- `036` is reserved for phase 6 (`floor_warden_bridge`), which renumbers from 035 under phase 5's "whichever lands second" rule.
+- `035` is phase 6 (`floor_warden_bridge`), merged.
+- `036` is reserved for phase 5 (`report_only_mode`), not yet implemented.
 - This work uses `037_agent_sessions.sql` and `038_direct_message_delivery.sql`.
 
 ### Execution-time rule
 
-Before writing a migration, run `ls sigil/migrations | tail -3`. Use max(existing) + 1, but never lower than 037 while the phase 5 or phase 6 implementation is unmerged. Never reuse 035 or 036.
+Before writing a migration, run `ls sigil/migrations | tail -3`. Use max(existing) + 1, but never lower than 037 while the phase 5 implementation is unmerged; never reuse 035 or 036.
 
 ### Out-of-order apply analysis
 
-If this work merges before the phase 5 and 6 implementations, existing databases apply 035 and 036 after 037 and 038 (filename sort plus the applied-set check). That is safe only because the object sets are disjoint:
+Phase 6 (035) is already on main. If this work merges before the phase 5 implementation, existing databases apply 036 after 037 and 038 (filename sort plus the applied-set check). That is safe only because the object sets are disjoint:
 
-- 035 touches the `conversation_members` response-mode CHECK, `envelopes.report_post`, and a partial index.
-- 036 touches `floor_warden_bots`, `bot_signing_keys`, and `room_threads.cap_epoch`.
+- 035 touches `floor_warden_bots`, `bot_signing_keys`, and `room_threads.cap_epoch`.
+- 036 touches the `conversation_members` response-mode CHECK, `envelopes.report_post`, and a partial index.
 - 037 and 038 only create new tables and alter `deliveries`, which neither 035 nor 036 touches.
 
-Hard rule: 037 and 038 must not alter `conversation_members`, `envelopes`, `room_threads`, or `endpoints`. A migration test applies 034, 037, 038, then stub 035 and 036 in that order, or at minimum asserts the object sets are disjoint.
+Hard rule: 037 and 038 must not alter `conversation_members`, `envelopes`, `room_threads`, or `endpoints`. A migration test applies 034, 037, 038, then a stub 036 (phase 5) after the real 035, which is already applied, in that order, or at minimum asserts the object sets are disjoint.
 
 ### Merge-order assumption
 
-The expected order is phase 5 implementation (035), phase 6 implementation (036), then the hybrid tasks with migrations (037, 038). This docs PR has no migrations and can merge at any time. If phase 6 lands before phase 5, those two swap 035 and 036 between themselves, and 037 and 038 stay unchanged.
+The settled order is phase 6 implementation (035, merged), phase 5 implementation (036, not yet built), then the hybrid tasks with migrations (037, 038). This docs PR has no migrations and can merge at any time.
 
 ### Shared files
 
@@ -477,12 +477,12 @@ These files are touched by both this work and phases 5 and 6, and will need reba
 - `relay/v1/postgres-repository.mjs`
 - `cli/memory-repository.mjs`
 - `cli/sigil.mjs`
-- `relay/v1/http-server.mjs` (phase 6 gate; phase 5 conditional)
-- `relay/v1/stream-server.mjs` (overlap with phases 5 and 6 is checked at rebase)
+- `relay/v1/http-server.mjs` (phase 6 already changed it; phase 5 conditional)
+- `relay/v1/stream-server.mjs` (phase 6 did not change it; overlap with phase 5 is checked at rebase)
 - `contracts/v1/relay-api.json`
 - `relay/v1/delivery-state.mjs` (this work only)
 
-Whether the phase 6 branch should be renumbered to 036 before it is pushed is Q8.
+Q8 (whether to renumber the phase 6 branch) is resolved by events: phase 6 merged as 035, so phase 5 takes 036.
 
 ## Rollout
 
@@ -523,7 +523,7 @@ Each layer must prove:
 - **No execution:** `direct.message` never reaches the agent daemon's `task.request` worker.
 - **Inheritance:** resume inherits the name, collisions append a suffix, unclaimed stored messages follow the name, claimed history does not, and id-addressed messages to an ended session return `SESSION_ENDED`.
 - **Listener:** one socket per session, supervised restart, revoked credentials stop it, and the bounded store does not grow past its bound.
-- **Migration independence:** 037 and 038 apply cleanly in the out-of-order sequence with stub 035 and 036, and the object sets are disjoint.
+- **Migration independence:** 037 and 038 apply cleanly in the out-of-order sequence with a stub 036 after the real 035, and the object sets are disjoint.
 - **Fault regression:** F6 truncation or replacement of the log does not lose messages, because the store is not the log.
 
 ## Assumptions
@@ -548,6 +548,6 @@ Each layer must prove:
 - **Q5.** Are a 30-second heartbeat and 90-second TTL acceptable for laptops that sleep?
 - **Q6.** Is the local per-session store SQLite (reusing the connectors sqlite store) or rotated JSONL?
 - **Q7.** The "Reason Network" reference has no public spec found. Is there a link or notes to check the design against?
-- **Q8.** Should the phase 6 implementation branch, which already uses 035 locally, be renumbered to 036 now, before it is pushed?
+- **Q8.** Should the phase 6 implementation branch, which already uses 035 locally, be renumbered to 036 now, before it is pushed? Resolved by events: phase 6 merged as 035 in PR #59, so phase 5 takes 036.
 - **Q9.** Should the web client get a directory panel in this series or later?
 - **Q10.** Who updates `run-sigil-daemon.ps1` (outside the repo) and the stream port in the local operator note (8793 versus 8792)?

@@ -24,9 +24,9 @@
 - Files are LF. Before using an edit tool on a file, run `file <path>`; if it reports CRLF, edit with a script that preserves line endings.
 - No secrets in CLI argv. Only environment variable names appear in commands, tests, and docs.
 - Commits use `test(sigil):` for test-heavy commits and `feat(sigil):`, `fix(sigil):`, `docs(sigil):` otherwise. Each commit ends with the repo's Co-Authored-By trailer (copy it from the latest commit on `main`).
-- Migration numbers are 037 (`037_agent_sessions.sql`) and 038 (`038_direct_message_delivery.sql`). Before writing a migration, run `ls sigil/migrations | tail -3`. Use max(existing) + 1, but never lower than 037 while the phase 5 or phase 6 implementation is unmerged. Never reuse 035 or 036.
+- Migration numbers are 037 (`037_agent_sessions.sql`) and 038 (`038_direct_message_delivery.sql`). Before writing a migration, run `ls sigil/migrations | tail -3`. Use max(existing) + 1, but never lower than 037 while the phase 5 implementation is unmerged; never reuse 035 or 036.
 - Migrations 037 and 038 must not alter `conversation_members`, `envelopes`, `room_threads`, or `endpoints`. They only create new tables and alter `deliveries`.
-- Merge-order assumption: phase 5 implementation (035), then phase 6 implementation (036), then this series (037, 038). If phase 6 lands first, those two swap 035 and 036 between themselves; 037 and 038 stay unchanged.
+- Merge-order assumption: phase 6 implementation (035, merged in PR #59), then phase 5 implementation (036, not yet built), then this series (037, 038). 037 and 038 stay unchanged.
 - All new behavior sits behind the relay flag `--enable-agent-sessions` (default off). With the flag off, the new routes answer as if absent and no existing route changes behavior.
 - The old listener (`scripts/inbox-listener.mjs`, `sigil inbox --wait --loop`) keeps working until `sigil session run` is proven on the Windows mesh. Removal is a later PR, one release after `sigil session run` ships.
 - Do not edit `C:\dev\scripts\run-sigil-daemon.ps1`. It lives outside the repo (see Out of scope).
@@ -75,17 +75,17 @@ The module `relay/v1/receipt-state.mjs` stays untouched.
 
 ## Migration numbering and PR #56 / #57
 
-PR #56 (rooms phase 6, Floor Warden bridge, `8492a2a`) and PR #57 (rooms phase 5, more bridges, `17742b9`) merged as docs only. Their implementations are not on `main`; the highest migration there is `034_oauth_login.sql`. Both designs claim 035. A local, unpushed phase 6 branch already holds `035_floor_warden_bridge.sql`.
+PR #56 (rooms phase 6, Floor Warden bridge, `8492a2a`) and PR #57 (rooms phase 5, more bridges, `17742b9`) merged as docs only. The phase 6 implementation is on `main` via PR #59 (`e027579`) as `035_floor_warden_bridge.sql`, the highest migration there. The phase 5 implementation is not built yet and takes 036.
 
 Decision:
 
-- 035 is reserved for phase 5 (`report_only_mode`).
-- 036 is reserved for phase 6 (`floor_warden_bridge`), which renumbers from 035 under phase 5's "whichever lands second renumbers" rule.
+- 035 is phase 6 (`floor_warden_bridge`), merged.
+- 036 is reserved for phase 5 (`report_only_mode`), not yet implemented.
 - This series uses 037 and 038.
 
-`scripts/apply-migrations.mjs` applies `*.sql` in filename sort order and records each file by name, so a database that applies 037 and 038 first still applies 035 and 036 later. That is safe because the object sets are disjoint: 035 touches the `conversation_members` response-mode CHECK, `envelopes.report_post`, and a partial index; 036 touches `floor_warden_bots`, `bot_signing_keys`, and `room_threads.cap_epoch`; 037 and 038 touch only new tables and `deliveries`. Task 8 proves this with a test.
+`scripts/apply-migrations.mjs` applies `*.sql` in filename sort order and records each file by name, so a database that applies 037 and 038 first still applies 036 later. That is safe because the object sets are disjoint: 035 (merged) touches `floor_warden_bots`, `bot_signing_keys`, and `room_threads.cap_epoch`; 036 touches the `conversation_members` response-mode CHECK, `envelopes.report_post`, and a partial index; 037 and 038 touch only new tables and `deliveries`. Task 8 proves this with a test.
 
-Rebase hot spots (shared with phases 5 and 6): `relay/v1/postgres-repository.mjs`, `cli/memory-repository.mjs`, `cli/sigil.mjs`, `relay/v1/http-server.mjs`, `relay/v1/stream-server.mjs`, `contracts/v1/relay-api.json`. Check the overlap of `relay/v1/stream-server.mjs` with phases 5 and 6 at rebase. `relay/v1/delivery-state.mjs` is touched by this series only. Rules for these files: append new methods and routes at the end of their groups, never reorder or reformat existing code, and rebase onto `origin/main` before each push. Open question Q8 (renumbering the local phase 6 branch to 036) stays with Chris.
+Rebase hot spots (shared with phases 5 and 6): `relay/v1/postgres-repository.mjs`, `cli/memory-repository.mjs`, `cli/sigil.mjs`, `relay/v1/http-server.mjs`, `relay/v1/stream-server.mjs`, `contracts/v1/relay-api.json`. Phase 6 did not change `relay/v1/stream-server.mjs`; check its overlap with phase 5 at rebase. `relay/v1/delivery-state.mjs` is touched by this series only. Rules for these files: append new methods and routes at the end of their groups, never reorder or reformat existing code, and rebase onto `origin/main` before each push. Open question Q8 (renumbering the phase 6 branch to 036) is resolved by events: phase 6 merged as 035 in PR #59, so phase 5 takes 036.
 
 ## Interfaces fixed up front
 
@@ -178,7 +178,7 @@ HTTP statuses follow neighboring codes in `fail()` usage; Task 4 records the map
 
 The findings file records, for each item, the command run, the result, and the task it affects.
 
-- [ ] Step 1: Fetch `origin`, create the worktree, and confirm the head of `main`. Run `ls migrations | tail -3` and `git branch -r`, then list open and merged PRs for the phase 5 and phase 6 implementations. Record the highest migration number and whether either implementation has landed. Apply the numbering rule from Global Constraints.
+- [ ] Step 1: Fetch `origin`, create the worktree, and confirm the head of `main`. Run `ls migrations | tail -3` and `git branch -r`, then list open and merged PRs for the phase 5 and phase 6 implementations. Record the highest migration number and whether the phase 5 implementation has landed (phase 6 landed as 035). Apply the numbering rule from Global Constraints.
 - [ ] Step 2: Find the `deliveries` state CHECK name. Grep all migrations for later changes to the `deliveries` state constraint. Against a disposable database (via `SIGIL_TEST_DATABASE_URL`), run `applyMigrations(url, { reset: true })`, then query `pg_constraint` for CHECK constraints on `deliveries`. Record the exact name (expected `deliveries_state_check`). Task 8 uses it.
 - [ ] Step 3: Test the PowerShell redirect behavior (Assumption 1). In a new empty temp directory, write a line to a log file, then run `Start-Process -RedirectStandardOutput <that file>` twice. Check whether the earlier content survives. Do not touch `run-sigil-daemon.ps1`. Record the result as confirmed, refuted, or inconclusive. The fix for F6 does not depend on the outcome.
 - [ ] Step 4: Read `connectors/v1/sqlite-store.mjs`. Record its dependency (built-in or native module), Windows support, whether it offers bounded retention, and whether per-session reuse is practical. State the Q6 recommendation (SQLite or rotated JSONL). Task 15 follows it.
@@ -359,7 +359,7 @@ The module does no I/O. Signature: `resolveAddress({ address, sender, sessions, 
 
 **Depends on:** Tasks 1 (CHECK name), 2.
 
-- [ ] Step 1: Write the failing tests. Migration test (pg): `deliveries` accepts `held` and `refused` and still rejects unknown states; every previously valid state still works and existing rows survive; `deliveries.session_id` is a nullable FK to `agent_sessions`; `deliveries.address_used` is nullable text; `direct_message_holds` has `delivery_id`, `held_at`, `released_by_human_id`, `released_at`, `decision` with a CHECK on `accept` and `refuse`. Static check (no pg): the file does not alter `conversation_members`, `envelopes`, `room_threads`, or `endpoints`. Independence test: parse the object names that 037 and 038 touch and assert they are disjoint from the 035 and 036 object sets (`conversation_members` response-mode CHECK, `envelopes.report_post`, `floor_warden_bots`, `bot_signing_keys`, `room_threads.cap_epoch`). If Task 1 shows `applyMigrations` accepts a directory, add a pg case that applies 034, 037, 038, then two stub migrations named `035_stub.sql` and `036_stub.sql` that touch only the 035/036 object names (created in the test's temp directory), and asserts success and unchanged `deliveries` behavior.
+- [ ] Step 1: Write the failing tests. Migration test (pg): `deliveries` accepts `held` and `refused` and still rejects unknown states; every previously valid state still works and existing rows survive; `deliveries.session_id` is a nullable FK to `agent_sessions`; `deliveries.address_used` is nullable text; `direct_message_holds` has `delivery_id`, `held_at`, `released_by_human_id`, `released_at`, `decision` with a CHECK on `accept` and `refuse`. Static check (no pg): the file does not alter `conversation_members`, `envelopes`, `room_threads`, or `endpoints`. Independence test: parse the object names that 037 and 038 touch and assert they are disjoint from the 035 and 036 object sets (035: `floor_warden_bots`, `bot_signing_keys`, `room_threads.cap_epoch`; 036: `conversation_members` response-mode CHECK, `envelopes.report_post`, and a partial index). If Task 1 shows `applyMigrations` accepts a directory, add a pg case that applies 034, 037, 038, then a stub migration named `036_stub.sql` (phase 5) after the real 035, which is already applied, that touches only the 036 object names (created in the test's temp directory), and asserts success and unchanged `deliveries` behavior.
 - [ ] Step 2: Run `timeout 60 node --test migrations/038_direct_message_delivery.test.mjs`. Expected: FAIL. Then run `timeout 60 node --test migrations/037_038_independence.test.mjs`. Expected: FAIL.
 - [ ] Step 3: Write the migration. Drop the `deliveries` state CHECK by the name from Task 1, re-add it with all existing states plus `held` and `refused`, add the two `deliveries` columns, and create `direct_message_holds`.
 - [ ] Step 4: Run both files, then run both with `SIGIL_TEST_DATABASE_URL` set. Expected: PASS, skipped 0.
@@ -369,7 +369,7 @@ The module does no I/O. Signature: `resolveAddress({ address, sender, sessions, 
 **Acceptance criteria:**
 
 - 038 applies after 037, and `applyMigrations(url, { reset: true })` succeeds.
-- The out-of-order case (034, 037, 038, then stub 035 and 036) applies cleanly, or the disjointness assertion passes where directory input is unavailable.
+- The out-of-order case (034, 037, 038, then stub 036 after the real 035) applies cleanly, or the disjointness assertion passes where directory input is unavailable.
 - Existing delivery states, rows, and tests are unaffected.
 - The pg suite shows `skipped 0` with `SIGIL_TEST_DATABASE_URL` set.
 
@@ -490,7 +490,7 @@ This is the largest relay task. Keep each concern in its own commit.
 
 **Depends on:** Tasks 9, 12. Task 1 finding on Assumption 4.
 
-Check the overlap of `relay/v1/stream-server.mjs` with phases 5 and 6 at rebase.
+Phase 6 did not change `relay/v1/stream-server.mjs`; check its overlap with phase 5 at rebase.
 
 - [ ] Step 1: Write the failing test. Stream: a session-scoped subscription (authenticated with the session token) receives deliveries addressed to its `session_id` and deliveries for its endpoint with null `session_id`; it never receives `held` deliveries or another session's deliveries; the existing endpoint subscription behaves as before; stream sequencing for other message types is unchanged. Claim: a `delivery.claim` frame moves the delivery to `acknowledged`, sets `session_id` for endpoint-addressed deliveries atomically, and emits a receipt with `dm_state = delivered`. Two sessions on one endpoint claiming the same endpoint-addressed delivery: exactly one claim wins and the other receives a typed rejection (no double claim). A session cannot claim a delivery addressed to a different session. `delivery.claim_failed` with reason `malformed` moves the delivery to `processing_failed`, and the next delivery is still served (F4). `delivered` never appears after local storage or printing alone, only after a claim.
 - [ ] Step 2: Run `timeout 60 node --test relay/v1/stream-server.session-claim.test.mjs`. Expected: FAIL.
@@ -652,7 +652,7 @@ Backend: SQLite through `connectors/v1/sqlite-store.mjs` if Task 1 confirms suit
 - **Web client directory panel.** Held-message and directory panels in `packages/sigil-rooms-web` wait for Q9.
 - **Removal of the old listener.** `scripts/inbox-listener.mjs` and the log-and-offset path go in a later PR, one release after `sigil session run` ships and is proven on the mesh.
 - **Per-sender allow list, federation, replacing rooms, end-to-end encryption, and any change to `task.request`.** Non-goals in the spec.
-- **Open questions Q1-Q10** stay with Chris. Tasks use the spec's proposals as defaults and mark where an answer changes behavior: Q1 (human framing), Q2 (cross-owner default), Q3 (handle aliases), Q4 (fan-out cap), Q5 (heartbeat and TTL), Q6 (store backend), Q8 (phase 6 renumbering).
+- **Open questions Q1-Q10** stay with Chris. Tasks use the spec's proposals as defaults and mark where an answer changes behavior: Q1 (human framing), Q2 (cross-owner default), Q3 (handle aliases), Q4 (fan-out cap), Q5 (heartbeat and TTL), Q6 (store backend), Q8 (phase 6 renumbering, resolved by events: phase 6 merged as 035).
 
 ## Self-review
 
