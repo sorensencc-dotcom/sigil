@@ -37,7 +37,13 @@ export function defaultKillTree(child) {
 export function runCli({ command, args = [], input = '', cwd, env, timeoutMs = DEFAULT_TIMEOUT_MS, maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES, signal, spawnImpl = spawn, killTree = defaultKillTree } = {}) {
   if (signal?.aborted) return Promise.reject(cliError('CLI_CANCELLED', 'CLI run cancelled'));
   return new Promise((resolve, reject) => {
-    const child = spawnImpl(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    let child;
+    try {
+      child = spawnImpl(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    } catch (cause) {
+      reject(Object.assign(cliError('CLI_START_FAILED', `CLI failed to start: ${cause.message}`), { cause }));
+      return;
+    }
     let stdout = '';
     let stderr = '';
     let bytes = 0;
