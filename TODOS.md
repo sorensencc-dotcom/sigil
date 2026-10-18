@@ -1,26 +1,10 @@
 # TODOS
 
-## Wrap mutation + audit-event writes in a transaction (repo-wide)
-
-**What:** Wrap each `repository.<mutate>(...)` + `repository.recordAuditEvent(...)` pair in `postgres-repository.mjs` in a single Postgres transaction, so a failure writing the audit event can't leave a mutation applied with no audit trail (or vice versa).
-
-**Why:** `postgres-repository.mjs` has zero `BEGIN`/`COMMIT` usage anywhere — every mutating method (`upsertOidcIssuerAllowlist`, and after the 2026-08-25 plan lands, `upsertPeer`) calls its audit event as a separate, independently-awaited write. If the audit insert fails after the mutation succeeds, trust/config state changes with no audit record of it happening.
-
-**Pros:** Audit trail integrity guaranteed on partial failure — currently the audit log can silently under-report real state changes.
-
-**Cons:** Touches every mutating method across the file, not just the peer-relay ones added by the 2026-08-25 plan — a bigger, more mechanical refactor than fixing it piecemeal for just the new methods (which was considered and rejected as inconsistent — half the mutations getting the safety net and half not, for no principled reason).
-
-**Context:** Surfaced by Codex outside-voice during `/plan-eng-review` of `docs/superpowers/plans/2026-08-25-sigil-inter-relay-trust-discovery.md`. Pre-existing pattern across the whole repository, not something the 2026-08-25 plan introduces — that plan just adds two more instances of it.
-
-**Depends on:** Nothing — can be done independently, any time.
-
----
-
 ## Wrap mutation + audit-event writes in a transaction (sigil.mjs federation-directory CLI)
 
-**What:** Same fix as the item above, scoped to `sigil.mjs`'s CLI-only federation-directory commands (`sigil federation invite create/revoke|redeem`, `sigil federation link confirm/revoke`), which pair mutations on `federation_directory_invites`/`federation_directory_links` with a separately-awaited `recordAuditEvent` call: `createFederationDirectoryInvite`+audit (`sigil.mjs:1142-1161`), `revokeFederationDirectoryInvite`+audit (`:1189-1199`), `createFederationDirectoryLink`+audit (`:1321-1351`), `setFederationDirectoryLinkConfirmation`+`enqueueFederationForward`+audit (`:1472-1517`, two conditional audit types), `revokeFederationDirectoryLink`+`enqueueFederationForward`+audit (`:1550-1582`).
+**What:** Same fix as the repo-wide audit-atomicity work, scoped to `sigil.mjs`'s CLI-only federation-directory commands (`sigil federation invite create/revoke|redeem`, `sigil federation link confirm/revoke`), which pair mutations on `federation_directory_invites`/`federation_directory_links` with a separately-awaited `recordAuditEvent` call: `createFederationDirectoryInvite`+audit (`sigil.mjs:1142-1161`), `revokeFederationDirectoryInvite`+audit (`:1189-1199`), `createFederationDirectoryLink`+audit (`:1321-1351`), `setFederationDirectoryLinkConfirmation`+`enqueueFederationForward`+audit (`:1472-1517`, two conditional audit types), `revokeFederationDirectoryLink`+`enqueueFederationForward`+audit (`:1550-1582`).
 
-**Why:** Same rationale as the item above — a failed audit write here leaves a directory-link state change (or a queued federation forward) uncorrelated with an audit row.
+**Why:** Same rationale as the repo-wide fix (done 2026-09-24, see `docs/superpowers/plans/2026-09-21-repo-wide-audit-transaction-atomicity.RESUME.md`) — a failed audit write here leaves a directory-link state change (or a queued federation forward) uncorrelated with an audit row.
 
 **Context:** Split out of the 2026-09-21 repo-wide audit-transaction-atomicity plan (`docs/superpowers/plans/2026-09-21-repo-wide-audit-transaction-atomicity.md`) during its Codex outside-voice review — this is a separate subsystem (distinct tables from the HTTP `/v1/directory/*` routes that plan covers) with several 3-way mutation+enqueue+audit sites rather than that plan's 2-way mutation+audit sites, so it didn't fit cleanly into the same task list.
 
