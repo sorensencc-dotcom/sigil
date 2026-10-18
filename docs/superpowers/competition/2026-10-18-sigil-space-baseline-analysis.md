@@ -1,6 +1,6 @@
 # Sigil space baseline analysis
 
-Status: draft for review. Date 2026-10-18. Baseline run with no week-over-week diff yet. The first diff is the 2026-10-19 Monday scan.
+Status: draft for review. Date 2026-10-18. Baseline run with no week-over-week diff yet. The first diff is the 2026-10-19 Monday scan. Chris decided all seven open questions on 2026-10-18. The results are recorded in the Decisions section.
 
 Labels: (V) means read in a saved snapshot whose checksum was verified on 2026-10-18. (U) means unverified. Competitor Command Center holds the snapshots on the box, and they are not in this repo.
 
@@ -40,7 +40,7 @@ Statements about Sigil come from those docs and from the relay code in main, not
 - **Reason Network.** A P2P team directory and messaging tool for coding agents, with a live view of who is on which computer and repo and whether they are busy or idle (V).
   The network page names Grok Bot, Muse, Claude Code, Codex and Cursor as agents, and Grok Bot is reached through Reason MCP (V).
   It is free, and cloud Reason sessions bill as usual (V as stated; billing detail U); the repo has 322 stars, and the latest release is v0.10.5 on 2026-10-17 (U).
-  The repo license field says Apache-2.0 and the README says "MIT OR Apache-2.0" (V), the Reason CLI is not open source (V), and the NOTICE says the project began as tincan and was renamed and modified by Reason Machines, Inc. (V). Sigil has its own tincan bridge, and whether it targets this project is unchecked (U).
+  The engine license is "MIT OR Apache-2.0", confirmed from the license files (V, see Decision 6). The Reason CLI is not open source and its terms are unknown (V). The NOTICE says the project began as tincan and was renamed and modified by Reason Machines, Inc. (V). Sigil's tincan bridge is a Sigil-local protocol and does not target this project (V, see Decision 7).
   The claims are E2E-encrypted traffic, a signed roster, per-machine inbound policy, loop and rate guards, and a relay that sees ciphertext only. They were read in the README and DESIGN but not audited (U). The DESIGN Envelope lists no signature field and does not describe replay protection (V), and "Zero data retention, SOC 2" is marketing (U).
 - **Crosswalk.** "Message boards for all your AI agents": a shared-memory and message-board MCP server at mcp.crosswalk.to with feed, inbox, tasks, files, calendar, notes and public or private crosswalks, and not a live agent-to-agent transport (V).
   The $49 a month price (list $99) is SquadRoom, a separate product, and crosswalk itself is free on every plan (V).
@@ -51,7 +51,7 @@ Statements about Sigil come from those docs and from the relay code in main, not
   Team rooms are not private, since every workspace member can see and join (V). The trust and security pages return 404 (V), webhooks use a shared-secret header (U), and agents run under the owner's account (V).
   Pricing is monthly plans from $20 to $10,000 per month with a free allowance and no per-room price (V), annual and PAYG plans ended 2026-08-26 (U), and the license is proprietary, "All rights reserved 2026, Hyperagent" (V).
   Custom MCP is an integration (V), and Grok appears as a model, not as an external agent in a room (U).
-  The changelog RSS snapshot lists only titles and dates (V). The baseline note says 2026-10-05 added "Edit your room messages" and 2026-10-14 added inviting colleagues to several rooms, but the snapshot holds no such details (U). If the edit item is true, it contradicts the 2026-10-16 brief line "messages can't be edited".
+  The changelog RSS snapshot lists only titles and dates (V). The 2026-10-05 edit item is now confirmed in Hyperagent's own changelog page (V, 2026-10-18, see Decision 4), and it contradicts the 2026-10-16 brief line "messages can't be edited". The 2026-10-14 item about inviting colleagues to several rooms is still unverified (U).
 
 ### Core
 
@@ -142,17 +142,25 @@ Sigil's receipts, replay rejection and room governance are read from repo docs a
 - Kodama and the other targets seen but not watched. Kodama is down, and the rest have no snapshot.
 - Webex, Slack Code channels and Perplexity Projects. The evidence is page-only or secondary, and the Webex rollout date is unconfirmed.
 - Crosswalk as a transport competitor. It is a neighbor for shared memory and inbox, and its Grok Bot path is the only reason to keep watching it.
-- The unverified Hyperagent changelog claims, until the snapshot confirms them.
+- The still-unverified 2026-10-14 Hyperagent invite item, until a changelog page confirms it. The 2026-10-05 edit item is no longer in this group.
 
-## Open questions for Chris
+## Decisions
 
-1. Should a Grok Bot MCP shim take priority over the phase 7 tunnel? Recommendation: scope the shim as a small spike beside the tunnel, because eight targets name Grok or Grok Bot (V): Reason Network, Crosswalk, Plasma Radio, Threadlines, Agent Relay, Concord MCP, AX and OpenCouncil. The tunnel is still blocked on Q2, Q5 and Q8.
-2. Should Sigil build one-command setup and team-link invites? Recommendation: yes, start with setup, since Reason Network ships both and Sigil lists both as weaknesses.
-3. Should Sigil add loop guards and a signed HALT from the 2026-10-16 brief? Recommendation: yes, loop guards first, since Reason Network claims loop and rate guards and Sigil has a hop budget and a per-agent concurrency limit.
-4. Should the unverified Hyperagent message-edit claim be checked before anyone acts on it? Recommendation: yes, read the 2026-10-05 changelog entry directly in the next scan and hold the gap analysis until then.
-5. Should the low-priority extras stay on the weekly watch list? Recommendation: keep Agent Relay and Concord weekly and check Murmur, acommune and mcp_agent_mail less often.
-6. Should the Reason Network license be confirmed before any reuse? Recommendation: yes, read the LICENSE file first, because the repo field, the README and the "CLI is not open source" note differ.
-7. Should Sigil check whether its own tincan bridge targets Reason Network? Recommendation: yes, a short check, since the NOTICE says Reason Network began as tincan.
+Chris decided all seven on 2026-10-18; each is "Decided 2026-10-18: yes, as recommended."
+
+1. Build a Grok Bot MCP shim? Decided 2026-10-18: yes, as recommended. Build it as a small spike beside the phase 7 tunnel. The tunnel is still blocked on Q2, Q5 and Q8, and eight targets name Grok or Grok Bot (V): Reason Network, Crosswalk, Plasma Radio, Threadlines, Agent Relay, Concord MCP, AX, OpenCouncil.
+
+2. Prioritize one-command setup and team-link invites? Decided 2026-10-18: yes, as recommended. Do both, with setup first.
+
+3. Order of loop guards and signed HALT? Decided 2026-10-18: yes, as recommended. Build loop guards first, then signed HALT.
+
+4. Verify the Hyperagent "Edit your room messages" claim before acting? Decided 2026-10-18: yes, as recommended. Verify the claim first, then act on the result. Result (found, V, fetched 2026-10-18): Hyperagent's own changelog page https://www.hyperagent.com/docs/changelog/2026-10-05-model-control-image-edits-short-video (dated 5 October 2026, title "Let Hyperagent choose the model for you") lists under "Other updates": "Edit your room messages to correct eligible text in an active room you've joined." The claim is confirmed as a vendor statement. It is a one-line bullet. The page does not say what "eligible" means, whether agents or an API can edit, or whether edits are shown or audited. The "Working in a room" page https://www.hyperagent.com/docs/concepts/rooms/working-in-a-room lists message actions as copy text, copy link, mark unread, open agent activity, react, reply in thread, and does not mention edit. The feature was not tested. The 2026-10-16 brief line "messages can't be edited" is out of date and should be corrected in that working note (kept on the box, not in this repo).
+
+5. How often to check each competitor? Decided 2026-10-18: yes, as recommended. Keep Agent Relay and Concord weekly. Check Murmur, acommune and mcp_agent_mail less often.
+
+6. Confirm the Reason Network license before any reuse? Decided 2026-10-18: yes, as recommended. Confirm the license from the source repo before any code reuse. Result (V, read 2026-10-18 in the reason-machines/reason-network repo): the engine is dual-licensed "MIT OR Apache-2.0". The files LICENSE-APACHE and LICENSE-MIT exist, and Cargo.toml, NOTICE, CONTRIBUTING.md and the README all say "MIT OR Apache-2.0". The site page and the GitHub license badge list only Apache-2.0, which is one of the two options, so they do not conflict. Still unknown: the terms of the Reason CLI (stated as not open source), and the licenses of the engine's dependencies were not audited. Check those two first before any code reuse.
+
+7. Does Sigil's tincan bridge target Reason Network or upstream tincan? Decided 2026-10-18: yes, as recommended. Check the bridge code and docs before assuming any interop. Result (V, code and docs read 2026-10-18): the bridge targets a Sigil-local protocol. It does not target Reason Network or upstream larstalian/tincan. README.md lines 346-355 describe it as transport over a private Tailscale (tsnet) mesh with Tailscale WhoIs node-key allowlisting plus Sigil Ed25519 identity, push-to-wake, and a held queue released by WebAuthn approval. sigil/relay/v1/transport-tincan/tincan-relay.mjs is an HTTP server with DISPATCH_PATH '/v1/dispatch' and CALLBACK_PATH '/v1/approval-callback' (lines 15-16). It calls `tailscale whois --json` (line 85) and binds to the Tailscale IPv4 from `tailscale ip -4` (line 349). whois-auth.mjs (lines 3-15) checks the Tailscale Node.Key against an allowlist of permitted endpoints. wake-dispatcher.mjs (lines 7-12) spawns `node sigil/cli/sigil.mjs agent run --room-bridge <kind>`. held-queue.mjs binds to the relay action hash. A repo-wide search of the Sigil worktree found no mention of iroh, larstalian, the reason-network binary, or the ~/.reason paths in code. The only references to Reason Network are the design comparison docs under docs/superpowers/specs (hybrid DM decisions Q7 and the hybrid design doc), which treat it as an unverified reference. Sigil's tincan plan and handoff docs in this repo do not cite upstream tincan or Reason Network. The code shares no protocol or code with either, and the docs do not say why the name was chosen. Reason Network (and upstream tincan, now archived; its README says it became Reason Network) uses an iroh QUIC transport (direct on LAN via mDNS, hole-punched, relay fallback), ALPN "tincan/1" with length-prefixed JSON frames, and Envelope{id: ulid, from, to, reply_to, thread, body, sent_at} with acks stored|delivered|held|refused. It also has a signed replicated roster and a per-machine daemon with a local unix socket and MCP tools list_team and send_message. These are different protocols, so the two cannot talk to each other. There is no interop or license obligation from this bridge. Any interop would need an adapter and is not decided.
 
 ## Next run
 
