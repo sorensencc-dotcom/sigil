@@ -17,6 +17,19 @@ test('non-zero exit is CLI_FAILED with stderr as the message', async () => {
   await assert.rejects(runCli({ command: process.execPath, args: [fake, 'claude'], env: { ...process.env, FAKE_EXIT: '3' } }), { code: 'CLI_FAILED', message: 'fake failure' });
 });
 
+test('synchronous spawn failures are CLI_START_FAILED', async () => {
+  let error;
+  try {
+    await runCli({ command: 'missing.cmd', spawnImpl: () => { throw Object.assign(new Error('spawn EINVAL'), { code: 'EINVAL' }); } });
+    assert.fail('expected CLI_START_FAILED');
+  } catch (cause) {
+    error = cause;
+  }
+  assert.equal(error.code, 'CLI_START_FAILED');
+  assert.equal(error.message, 'CLI failed to start: spawn EINVAL');
+  assert.equal(error.cause.code, 'EINVAL');
+});
+
 test('timeout kills the process and rejects CLI_TIMEOUT', async () => {
   await assert.rejects(runCli({ command: process.execPath, args: [fake, 'claude'], env: { ...process.env, FAKE_SLEEP_MS: '10000' }, timeoutMs: 300 }), { code: 'CLI_TIMEOUT' });
 });
