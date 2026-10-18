@@ -50,6 +50,8 @@ Ideas supplied for comparison with Sigil:
 
 The supplied comparison credits Sigil with signed envelopes, relay and room history, and shared human/bot rooms. It describes Reason Network as signing only its roster and lacking cryptographic cutoff for removed machines. Treat those comparative security claims as unverified reference notes, not acceptance evidence.
 
+The public page and repo were read on 2026-10-18, and the result is in the [design comparison section](2026-10-16-sigil-hybrid-rooms-direct-messages-design.md#reason-network-comparison). That section labels each claim as verified or unverified. The earlier comparative security claims are now labeled there, since the roster is signed, the design lists no per-message signature, and removed machines are not cryptographically cut off (Verified: repo docs). No decided answer changes.
+
 ## Unresolved decisions and external follow-ups
 
 - **Q2:** Cross-owner default remains undecided: hold is proposed; refuse is the alternative.

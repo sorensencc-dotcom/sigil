@@ -21,7 +21,7 @@ The design covers:
 - session name inheritance;
 - replacement of the current inbox listener, which worked but was not robust.
 
-The inspiration is a reference named "Reason Network". No public spec was found, so the design takes only the features listed above (see Q7).
+The public page and repo for Reason Network were read on 2026-10-18, so the "no public spec" statement no longer holds. The design still takes only the features listed above, and the comparison is in the section headed Reason Network comparison.
 
 ## Why the current listener is not enough
 
@@ -540,6 +540,53 @@ Each layer must prove:
 9. `connectors/v1/sqlite-store.mjs` is reusable for a bounded per-session store. Confirmed in the plan task for the local store (Q6).
 10. The Floor Warden and report-only phases do not touch `deliveries`. Confirmed in the plan task for migration independence.
 
+## Reason Network comparison
+
+This section compares the design with Reason Network using the public page at https://reasonmachines.com/network and the README.md, DESIGN.md and SECURITY.md files of github.com/reason-machines/reason-network on branch main, both read on 2026-10-18 (America/New_York). Nothing was run, and the Rust source was not read. This section replaces the earlier "no public spec" note.
+
+### What overlaps
+
+The hybrid design in this document specifies a live session directory, delivery tiers, receipts, inbound policy and peer-input framing, and none of it is built yet.
+
+- Sigil specifies a live session directory, and Reason lists who, which computer, which repository, and busy or idle (Verified: page).
+- Sigil specifies delivery tiers, and Reason shows the tiers push, turn and pull to the sender (Verified: repo docs).
+- Sigil envelopes carry receipts, and Reason acks each message as stored, delivered, held or refused (Verified: repo docs).
+- Sigil specifies inbound policy, and Reason sets a per-machine policy of accept, hold or refuse (Verified: repo docs).
+- Sigil specifies peer-input framing, and Reason frames peer text as a peer message, not user input (Verified: repo docs).
+
+### What Sigil has that Reason Network does not claim
+
+- Sigil signs every envelope, while Reason signs only the roster and lists no signature field in its Envelope (Verified: repo docs).
+- Sigil protects envelopes against replay, while the Reason docs do not describe replay protection or nonce handling (Verified: repo docs).
+- Sigil governs rooms with human and bot membership, while Reason membership is the signed-in Reason workspace (Verified: page).
+- Sigil keeps room history in a Postgres-backed relay, while Reason has no central message history and lists its M4 milestone as not started (Verified: repo docs).
+- Sigil removes membership through the governed room roster, while Reason says removed machines are not made cryptographically powerless (Verified: repo docs).
+
+### Where Sigil is weaker
+
+- Sigil has no one-command setup, while Reason uses one install command and then `reason network setup` (Verified: page).
+- Sigil has no team invite flow, while Reason offers `reason network invite` (Verified: page).
+- Sigil has no first-class path for Grok Bot, while Reason reaches Grok Bot through the Reason MCP (Verified: page).
+- Sigil's Grok cloud replies need the phase 7 reply ingress tunnel, which is designed but not built.
+
+### Options to borrow
+
+These are options for later review. None is a decision, and none changes the design above.
+
+- A one-command setup, shaped like the install and setup pair (Verified: page).
+- A team link join flow, shaped like the team link that the no-account install prints (Verified: repo docs).
+- A warm serve mode for bots, shaped like `reason network serve claude|grok|codex` (Verified: page).
+- Publishing the Sigil skill file so cloud agents can follow it, as Reason does for agents without its tools (Verified: repo docs).
+- A Reason MCP style shim for Grok Bot, to compare against the phase 7 tunnel (Verified: page).
+
+### Claims that remain unverified
+
+- The page gives about 1.5 to 2 seconds for a warm agent to answer a short question, and the figure was not measured (Unverified).
+- The page claims end-to-end encryption between computers, and the claim was not audited (Unverified).
+- Every claim about what the Reason code actually does is unchecked, including handshake authentication against the roster and relay behavior (Unverified).
+- The README says the project was originally called tincan, and whether Sigil's existing tincan bridge targets this project was not checked (Unverified).
+- The page says Apache 2.0 and the repo license file text says "MIT OR Apache-2.0", so the license needs checking before any reuse, and which one governs is unresolved (Unverified).
+
 ## Open questions
 
 - **Q1.** Should messages from the owner's own human endpoint also be framed as peer input, or shown as owner instructions? Proposal: framed, marked `from_kind="human"` with an owner flag.
@@ -548,7 +595,7 @@ Each layer must prove:
 - **Q4.** Are a fan-out cap of 20 and quota per target acceptable?
 - **Q5.** Are a 30-second heartbeat and 90-second TTL acceptable for laptops that sleep?
 - **Q6.** Is the local per-session store SQLite (reusing the connectors sqlite store) or rotated JSONL?
-- **Q7.** The "Reason Network" reference has no public spec found. Is there a link or notes to check the design against?
+- **Q7.** Answered by reference. The public page and repo were read on 2026-10-18, and the result is in the `Reason Network comparison` section and in the decisions document. The comparison is context only and approves no feature.
 - **Q8.** Should the phase 6 implementation branch, which already uses 035 locally, be renumbered to 036 now, before it is pushed? Resolved by events: phase 6 merged as 035 in PR #59, so phase 5 takes 036.
 - **Q9.** Should the web client get a directory panel in this series or later?
 - **Q10.** Who updates `run-sigil-daemon.ps1` (outside the repo) and the stream port in the local operator note (8793 versus 8792)?
