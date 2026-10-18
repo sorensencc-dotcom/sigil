@@ -1,0 +1,21 @@
+scripts/check-retro-needed.ps1
+  s_82f4e37c320f0a::t_c77bf89ad40cbf 1-81
+scripts/test-check-retro-needed.ps1
+  s_82f4e37c320f0a::t_8c527866f1046c 1-62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5c13aeaedb8bb572c64f07f77f657296a9c3d945",
+  "prompts": {},
+  "sessions": {
+    "s_82f4e37c320f0a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a14f97-4c91-7b90-bb23-987bd1f04259",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
