@@ -13,7 +13,7 @@ import { validateRoomMessageBody } from '../../contracts/v1/room-message-schema.
 
 const MANAGER_ROLES = new Set(['owner', 'room_manager']);
 const GRANTABLE_ROLES = new Set(['room_manager', 'member']);
-const RESPONSE_MODES = new Set(['joins', 'mentions_only', 'router']);
+const RESPONSE_MODES = new Set(['joins', 'mentions_only', 'router', 'report_only']);
 const INVOKABLE_MODES = new Set(['owner', 'members']);
 const ROOM_METHODS = ['createRoom', 'lookupRoom', 'listRoomsForEndpoint', 'addRoomMember', 'removeRoomMember', 'lookupRoomMember', 'listRoomMembers', 'listRoomMessages', 'listRoomInvocations', 'lookupRunningInvocation', 'finishInvocation', 'cancelRoomInvocations', 'nextQueuedInvocation', 'startInvocation', 'createRoomDelivery', 'lookupRouterDecision', 'lookupRoomMessage', 'lookupRoomEventByKey', 'lockRoom', 'createRoomInvocation', 'reserveAgentTurn', 'withTransaction', 'acknowledgeRoomDeliveries', 'renameRoom', 'setRoomMemberResponseMode'];
 const NAME_MAX = 80;
@@ -238,7 +238,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     const responseMode = body?.response_mode ?? null;
     if (typeof endpointId !== 'string' || !endpointId) return fail(response, requestId, 400, 'INVALID_REQUEST', 'endpoint_id is required');
     if (!GRANTABLE_ROLES.has(role)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'role must be room_manager or member');
-    if (responseMode !== null && !RESPONSE_MODES.has(responseMode)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'response_mode must be joins, mentions_only, or router');
+    if (responseMode !== null && !RESPONSE_MODES.has(responseMode)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'response_mode must be joins, mentions_only, router, or report_only');
     // Owner, status, and kind come from the trusted lookup, never the startup Map.
     const endpoint = await lookupTrustedEntry(repository, registry, endpointId);
     if (!endpoint || endpoint.status !== 'active' || endpoint.owner_id !== principal.human_id || endpoint.kind === 'system') {
@@ -310,13 +310,14 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     if (!MANAGER_ROLES.has(access.member.role)) return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', 'Only room managers can change response modes');
     const body = await readJson(request, readBody);
     const responseMode = body?.response_mode;
-    if (!RESPONSE_MODES.has(responseMode)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'response_mode must be joins, mentions_only, or router');
+    if (!RESPONSE_MODES.has(responseMode)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'response_mode must be joins, mentions_only, router, or report_only');
     const target = await repository.lookupRoomMember(roomId, targetEndpointId);
     if (!target) return fail(response, requestId, 404, 'ROOM_MEMBER_NOT_FOUND', 'Member not found');
     // Same agent rule as room dispatch: a phase 1 agent can have a null mode, so response_mode alone is not enough.
     const targetIsAgent = await repository.withTransaction((client) => isAgentMember(target, repository, client, registry));
     if (!targetIsAgent) return fail(response, requestId, 400, 'INVALID_REQUEST', 'response_mode applies only to agent endpoints');
     if (!target.owner_id || target.owner_id !== principal.human_id) return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', "Only the agent's owner can change its response mode");
+    if (target.response_mode === 'report_only' || responseMode === 'report_only') return fail(response, requestId, 409, 'RESPONSE_MODE_LOCKED', 'report_only response mode can only be set when adding an agent');
     const member = await repository.setRoomMemberResponseMode({ conversationId: roomId, endpointId: targetEndpointId, responseMode });
     if (!member) return fail(response, requestId, 404, 'ROOM_MEMBER_NOT_FOUND', 'Member not found');
     await notifyRoomChange(roomId, 'members');

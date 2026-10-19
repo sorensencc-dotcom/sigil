@@ -27,6 +27,14 @@ test('memory relay withTransaction runs the callback with a null client and retu
   assert.equal(result, 'ok');
 });
 
+test('memory relay stores report_only response mode for an agent member', async () => {
+  const repository = createMemoryRepository({ registry: new Map([['ep_report', { owner_id: 'usr_chris', status: 'active', kind: 'agent' }]]) });
+  await repository.createRoom({ conversationId: 'room_report', workspaceId: 'ws_report', name: 'reports', createdByHumanId: 'usr_chris', ownerEndpointId: 'ep_report' });
+  const member = await repository.addRoomMember({ conversationId: 'room_report', endpointId: 'ep_report_2', role: 'member', responseMode: 'report_only', addedByHumanId: 'usr_chris' });
+  assert.equal(member.response_mode, 'report_only');
+  assert.equal((await repository.lookupRoomMember('room_report', 'ep_report_2')).response_mode, 'report_only');
+});
+
 test('memory relay lookupTaskRequest finds an accepted task.request by conversation and task_id', async () => {
   const repository = createMemoryRepository();
   await repository.persistAcceptedEnvelope({
