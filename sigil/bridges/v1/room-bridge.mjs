@@ -77,7 +77,6 @@ export function createRoomBridge({ identity, relay, outbox, cli, sessions, pollI
     const lines = messages.map((item) => `[seq ${item.room_seq}] ${escapeField(item.envelope?.sender?.endpoint_id)}: ${escapeField(messageText(item.envelope)).replace(/\r|\n/g, ' ')}`);
     const me = members.find((member) => member.endpoint_id === self);
     const ownerId = me?.owner_id ?? null;
-    // The owner's human endpoints: same owner, no response_mode (agents carry one).
     const ownerEndpointIds = ownerId
       ? members.filter((member) => member.owner_id === ownerId && member.response_mode === null && member.endpoint_id !== self).map((member) => escapeField(member.endpoint_id))
       : [];
@@ -97,10 +96,6 @@ export function createRoomBridge({ identity, relay, outbox, cli, sessions, pollI
     return { outcome: 'failed', reason };
   }
 
-  // A throw before the invocation is known propagates, so the daemon leaves
-  // the delivery unacked for the next poll. Once it is known, any unexpected
-  // error fails that invocation: otherwise it stays running, the delivery is
-  // acked, and the agent is stuck until Stop.
   async function handle({ envelope }) {
     const roomId = envelope.conversation_id;
     const invocation = await runningFor(roomId);
@@ -113,17 +108,20 @@ export function createRoomBridge({ identity, relay, outbox, cli, sessions, pollI
     }
   }
 
-  // The session cursor is per thread. One CLI session serves the whole room,
-  // but each turn shows only its own thread, so a room-wide cursor would skip
-  // messages of other threads it never showed -- including a queued trigger
-  // in thread B posted before a thread A turn read past it.
   async function runInvocation(envelope, roomId, invocation) {
     const threadRootId = invocation.thread_root_id;
     const session = sessions.get(roomId);
+    const resumeId = session?.session_id ?? null;
+    const replay = cli.capabilities?.resume === false;
     const cursors = session?.last_seq_by_thread ?? {};
     const members = await relay.listRoomMembers(roomId);
-    const context = await threadContext(roomId, threadRootId, cursors[threadRootId] ?? '0');
-    const prompt = buildPrompt({ roomId, members, messages: context.messages, trigger: envelope });
+
+    const runTurn = async (sessionId, afterSeq) => {
+      const context = await threadContext(roomId, threadRootId, afterSeq);
+      const prompt = buildPrompt({ roomId, members, messages: context.messages, trigger: envelope });
+      const result = await cli.run({ prompt, sessionId, signal: controller.signal });
+      return { context, result };
+    };
 
     const controller = new AbortController();
     const watcher = setInterval(async () => {
@@ -135,17 +133,24 @@ export function createRoomBridge({ identity, relay, outbox, cli, sessions, pollI
       }
     }, pollIntervalMs);
 
-    let result;
+    let turn;
     try {
-      result = await cli.run({ prompt, sessionId: session?.session_id ?? null, signal: controller.signal });
-    } catch (error) {
-      if (controller.signal.aborted || error.code === 'CLI_CANCELLED') return { outcome: 'cancelled' };
-      return fail(roomId, invocation, error.code ?? 'CLI_FAILED');
+      try {
+        turn = await runTurn(replay ? null : resumeId, replay ? '0' : (cursors[threadRootId] ?? '0'));
+      } catch (error) {
+        if (controller.signal.aborted || error.code === 'CLI_CANCELLED') return { outcome: 'cancelled' };
+        if (!replay && resumeId && error.code === 'CLI_SESSION_LOST') {
+          try { turn = await runTurn(null, '0'); } catch (retryError) { if (controller.signal.aborted || retryError.code === 'CLI_CANCELLED') return { outcome: 'cancelled' }; return fail(roomId, invocation, retryError.code ?? 'CLI_FAILED'); }
+        } else {
+          return fail(roomId, invocation, error.code ?? 'CLI_FAILED');
+        }
+      }
     } finally {
       clearInterval(watcher);
     }
     if (controller.signal.aborted) return { outcome: 'cancelled' };
 
+    const { context, result } = turn;
     const text = result.text.slice(0, TEXT_MAX);
     const mentions = members
       .filter((member) => member.response_mode !== null && member.endpoint_id !== self && mentionsEndpoint(text, member.endpoint_id))
@@ -170,7 +175,11 @@ export function createRoomBridge({ identity, relay, outbox, cli, sessions, pollI
     } catch (error) {
       return fail(roomId, invocation, error.code ?? 'REPLY_REJECTED');
     }
-    sessions.set(roomId, { session_id: result.sessionId, last_seq_by_thread: { ...(sessions.get(roomId)?.last_seq_by_thread ?? {}), [threadRootId]: context.lastSeq } });
+    if (replay) return { outcome: 'replied' };
+
+    const previous = sessions.get(roomId);
+    const next = { session_id: result.sessionId, last_seq_by_thread: { ...(previous?.session_id === resumeId && result.sessionId === resumeId ? previous.last_seq_by_thread : {}), [threadRootId]: context.lastSeq } };
+    sessions.set(roomId, next);
     return { outcome: 'replied' };
   }
 

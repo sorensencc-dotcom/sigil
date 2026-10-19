@@ -119,10 +119,37 @@ test('a CLI failure fails the invocation', async () => {
 test('resumes the stored session', async () => {
   const relay = fakeRelay();
   const seen = [];
-  const { instance, sessions } = bridge(relay, { name: 'claude', run: async (input) => { seen.push(input.sessionId); return { text: 'ok', sessionId: 'sess_1' }; } });
-  sessions.set('room_1', { session_id: 'sess_0', last_seq: '0' });
+  const prompts = [];
+  let attempts = 0;
+  const { instance, sessions } = bridge(relay, {
+    name: 'claude',
+    run: async (input) => {
+      seen.push(input.sessionId);
+      prompts.push(input.prompt);
+      if (attempts++ === 0) throw Object.assign(new Error('session not found'), { code: 'CLI_SESSION_LOST' });
+      return { text: 'ok', sessionId: 'sess_1' };
+    },
+  });
+  sessions.set('room_1', { session_id: 'sess_0', last_seq_by_thread: { thread_older: '99' } });
   await instance.handle({ envelope: trigger });
-  assert.deepEqual(seen, ['sess_0']);
+  assert.deepEqual(seen, ['sess_0', null]);
+  assert.match(prompts[1], /msg_t/);
+  assert.deepEqual(sessions.get('room_1'), { session_id: 'sess_1', last_seq_by_thread: { msg_t: '1' } });
+
+  const replayCalls = [];
+  const replay = bridge(relay, {
+    name: 'hermes',
+    capabilities: { resume: false },
+    run: async (input) => {
+      replayCalls.push(input);
+      return { text: 'replayed', sessionId: 'ignored' };
+    },
+  });
+  replay.sessions.set('room_1', { session_id: 'sess_old', last_seq_by_thread: { thread_1: '99' } });
+  await replay.instance.handle({ envelope: trigger });
+  assert.equal(replayCalls[0].sessionId, null);
+  assert.match(replayCalls[0].prompt, /msg_t/);
+  assert.deepEqual(replay.sessions.get('room_1'), { session_id: 'sess_old', last_seq_by_thread: { thread_1: '99' } });
 });
 
 test('a CLI that rejects with another code after Stop is cancelled, not failed', async () => {
@@ -213,7 +240,7 @@ test('a resumed thread only gets messages after its own cursor', async () => {
   sessions.set('room_1', { session_id: 's0', last_seq_by_thread: { msg_t: '7', msg_other: '40' } });
   await instance.handle({ envelope: trigger });
   assert.deepEqual(seenAfter, ['7']);
-  assert.deepEqual(sessions.get('room_1'), { session_id: 's', last_seq_by_thread: { msg_t: '7', msg_other: '40' } });
+  assert.deepEqual(sessions.get('room_1'), { session_id: 's', last_seq_by_thread: { msg_t: '7' } });
 });
 
 test('an unexpected throw after the invocation is known fails that invocation', async () => {
