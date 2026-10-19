@@ -13,11 +13,11 @@ async function seed(pool, suffix) {
   const ownerEndpointId = `ep_owner_${suffix}`;
   const reporterEndpointId = `ep_report_${suffix}`;
   await pool.query(`INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW())`, [humanId]);
-  for (const endpointId of [ownerEndpointId, reporterEndpointId]) {
+  for (const [endpointId, displayName] of [[ownerEndpointId, 'owner'], [reporterEndpointId, 'reporter']]) {
     await pool.query(
       `INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
-       VALUES ($1, $2, 'reporter', 'agent', $3, 'reporter', 'active', NOW())`,
-      [endpointId, humanId, `install_${endpointId}`],
+       VALUES ($1, $2, 'reporter', 'agent', $3, $4, 'active', NOW())`,
+      [endpointId, humanId, `install_${endpointId}`, displayName],
     );
   }
   return { humanId, ownerEndpointId, reporterEndpointId };
