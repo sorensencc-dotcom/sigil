@@ -3,7 +3,8 @@
 ## Session update: 2026-10-19 Sigil Rooms Phase 5 Task 8
 
 - Antigravity CLI discovery initially failed because its bin directory was absent from the probe process's `PATH`. Direct invocation verified `agy.exe` 1.4.2, headless JSON output, and conversation resume.
-- Tool-boundary evidence remains unverified. The registry continues to omit `antigravity` until a bounded permission probe passes. Phase 5 report-only implementation remains closed.
+- The permission probe created a marker outside the workspace without an auto-approve flag. The current CLI configuration is not a verified read-only boundary.
+- The registry continues to omit `antigravity`. Phase 5 report-only implementation remains closed.
 
 
 ## Session update: 2026-10-19 Sigil Rooms Phase 5 Task 6
