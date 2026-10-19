@@ -93,9 +93,9 @@ Antigravity executable discovery returned no match; no help or prompt could run.
 
 ## Antigravity deferral
 
-Task 8 takes Branch B. Executable discovery failed for `agy`, `antigravity`, and `antigravity-ide`. No launcher help, headless prompt mode, session-resume mode, or tool-boundary allowlist was available to inspect. No headless, session, or tool-boundary evidence exists.
+Task 8 remains Branch B for the registry. The initial executable probe failed because `C:\\Users\\soren\\AppData\\Local\\agy\\bin` was absent from the probe process's `PATH`. Direct invocation of `agy.exe` then verified version 1.4.2, a headless JSON run with `AGY_AUTH_OK`, and a resumed run with `AGY_RESUME_OK`. No tool-boundary evidence exists yet. The run also exposed sandbox access failures for Antigravity's local logs and state, so these probes used the authenticated CLI outside the restricted sandbox.
 
-The registry must continue to omit `antigravity`. Reopen Task 8 only after a bounded probe captures a headless prompt mode, a session-resume mode, and a read-only tool allowlist without auto-approve or high-risk capabilities. Until then, do not start the Phase 5 report-only implementation.
+The registry must continue to omit `antigravity` until a bounded permission probe verifies a read-only tool boundary without auto-approve or high-risk capabilities. The Phase 5 report-only implementation remains closed until that registry decision is recorded.
 
 ## Hermes deferral
 
