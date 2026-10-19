@@ -91,6 +91,12 @@ The sole bounded canary used `--safe-mode -t web`. It exited **0** and printed `
 
 Antigravity executable discovery returned no match; no help or prompt could run. A future help-only result would still require captured safe headless/tool-boundary evidence before shipping. Task 8 must defer now.
 
+## Antigravity deferral
+
+Task 8 takes Branch B. Executable discovery failed for `agy`, `antigravity`, and `antigravity-ide`. No launcher help, headless prompt mode, session-resume mode, or tool-boundary allowlist was available to inspect. No headless, session, or tool-boundary evidence exists.
+
+The registry must continue to omit `antigravity`. Reopen Task 8 only after a bounded probe captures a headless prompt mode, a session-resume mode, and a read-only tool allowlist without auto-approve or high-risk capabilities. Until then, do not start the Phase 5 report-only implementation.
+
 ## Hermes deferral
 
 Task 7 takes Branch B. `HERMES_READONLY_TOOLSETS` remains empty because the only bounded canary, `--safe-mode -t web`, reached a missing-provider error before producing a model answer or reporting the available tools. The `hermes tools` listing also failed while reading a boolean MCP configuration, and source inspection does not replace a live tool-boundary canary. No Hermes success, stdin, session, resume, or authentication behavior was verified.
