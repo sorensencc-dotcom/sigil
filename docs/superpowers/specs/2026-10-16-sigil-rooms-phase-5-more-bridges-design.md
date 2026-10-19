@@ -117,9 +117,9 @@ Flags it never uses: `--yolo`. Because oneshot auto-approves, the bridge is defa
 
 ### Antigravity
 
-Executable discovery failed for `agy`, `antigravity`, and `antigravity-ide`. No launcher help, headless prompt mode, session-resume mode, or tool-boundary allowlist was available to inspect. No headless, session, or tool-boundary evidence exists.
+The Antigravity CLI is installed at `C:\\Users\\soren\\AppData\\Local\\agy\\bin\\agy.exe`, but that directory was absent from the initial probe process's `PATH`. Direct invocation verified version 1.4.2, headless JSON output, and conversation resume. Tool-boundary behavior remains unverified because the authenticated CLI's permission behavior has not been tested.
 
-Task 8 takes Branch B. The registry omits `antigravity`, and the Phase 5 report-only implementation stays closed until a bounded probe captures the required headless, session, and read-only tool-boundary evidence.
+Task 8 remains Branch B for the registry. The registry omits `antigravity` until a bounded permission probe verifies a read-only tool boundary without auto-approve or high-risk capabilities.
 
 ### Replay mode and lost-session recovery
 
