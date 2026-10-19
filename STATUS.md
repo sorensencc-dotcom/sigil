@@ -2,8 +2,8 @@
 
 ## Session update: 2026-10-19 Sigil Rooms Phase 5 Task 8
 
-- Antigravity bridge deferred under Branch B. Executable discovery failed for `agy`, `antigravity`, and `antigravity-ide`; no headless, session, or tool-boundary evidence exists.
-- The registry continues to omit `antigravity`. Phase 5 report-only implementation stays closed until the deferral is recorded and the required bounded evidence exists.
+- Antigravity CLI discovery initially failed because its bin directory was absent from the probe process's `PATH`. Direct invocation verified `agy.exe` 1.4.2, headless JSON output, and conversation resume.
+- Tool-boundary evidence remains unverified. The registry continues to omit `antigravity` until a bounded permission probe passes. Phase 5 report-only implementation remains closed.
 
 
 ## Session update: 2026-10-19 Sigil Rooms Phase 5 Task 6
