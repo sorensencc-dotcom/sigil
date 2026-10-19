@@ -29,7 +29,7 @@ Reason Network shipped signed approvals and Grok CLI support, which narrows Sigi
 
 ### Security claims
 
-- Reason Network signs the approval answer. The Approval record carries request id and sender, approver, decision, request text, question, note and time, signed with the approver machine's key. The receiving machine drops it unless it verifies (V, DESIGN.md).
+- Reason Network signs the approval answer. The Approval record carries request id and sender, approver, decision, request text, question, note and time, signed with the approver machine's key. The receiving machine drops it unless it verifies (U, DESIGN.md).
 - Reason's own DESIGN calls this "a speed bump, not a guarantee", since software controlling the approver's machine can still sign (U).
 - Reason's DESIGN now says a session that skips permission prompts holds a message from a stranger for its user unless the inbound setting is accept (U).
 - The Reason message Envelope still has no signature field. Its fields are id, from, to, reply_to, thread, body and sent_at (U).
@@ -38,7 +38,7 @@ Reason Network shipped signed approvals and Grok CLI support, which narrows Sigi
 
 ### Grok Bot and MCP integrations
 
-- Concord MCP still names Grok Build (V from 2026-10-18).
+- Concord MCP still names Grok Build (U from 2026-10-18).
 - Last week eight targets named Grok or Grok Bot. AgentCouch adds an explicit Grok Bot install path and Reason Network adds Grok CLI support, so at least nine targets now name Grok or Grok Bot (U).
 - endue added MCP access per agent this week (see Features). Grok was not seen there (U).
 
@@ -59,7 +59,7 @@ Added 2026-10-19.
   - Launch date unknown (U). No security page found, 404 (U).
 - Concord (concord.fenginwind.com), a different product from Concord MCP (U). Credible: MEDIUM.
   - Cross-owner durable rooms, installed with `npm i -g concord-agent` and joined with `concord join claude|codex|gemini` (U).
-  - Claims idle costs zero tokens, un-addressed messages wake nobody, targeted wake, approval-required join and prompt-injection defense. It also claims "Destructive operations are always gated to the human at the terminal, never to a chat message" (V as claims, not audited).
+  - Claims idle costs zero tokens, un-addressed messages wake nobody, targeted wake, approval-required join and prompt-injection defense. It also claims "Destructive operations are always gated to the human at the terminal, never to a chat message" (U as claims, not audited).
   - A commitment ledger is "coming next" (U).
   - Pricing page is behind sign-in (U). Lists Claude Code, Codex, Gemini and Cursor, and no Grok was seen (U).
 - SharedNet (sharednet.ai, SysteMind, Inc.). Credible: MEDIUM.
@@ -71,7 +71,7 @@ Added 2026-10-19.
 
 This section reports status only. The 2026-10-18 decisions stand.
 
-- Item 4, Hyperagent message edit. The vendor changelog still lists "Edit your room messages to correct eligible text in an active room you've joined" under the 2026-10-05 entry (V, read on the vendor page 2026-10-19). The manage-a-room FAQ "Can I edit a message after posting it?" exists, but its answer text was not captured (U). What "eligible" means, whether agents or the API can edit, and whether edits are shown or audited are unknown (U). The feature was not tested. The claim is confirmed, the details are open, and nothing needs action.
+- Item 4, Hyperagent message edit. The vendor changelog still lists "Edit your room messages to correct eligible text in an active room you've joined" under the 2026-10-05 entry (U, read on the vendor page 2026-10-19). The manage-a-room FAQ "Can I edit a message after posting it?" exists, but its answer text was not captured (U). What "eligible" means, whether agents or the API can edit, and whether edits are shown or audited are unknown (U). The feature was not tested. The claim is confirmed, the details are open, and nothing needs action.
 - Item 6, Reason CLI terms. Still unknown. The network page still says the engine is open source under Apache 2.0 and "The Reason CLI that sets it up is not" (U). Fetching reasonmachines.com/terms returned product marketing content, not terms text (U), so the CLI terms remain unread (U). The engine license is unchanged at MIT OR Apache-2.0 per NOTICE and README (U). Dependency licenses are still not audited.
 - Item 7, tincan. No change. The Reason Network README still offers "Coming from tincan?" migration and team links ending in #tincan1, and DESIGN still uses ALPN tincan/1 over iroh QUIC (U). A search of Sigil origin/main c1cb304 on 2026-10-19 found no iroh, larstalian or ALPN references (U). Sigil's tincan bridge is still a Sigil-local Tailscale tsnet protocol, so the result stands: no interop, no license obligation.
 
@@ -83,7 +83,7 @@ Sigil facts below come from repo docs and code at origin/main c1cb304. Reason cl
 
 - Sigil signs every envelope, and the relay rejects a reused message_id with REPLAY_DETECTED. Reason signs only roster and approvals, not envelopes (U).
 - Sigil has governed rooms with human and bot membership. AgentCouch shows the full transcript to every human in a room (U), and Hyperagent team rooms are open to every workspace member (U).
-- The tincan bridge holds high-risk actions in an immutable queue keyed by sha256(signedBytes(envelope)) and releases them only after a WebAuthn approval challenge. This is stronger than Reason's signed approvals, which Reason itself calls a speed bump (Reason claim V, comparison is analysis).
+- The tincan bridge holds high-risk actions in an immutable queue keyed by sha256(signedBytes(envelope)) and releases them only after a WebAuthn approval challenge. This is stronger than Reason's signed approvals, which Reason itself calls a speed bump (Reason claim U, comparison is analysis).
 
 ### Where Sigil is weaker
 
