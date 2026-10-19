@@ -117,9 +117,9 @@ Flags it never uses: `--yolo`. Because oneshot auto-approves, the bridge is defa
 
 ### Antigravity
 
-PATH holds no `agy` or `antigravity`. The only launcher is `antigravity-ide(.cmd)`, an IDE launcher. Task 1 is a spike: look for a headless prompt mode, a session-resume mode, and a tool allowlist. Outcomes:
-- Found: the bridge follows the same contract. Read-only tool allowlist, no `high` risk-tier capabilities, no auto-approve. The master design gives the reason: Antigravity once faked an approval and force-pushed during IronLedger Phase 1 (2026-09-01).
-- Not found: Task 1 ends with a written deferral in the plan and the registry omits `antigravity`. This is an accepted outcome of the phase.
+The Antigravity CLI is installed at `C:\\Users\\soren\\AppData\\Local\\agy\\bin\\agy.exe`, but that directory was absent from the initial probe process's `PATH`. Direct invocation verified version 1.4.2, headless JSON output, and conversation resume. A bounded permission probe wrote a marker outside the workspace without `--dangerously-skip-permissions`, so the current CLI configuration is not a verified read-only boundary.
+
+Task 8 remains Branch B for the registry. The registry omits `antigravity` until a bounded configuration or bridge invocation proves a read-only tool allowlist without auto-approve or high-risk capabilities.
 
 ### Replay mode and lost-session recovery
 
@@ -202,6 +202,7 @@ New migration `036_report_only_mode.sql` (assumption 10 covers the number): drop
 |---|---|---|
 | Grok CLI bridge | Task 1 did not verify cancellation of the actual model turn or establish a safe leader owner; blocks the tincan multi-host demo | Later phase, after a verified cancel of the actual model turn |
 | Hermes bridge | Task 1 found no toolset verified read-only and no successful oneshot canary proving that `-t` enforces restriction | Later phase, after a verified read-only toolset and oneshot enforcement |
+| Antigravity bridge | Executable discovery failed; no headless, session, or tool-boundary evidence exists | Later phase, after a headless prompt mode, session-resume mode, and read-only tool allowlist are verified |
 | Automatic report recreation past the freshness window | Needs relay-side reconciliation that atomically rules out later acceptance (for example a tombstone or sender-scoped fence written under the same lock and transaction as accept) | Later phase |
 | Automatic stale-lock recovery for report state | File-based token check and unlink are not atomic and cannot stop a paused live holder from resuming; safe automatic recovery needs an OS-level exclusion primitive | Later phase |
 | Ironbots requests and per-bot endpoints | Needs the narrow-command-list design | Phase 6 |

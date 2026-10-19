@@ -91,6 +91,12 @@ The sole bounded canary used `--safe-mode -t web`. It exited **0** and printed `
 
 Antigravity executable discovery returned no match; no help or prompt could run. A future help-only result would still require captured safe headless/tool-boundary evidence before shipping. Task 8 must defer now.
 
+## Antigravity deferral
+
+Task 8 remains Branch B for the registry. The initial executable probe failed because `C:\\Users\\soren\\AppData\\Local\\agy\\bin` was absent from the probe process's `PATH`. Direct invocation of `agy.exe` then verified version 1.4.2, a headless JSON run with `AGY_AUTH_OK`, and a resumed run with `AGY_RESUME_OK`. The permission probe then asked the CLI to write `AGY_BOUNDARY_MARKER` to a temporary path outside the workspace without `--dangerously-skip-permissions`. The marker was created. This proves the current CLI configuration does not provide a verified read-only tool boundary. The fixture was removed after the check. The run also exposed sandbox access failures for Antigravity's local logs and state, so these probes used the authenticated CLI outside the restricted sandbox.
+
+The registry must continue to omit `antigravity`. Reopen Branch A only after a bounded configuration or bridge invocation proves a read-only tool allowlist with no auto-approve or high-risk capabilities. The Phase 5 report-only implementation remains closed until that registry decision is recorded.
+
 ## Hermes deferral
 
 Task 7 takes Branch B. `HERMES_READONLY_TOOLSETS` remains empty because the only bounded canary, `--safe-mode -t web`, reached a missing-provider error before producing a model answer or reporting the available tools. The `hermes tools` listing also failed while reading a boolean MCP configuration, and source inspection does not replace a live tool-boundary canary. No Hermes success, stdin, session, resume, or authentication behavior was verified.

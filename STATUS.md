@@ -1,5 +1,12 @@
 # Status
 
+## Session update: 2026-10-19 Sigil Rooms Phase 5 Task 8
+
+- Antigravity CLI discovery initially failed because its bin directory was absent from the probe process's `PATH`. Direct invocation verified `agy.exe` 1.4.2, headless JSON output, and conversation resume.
+- The permission probe created a marker outside the workspace without an auto-approve flag. The current CLI configuration is not a verified read-only boundary.
+- The registry continues to omit `antigravity`. Phase 5 report-only implementation remains closed.
+
+
 ## Session update: 2026-10-19 Sigil Rooms Phase 5 Task 6
 
 - Grok CLI bridge deferred under Branch B. Task 1 did not verify cancellation of the actual model turn or establish a safe leader owner; the tincan multi-host demo remains blocked until that evidence exists. The registry intentionally omits `grok`; see the phase 5 verification notes and design deferred table.
