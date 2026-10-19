@@ -1,0 +1,35 @@
+sigil/bridges/v1/copilot-cli.mjs
+  s_e38fa8bfc5b2cb::t_bd69dffb348d27 1-51
+sigil/bridges/v1/cli-registry.test.mjs
+  s_e38fa8bfc5b2cb::t_b10e52c06f9906 13-14,60,159
+  s_e38fa8bfc5b2cb::t_aee265e7833b0b 84,161
+  s_e38fa8bfc5b2cb::t_c60eeb2140e711 86
+sigil/bridges/v1/copilot-cli.test.mjs
+  s_e38fa8bfc5b2cb::t_bd69dffb348d27 1-36
+sigil/cli/agent-run-floor-warden.test.mjs
+  s_e38fa8bfc5b2cb::t_8eeb5c8d20ff3d 372
+sigil/bridges/v1/cli-registry.mjs
+  s_e38fa8bfc5b2cb::t_bd69dffb348d27 3,9
+sigil/bridges/v1/cli-conformance.test.mjs
+  s_e38fa8bfc5b2cb::t_bd69dffb348d27 8,28-33
+  s_e38fa8bfc5b2cb::t_0663fa6d4df6ad 34
+sigil/bridges/v1/fixtures/fake-agent-cli.mjs
+  s_e38fa8bfc5b2cb::t_aee265e7833b0b 33
+  s_e38fa8bfc5b2cb::t_b10e52c06f9906 5,26,63-65
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8fdf1b5eb8edffedb936bf6a9217bf5e97c6662e",
+  "prompts": {},
+  "sessions": {
+    "s_e38fa8bfc5b2cb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a151ff-ea0a-7060-a9ed-cebbc2717e2e",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": null
+    }
+  }
+}
