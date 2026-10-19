@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createClaudeCli } from './claude-cli.mjs';
 import { createCodexCli } from './codex-cli.mjs';
+import { createCopilotCli } from './copilot-cli.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fake = path.join(here, 'fixtures', 'fake-agent-cli.mjs');
@@ -23,6 +24,13 @@ const rows = [
     goodOutput: `${JSON.stringify({ type: 'thread.started', thread_id: 'sess_1' })}\n${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'ok' } })}\n`,
     badOutput: 'not json',
     forbidden: ['--dangerously-bypass-approvals-and-sandbox', 'danger-full-access'],
+  },
+  {
+    kind: 'copilot',
+    makeCli: (command, options = {}) => createCopilotCli({ command, commandArgs: [fake, 'copilot', ...(options.mode ?? [])], ...options.config }),
+    goodOutput: `${JSON.stringify({ type: 'assistant.message', data: { content: 'ok' } })}\n${JSON.stringify({ type: 'result', sessionId: 'sess_1', exitCode: 0 })}\n`,
+    badOutput: 'not json',
+    forbidden: ['--allow-all', '--yolo', '--allow-all-tools', '--allow-all-paths', '--allow-all-urls'],
   },
 ];
 

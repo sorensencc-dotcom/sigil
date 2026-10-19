@@ -10,8 +10,8 @@ import { agentEnv } from './cli-runner.mjs';
 import { BRIDGES, createWakeDispatcher } from '../../relay/v1/transport-tincan/wake-dispatcher.mjs';
 import { createIdentity } from '../../cli/identity.mjs';
 
-test('registry creates the initial Claude and Codex adapters', () => {
-  assert.deepEqual(CLI_KINDS, ['claude', 'codex']);
+test('registry creates the Claude, Codex, and Copilot adapters', () => {
+  assert.deepEqual(CLI_KINDS, ['claude', 'codex', 'copilot']);
   for (const kind of CLI_KINDS) {
     assert.equal(isCliKind(kind), true);
     assert.equal(createCli(kind, {}).name, kind);
@@ -57,7 +57,7 @@ for (const [kind, allowed] of [['claude', ['ANTHROPIC_X', 'CLAUDE_X']], ['codex'
       env: source, command: 'fixture-command', commandArgs: ['fixture-arg'], cwd: 'fixture-cwd', timeoutMs: 1234,
       runner: async (options) => {
         seen = options;
-        return { stdout: kind === 'claude' ? JSON.stringify({ result: 'ok', session_id: 'sess_test' }) : `${JSON.stringify({ type: 'thread.started', thread_id: 'sess_test' })}\n${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'ok' } })}` };
+        return { stdout: kind === 'claude' ? JSON.stringify({ result: 'ok', session_id: 'sess_test' }) : kind === 'codex' ? `${JSON.stringify({ type: 'thread.started', thread_id: 'sess_test' })}\n${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'ok' } })}` : `${JSON.stringify({ type: 'assistant.message', data: { content: 'ok' } })}\n${JSON.stringify({ type: 'result', sessionId: 'sess_test', exitCode: 0 })}` };
       },
     });
     assert.deepEqual(await cli.run({ prompt: 'fixture prompt', signal: controller.signal }), { text: 'ok', sessionId: 'sess_test' });
@@ -81,9 +81,9 @@ test('registry filters inherited environments by kind when no env is supplied', 
       let passedNames;
       await createCli(kind, { runner: async ({ env }) => {
         passedNames = Object.keys(env);
-        return { stdout: kind === 'claude' ? JSON.stringify({ result: 'ok', session_id: 'sess_test' }) : `${JSON.stringify({ type: 'thread.started', thread_id: 'sess_test' })}\n${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'ok' } })}` };
+        return { stdout: kind === 'claude' ? JSON.stringify({ result: 'ok', session_id: 'sess_test' }) : kind === 'codex' ? `${JSON.stringify({ type: 'thread.started', thread_id: 'sess_test' })}\n${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'ok' } })}` : `${JSON.stringify({ type: 'assistant.message', data: { content: 'ok' } })}\n${JSON.stringify({ type: 'result', sessionId: 'sess_test', exitCode: 0 })}` };
       } }).run({ prompt: 'fixture prompt' });
-      assert.deepEqual(names.filter((name) => passedNames.includes(name)), kind === 'claude' ? names.slice(0, 2) : names.slice(2, 4));
+      assert.deepEqual(names.filter((name) => passedNames.includes(name)), kind === 'claude' ? names.slice(0, 2) : kind === 'codex' ? names.slice(2, 4) : []);
       assert.equal(passedNames.includes('SIGIL_RELAY_TOKEN'), false);
       assert.equal(passedNames.includes('GITHUB_TOKEN'), false);
     }
@@ -156,9 +156,9 @@ test('wake dispatcher keeps running registry agents idempotent and rejects unkno
       assert.deepEqual(await dispatcher.wakeAgent({ endpointId, bridgeType }), { alreadyRunning: true, endpointId });
     }
   }
-  assert.deepEqual(checked, ['ep_test_registry_claude', 'ep_test_registry_claude', 'ep_test_registry_codex', 'ep_test_registry_codex']);
+  assert.deepEqual(checked, ['ep_test_registry_claude', 'ep_test_registry_claude', 'ep_test_registry_codex', 'ep_test_registry_codex', 'ep_test_registry_copilot', 'ep_test_registry_copilot']);
   await assert.rejects(dispatcher.wakeAgent({ endpointId: 'ep_test_registry_unknown', bridgeType: 'nope' }), { code: 'INVALID_REQUEST' });
-  assert.equal(checked.length, 4);
+  assert.equal(checked.length, 6);
 });
 
 test('actual agent run validates registry kinds before any daemon or provider can start', () => {
