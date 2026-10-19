@@ -200,8 +200,8 @@ New migration `036_report_only_mode.sql` (assumption 10 covers the number): drop
 
 | Item | Why not now | Where it goes |
 |---|---|---|
-| Grok CLI bridge, if Stop does not cancel the turn | Task 1 gate failed; blocks the tincan multi-host demo | Revisit when the CLI exposes a verified cancel |
-| Hermes bridge, if no toolset verifies read-only or `-t` does not restrict oneshot | Task 1 gate failed | Revisit with a CLI that restricts oneshot |
+| Grok CLI bridge | Task 1 did not verify cancellation of the actual model turn or establish a safe leader owner; blocks the tincan multi-host demo | Later phase, after a verified cancel of the actual model turn |
+| Hermes bridge | Task 1 found no toolset verified read-only and no successful oneshot canary proving that `-t` enforces restriction | Later phase, after a verified read-only toolset and oneshot enforcement |
 | Automatic report recreation past the freshness window | Needs relay-side reconciliation that atomically rules out later acceptance (for example a tombstone or sender-scoped fence written under the same lock and transaction as accept) | Later phase |
 | Automatic stale-lock recovery for report state | File-based token check and unlink are not atomic and cannot stop a paused live holder from resuming; safe automatic recovery needs an OS-level exclusion primitive | Later phase |
 | Ironbots requests and per-bot endpoints | Needs the narrow-command-list design | Phase 6 |

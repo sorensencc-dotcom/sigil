@@ -34,6 +34,12 @@ The Grok success fixture records output shape, not cancellation readiness. Priva
 
 `agentEnv` permits baseline runtime/home variables plus `ANTHROPIC_`, `CLAUDE_`, `CODEX_`, and `OPENAI_` prefixes (`sigil/bridges/v1/cli-runner.mjs:13-23`). It excludes GitHub-, Grok-, and Hermes-specific auth-variable names. Successful prompts prove current local authentication works under that environment. The following nonsecret help observations support a source-category inference, not observation of the actual backend. No credential file was inspected, and no new auth prefix is justified by this spike.
 
+## Grok deferral
+
+Task 6 takes Branch B. The Grok CLI bridge remains deferred because the Task 1 probe did not establish ownership of the actual model turn. Completed probes used a private `--leader-socket`, but process metadata exposed no process bearing that socket path. No long-running model turn was safely attributed to that leader, so no post-kill transcript or leader-activity observation exists. The quiet period was not observed, not zero seconds.
+
+The examined cancel path was Grok help's `leader kill`, described as stopping all running leader processes. It was not invoked because the probe could not prove that the private leader owned the tested turn. No explicit turn-cancel command was established. Reopen the bridge only after a bounded probe verifies cancellation of the actual model turn, with the transcript or leader activity stopping for a recorded quiet period and no assistant answer completing later. Until then, the registry must omit `grok`, and the tincan multi-host demo remains blocked on `grok` as a `--room-bridge` value.
+
 ## Copilot authentication-source follow-up
 
 Review fix round 1 ran `copilot login --help` and `copilot help environment` through the same in-memory `agentEnv` runner, with a 15-second deadline each, private raw capture, and output scrubbing before display. Both exited 0 without timeout; neither invoked a provider prompt or authentication action. Top-level/login help exposed no status/source command. Login help describes the system credential store with plaintext configuration fallback. Environment help documents `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, and `GITHUB_TOKEN` as authentication inputs, in that order; `agentEnv` excludes all three. This evidence and the earlier successful native Copilot prompts support **stored-local-credentials as an inference**. They do not establish whether the active backend is the system store or plaintext fallback.
@@ -82,6 +88,12 @@ Help states that `-z` auto-bypasses approvals, so a successful listing/canary ga
 The sole bounded canary used `--safe-mode -t web`. It exited **0** and printed `API call failed after 3 retries: HTTP 404: model 'llama3.2:latest' not found`. No `canary.txt` existed afterwards. Missing file alone does not establish restriction because the provider never answered and never reported the tools unavailable. Therefore `HERMES_READONLY_TOOLSETS = []` (no verified candidates). No Hermes ok, stdin, session, resume, or auth prompt followed the failed gate. Do not interpret exit 0 as successful inference. Task 7 must defer rather than build a parser from this failure fixture.
 
 Antigravity executable discovery returned no match; no help or prompt could run. A future help-only result would still require captured safe headless/tool-boundary evidence before shipping. Task 8 must defer now.
+
+## Hermes deferral
+
+Task 7 takes Branch B. `HERMES_READONLY_TOOLSETS` remains empty because the only bounded canary, `--safe-mode -t web`, reached a missing-provider error before producing a model answer or reporting the available tools. The `hermes tools` listing also failed while reading a boolean MCP configuration, and source inspection does not replace a live tool-boundary canary. No Hermes success, stdin, session, resume, or authentication behavior was verified.
+
+Reopen the Hermes bridge only after a toolset is verified read-only by a successful listing and canary, and `-t` is shown to enforce that restriction in oneshot mode. Until then, the registry must omit `hermes`.
 
 ## Ordinary-message receipts and clock probe
 

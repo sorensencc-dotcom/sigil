@@ -26,6 +26,14 @@ test('unknown and inherited object keys cannot select a CLI', () => {
   }
 });
 
+test('deferred Grok bridge stays rejected by the registry', () => {
+  assert.throws(() => createCli('grok', {}), { code: 'UNKNOWN_BRIDGE_KIND' });
+});
+
+test('deferred Hermes bridge stays rejected by the registry', () => {
+  assert.throws(() => createCli('hermes', {}), { code: 'UNKNOWN_BRIDGE_KIND' });
+});
+
 test('unknown CLI kinds reject before evaluating caller options', () => {
   const options = {
     get env() { throw new Error('unknown kinds must not read environment options'); },

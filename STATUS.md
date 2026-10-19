@@ -1,5 +1,19 @@
 # Status
 
+## Session update: 2026-10-19 Sigil Rooms Phase 5 Task 6
+
+- Grok CLI bridge deferred under Branch B. Task 1 did not verify cancellation of the actual model turn or establish a safe leader owner; the tincan multi-host demo remains blocked until that evidence exists. The registry intentionally omits `grok`; see the phase 5 verification notes and design deferred table.
+- Hermes bridge deferred under Branch B. Task 1 verified no read-only toolset and no successful oneshot restriction canary; the registry intentionally omits `hermes`.
+
+## Session update: 2026-10-18 Sigil Rooms Phase 5 Task 3
+
+- Isolated checkout `C:\dev\dev-sandbox\sigil-rooms-phase5-task3`, branch `codex/sigil-rooms-phase5-task3`, based on `origin/main` `9737bac` with merged Task 2.
+- Task 3 changes remain uncommitted. Fixture modes, grandchild readiness, a real `.cmd` fixture, and the authorized synchronous `CLI_START_FAILED` runner fix are present.
+- Restricted sandbox run was blocked because `taskkill /T /F` failed with `The user name or password is incorrect`; this was an environment limitation, not a product failure.
+- Outside-sandbox Windows verification cleared the environment limitation. Conformance passed 10/10 and the runner suite passed 7/7. Changes are ready for the scoped local commit; no push or PR is authorized.
+- The `.cmd` mapping fix and regression now pass. Full conformance remains blocked because sandbox `taskkill /T /F` fails with `The user name or password is incorrect`, leaving fake process trees alive; the existing runner abort-tree test fails identically.
+- Independent review found no Critical findings, one Important blocker, and one Minor assertion gap. No provider, relay, database, auth, or `.sigil` JSON access occurred.
+
 ## Session update: 2026-10-16 Floor Warden bridge (phase 6)
 
 - Branch `feat/sigil-rooms-phase6-floor-warden-bridge`, plan `docs/superpowers/plans/2026-10-16-sigil-rooms-phase-6-floor-warden-bridge.md`, spec `docs/superpowers/specs/2026-10-16-sigil-rooms-phase-6-floor-warden-bridge-design.md`. Tasks 1-15 done; merged as PR #59. Follow-ups on `fix/sigil-phase6-followups`.
