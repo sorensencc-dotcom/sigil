@@ -1,5 +1,11 @@
 # Status
 
+## Session update: 2026-10-19 Sigil Rooms Phase 5 Task 8
+
+- Antigravity bridge deferred under Branch B. Executable discovery failed for `agy`, `antigravity`, and `antigravity-ide`; no headless, session, or tool-boundary evidence exists.
+- The registry continues to omit `antigravity`. Phase 5 report-only implementation stays closed until the deferral is recorded and the required bounded evidence exists.
+
+
 ## Session update: 2026-10-19 Sigil Rooms Phase 5 Task 6
 
 - Grok CLI bridge deferred under Branch B. Task 1 did not verify cancellation of the actual model turn or establish a safe leader owner; the tincan multi-host demo remains blocked until that evidence exists. The registry intentionally omits `grok`; see the phase 5 verification notes and design deferred table.
