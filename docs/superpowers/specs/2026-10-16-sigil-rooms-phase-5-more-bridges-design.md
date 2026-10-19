@@ -117,9 +117,9 @@ Flags it never uses: `--yolo`. Because oneshot auto-approves, the bridge is defa
 
 ### Antigravity
 
-The Antigravity CLI is installed at `C:\\Users\\soren\\AppData\\Local\\agy\\bin\\agy.exe`, but that directory was absent from the initial probe process's `PATH`. Direct invocation verified version 1.4.2, headless JSON output, and conversation resume. Tool-boundary behavior remains unverified because the authenticated CLI's permission behavior has not been tested.
+The Antigravity CLI is installed at `C:\\Users\\soren\\AppData\\Local\\agy\\bin\\agy.exe`, but that directory was absent from the initial probe process's `PATH`. Direct invocation verified version 1.4.2, headless JSON output, and conversation resume. A bounded permission probe wrote a marker outside the workspace without `--dangerously-skip-permissions`, so the current CLI configuration is not a verified read-only boundary.
 
-Task 8 remains Branch B for the registry. The registry omits `antigravity` until a bounded permission probe verifies a read-only tool boundary without auto-approve or high-risk capabilities.
+Task 8 remains Branch B for the registry. The registry omits `antigravity` until a bounded configuration or bridge invocation proves a read-only tool allowlist without auto-approve or high-risk capabilities.
 
 ### Replay mode and lost-session recovery
 
