@@ -3,6 +3,7 @@
 ## Session update: 2026-10-19 Sigil Rooms Phase 5 Task 6
 
 - Grok CLI bridge deferred under Branch B. Task 1 did not verify cancellation of the actual model turn or establish a safe leader owner; the tincan multi-host demo remains blocked until that evidence exists. The registry intentionally omits `grok`; see the phase 5 verification notes and design deferred table.
+- Task 6 registry test now pins `grok` out of `CLI_KINDS` and the wake dispatcher bridges. Grok cancellation, live PostgreSQL proof, and hosted CI proof remain unverified.
 - Hermes bridge deferred under Branch B. Task 1 verified no read-only toolset and no successful oneshot restriction canary; the registry intentionally omits `hermes`.
 
 ## Session update: 2026-10-18 Sigil Rooms Phase 5 Task 3
