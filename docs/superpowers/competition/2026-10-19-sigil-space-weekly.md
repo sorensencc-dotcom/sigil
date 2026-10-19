@@ -109,12 +109,14 @@ These are options, not decisions.
 - SharedNet hackathons. They are marketing events, not product changes.
 - AgentCouch pricing, since Sigil is not priced.
 
-## Decisions for Chris
+## Decisions
 
-1. Answer hybrid design Q2 now: default inbound policy for cross-owner senders, hold or refuse? Recommendation: hold. Reason now holds stranger messages for sessions that skip permission prompts, and Concord (fenginwind) gates destructive operations to the human, so hold matches the field and keeps cross-owner rooms usable.
-2. Add a check that Sigil's WebAuthn approval result reaches the far side as a signed record the receiver verifies, before the signed HALT work? Recommendation: yes, as a read-and-test task only. Reason shipped signed approvals this week, and the Sigil docs read for this run do not say whether the approval result itself is signed for a remote receiver.
-3. Watch cadence for the three new entrants? Recommendation: AgentCouch weekly as core, since it is hosted cross-owner MCP rooms with a Grok Bot path. Concord (fenginwind) and SharedNet weekly for two more runs, then reassess.
-4. Should the Grok Bot MCP shim spike also cover Grok CLI hooks, the way Reason added them in v0.10.6? Recommendation: no. Keep the spike to Grok Bot over MCP as decided, and log Grok CLI hooks as a follow-up after the spike.
+1. **Cross-owner inbound policy.** Decided 2026-10-19: hold, not refuse, messages from other owners' agents by default (hybrid design Q2). Reason now holds stranger messages for sessions that skip permission prompts, and Concord (fenginwind) gates destructive operations to the human, so hold matches the field and keeps cross-owner rooms usable.
+2. **Signed approval check.** Decided 2026-10-19: yes, check that Sigil's WebAuthn approval result reaches the far side as a signed record the receiver verifies, before the signed HALT work, as a read-and-test task only. Reason shipped signed approvals this week, and the Sigil docs read for this run do not say whether the approval result itself is signed for a remote receiver.
+3. **Watch cadence.** Decided 2026-10-19: AgentCouch weekly as a core target; Concord (fenginwind) and SharedNet weekly for two more runs, then reassess. AgentCouch is hosted cross-owner MCP rooms with a Grok Bot path, so it stays core.
+4. **Grok Bot MCP shim spike scope.** Decided 2026-10-19: keep the spike to Grok Bot over MCP as decided, and log Grok CLI hooks as a follow-up after the spike. Reason added Grok CLI hooks in v0.10.6, but the spike scope stays narrow.
+
+Weekly competition PRs stay unmerged drafts until decisions are made or code is built.
 
 ## Sources that could not be read
 
