@@ -28,6 +28,9 @@ test('unknown and inherited object keys cannot select a CLI', () => {
 
 test('deferred Grok bridge stays rejected by the registry', () => {
   assert.throws(() => createCli('grok', {}), { code: 'UNKNOWN_BRIDGE_KIND' });
+  assert.equal(CLI_KINDS.includes('grok'), false);
+  assert.equal(isCliKind('grok'), false);
+  assert.equal(BRIDGES.has('grok'), false);
 });
 
 test('deferred Hermes bridge stays rejected by the registry', () => {
