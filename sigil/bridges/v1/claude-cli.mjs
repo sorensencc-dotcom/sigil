@@ -27,22 +27,24 @@ export function createClaudeCli({ command = 'claude', commandArgs = [], allowedT
   }
   return {
     name: 'claude',
+    capabilities: { resume: true },
     async run({ prompt, sessionId = null, signal }) {
       assertSessionId(sessionId);
-      // Room text is untrusted, so the CLI must not inherit the operator's
-      // setup: --setting-sources project drops user settings (Bash/PowerShell
-      // allow rules, hooks), --strict-mcp-config drops user MCP servers, and
-      // --tools removes every other built-in tool rather than only adding
-      // allow rules. --bare would be stricter but ignores OAuth logins
-      // ("Not logged in"), so it is not used. Variadic lists stay last.
       const args = [
         ...commandArgs, '-p', '--output-format', 'json',
         '--setting-sources', 'project', '--permission-mode', 'default',
         ...(sessionId ? ['--resume', sessionId] : []),
         '--strict-mcp-config', '--tools', ...allowedTools, '--allowedTools', ...allowedTools,
       ];
-      const { stdout } = await runner({ command, args, input: prompt, cwd, env: env ?? agentEnv(), timeoutMs, signal });
-      return parseClaudeOutput(stdout);
+      try {
+        const { stdout } = await runner({ command, args, input: prompt, cwd, env: env ?? agentEnv(), timeoutMs, signal });
+        return parseClaudeOutput(stdout);
+      } catch (error) {
+        if (sessionId && error.code === 'CLI_FAILED' && /(?:session|conversation).*(?:not found|does not exist|unknown|invalid|expired)|no such (?:session|conversation)|no (?:session|thread|conversation).*matched/i.test(error.message ?? '')) {
+          throw Object.assign(error, { code: 'CLI_SESSION_LOST' });
+        }
+        throw error;
+      }
     },
   };
 }

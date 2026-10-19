@@ -369,7 +369,7 @@ test('agent run --room-bridge rejects an unknown bridge and lists floor-warden',
   const idFile = writeIdentity(dir, receiveOnlyIdentity());
   const { status, out } = runCli(['--identity', idFile, '--relay-url', 'http://127.0.0.1:1', '--config', path.join(dir, 'none.json'), '--room-bridge', 'bogus'], { cwd: dir });
   assert.notEqual(status, 0);
-  assert.match(out, /--room-bridge must be claude, codex, router, or floor-warden/);
+  assert.match(out, /--room-bridge must be claude, codex, copilot, router, or floor-warden/);
 });
 
 test('agent run usage text lists floor-warden and its flags', () => {

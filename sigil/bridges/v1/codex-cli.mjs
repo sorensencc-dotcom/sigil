@@ -22,12 +22,20 @@ export function createCodexCli({ command = 'codex', commandArgs = [], sandbox = 
   if (!SANDBOXES.has(sandbox)) throw Object.assign(new Error('sandbox must be read-only or workspace-write'), { code: 'CLI_INVALID_CONFIG' });
   return {
     name: 'codex',
+    capabilities: { resume: true },
     async run({ prompt, sessionId = null, signal }) {
       assertSessionId(sessionId);
       const common = ['--json', '--skip-git-repo-check', '-c', `sandbox_mode="${sandbox}"`, '-'];
       const args = [...commandArgs, 'exec', ...(sessionId ? ['resume', sessionId] : []), ...common];
-      const { stdout } = await runner({ command, args, input: prompt, cwd, env: env ?? agentEnv(), timeoutMs, signal });
-      return parseCodexOutput(stdout);
+      try {
+        const { stdout } = await runner({ command, args, input: prompt, cwd, env: env ?? agentEnv(), timeoutMs, signal });
+        return parseCodexOutput(stdout);
+      } catch (error) {
+        if (sessionId && error.code === 'CLI_FAILED' && /(?:session|thread|conversation).*(?:not found|does not exist|unknown|invalid|expired)|no such (?:session|thread|conversation)|no (?:session|thread|conversation).*matched/i.test(error.message ?? '')) {
+          throw Object.assign(error, { code: 'CLI_SESSION_LOST' });
+        }
+        throw error;
+      }
     },
   };
 }

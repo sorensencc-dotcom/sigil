@@ -1,10 +1,12 @@
 import { createClaudeCli } from './claude-cli.mjs';
 import { createCodexCli } from './codex-cli.mjs';
+import { createCopilotCli } from './copilot-cli.mjs';
 import { agentEnv } from './cli-runner.mjs';
 
 const REGISTRY = {
   claude: { create: createClaudeCli, prefixes: Object.freeze(['ANTHROPIC_', 'CLAUDE_']) },
   codex: { create: createCodexCli, prefixes: Object.freeze(['CODEX_', 'OPENAI_']) },
+  copilot: { create: createCopilotCli, prefixes: Object.freeze([]) },
 };
 
 export const CLI_KINDS = Object.freeze(Object.keys(REGISTRY));

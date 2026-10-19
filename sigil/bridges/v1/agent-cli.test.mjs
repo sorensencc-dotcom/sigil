@@ -19,9 +19,13 @@ test('parses the captured Codex events', () => {
   assert.ok(parsed.sessionId);
 });
 
-test('Claude error results and empty output are CLI_INVALID_OUTPUT', () => {
+test('Claude error results and empty output are CLI_INVALID_OUTPUT', async () => {
   assert.throws(() => parseClaudeOutput(JSON.stringify({ is_error: true, result: 'boom', session_id: 's' })), { code: 'CLI_INVALID_OUTPUT' });
   assert.throws(() => parseCodexOutput(''), { code: 'CLI_INVALID_OUTPUT' });
+
+  const missing = () => { throw Object.assign(new Error('No session, task, or name matched'), { code: 'CLI_FAILED' }); };
+  await assert.rejects(() => createClaudeCli({ runner: missing }).run({ prompt: 'x', sessionId: 's' }), { code: 'CLI_SESSION_LOST' });
+  await assert.rejects(() => createCodexCli({ runner: missing }).run({ prompt: 'x', sessionId: 's' }), { code: 'CLI_SESSION_LOST' });
 });
 
 test('Claude args: print mode, json, isolated settings/MCP, tools = allowlist, resume only with a session', async () => {

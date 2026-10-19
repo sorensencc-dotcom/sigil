@@ -2,6 +2,7 @@
 // Test double for the claude and codex CLIs. Mode comes from argv[2]:
 //   claude -> prints one Claude --output-format json result object
 //   codex  -> prints Codex --json JSONL events
+//   copilot -> prints Copilot JSONL events
 // Env: FAKE_NAME (who is speaking), FAKE_PARTNER (endpoint id to @mention),
 //      FAKE_SLEEP_MS (delay before answering), FAKE_EXIT (exit code),
 //      FAKE_PID_FILE (write own pid here, for kill tests).
@@ -22,12 +23,14 @@ process.stdin.on('end', async () => {
   if (fixtureMode === 'argv') {
     const text = JSON.stringify(process.argv.slice(2));
     if (mode === 'claude') process.stdout.write(JSON.stringify({ result: text, session_id: sessionId }));
+    else if (mode === 'copilot') process.stdout.write(`${JSON.stringify({ type: 'assistant.message', data: { content: text } })}\n${JSON.stringify({ type: 'result', sessionId, exitCode: 0 })}\n`);
     else process.stdout.write(`${JSON.stringify({ type: 'thread.started', thread_id: sessionId })}\n${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } })}\n`);
     return;
   }
   if (fixtureMode === 'env') {
     const text = JSON.stringify(Object.keys(process.env));
     if (mode === 'claude') process.stdout.write(JSON.stringify({ result: text, session_id: sessionId }));
+    else if (mode === 'copilot') process.stdout.write(`${JSON.stringify({ type: 'assistant.message', data: { content: text } })}\n${JSON.stringify({ type: 'result', sessionId, exitCode: 0 })}\n`);
     else process.stdout.write(`${JSON.stringify({ type: 'thread.started', thread_id: sessionId })}\n${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } })}\n`);
     return;
   }
@@ -57,6 +60,9 @@ process.stdin.on('end', async () => {
   const text = `${process.env.FAKE_NAME ?? mode} turn after ${turn} messages, resumed=${Boolean(priorSession)} @${process.env.FAKE_PARTNER ?? 'nobody'}`;
   if (mode === 'claude') {
     process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: text, session_id: sessionId }));
+  } else if (mode === 'copilot') {
+    process.stdout.write(`${JSON.stringify({ type: 'assistant.message', data: { content: text } })}\n`);
+    process.stdout.write(`${JSON.stringify({ type: 'result', sessionId, exitCode: 0 })}\n`);
   } else {
     process.stdout.write(`${JSON.stringify({ type: 'thread.started', thread_id: sessionId })}\n`);
     process.stdout.write(`${JSON.stringify({ type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text } })}\n`);

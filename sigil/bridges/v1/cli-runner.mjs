@@ -30,7 +30,7 @@ export function defaultKillTree(child) {
   if (process.platform === 'win32') {
     spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }).on('error', () => child.kill());
   } else {
-    child.kill('SIGTERM');
+    try { process.kill(-child.pid, 'SIGTERM'); } catch { child.kill('SIGTERM'); }
   }
 }
 
@@ -39,7 +39,7 @@ export function runCli({ command, args = [], input = '', cwd, env, timeoutMs = D
   return new Promise((resolve, reject) => {
     let child;
     try {
-      child = spawnImpl(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      child = spawnImpl(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
     } catch (cause) {
       reject(Object.assign(cliError('CLI_START_FAILED', `CLI failed to start: ${cause.message}`), { cause }));
       return;
