@@ -4,8 +4,13 @@ import {
   runSuitesSequentially,
   summarizeResults,
   parseSummary,
-  clearLiveTestEnv
+  clearLiveTestEnv,
+  nodeTestArgs
 } from './live-db-tests.mjs';
+
+test('live suite child uses flags supported by Node 22', () => {
+  assert.deepEqual(nodeTestArgs('suite.test.mjs'), ['--test', '--test-concurrency=1', 'suite.test.mjs']);
+});
 
 test('runSuitesSequentially never launches a second schema-reset suite before the first finishes', async () => {
   const files = ['fixture-a.test.mjs', 'fixture-b.test.mjs', 'fixture-c.test.mjs'];

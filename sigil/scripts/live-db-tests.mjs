@@ -83,10 +83,14 @@ export function parseSummary(output) {
   return summary;
 }
 
+export function nodeTestArgs(file) {
+  return ['--test', '--test-concurrency=1', file];
+}
+
 export function defaultRunSuite(file, env, { timeoutMs = Number(env.SIGIL_LIVE_SUITE_TIMEOUT_MS ?? DEFAULT_SUITE_TIMEOUT_MS) } = {}) {
   return new Promise((resolve, reject) => {
     let stdout = '';
-    const child = spawn(process.execPath, ['--test', '--test-isolation=none', '--test-concurrency=1', file], { env, cwd: sigilRoot });
+    const child = spawn(process.execPath, nodeTestArgs(file), { env, cwd: sigilRoot });
     child.stdout.on('data', (chunk) => {
       stdout += chunk;
       try { process.stdout.write(chunk); } catch (error) { if (error.code !== 'EPIPE') throw error; }
