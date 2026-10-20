@@ -11,6 +11,7 @@ import { createRoomBotSigner } from './room-bot-signer.mjs';
 import { wrapPrivateKey } from './key-wrap.mjs';
 import { signedBytes } from './validate-envelope.mjs';
 import { entryFromRegistryRow } from './trusted-endpoint.mjs';
+import { handleFloorWardenReply } from './floor-warden-replies.mjs';
 
 const REPLY = 'r'.repeat(40);
 const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
@@ -158,6 +159,22 @@ async function withWorld(fn, { botSigner: injectedSigner = null, handler, noWrap
 
 const invoked = async (w) => w.say('hi bot', { mentions: [BOT_EP] });
 const running = async (w) => (await w.repository.listRoomInvocations(ROOM, { endpointId: BOT_EP, status: 'running' }))[0] ?? null;
+
+test('a bot token cannot answer for another bot before persistence or audit', async () => {
+  let repositoryCalls = 0;
+  let auditRows = 0;
+  const repository = new Proxy({}, { get: () => async () => { repositoryCalls += 1; throw new Error('unexpected repository call'); } });
+  repository.recordAuditEvent = async () => { auditRows += 1; };
+  const result = await handleFloorWardenReply({
+    request: {}, requestId: 'req_mismatch', roomId: ROOM, now: NOW,
+    readBody: async () => JSON.stringify({ room_id: ROOM, target_bot_id: BOT_ID, sender: BOT_EP, in_reply_to: 'msg_trigger', text: 'answer', idempotency_key: 'k_mismatch' }),
+    repository, botId: 'bot_other', botSigner: { signForBot: async () => { throw new Error('unexpected signer call'); } },
+    buildAcceptOptions: () => { throw new Error('unexpected accept call'); },
+  });
+  assert.deepEqual([result.status, result.body.code], [403, 'BOT_NOT_ON_ROSTER']);
+  assert.equal(repositoryCalls, 0);
+  assert.equal(auditRows, 0);
+});
 
 test('400 INVALID_REQUEST for every malformed body', async () => {
   await withWorld(async (w) => {

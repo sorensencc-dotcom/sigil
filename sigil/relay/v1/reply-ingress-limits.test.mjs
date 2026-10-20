@@ -31,6 +31,21 @@ test('enforces ingress and per-bot limits with the settled retry header', async 
   assert.ok(metrics.snapshot().counters['sigil_ingress_rate_limited_total{scope=bot}']);
 });
 
+test('does not charge the body-named bot when the matched token belongs to another bot', async (t) => {
+  const charged = [];
+  const ingress = createReplyIngress({
+    match: async () => ({ kind: 'bot', botId: 'bot_b', tokenId: 'frt_b' }),
+    perBotLimiter: async ({ botId }) => { charged.push(botId); return { allowed: true }; },
+    gate: async ({ response }) => { response.writeHead(403, { 'content-type': 'application/json' }); response.end(JSON.stringify({ code: 'BOT_NOT_ON_ROSTER', message: 'mismatch', details: {} })); },
+  });
+  const address = await ingress.listen(0);
+  t.after(() => ingress.server.close());
+  const result = await fetch(`http://127.0.0.1:${address.port}/v1/rooms/room_x/replies`, { method: 'POST', headers: { authorization: 'Bearer fwr_fixture', 'content-type': 'application/json' }, body: JSON.stringify({ target_bot_id: 'bot_a' }) });
+  assert.equal(result.status, 403);
+  assert.deepEqual(charged, ['bot_b']);
+  assert.equal(charged.includes('bot_a'), false);
+});
+
 test('rejects bad authentication before content type and fails closed when bot limits cannot reserve', async (t) => {
   const seen = [];
   const ingress = createReplyIngress({
