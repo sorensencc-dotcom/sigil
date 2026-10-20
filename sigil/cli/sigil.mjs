@@ -42,6 +42,10 @@ import { signContract, verifyContract } from './contract-signing.mjs';
 import { checkRelayConnectivity } from './doctor.mjs';
 import { resolveRateLimits, DEFAULT_INBOX_DEPTH_LIMIT } from '../relay/v1/relay-config.mjs';
 import { createRelayMetrics } from '../relay/v1/metrics.mjs';
+import { createReplyIngress } from '../relay/v1/reply-ingress.mjs';
+import { createReplyTokenMatcher } from '../relay/v1/reply-token.mjs';
+import { createFloorWardenGate } from '../relay/v1/floor-warden-gate.mjs';
+import { createFloorWardenReplyHandler } from '../relay/v1/floor-warden-replies.mjs';
 import { cmdBotAdd, cmdBotDisable, cmdBotToken } from './bot-commands.mjs';
 import { cmdAgentSetInvokable, cmdHumanAdd, cmdHumanAddToRoom, cmdHumanSuspend, cmdHumanUnsuspend } from './human-commands.mjs';
 import { cmdIdentityRevoke, cmdInviteCreate, cmdInviteList, cmdInviteRevoke } from './oauth-commands.mjs';
@@ -63,7 +67,7 @@ Commands:
                                                             Run the agent daemon; --room-bridge answers room.message deliveries via a local CLI, or via a local Ollama router (--router-* flags: model, Ollama URL, timeout, context messages, sole-agent fallback on|off, default on), or forwards them to the Floor Warden webhook (--room-bridge floor-warden: webhook URL and key read from the named environment variables; a receive-only identity from sigil bot add is enough)
   agentmail provision --identity path --installation-id id [--registry path] [--audit-output path]
                                                             Explicitly provision non-mailbox ep_ingress; creates no grants or inbox mapping
-  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] [--relay-request-freshness-ms N] [--room-system-identity path] [--browser-origin origin]... [--room-human-identity path] [--public-origin origin] [--public-port N] [--enable-mock-oauth] [--room-key-wrap-key env_var] [--floor-warden-reply-token-env env_var [--floor-warden-reply-token-next-env env_var]] [--room-bot-key-wrap-key env_var] [--reconcile-kind endpoint_id=kind]... [--p2p [--p2p-identity path] [--p2p-listen multiaddr] [--p2p-no-mdns]] Run a local relay; --room-system-identity is a dedicated identity file (endpoint ep_relay_system, owner relay_system) that signs room.event envelopes, without it rooms emit no events and the router route answers 503 --browser-origin is an exact origin a browser may call from (repeatable; default none); --room-human-identity is the human identity file the relay signs POST /v1/rooms/{id}/messages with (its key must match the registry key; without it the route answers 503); --public-origin requires --room-human-identity; --room-key-wrap-key names the environment variable holding the 32-byte base64 key that unwraps provisioned humans' signing keys (pass the same name to "human add"); --floor-warden-reply-token-env names the environment variable holding the Floor Warden reply token (at least 32 characters; the reply route POST /v1/rooms/{id}/replies exists only when this is set; --floor-warden-reply-token-next-env names a second variable accepted during rotation); --room-bot-key-wrap-key names the environment variable holding the 32-byte base64 key that unwraps room bots' signing keys; --reconcile-kind sets one endpoint's Postgres kind to the registry file's kind after a REGISTRY_CONFLICT. If you front the relay with a proxy, do not log request URLs for /v1/stream: they carry single-use tickets (blocks; Ctrl+C to stop; set SIGIL_STREAM_SEQ_ENABLED=1 to stamp stream sequences)
+  relay up [--registry path] [--port N] [--enable-mock-oidc] [--oidc-issuer-refresh-interval-ms N] [--domain domain] [--federation-mode sync|queue] [--federation-identity path] [--relay-request-freshness-ms N] [--room-system-identity path] [--browser-origin origin]... [--room-human-identity path] [--public-origin origin] [--public-port N] [--enable-mock-oauth] [--room-key-wrap-key env_var] [--floor-warden-reply-token-env env_var [--floor-warden-reply-token-next-env env_var]] [--room-bot-key-wrap-key env_var] [--ingress-origin https_origin] [--ingress-port N] [--ingress-rate-per-minute N] [--ingress-allow-global-token] [--reconcile-kind endpoint_id=kind]... [--p2p [--p2p-identity path] [--p2p-listen multiaddr] [--p2p-no-mdns]] Run a local relay; --room-system-identity is a dedicated identity file (endpoint ep_relay_system, owner relay_system) that signs room.event envelopes, without it rooms emit no events and the router route answers 503 --browser-origin is an exact origin a browser may call from (repeatable; default none); --room-human-identity is the human identity file the relay signs POST /v1/rooms/{id}/messages with (its key must match the registry key; without it the route answers 503); --public-origin requires --room-human-identity; --room-key-wrap-key names the environment variable holding the 32-byte base64 key that unwraps provisioned humans' signing keys (pass the same name to "human add"); --floor-warden-reply-token-env names the environment variable holding the Floor Warden reply token (at least 32 characters; the reply route POST /v1/rooms/{id}/replies exists only when this is set; --floor-warden-reply-token-next-env names a second variable accepted during rotation); --room-bot-key-wrap-key names the environment variable holding the 32-byte base64 key that unwraps room bots' signing keys; --ingress-origin enables the loopback reply ingress; --ingress-port overrides the relay port plus 5; --ingress-rate-per-minute defaults to 120; --ingress-allow-global-token enables the legacy global token on the ingress; --reconcile-kind sets one endpoint's Postgres kind to the registry file's kind after a REGISTRY_CONFLICT. If you front the relay with a proxy, do not log request URLs for /v1/stream: they carry single-use tickets (blocks; Ctrl+C to stop; set SIGIL_STREAM_SEQ_ENABLED=1 to stamp stream sequences)
   relay well-known generate --identity path --domain domain --endpoint url [--ws-endpoint url] [--output path]
                                                             Emit this relay's .well-known/sigil discovery document from a designated endpoint identity
   oidc-issuer add <issuer> --client-id id [--label text] [--assurance level] [--database-url url]
@@ -205,7 +209,7 @@ export function startOidcIssuerAllowlistPolling({ repository, allowlistSet, inte
 }
 
 async function cmdRelayUp(argv) {
-  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' }, 'oidc-issuer-refresh-interval-ms': { type: 'string' }, domain: { type: 'string' }, 'federation-mode': { type: 'string' }, 'federation-identity': { type: 'string' }, 'room-system-identity': { type: 'string' }, 'browser-origin': { type: 'string', multiple: true }, 'room-human-identity': { type: 'string' }, 'room-key-wrap-key': { type: 'string' }, 'floor-warden-reply-token-env': { type: 'string' }, 'floor-warden-reply-token-next-env': { type: 'string' }, 'room-bot-key-wrap-key': { type: 'string' }, 'public-origin': { type: 'string' }, 'public-port': { type: 'string' }, 'enable-mock-oauth': { type: 'boolean' }, 'reconcile-kind': { type: 'string', multiple: true }, 'relay-request-freshness-ms': { type: 'string' }, p2p: { type: 'boolean' }, 'p2p-listen': { type: 'string' }, 'p2p-identity': { type: 'string' }, 'p2p-no-mdns': { type: 'boolean' } } });
+  const args = parseArgs({ args: argv, options: { registry: { type: 'string' }, port: { type: 'string' }, 'stream-port': { type: 'string' }, 'database-url': { type: 'string' }, 'enable-mock-oidc': { type: 'boolean' }, 'oidc-issuer-refresh-interval-ms': { type: 'string' }, domain: { type: 'string' }, 'federation-mode': { type: 'string' }, 'federation-identity': { type: 'string' }, 'room-system-identity': { type: 'string' }, 'browser-origin': { type: 'string', multiple: true }, 'room-human-identity': { type: 'string' }, 'room-key-wrap-key': { type: 'string' }, 'floor-warden-reply-token-env': { type: 'string' }, 'floor-warden-reply-token-next-env': { type: 'string' }, 'room-bot-key-wrap-key': { type: 'string' }, 'ingress-origin': { type: 'string' }, 'ingress-port': { type: 'string' }, 'ingress-rate-per-minute': { type: 'string' }, 'ingress-allow-global-token': { type: 'boolean' }, 'public-origin': { type: 'string' }, 'public-port': { type: 'string' }, 'enable-mock-oauth': { type: 'boolean' }, 'reconcile-kind': { type: 'string', multiple: true }, 'relay-request-freshness-ms': { type: 'string' }, p2p: { type: 'boolean' }, 'p2p-listen': { type: 'string' }, 'p2p-identity': { type: 'string' }, 'p2p-no-mdns': { type: 'boolean' } } });
   const registryPath = opt(args, ['registry']) ?? DEFAULT_REGISTRY;
   if (opt(args, ['public-origin']) !== undefined && !opt(args, ['room-human-identity'])) throw new Error('sigil relay up: --public-origin requires --room-human-identity');
   const reconcileKind = new Map();
@@ -218,6 +222,31 @@ async function cmdRelayUp(argv) {
   const port = Number(opt(args, ['port']) ?? 0);
   const streamPort = Number(opt(args, ['stream-port']) ?? (port ? port + 1 : 0));
   const databaseUrl = opt(args, ['database-url']) ?? process.env.SIGIL_DATABASE_URL;
+  const ingressOrigin = opt(args, ['ingress-origin']);
+  const ingressAllowGlobalToken = Boolean(args.values['ingress-allow-global-token']);
+  const ingressRateRaw = opt(args, ['ingress-rate-per-minute']);
+  const ingressRatePerMinute = ingressRateRaw === undefined ? 120 : Number(ingressRateRaw);
+  const ingressPortRaw = opt(args, ['ingress-port']);
+  const ingressPort = ingressPortRaw === undefined ? (port ? port + 5 : 0) : Number(ingressPortRaw);
+  const validatePort = (name, value, raw = value) => {
+    if (!Number.isInteger(value) || value < 0 || value > 65535) throw new Error(`sigil relay up: --${name} must be an integer 0-65535, got "${raw}"`);
+  };
+  validatePort('port', port, opt(args, ['port']) ?? 0);
+  validatePort('stream-port', streamPort, opt(args, ['stream-port']) ?? streamPort);
+  if (ingressOrigin !== undefined) {
+    let origin;
+    try { origin = new URL(ingressOrigin); } catch { origin = null; }
+    if (!origin || origin.protocol !== 'https:' || origin.origin !== ingressOrigin) throw new Error('sigil relay up: --ingress-origin must be a bare https: origin');
+    if (!databaseUrl) throw new Error('sigil relay up: --ingress-origin requires --database-url (or SIGIL_DATABASE_URL)');
+    if (!opt(args, ['room-bot-key-wrap-key'])) throw new Error('sigil relay up: --ingress-origin requires --room-bot-key-wrap-key');
+    if (!port) throw new Error('sigil relay up: --ingress-origin requires a non-zero --port');
+    validatePort('ingress-port', ingressPort, ingressPortRaw ?? ingressPort);
+    const publicPortForValidation = opt(args, ['public-port']) === undefined ? (port ? port + 2 : 0) : Number(opt(args, ['public-port']));
+    validatePort('public-port', publicPortForValidation, opt(args, ['public-port']) ?? publicPortForValidation);
+    const ports = [port, streamPort, publicPortForValidation, ingressPort];
+    if (new Set(ports).size !== ports.length) throw new Error(`sigil relay up: relay, stream, public and ingress ports must be distinct (relay=${port}, stream=${streamPort}, public=${publicPortForValidation}, ingress=${ingressPort}); 8793 overlaps the mesh stream port`);
+    if (!Number.isInteger(ingressRatePerMinute) || ingressRatePerMinute <= 0) throw new Error(`sigil relay up: --ingress-rate-per-minute must be a positive integer, got "${ingressRateRaw}"`);
+  }
   const enableMockOidc = Boolean(args.values['enable-mock-oidc']) || process.env.SIGIL_ENABLE_MOCK_OIDC === '1';
   const streamSequenceEnabled = process.env.SIGIL_STREAM_SEQ_ENABLED === '1';
   const oidcIssuerRefreshIntervalMsRaw = opt(args, ['oidc-issuer-refresh-interval-ms']);
@@ -327,6 +356,7 @@ async function cmdRelayUp(argv) {
     error: (entry) => console.error(JSON.stringify(entry)),
   });
   let floorWardenReplies = null;
+  let botSigner = null;
   const replyTokenEnv = opt(args, ['floor-warden-reply-token-env']);
   const replyTokenNextEnv = opt(args, ['floor-warden-reply-token-next-env']);
   if (replyTokenNextEnv && !replyTokenEnv) throw new Error('sigil relay up: --floor-warden-reply-token-next-env requires --floor-warden-reply-token-env');
@@ -340,7 +370,10 @@ async function cmdRelayUp(argv) {
   // Without the bot wrap key the relay still runs; the signer then throws
   // WRAP_KEY_UNAVAILABLE and the reply route answers 503 BOT_SIGNING_UNAVAILABLE.
   // createRelayServer binds the handler to this signer and its accept path.
-  if (floorWardenReplies) floorWardenReplies.botSigner = createRoomBotSigner({ repository, wrapKey: roomBotWrapKey });
+  if (floorWardenReplies || ingressOrigin) {
+    botSigner = createRoomBotSigner({ repository, wrapKey: roomBotWrapKey });
+    if (floorWardenReplies) floorWardenReplies.botSigner = botSigner;
+  }
   const publicOrigin = opt(args, ['public-origin']);
   const allowedOrigins = [...(args.values['browser-origin'] ?? []), ...(publicOrigin ? [publicOrigin] : [])];
   const ticketStore = createTicketStore();
@@ -415,6 +448,18 @@ async function cmdRelayUp(argv) {
   if (publicServer) {
     await new Promise((resolve) => publicServer.listen(resolvePublicPort({ port, publicPort }), '127.0.0.1', resolve));
     publicAddress = publicServer.address();
+  }
+  let ingressListener = null;
+  let ingressAddress = null;
+  if (ingressOrigin) {
+    const ingressGate = createFloorWardenGate({
+      match: createReplyTokenMatcher({ repository, globalTokens: floorWardenReplies?.tokens, allowGlobal: ingressAllowGlobalToken, logger: relayLogger }),
+      handler: createFloorWardenReplyHandler({ repository, botSigner, buildAcceptOptions }),
+      distinguishEndpointPrincipal: false,
+      logger: relayLogger,
+    });
+    ingressListener = createReplyIngress({ gate: ingressGate, repository, ratePerMinute: ingressRatePerMinute, metrics: relayMetrics, logger: relayLogger });
+    ingressAddress = await ingressListener.listen(ingressPort);
   }
 
   // Optional libp2p transport (spec §8), started alongside the existing
@@ -529,8 +574,13 @@ async function cmdRelayUp(argv) {
   const resendWorkerTimer = startResendWorker({ repository, stream, logger: relayLogger, metrics: relayMetrics });
   if (resendWorkerTimer) console.log('Session resend worker running (60s interval).');
   if (enableMockOidc) console.log('WARNING: mock-OIDC login is enabled (--enable-mock-oidc). This is for local development and CI only -- never expose this relay to untrusted networks.');
+  if (ingressOrigin && ingressAllowGlobalToken) console.log('WARNING: --ingress-allow-global-token enables the legacy global reply token on the ingress.');
   console.log(`Sigil relay listening on http://127.0.0.1:${address.port}`);
   console.log(`Sigil stream (push notify) on ws://127.0.0.1:${streamAddress.port}/v1/stream`);
+  if (ingressAddress) {
+    console.log(`Reply ingress origin: ${ingressOrigin}`);
+    console.log(`Reply ingress listener: 127.0.0.1:${ingressAddress.port}`);
+  }
   if (publicAddress) {
     console.log(`Public origin: ${publicOrigin}`);
     console.log(`Cookie-only listener: 127.0.0.1:${publicAddress.port}`);
@@ -549,6 +599,7 @@ async function cmdRelayUp(argv) {
       if (p2pHost) await p2pHost.stop();
       await new Promise((done) => server.close(() => done()));
       if (publicServer) { const closing = new Promise((done) => publicServer.close(() => done())); publicServer.closeAllConnections?.(); await closing; }
+      if (ingressListener) await new Promise((done) => ingressListener.server.close(() => done()));
       await new Promise((done) => streamHttpServer.close(() => done()));
       resolve();
     };
