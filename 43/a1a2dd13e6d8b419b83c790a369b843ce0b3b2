@@ -1,0 +1,19 @@
+sigil/relay/v1/floor-warden-ingress-e2e.pg.test.mjs
+  s_e0ff9838a5999a::t_a404b23a8344d0 23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "43a1a2dd13e6d8b419b83c790a369b843ce0b3b2",
+  "prompts": {},
+  "sessions": {
+    "s_e0ff9838a5999a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15aed-7dd5-70a2-8273-87e6baa5453e",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
