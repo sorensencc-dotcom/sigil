@@ -73,6 +73,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
   const rooms = new Map(); // conversation_id -> room row (migration 027)
   const roomMembers = new Map(); // conversation_id -> Map(endpoint_id -> member row incl. removed_at)
   const floorWardenBots = new Map(); // bot_id -> row (migration 035)
+  const replyTokens = new Map(); // token_id -> row (migration 039)
   const botSigningKeys = new Map(); // key_id -> { wrapped, created_at } (migration 035)
   const roomInvocations = new Map(); // invocation_id -> row (migration 028)
   const roomThreads = new Map(); // JSON [room_id, thread_root_id] -> { agent_turns, updated_at } (migration 028)
@@ -247,6 +248,55 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     async lookupFloorWardenBot(botId) {
       const row = floorWardenBots.get(botId);
       return row ? { bot_id: row.bot_id, endpoint_id: row.endpoint_id, display_name: row.display_name, status: row.status } : null;
+    },
+    async insertReplyToken({ tokenId, botId, tokenSha256, status, createdAt, expiresAt }, client) {
+      replyTokens.set(tokenId, {
+        token_id: tokenId,
+        bot_id: botId,
+        token_sha256: Buffer.from(tokenSha256),
+        status,
+        created_at: (createdAt instanceof Date ? createdAt : new Date(createdAt)).toISOString(),
+        expires_at: expiresAt == null ? null : (expiresAt instanceof Date ? expiresAt : new Date(expiresAt)).toISOString(),
+        last_used_at: null,
+        revoked_at: null,
+      });
+    },
+    async lookupReplyTokenByHash(tokenSha256, client) {
+      const hash = Buffer.from(tokenSha256);
+      for (const row of replyTokens.values()) if (Buffer.from(row.token_sha256).equals(hash)) return { ...row, token_sha256: Buffer.from(row.token_sha256) };
+      return null;
+    },
+    async retireActiveReplyTokens(botId, expiresAt, client) {
+      const timestamp = (expiresAt instanceof Date ? expiresAt : new Date(expiresAt)).toISOString();
+      let count = 0;
+      for (const row of replyTokens.values()) {
+        if (row.bot_id === botId && row.status === 'active') { row.status = 'retired'; row.expires_at = timestamp; count += 1; }
+      }
+      return count;
+    },
+    async revokeReplyToken(tokenId, now, client) {
+      const row = replyTokens.get(tokenId);
+      if (!row || row.status === 'revoked') return false;
+      row.status = 'revoked';
+      row.revoked_at = (now instanceof Date ? now : new Date(now)).toISOString();
+      return true;
+    },
+    async listReplyTokens(botId, client) {
+      return [...replyTokens.values()]
+        .filter((row) => row.bot_id === botId)
+        .map(({ token_sha256: _tokenSha256, ...row }) => ({ ...row }));
+    },
+    async touchReplyTokenLastUsed(tokenId, now, minIntervalMs, client) {
+      const row = replyTokens.get(tokenId);
+      const timestamp = now instanceof Date ? now : new Date(now);
+      if (!row || (row.last_used_at && timestamp.getTime() - Date.parse(row.last_used_at) < minIntervalMs)) return false;
+      row.last_used_at = timestamp.toISOString();
+      return true;
+    },
+    async countAcceptedReplies({ botId, since }, client) {
+      const cutoff = (since instanceof Date ? since : new Date(since)).getTime();
+      return auditEvents.filter((row) => row.event_type === 'room.floor_warden_reply'
+        && row.subject_id === botId && row.outcome === 'accepted' && Date.parse(row.created_at) >= cutoff).length;
     },
     async insertFloorWardenBot(row) {
       if (floorWardenBots.has(row.bot_id) || [...floorWardenBots.values()].some((b) => b.endpoint_id === row.endpoint_id)) {

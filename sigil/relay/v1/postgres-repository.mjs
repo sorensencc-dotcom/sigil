@@ -343,6 +343,59 @@ export class PostgresRepository {
     const result = await client.query('SELECT bot_id, endpoint_id, display_name, status FROM floor_warden_bots WHERE bot_id = $1', [botId]);
     return result.rows[0] ?? null;
   }
+  async insertReplyToken({ tokenId, botId, tokenSha256, status, createdAt, expiresAt }, client = this.pool) {
+    await client.query(
+      `INSERT INTO floor_warden_reply_tokens (token_id, bot_id, token_sha256, status, created_at, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [tokenId, botId, tokenSha256, status, createdAt instanceof Date ? createdAt.toISOString() : new Date(createdAt).toISOString(), expiresAt == null ? null : (expiresAt instanceof Date ? expiresAt.toISOString() : new Date(expiresAt).toISOString())],
+    );
+  }
+  async lookupReplyTokenByHash(tokenSha256, client = this.pool) {
+    const result = await client.query('SELECT token_id, bot_id, token_sha256, status, created_at, expires_at, last_used_at, revoked_at FROM floor_warden_reply_tokens WHERE token_sha256 = $1', [tokenSha256]);
+    return result.rows[0] ?? null;
+  }
+  async retireActiveReplyTokens(botId, expiresAt, client = this.pool) {
+    const result = await client.query(
+      `UPDATE floor_warden_reply_tokens SET status = 'retired', expires_at = $2
+       WHERE bot_id = $1 AND status = 'active'`,
+      [botId, expiresAt instanceof Date ? expiresAt.toISOString() : new Date(expiresAt).toISOString()],
+    );
+    return result.rowCount;
+  }
+  async revokeReplyToken(tokenId, now, client = this.pool) {
+    const result = await client.query(
+      `UPDATE floor_warden_reply_tokens SET status = 'revoked', revoked_at = $2
+       WHERE token_id = $1 AND status <> 'revoked'`,
+      [tokenId, now instanceof Date ? now.toISOString() : new Date(now).toISOString()],
+    );
+    return result.rowCount === 1;
+  }
+  async listReplyTokens(botId, client = this.pool) {
+    const result = await client.query(
+      `SELECT token_id, bot_id, status, created_at, expires_at, last_used_at, revoked_at
+       FROM floor_warden_reply_tokens WHERE bot_id = $1 ORDER BY created_at, token_id`,
+      [botId],
+    );
+    return result.rows;
+  }
+  async touchReplyTokenLastUsed(tokenId, now, minIntervalMs, client = this.pool) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const result = await client.query(
+      `UPDATE floor_warden_reply_tokens SET last_used_at = $2
+       WHERE token_id = $1 AND (last_used_at IS NULL OR last_used_at < $2::timestamptz - ($3 * INTERVAL '1 millisecond'))`,
+      [tokenId, timestamp, minIntervalMs],
+    );
+    return result.rowCount === 1;
+  }
+  async countAcceptedReplies({ botId, since }, client = this.pool) {
+    const result = await client.query(
+      `SELECT count(*) FROM audit_events
+       WHERE event_type = 'room.floor_warden_reply' AND subject_id = $1
+         AND outcome = 'accepted' AND created_at >= $2`,
+      [botId, since instanceof Date ? since.toISOString() : new Date(since).toISOString()],
+    );
+    return Number(result.rows[0].count);
+  }
   async insertFloorWardenBot(row, client = this.pool) {
     const createdAt = row.created_at ?? new Date();
     try {
