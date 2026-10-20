@@ -1,0 +1,24 @@
+sigil/relay/v1/admin-notify.pg.test.mjs
+  s_c74226617cd7b9::t_39beed3f754d83 80
+  s_c74226617cd7b9::t_60aa423a1b069e 82
+  s_c74226617cd7b9::t_440af0f9b2346e 85
+  s_c74226617cd7b9::t_553d7534bcf855 77
+sigil/scripts/live-db-tests.mjs
+  s_c74226617cd7b9::t_0d4ab7c7c3e9eb 8-11,89
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0448eae5f416e26f8752b6a77456f5ca3dbc4114",
+  "prompts": {},
+  "sessions": {
+    "s_c74226617cd7b9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15648-52f1-74e1-9328-bfd34e28d815",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
