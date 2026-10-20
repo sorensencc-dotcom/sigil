@@ -298,11 +298,11 @@ function runCli(args, { env = {}, cwd = tempDir() } = {}) {
   return { status: result.status, out: `${result.stdout}${result.stderr}` };
 }
 
-function floorWardenArgs(idFile, omit = []) {
+function floorWardenArgs(idFile, omit = [], replyUrl = 'https://relay.example.test') {
   const all = {
     '--floor-warden-url-env': 'SIGIL_TEST_FW_URL',
     '--floor-warden-key-env': 'SIGIL_TEST_FW_KEY',
-    '--floor-warden-reply-url': 'https://relay.example.test',
+    '--floor-warden-reply-url': replyUrl,
   };
   const args = ['--identity', idFile, '--relay-url', 'http://127.0.0.1:1', '--config', path.join(path.dirname(idFile), 'none.json'), '--room-bridge', 'floor-warden'];
   for (const [flag, value] of Object.entries(all)) if (!omit.includes(flag)) args.push(flag, value);
@@ -351,6 +351,28 @@ test('agent run --room-bridge floor-warden with a URL env that is not http(s) fa
   assert.notEqual(status, 0);
   assert.match(out, /SIGIL_TEST_FW_URL/);
   assertNoValues(out, env);
+});
+
+test('agent run --room-bridge floor-warden accepts https and loopback http reply URLs', async () => {
+  for (const replyUrl of ['https://relay.example.test/replies', 'http://127.0.0.1:8794/replies', 'http://localhost:8794/replies', 'http://[::1]:8794/replies']) {
+    const dir = tempDir();
+    const env = secretEnv();
+    const idFile = writeIdentity(dir, receiveOnlyIdentity());
+    const { status, out } = await spawnUntil(floorWardenArgs(idFile, [], replyUrl), { env, cwd: dir, until: /Room bridge: floor-warden/ });
+    assert.equal(status, undefined, `${replyUrl}: ${out}`);
+  }
+});
+
+test('agent run --room-bridge floor-warden refuses public http and malformed reply URLs without echoing values', () => {
+  for (const replyUrl of [`http://relay.example.test/${random()}`, `not a url ${random()}`]) {
+    const dir = tempDir();
+    const env = secretEnv();
+    const idFile = writeIdentity(dir, receiveOnlyIdentity());
+    const { status, out } = runCli(floorWardenArgs(idFile, [], replyUrl), { env, cwd: dir });
+    assert.notEqual(status, 0);
+    assert.match(out, /--floor-warden-reply-url/);
+    assert.ok(!out.includes(replyUrl));
+  }
 });
 
 test('agent run --room-bridge floor-warden without a bot id in the identity or a flag fails naming both', () => {

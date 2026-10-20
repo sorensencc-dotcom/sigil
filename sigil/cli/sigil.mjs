@@ -1115,7 +1115,8 @@ async function buildFloorWardenRoomBridge({ args, identity, relayUrl }) {
   if (!key) throw new Error(`environment variable ${keyEnv} (named by --floor-warden-key-env) is not set`);
   let parsedReply = null;
   try { parsedReply = new URL(replyUrl); } catch { /* reported below */ }
-  if (!parsedReply || (parsedReply.protocol !== 'https:' && parsedReply.protocol !== 'http:')) throw new Error('--floor-warden-reply-url must be an http(s) URL');
+  const loopback = new Set(['127.0.0.1', 'localhost', '[::1]']);
+  if (!parsedReply || (parsedReply.protocol !== 'https:' && parsedReply.protocol !== 'http:') || (parsedReply.protocol === 'http:' && !loopback.has(parsedReply.hostname))) throw new Error('--floor-warden-reply-url must use https, or http on loopback');
   // `sigil bot add` writes bot_id into the receive-only identity; the flag is
   // the fallback for an identity file that lacks it.
   const identityBotId = typeof identity.bot_id === 'string' && identity.bot_id ? identity.bot_id : null;
