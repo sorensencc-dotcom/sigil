@@ -124,6 +124,10 @@ SIGIL_IDENTITY/SIGIL_RELAY_URL/SIGIL_STREAM_URL env vars, then .sigil/config.jso
 Everything here runs on this machine. See docs/meta/sigil-cli-roadmap.md for what's missing for real multi-user use.`);
 }
 
+function listenerBindError(name, port, error) {
+  return new Error(`sigil relay up: ${name} listener failed to bind on port ${port}: ${error.code ?? error.message}`, { cause: error });
+}
+
 function opt(args, flags, fallback) {
   for (const flag of flags) if (args.values[flag] !== undefined) return args.values[flag];
   return fallback;
@@ -442,11 +446,39 @@ async function cmdRelayUp(argv) {
     onPersisted: createOnPersisted(stream, { repository, logger: relayLogger }), systemIdentity: roomSystemIdentity, stream,
   });
   acceptOptionsHolder.build = buildAcceptOptions;
-  await new Promise((resolve) => streamHttpServer.listen(streamPort, '127.0.0.1', resolve));
+  const startupListeners = [];
+  const closeStartupListeners = async () => {
+    while (startupListeners.length) {
+      const listener = startupListeners.pop();
+      if (listener?.listening) await new Promise((resolve) => listener.close(resolve));
+    }
+  };
+  const closeStartupResources = async () => {
+    await closeStartupListeners();
+    agentmailDeployment?.close();
+    await adminListener?.close();
+    await pool?.end();
+  };
+  const listenHttp = (listener, port, name) => new Promise((resolve, reject) => {
+    const onError = (error) => {
+      listener.removeListener('listening', onListening);
+      void closeStartupResources().finally(() => reject(listenerBindError(name, port, error)));
+    };
+    const onListening = () => {
+      listener.removeListener('error', onError);
+      startupListeners.push(listener);
+      resolve();
+    };
+    listener.once('error', onError);
+    listener.once('listening', onListening);
+    listener.listen(port, '127.0.0.1');
+  });
+  await listenHttp(streamHttpServer, streamPort, 'stream');
   const streamAddress = streamHttpServer.address();
   let publicAddress = null;
   if (publicServer) {
-    await new Promise((resolve) => publicServer.listen(resolvePublicPort({ port, publicPort }), '127.0.0.1', resolve));
+    const resolvedPublicPort = resolvePublicPort({ port, publicPort });
+    await listenHttp(publicServer, resolvedPublicPort, 'public');
     publicAddress = publicServer.address();
   }
   let ingressListener = null;
@@ -459,7 +491,13 @@ async function cmdRelayUp(argv) {
       logger: relayLogger,
     });
     ingressListener = createReplyIngress({ gate: ingressGate, repository, ratePerMinute: ingressRatePerMinute, metrics: relayMetrics, logger: relayLogger });
-    ingressAddress = await ingressListener.listen(ingressPort);
+    try {
+      ingressAddress = await ingressListener.listen(ingressPort);
+      startupListeners.push(ingressListener.server);
+    } catch (error) {
+      await closeStartupResources();
+      throw listenerBindError('reply ingress', ingressPort, error);
+    }
   }
 
   // Optional libp2p transport (spec §8), started alongside the existing
@@ -562,7 +600,7 @@ async function cmdRelayUp(argv) {
     return addr ? `http://127.0.0.1:${addr.port}` : `http://127.0.0.1:${port}`;
   };
   server = createRelayServer({ floorWardenReplies, buildAcceptOptions, roomSystemIdentity, registry, repository, authenticate: bearerAuth, stream, ticketStore, allowedOrigins, humanSigner, relayOrigin, enableMockOidc, oidcIssuerAllowList, relayDomain, federationMode, federationIdentity, relayRequestFreshnessMs, stream_seq: { enabled: streamSequenceEnabled }, logger: relayLogger, resendMetrics: relayMetrics, agentmailIngress: agentmailDeployment?.agentmailIngress, agentmailControl: agentmailDeployment?.agentmailControl });
-  await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
+  await listenHttp(server, port, 'relay');
   const address = server.address();
   let federationReaperTimer;
   if (federationMode === 'queue') {
