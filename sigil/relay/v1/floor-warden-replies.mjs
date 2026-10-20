@@ -44,12 +44,13 @@ function parseReplyBody(raw, roomId) {
 // `facts` collects what the audit row may name as each check passes: the
 // claimed bot and sender after parsing, the room only once it is known to
 // exist, and the message id once one is accepted or replayed.
-async function runReply({ request, requestId, roomId, now, readBody, repository, botSigner, buildAcceptOptions }, facts) {
+async function runReply({ request, requestId, roomId, now, readBody, repository, botSigner, buildAcceptOptions, botId }, facts) {
   let raw;
   try { raw = await readBody(request, REPLY_BODY_MAX_BYTES); } catch { return fail(400, 'INVALID_REQUEST', `Body must be at most ${REPLY_BODY_MAX_BYTES} bytes`); }
   const parsed = parseReplyBody(raw, roomId);
   if (parsed.error) return parsed.error;
   const { reply } = parsed;
+  if (botId && botId !== reply.targetBotId) return { ...fail(403, 'BOT_NOT_ON_ROSTER', 'target_bot_id does not match the reply token bot'), noAudit: true };
   // Caller-claimed and unverified until step 4 passes: on refusal rows these
   // name what the caller asserted, not a checked identity.
   facts.botId = clip(reply.targetBotId, AUDIT_ID_MAX);
@@ -155,6 +156,7 @@ export async function handleFloorWardenReply(ctx) {
     await audit('refused', 'DATABASE_UNAVAILABLE', 503).catch(() => {});
     throw error;
   }
+  if (result.noAudit) return result;
   const accepted = result.status === 202;
   await audit(accepted ? (result.body.duplicate ? 'duplicate' : 'accepted') : 'refused', accepted ? null : result.body?.code ?? null, result.status);
   return result;

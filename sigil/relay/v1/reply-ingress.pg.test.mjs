@@ -186,8 +186,7 @@ test('real HTTP accepts a reply and makes the same idempotency key a duplicate',
 test('real HTTP refuses wrong-bot, revoked, expired, and normal endpoint credentials', { skip, timeout: 60_000 }, async () => {
   const wrong = await runningInvocation(await newRoom('wrong-bot'));
   const wrongBot = await reply(wrong, state.otherToken, { idempotency_key: `${wrong.messageId}:wrong` });
-  // TODO(product bug): a valid token for another bot is accepted instead of BOT_NOT_ON_ROSTER.
-  assert.deepEqual([wrongBot.status, wrongBot.body.code], [202, undefined]);
+  assert.deepEqual([wrongBot.status, wrongBot.body.code], [403, 'BOT_NOT_ON_ROSTER']);
 
   const revokedToken = `fwr_${crypto.randomBytes(32).toString('base64url')}`;
   const revokedId = `frt_${random()}`;
