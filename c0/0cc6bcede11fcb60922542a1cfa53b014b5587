@@ -1,0 +1,22 @@
+sigil/migrations/039_reply_ingress.test.mjs
+  s_158d0166252aeb::t_9e3ba3b0df1231 1-58,61-79
+  s_158d0166252aeb::t_44fe4a0148ee3e 59-60
+sigil/migrations/039_reply_ingress.sql
+  s_158d0166252aeb::t_9e3ba3b0df1231 1-23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c00cc6bcede11fcb60922542a1cfa53b014b5587",
+  "prompts": {},
+  "sessions": {
+    "s_158d0166252aeb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15a28-da28-71c1-b0ee-1cb21afdb858",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
