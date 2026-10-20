@@ -1,0 +1,19 @@
+docs/reply-ingress-runbook.md
+  s_a0fe25a223289f::t_0ea1112d2e5883 1-285
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3543162f486457878b6cde452420544d496970fe",
+  "prompts": {},
+  "sessions": {
+    "s_a0fe25a223289f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8f0f3f9f-3702-49e7-89b5-2e8b1e8af2b3",
+        "model": "unknown"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
