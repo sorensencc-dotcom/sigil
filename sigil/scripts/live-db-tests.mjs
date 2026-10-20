@@ -5,9 +5,10 @@
 // races every other one for the same `pg_catalog` rows when run that way —
 // verified failure: `duplicate key value violates unique constraint
 // "pg_type_typname_nsp_index"`. This runner discovers those suites and runs
-// them one at a time in a single child process each, so no two schema resets
-// ever overlap. Individual suites are untouched and still run standalone via
-// `node --test <file>` exactly as before.
+// them one at a time in a child process with Node's in-process test concurrency
+// disabled, so no two schema resets ever overlap while each file's shared
+// before/after lifecycle remains intact. Individual suites are untouched and
+// still run standalone via `node --test <file>` exactly as before.
 import { spawn } from 'node:child_process';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -85,7 +86,7 @@ export function parseSummary(output) {
 export function defaultRunSuite(file, env, { timeoutMs = Number(env.SIGIL_LIVE_SUITE_TIMEOUT_MS ?? DEFAULT_SUITE_TIMEOUT_MS) } = {}) {
   return new Promise((resolve, reject) => {
     let stdout = '';
-    const child = spawn(process.execPath, ['--test', file], { env, cwd: sigilRoot });
+    const child = spawn(process.execPath, ['--test', '--test-isolation=none', '--test-concurrency=1', file], { env, cwd: sigilRoot });
     child.stdout.on('data', (chunk) => {
       stdout += chunk;
       try { process.stdout.write(chunk); } catch (error) { if (error.code !== 'EPIPE') throw error; }
