@@ -17,8 +17,11 @@ const hooksDir = path.resolve(repoRoot, gitDir, 'hooks');
 fs.mkdirSync(hooksDir, { recursive: true });
 
 const hookPath = path.join(hooksDir, 'pre-commit');
+const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+const nodePath = process.execPath.replaceAll('\\', '/');
+const scanPath = path.relative(repoRoot, path.join(here, 'secret-scan.mjs')).split(path.sep).join('/');
 const hookBody = `#!/bin/sh
-node "${path.relative(repoRoot, path.join(here, 'secret-scan.mjs')).split(path.sep).join('/')}" || exit 1
+exec ${shellQuote(nodePath)} ${shellQuote(scanPath)}
 `;
 
 fs.writeFileSync(hookPath, hookBody, { mode: 0o755 });
