@@ -1,0 +1,32 @@
+sigil/cli/sigil.mjs
+  s_1f2147d149cce1::t_a7f283a296ad1a 127-130,449-455,462-464,466-476,480-481,494-497,499-500,603
+  s_1f2147d149cce1::t_62518c7f000552 456-461,465,498
+sigil/cli/relay-up-ingress.test.mjs
+  s_1f2147d149cce1::t_7138154b832fd9 7,16
+  s_1f2147d149cce1::t_a7f283a296ad1a 87-93,117,122
+  s_1f2147d149cce1::t_d40922e01bf0ff 39-47,115
+  s_1f2147d149cce1::t_138a84fb1b00cc 8,108
+  s_1f2147d149cce1::t_f9e0c9acb47126 113
+sigil/cli/relay-up-bind-fail-closed.test.mjs
+  s_1f2147d149cce1::t_f9e0c9acb47126 25-30,58
+  s_1f2147d149cce1::t_a7f283a296ad1a 1-6,8-14,16-24,31-52,57,59-63
+  s_1f2147d149cce1::t_19797b3b3aeaf1 53-54
+  s_1f2147d149cce1::t_1a386eb7827a41 55-56
+  s_1f2147d149cce1::t_7138154b832fd9 7,15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3503bb082828d96216041827fc93da478dfaa6dd",
+  "prompts": {},
+  "sessions": {
+    "s_1f2147d149cce1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15afb-c882-7961-9b20-d28c0204c5ae",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
