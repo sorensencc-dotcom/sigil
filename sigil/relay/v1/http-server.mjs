@@ -11,6 +11,7 @@ import { sendReceiptFrame } from './receipt-notify.mjs';
 import { createBearerAuthenticator } from './transport-auth.mjs';
 import { handleRoomRoute } from './room-routes.mjs';
 import { createFloorWardenReplyHandler } from './floor-warden-replies.mjs';
+import { createFloorWardenGate } from './floor-warden-gate.mjs';
 import { applyBrowserCors, isBrowserRoute } from './browser-cors.mjs';
 import { createApprovalChallenge, coseKeyToPublicKey, parseAttestationObject, verifyPackedAttestation, verifyWebAuthnApproval, verifyWebAuthnAssertion } from './approval-ceremony.mjs';
 import { renderApprovalPage } from './approval-ui.mjs';
@@ -114,6 +115,14 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
   // handler bound to this server's repository and accept path.
   const replyHandler = floorWardenReplies?.handler
     ?? (floorWardenReplies?.botSigner ? createFloorWardenReplyHandler({ repository, botSigner: floorWardenReplies.botSigner, buildAcceptOptions }) : null);
+  const replyGate = createFloorWardenGate({
+    match: async (bearer) => floorWardenReplies?.tokens?.matches(bearer) ? { kind: 'global' } : null,
+    handler: replyHandler,
+    authenticateRequest,
+    distinguishEndpointPrincipal: true,
+    logger,
+    configured: Boolean(floorWardenReplies?.tokens),
+  });
   const resolveHumanCredential = lookupHumanCredential ?? repository?.lookupHumanCredential?.bind(repository);
   const assertionRateLimits = new Map();
   const MAX_STORED_LIMITS = 5000;
@@ -254,36 +263,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     // sits before the generic bearer gate. Absent (404) unless configured.
     const replyMatch = parsedUrl.pathname.match(/^\/v1\/rooms\/([^/]+)\/replies$/);
     if (request.method === 'POST' && replyMatch) {
-      const sendReply = (status, code, message) => {
-        response.writeHead(status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
-        return response.end(JSON.stringify({ request_id: requestId, code, message, details: {} }));
-      };
-      if (!floorWardenReplies?.tokens) return sendReply(404, 'NOT_FOUND', 'Not found');
-      const header = request.headers.authorization;
-      const presented = typeof header === 'string' && header.startsWith('Bearer ') ? header.slice(7) : '';
-      if (!floorWardenReplies.tokens.matches(presented)) {
-        const endpointPrincipal = presented && authenticateRequest ? await authenticateRequest(request) : null;
-        if (endpointPrincipal) return sendReply(403, 'ROUTE_NOT_AUTHORIZED', 'This route accepts only the Floor Warden reply token');
-        return sendReply(401, 'UNAUTHENTICATED', 'Authentication required');
-      }
-      if (typeof replyHandler !== 'function') return sendReply(503, 'FLOOR_WARDEN_UNAVAILABLE', 'Floor Warden replies are not available');
-      let replyRoomId;
-      try { replyRoomId = decodeURIComponent(replyMatch[1]); } catch { return sendReply(400, 'INVALID_REQUEST', 'Malformed room ID in path'); }
-      let result;
-      try {
-        result = await replyHandler({ request, response, requestId, roomId: replyRoomId, now, readBody });
-      } catch (error) {
-        // A thrown error is a store failure, answered like the sibling rooms
-        // routes. The relay-signature fault is an explicit 500 INTERNAL result
-        // from the handler, not a throw. No error text reaches the caller or
-        // the log: it could name internal state.
-        logger?.error?.({ event: 'floor_warden_reply_failed', request_id: requestId, code: error?.code ?? null });
-        if (response.headersSent) return response.end();
-        return sendReply(503, 'DATABASE_UNAVAILABLE', 'Rooms temporarily unavailable');
-      }
-      if (result?.handled) return;
-      response.writeHead(result?.status ?? 500, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
-      return response.end(JSON.stringify({ request_id: requestId, ...(result?.body ?? {}) }));
+      return replyGate({ request, response, requestId, roomId: replyMatch[1], now, readBody });
     }
 
     // Unauthenticated at the transport layer: trust is the peer relay's

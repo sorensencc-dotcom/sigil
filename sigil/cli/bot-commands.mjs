@@ -6,10 +6,12 @@ import { loadWrapKey, wrapPrivateKey } from '../relay/v1/key-wrap.mjs';
 import { loadIdentity } from './identity.mjs';
 import { addEndpointToRegistry } from './registry-store.mjs';
 import { loadConfigFile, resolveConfig } from './config-resolver.mjs';
+import { generateReplyToken } from '../relay/v1/reply-token.mjs';
 
 const DEFAULT_CLI_CONFIG = '.sigil/config.json';
 const ADD_USAGE = 'usage: sigil bot add --bot-id <id> --endpoint <endpoint_id> --name <display name> [--identity path] [--config path] [--out path] [--registry path] [--database-url url] [--room-bot-key-wrap-key env_var]';
 const DISABLE_USAGE = 'usage: sigil bot disable --bot-id <id> [--database-url url]';
+const TOKEN_USAGE = 'usage: sigil bot token <create|rotate|revoke|list> --bot-id <id> [options] [--database-url url]';
 
 function operatorOwnerId(values) {
   const config = loadConfigFile(values.config ?? DEFAULT_CLI_CONFIG);
@@ -154,4 +156,100 @@ export async function cmdBotDisable(argv) {
   }));
   console.log(`bot_id: ${botId}`);
   console.log('status: disabled');
+}
+
+function tokenDatabase(values) {
+  const databaseUrl = values['database-url'] ?? process.env.SIGIL_DATABASE_URL;
+  if (!databaseUrl) throw new Error('sigil bot token requires --database-url (or SIGIL_DATABASE_URL)');
+  return databaseUrl;
+}
+
+function positiveNumber(value, flag) {
+  if (value == null || !/^\d+(?:\.\d+)?$/.test(value) || Number(value) <= 0) throw new Error(`--${flag} must be positive`);
+  return Number(value);
+}
+
+async function prepareTokenDatabase(databaseUrl) {
+  const { applyMigrations } = await import('../scripts/apply-migrations.mjs');
+  await applyMigrations(databaseUrl);
+}
+
+export async function cmdBotTokenCreate(argv) {
+  const { values } = parseArgs({ args: argv, options: { 'bot-id': { type: 'string' }, 'expires-in-days': { type: 'string' }, 'database-url': { type: 'string' } } });
+  const botId = values['bot-id'];
+  if (!botId) throw new Error(TOKEN_USAGE);
+  const databaseUrl = tokenDatabase(values);
+  const expiresInDays = values['expires-in-days'] == null ? null : positiveNumber(values['expires-in-days'], 'expires-in-days');
+  await prepareTokenDatabase(databaseUrl);
+  const generated = generateReplyToken();
+  const now = new Date();
+  const expiresAt = expiresInDays == null ? null : new Date(now.getTime() + expiresInDays * 86_400_000);
+  await withRepository(databaseUrl, (repository) => repository.withTransaction(async (client) => {
+    const bot = await repository.lookupFloorWardenBot(botId, client);
+    if (!bot) throw new Error(`Floor Warden bot ${botId} not found`);
+    if (bot.status !== 'active') throw new Error(`Floor Warden bot ${botId} is disabled`);
+    await repository.insertReplyToken({ tokenId: generated.tokenId, botId, tokenSha256: generated.sha256, status: 'active', createdAt: now, expiresAt }, client);
+    await repository.recordAuditEvent({ eventType: 'ingress.token_created', subjectId: botId, endpointId: bot.endpoint_id, objectType: 'floor_warden_reply_token', objectId: generated.tokenId, outcome: 'accepted', payload: {}, now, client });
+  }));
+  console.log(generated.token);
+}
+
+export async function cmdBotTokenRotate(argv) {
+  const { values } = parseArgs({ args: argv, options: { 'bot-id': { type: 'string' }, 'grace-minutes': { type: 'string' }, 'database-url': { type: 'string' } } });
+  const botId = values['bot-id'];
+  if (!botId) throw new Error(TOKEN_USAGE);
+  const databaseUrl = tokenDatabase(values);
+  const graceMinutes = values['grace-minutes'] == null ? 1440 : positiveNumber(values['grace-minutes'], 'grace-minutes');
+  await prepareTokenDatabase(databaseUrl);
+  const generated = generateReplyToken();
+  const now = new Date();
+  const graceUntil = new Date(now.getTime() + graceMinutes * 60_000);
+  await withRepository(databaseUrl, (repository) => repository.withTransaction(async (client) => {
+    const bot = await repository.lookupFloorWardenBot(botId, client);
+    if (!bot) throw new Error(`Floor Warden bot ${botId} not found`);
+    if (bot.status !== 'active') throw new Error(`Floor Warden bot ${botId} is disabled`);
+    await repository.retireActiveReplyTokens(botId, graceUntil, client);
+    await repository.insertReplyToken({ tokenId: generated.tokenId, botId, tokenSha256: generated.sha256, status: 'active', createdAt: now, expiresAt: null }, client);
+    await repository.recordAuditEvent({ eventType: 'ingress.token_rotated', subjectId: botId, endpointId: bot.endpoint_id, objectType: 'floor_warden_reply_token', objectId: generated.tokenId, outcome: 'accepted', payload: { grace_minutes: graceMinutes }, now, client });
+  }));
+  console.log(generated.token);
+}
+
+export async function cmdBotTokenRevoke(argv) {
+  const { values } = parseArgs({ args: argv, options: { 'bot-id': { type: 'string' }, 'token-id': { type: 'string' }, 'database-url': { type: 'string' } } });
+  const botId = values['bot-id'];
+  const tokenId = values['token-id'];
+  if (!botId || !tokenId) throw new Error(TOKEN_USAGE);
+  const databaseUrl = tokenDatabase(values);
+  await prepareTokenDatabase(databaseUrl);
+  await withRepository(databaseUrl, (repository) => repository.withTransaction(async (client) => {
+    const bot = await repository.lookupFloorWardenBot(botId, client);
+    if (!bot) throw new Error(`Floor Warden bot ${botId} not found`);
+    const token = (await repository.listReplyTokens(botId, client)).find((row) => row.token_id === tokenId);
+    if (!token) throw new Error(`Reply token ${tokenId} not found for bot ${botId}`);
+    const changed = await repository.revokeReplyToken(tokenId, new Date(), client);
+    if (changed) await repository.recordAuditEvent({ eventType: 'ingress.token_revoked', subjectId: botId, endpointId: bot.endpoint_id, objectType: 'floor_warden_reply_token', objectId: tokenId, outcome: 'accepted', payload: {}, now: new Date(), client });
+  }));
+}
+
+export async function cmdBotTokenList(argv) {
+  const { values } = parseArgs({ args: argv, options: { 'bot-id': { type: 'string' }, 'database-url': { type: 'string' } } });
+  const botId = values['bot-id'];
+  if (!botId) throw new Error(TOKEN_USAGE);
+  const databaseUrl = tokenDatabase(values);
+  await prepareTokenDatabase(databaseUrl);
+  await withRepository(databaseUrl, async (repository) => {
+    const bot = await repository.lookupFloorWardenBot(botId);
+    if (!bot) throw new Error(`Floor Warden bot ${botId} not found`);
+    for (const row of await repository.listReplyTokens(botId)) console.log(`${row.token_id}\t${row.status}\t${row.created_at}\t${row.expires_at ?? ''}`);
+  });
+}
+
+export async function cmdBotToken(argv) {
+  const [action, ...rest] = argv;
+  if (action === 'create') return cmdBotTokenCreate(rest);
+  if (action === 'rotate') return cmdBotTokenRotate(rest);
+  if (action === 'revoke') return cmdBotTokenRevoke(rest);
+  if (action === 'list') return cmdBotTokenList(rest);
+  throw new Error(TOKEN_USAGE);
 }
