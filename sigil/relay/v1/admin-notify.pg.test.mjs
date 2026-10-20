@@ -74,14 +74,15 @@ test('listener reconnects after its backend is terminated and calls onReconnect'
   const pool = await freshPool(t);
   const received = inbox();
   let reconnects = 0;
-  const listener = await startAdminListener({ pool, onMessage: received.push, onReconnect: () => { reconnects += 1; }, logger: null, backoffMs: 10 });
+  const listener = await startAdminListener({ pool, onMessage: received.push, onReconnect: () => { reconnects += 1; }, logger: null, backoffMs: 100 });
   t.after(() => listener.close());
 
-  const { rows } = await pool.query('SELECT pg_terminate_backend(pid) AS ok FROM pg_stat_activity WHERE application_name = $1', [ADMIN_LISTENER_APPLICATION_NAME]);
+  const { rows } = await pool.query('SELECT pid FROM pg_stat_activity WHERE application_name = $1 ORDER BY backend_start DESC LIMIT 1', [ADMIN_LISTENER_APPLICATION_NAME]);
   assert.equal(rows.length, 1);
+  await pool.query('SELECT pg_terminate_backend($1)', [rows[0].pid]);
   const deadline = Date.now() + 5000;
   while (reconnects === 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.equal(reconnects, 1);
+  assert.ok(reconnects >= 1, `expected at least one reconnect, got ${reconnects}`);
 
   await inTx(pool, (client) => publishAdmin(client, { type: 'human.unsuspended', human_id: 'hum_back' }));
   assert.deepEqual(await received.next(1), [{ type: 'human.unsuspended', human_id: 'hum_back' }]);

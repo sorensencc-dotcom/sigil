@@ -1,5 +1,11 @@
 # Status
 
+## Session update: 2026-10-19 Sigil Rooms Phase 5 Task 9
+
+- Report-only mode implementation is staged locally on `feat/sigil-phase5-task9-report-only`; Antigravity remains omitted from the registry.
+- Task 9 uses existing `envelopes.created_at` for the report-post partial index because no relay-assigned acceptance timestamp exists. The existing five-minute envelope clock tolerance bounds the fallback; Task 10 must use the same column.
+- Focused memory, route, migration-static, and policy tests pass. PostgreSQL proof is blocked because `SIGIL_TEST_DATABASE_URL` is unset and no disposable local PostgreSQL service is available. Do not advance to Task 10 until the PostgreSQL gate runs.
+
 ## Session update: 2026-10-19 Sigil Rooms Phase 5 Task 8
 
 - Antigravity CLI discovery initially failed because its bin directory was absent from the probe process's `PATH`. Direct invocation verified `agy.exe` 1.4.2, headless JSON output, and conversation resume.

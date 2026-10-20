@@ -127,7 +127,7 @@ The probe independently injected the relay clock through `createRelayServer({now
 
 Live `information_schema.columns` returns only `expires_at` and `created_at` for envelope timestamp columns. `001_initial.sql:62-89` defines the table; `postgres-repository.mjs:1076-1078` inserts `envelope.created_at`. No `accepted_at` or `received_at` exists. Deliveries, idempotency rows, and the `envelope.accepted` audit also use the client envelope time (`1085`, `1096`, `1104`, `1109`), not an independent relay acceptance timestamp. The memory repository retains the envelope and stamps delivery queue time separately (`memory-repository.mjs:273-305`).
 
-Task 9 must explicitly choose the existing `created_at` column or amend its schema requirement; this spike does not invent a relay-assigned acceptance column or call client time relay time. Task 10's count and Task 9's index must use the same chosen column. `countRecentReports` is absent in both repositories and remains new Task 10 work.
+Task 9 chooses the existing `created_at` column for the report-post partial index because this schema has no relay-assigned acceptance timestamp. This is a bounded fallback, not a claim that client time is relay time: envelope validation already rejects timestamps more than five minutes from the relay clock. Task 10's count must use this same column. `countRecentReports` is absent in both repositories and remains new Task 10 work.
 
 ## Windows rename observation
 
