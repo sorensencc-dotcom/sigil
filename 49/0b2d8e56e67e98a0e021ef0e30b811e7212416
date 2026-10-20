@@ -1,0 +1,29 @@
+sigil/cli/sigil.mjs
+  s_fd735c93dcd000::t_4e9efeb2e4f2a7 50,95-97,2058-2059
+sigil/cli/ingress-commands.test.mjs
+  s_fd735c93dcd000::t_17786f48052183 1-65,68-73,75-78,81,84-127
+  s_fd735c93dcd000::t_548fecb5564edc 66-67,74,79-80,82-83
+sigil/cli/ingress-commands.pg.test.mjs
+  s_fd735c93dcd000::t_02c65a0fd771ef 20-21,27
+  s_fd735c93dcd000::t_c682ba419db727 1-19,22-26,28-31
+sigil/cli/ingress-commands.mjs
+  s_fd735c93dcd000::t_4e9efeb2e4f2a7 1-41,44-75,77-88,90-171
+  s_fd735c93dcd000::t_1c6a1194f25b48 42-43
+  s_fd735c93dcd000::t_b369f9cc698b56 76,89
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "490b2d8e56e67e98a0e021ef0e30b811e7212416",
+  "prompts": {},
+  "sessions": {
+    "s_fd735c93dcd000": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15ad3-b601-70a3-8a38-e80853a189d4",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
