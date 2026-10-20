@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InvitePage } from './InvitePage';
 import { LoginPage } from './LoginPage';
@@ -50,5 +51,31 @@ describe('LoginPage', () => {
     window.history.replaceState(null, '', '/login?error=bogus');
     const { container } = render(<LoginPage />);
     expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+});
+
+describe.each([
+  ['LoginPage', LoginPage],
+  ['InvitePage', InvitePage],
+])('%s gate header', (_name, Page) => {
+  afterEach(() => window.history.replaceState(null, '', '/'));
+
+  it('renders the branded title inside .gate-header', () => {
+    const { container } = render(<Page />);
+    expect(container.querySelector('.gate-header h1')).toHaveTextContent('Sigil rooms');
+  });
+
+  it('omits the theme picker when no theme handler is given', () => {
+    render(<Page />);
+    expect(screen.queryByRole('combobox', { name: 'Theme' })).toBeNull();
+  });
+
+  it('shows the theme picker and reports a change', async () => {
+    const onThemeChange = vi.fn();
+    render(<Page theme="rewrite-labs" onThemeChange={onThemeChange} />);
+    const select = screen.getByRole('combobox', { name: 'Theme' });
+    expect(select).toHaveValue('rewrite-labs');
+    await userEvent.selectOptions(select, 'cast-iron-charlie');
+    expect(onThemeChange).toHaveBeenCalledWith('cast-iron-charlie');
   });
 });

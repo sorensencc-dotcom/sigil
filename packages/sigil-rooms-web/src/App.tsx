@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tan
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ApiError } from './api/client';
 import { AuthProvider, useAuth, useSelfEndpoint } from './auth/AuthContext';
+import { ThemeSelect } from './auth/GateHeader';
 import { TokenGate } from './auth/TokenGate';
 import { loadConfig, type WebConfig } from './config';
 import { describeError, ErrorBanner } from './errors/ErrorBanner';
@@ -83,23 +84,18 @@ function Shell({ theme, onThemeChange }: { theme: string; onThemeChange: (next: 
   }, [queryClient]);
   if (mode === 'cookie') {
     if (loading) return <p>Loading…</p>;
-    if (!isLoggedIn) return window.location.pathname === '/invite' ? <InvitePage /> : <LoginPage />;
+    if (!isLoggedIn) {
+      return window.location.pathname === '/invite'
+        ? <InvitePage theme={theme} onThemeChange={onThemeChange} />
+        : <LoginPage theme={theme} onThemeChange={onThemeChange} />;
+    }
   } else if (!isLoggedIn) return <TokenGate onSubmit={login} rejected={rejected} theme={theme} onThemeChange={onThemeChange} />;
   return (
     <main className="app">
       <header className="topbar">
         <strong className="brand">Sigil rooms</strong>
         <span className="chip" data-live={live === 'live' ? 'true' : 'false'}>{live === 'live' ? 'Live' : 'Live: off'}</span>
-        <select
-          aria-label="Theme"
-          className="theme-select"
-          value={theme}
-          onChange={(e) => onThemeChange(e.target.value)}
-        >
-          <option value="rewrite-labs">Rewrite Labs</option>
-          <option value="cast-iron-charlie">Cast Iron Charlie (Dark)</option>
-          <option value="cast-iron-charlie-light">Cast Iron Charlie (Paper)</option>
-        </select>
+        <ThemeSelect theme={theme} onThemeChange={onThemeChange} />
         <button className="ghost" onClick={signOut}>Sign out</button>
       </header>
       <div className="body">

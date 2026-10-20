@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { GateHeader } from '../auth/GateHeader';
 import { START_URL } from './startUrl';
 
 // The invite token lives only in the URL fragment, which the browser never sends to a server.
@@ -14,14 +15,14 @@ export function captureInviteFragment(): string {
   return heldInvite;
 }
 
-export function InvitePage() {
+export function InvitePage({ theme, onThemeChange }: { theme?: string; onThemeChange?: (next: string) => void }) {
   const [invite] = useState(() => captureInviteFragment());
   useEffect(() => {
     window.history.replaceState(null, '', window.location.pathname + window.location.search);
   }, []);
   return (
     <main className="gate">
-      <h1>Sigil rooms</h1>
+      <GateHeader theme={theme} onThemeChange={onThemeChange} />
       <p>You have been invited to Sigil rooms. Continue with GitHub to accept.</p>
       <form method="post" action={START_URL}>
         <input type="hidden" name="invite" value={invite} />
