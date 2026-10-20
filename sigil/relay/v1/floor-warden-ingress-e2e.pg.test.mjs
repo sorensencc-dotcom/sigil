@@ -20,7 +20,7 @@ import { createRedactingLogger, floorWardenSecrets } from '../../cli/redacting-l
 import { createFloorWardenBridge } from '../../bridges/v1/floor-warden-bridge.mjs';
 import { createSessionStore } from '../../bridges/v1/session-store.mjs';
 import { RelayClient } from '../../connectors/v1/relay-client.mjs';
-import { startLoopbackTlsProxy, TLS_CERT } from '../../integration/fixtures/loopback-tls-proxy.mjs';
+const { startLoopbackTlsProxy, TLS_CERT } = await import(new URL('../../integration/fixtures/loopback-tls-proxy.mjs', import.meta.url));
 
 const connectionString = process.env.SIGIL_TEST_DATABASE_URL;
 const sigilCli = fileURLToPath(new URL('../../cli/sigil.mjs', import.meta.url));
