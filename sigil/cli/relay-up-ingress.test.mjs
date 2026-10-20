@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
+import { execFileSync, execSync, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const sigilCli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'sigil.mjs');
@@ -12,7 +13,7 @@ const fakeDatabaseUrl = 'postgres://127.0.0.1:5432/sigil_fixture';
 
 function fixtureCwd() {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-relay-ingress-test-'));
-  execFileSync(process.execPath, [sigilCli, 'init', 'alice'], { cwd, encoding: 'utf8' });
+  execFileSync(process.execPath, [sigilCli, 'init', `test_${crypto.randomUUID().replaceAll('-', '')}`], { cwd, encoding: 'utf8' });
   return cwd;
 }
 
@@ -33,6 +34,15 @@ async function freePort() {
   const port = server.address().port;
   await new Promise((resolve) => server.close(resolve));
   return port;
+}
+
+async function freeDistinctPorts(count) {
+  const ports = [];
+  while (ports.length < count) {
+    const port = await freePort();
+    if (ports.every((other) => port !== other && port !== other + 2 && other !== port + 2)) ports.push(port);
+  }
+  return ports;
 }
 
 test('relay up help documents all ingress flags', () => {
@@ -74,6 +84,13 @@ test('relay up rejects invalid ingress rates and overlapping ports', () => {
   assert.match(out, /8793/);
 });
 
+test('relay up defaults ingress to relay port plus 5 before binding', () => {
+  const { result, out } = run(['--port', '8791', '--stream-port', '8792', '--public-port', '8796', '--ingress-origin', 'https://relay.example', '--database-url', fakeDatabaseUrl, '--room-bot-key-wrap-key', 'SIGIL_TEST_BOT_WRAP']);
+  assert.equal(result.status, 1, out);
+  assert.match(out, /relay, stream, public and ingress ports must be distinct/);
+  assert.match(out, /ingress=8796/);
+});
+
 test('relay up without ingress origin keeps the would-be ingress port closed', async () => {
   const port = await freePort();
   const cwd = fixtureCwd();
@@ -88,21 +105,21 @@ test('relay up without ingress origin keeps the would-be ingress port closed', a
     });
     await assert.rejects(() => fetch(`http://127.0.0.1:${port + 5}`, { signal: AbortSignal.timeout(1000) }));
   } finally {
-    child.kill('SIGTERM');
+    if (process.platform === 'win32' && child.pid) { try { execSync(`taskkill /F /T /PID ${child.pid}`, { stdio: 'ignore' }); } catch {} } else child.kill('SIGTERM');
     await new Promise((resolve) => child.once('exit', resolve));
   }
 });
 
-test('relay up binds the ingress on loopback, uses port plus 5, and warns only for the global-token flag', { skip: !process.env.SIGIL_TEST_DATABASE_URL, timeout: 90_000 }, async () => {
+test('relay up binds the ingress on loopback and warns only for the global-token flag', { skip: !process.env.SIGIL_TEST_DATABASE_URL, timeout: 90_000 }, async () => {
   const cwd = fixtureCwd();
-  const port = await freePort();
+  const [port, streamPort, ingressPort] = await freeDistinctPorts(3);
   const env = { ...process.env, SIGIL_TEST_BOT_WRAP: Buffer.alloc(32, 7).toString('base64') };
-  const child = spawn(process.execPath, [sigilCli, 'relay', 'up', '--port', String(port), '--stream-port', '0', '--database-url', process.env.SIGIL_TEST_DATABASE_URL, '--room-bot-key-wrap-key', 'SIGIL_TEST_BOT_WRAP', '--ingress-origin', 'https://relay.example'], { cwd, env });
+  const child = spawn(process.execPath, [sigilCli, 'relay', 'up', '--port', String(port), '--stream-port', String(streamPort), '--database-url', process.env.SIGIL_TEST_DATABASE_URL, '--room-bot-key-wrap-key', 'SIGIL_TEST_BOT_WRAP', '--ingress-origin', 'https://relay.example', '--ingress-port', String(ingressPort)], { cwd, env });
   let output = '';
   try {
     await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(`relay did not start: ${output}`)), 60_000);
-      child.stdout.on('data', (chunk) => { output += chunk; if (output.includes(`Reply ingress listener: 127.0.0.1:${port + 5}`)) { clearTimeout(timer); resolve(); } });
+      child.stdout.on('data', (chunk) => { output += chunk; if (output.includes(`Reply ingress listener: 127.0.0.1:${ingressPort}`)) { clearTimeout(timer); resolve(); } });
       child.stderr.on('data', (chunk) => { output += chunk; });
       child.once('exit', (code) => reject(new Error(`relay exited ${code}: ${output}`)));
     });
