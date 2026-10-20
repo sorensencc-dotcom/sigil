@@ -1,0 +1,27 @@
+docs/superpowers/plans/2026-10-17-sigil-rooms-phase-7-tunnel.md
+  s_ca082c9d7b09f2::t_d7bd9be0fe31c0 145,630
+  s_ca082c9d7b09f2::t_40d3e3550a5d1f 530
+docs/superpowers/plans/2026-10-17-reply-ingress-verification-notes.md
+  s_ca082c9d7b09f2::t_d7bd9be0fe31c0 27
+sigil/cli/agent-run-floor-warden.test.mjs
+  s_ca082c9d7b09f2::t_d7bd9be0fe31c0 357
+docs/superpowers/specs/2026-10-17-sigil-rooms-phase-7-tunnel-design.md
+  s_ca082c9d7b09f2::t_40d3e3550a5d1f 141,276,409
+  s_ca082c9d7b09f2::t_d7bd9be0fe31c0 310
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3e1cc7e85dcce119832005bf0701455d827e7952",
+  "prompts": {},
+  "sessions": {
+    "s_ca082c9d7b09f2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15a7b-9e48-7b30-92c9-4c6e7f489de0",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
