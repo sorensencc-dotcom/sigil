@@ -47,6 +47,7 @@ import { createReplyTokenMatcher } from '../relay/v1/reply-token.mjs';
 import { createFloorWardenGate } from '../relay/v1/floor-warden-gate.mjs';
 import { createFloorWardenReplyHandler } from '../relay/v1/floor-warden-replies.mjs';
 import { cmdBotAdd, cmdBotDisable, cmdBotToken } from './bot-commands.mjs';
+import { cmdIngressDoctor, cmdIngressStatus } from './ingress-commands.mjs';
 import { cmdAgentSetInvokable, cmdHumanAdd, cmdHumanAddToRoom, cmdHumanSuspend, cmdHumanUnsuspend } from './human-commands.mjs';
 import { cmdIdentityRevoke, cmdInviteCreate, cmdInviteList, cmdInviteRevoke } from './oauth-commands.mjs';
 import { provisionIngressEndpoint } from './agentmail-provision.mjs';
@@ -91,6 +92,9 @@ Commands:
   bot add --bot-id <id> --endpoint <endpoint_id> --name <display name> [--identity path] [--out path] [--database-url url] [--room-bot-key-wrap-key env_var]   Create a Floor Warden bot endpoint with a relay-held signing key and a receive-only identity file
   bot disable --bot-id <id> [--database-url url]   Disable a Floor Warden bot (idempotent)
   bot token create|rotate|revoke|list --bot-id <id> [--token-id id] [--expires-in-days N] [--grace-minutes N] [--database-url url]   Manage per-bot reply tokens
+  ingress status [--database-url url]                         Show reply token status and accepted replies
+  ingress doctor --origin <url> [--access-client-id-env name --access-client-secret-env name] [--relay-port N --stream-port N --public-port N --ingress-port N]
+                                                            Check the reply ingress through its public origin
   agent set-invokable --room <room_id> --agent <endpoint_id> --mode owner|members [--identity path] [--database-url url]   Set who may invoke an agent in a room; only the agent's owner (--identity) may change it
   endpoint revoke <endpoint_id> [--database-url url]       Revoke an endpoint and retire all of its signing keys
   federation outbox list [--database-url url]              List queue-mode federation forward jobs: state counts, then one row per job (no envelope bodies)
@@ -2089,6 +2093,8 @@ export async function main() {
     else if (command === 'bot' && sub === 'add') await cmdBotAdd(rest);
     else if (command === 'bot' && sub === 'disable') await cmdBotDisable(rest);
     else if (command === 'bot' && sub === 'token') await cmdBotToken(rest);
+    else if (command === 'ingress' && sub === 'status') await cmdIngressStatus(rest);
+    else if (command === 'ingress' && sub === 'doctor') await cmdIngressDoctor(rest);
     else usage();
   } catch (error) {
     console.error(`sigil: ${error.message}`);
