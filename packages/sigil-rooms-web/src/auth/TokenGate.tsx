@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { GateHeader } from './GateHeader';
 
 export function TokenGate({
   onSubmit,
@@ -20,21 +21,7 @@ export function TokenGate({
         if (value.trim()) onSubmit(value.trim());
       }}
     >
-      <div className="gate-header">
-        <h1>Sigil rooms</h1>
-        {onThemeChange && theme ? (
-          <select
-            aria-label="Theme"
-            className="theme-select"
-            value={theme}
-            onChange={(e) => onThemeChange(e.target.value)}
-          >
-            <option value="rewrite-labs">Rewrite Labs</option>
-            <option value="cast-iron-charlie">Cast Iron Charlie (Dark)</option>
-            <option value="cast-iron-charlie-light">Cast Iron Charlie (Paper)</option>
-          </select>
-        ) : null}
-      </div>
+      <GateHeader theme={theme} onThemeChange={onThemeChange} />
       {rejected ? <p role="alert">Token rejected</p> : null}
       <label>
         Bearer token
