@@ -142,7 +142,7 @@ Record whether the repo already sets `Retry-After` on a `429`, and in what unit.
 
 - [ ] **Step 7: Record ports and the bridge set**
 
-Record the default ports for relay 8791 (stream port plus 1 is 8792, public port plus 2 is 8793, ingress port plus 3 is 8794). Flag the 8793 overlap with the mesh skill's stream port as a flag only. Read `relay/v1/transport-tincan/wake-dispatcher.mjs` and record that `BRIDGES` has no `floor-warden` entry and that this plan adds none. Do not read or open `run-sigil-daemon.ps1`.
+Record the default ports for relay 8791 (stream port plus 1 is 8792, public port plus 2 is 8793, ingress port plus 5 is 8796). Flag the 8793 overlap with the mesh skill's stream port as a flag only. Read `relay/v1/transport-tincan/wake-dispatcher.mjs` and record that `BRIDGES` has no `floor-warden` entry and that this plan adds none. Do not read or open `run-sigil-daemon.ps1`.
 
 - [ ] **Step 8: Write the notes file**
 
@@ -527,7 +527,7 @@ Model the file on `cli/relay-up-flags.test.mjs`. Fail-closed cases (the relay ex
 
 Success cases:
 
-- A valid `--ingress-origin` with distinct ports binds the ingress on `127.0.0.1` only (assert the bind address) at `--port` plus 3 by default and at `--ingress-port` when given.
+- A valid `--ingress-origin` with distinct ports binds the ingress on `127.0.0.1` only (assert the bind address) at `--port` plus 5 by default and at `--ingress-port` when given.
 - The startup banner prints the ingress origin and local port.
 - `--ingress-allow-global-token` adds a warning line to the banner. Without the flag, no warning prints.
 
@@ -627,7 +627,7 @@ Doctor takes an injectable `fetch`. Cases:
 - With `--access-client-id-env` and `--access-client-secret-env`, the two Cloudflare Access service-token headers are sent on every probe, with values read from the named environment variables. The values appear in no printed line and no argv.
 - A named environment variable that is unset fails before any probe and names the variable, never a value.
 - Doctor never sends an `Authorization` reply token header.
-- Port overlap. With no port flags, doctor computes the `relay up` defaults (relay 8791, stream 8792, public 8793, ingress 8794) and reports no overlap. When any two of the four values from `--relay-port`, `--stream-port`, `--public-port` and `--ingress-port` are equal, doctor reports the equal pair and prints the 8793 hint. A case with the public port and the ingress port both at 8793 and a case with two other equal ports both report the overlap.
+- Port overlap. With no port flags, doctor computes the `relay up` defaults (relay 8791, stream 8792, public 8793, ingress 8796) and reports no overlap. When any two of the four values from `--relay-port`, `--stream-port`, `--public-port` and `--ingress-port` are equal, doctor reports the equal pair and prints the 8793 hint. A case with the public port and the ingress port both at 8793 and a case with two other equal ports both report the overlap.
 
 - [ ] **Step 2: Write the failing status pg test**
 

@@ -354,7 +354,7 @@ test('agent run --room-bridge floor-warden with a URL env that is not http(s) fa
 });
 
 test('agent run --room-bridge floor-warden accepts https and loopback http reply URLs', async () => {
-  for (const replyUrl of ['https://relay.example.test/replies', 'http://127.0.0.1:8794/replies', 'http://localhost:8794/replies', 'http://[::1]:8794/replies']) {
+  for (const replyUrl of ['https://relay.example.test/replies', 'http://127.0.0.1:8796/replies', 'http://localhost:8796/replies', 'http://[::1]:8796/replies']) {
     const dir = tempDir();
     const env = secretEnv();
     const idFile = writeIdentity(dir, receiveOnlyIdentity());
