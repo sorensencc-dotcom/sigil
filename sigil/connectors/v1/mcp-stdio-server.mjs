@@ -41,7 +41,6 @@ function error(id, code, message) { process.stdout.write(`${JSON.stringify({ jso
 
 export function createMcpHandler(runtime) {
   return async (message) => {
-    if (message.method === 'initialize') return reply(message.id, { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'sigil-connector', version: '1.0.0' } });
     if (message.method === 'notifications/initialized') return;
     if (message.method === 'tools/list') return reply(message.id, { tools: TOOLS.map(([name, description]) => ({ name, description, inputSchema: TOOL_SCHEMAS[name] ?? { type: 'object', additionalProperties: true } })) });
     if (message.method === 'tools/call') {
