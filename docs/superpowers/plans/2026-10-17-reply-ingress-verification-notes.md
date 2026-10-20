@@ -24,6 +24,6 @@ The repository sets lowercase `retry-after: '60'` on two existing `429 RATE_LIMI
 
 ## Port and bridge notes
 
-The operational plan values are relay `8791`, stream `8792`, cookie-only public `8793`, and reply ingress `8794`. The CLI source defaults `--port` and `--stream-port` to `0` and `port + 1` when an explicit port is supplied (`sigil/cli/sigil.mjs` lines 217-219), while the client default relay URL is `http://127.0.0.1:8791` (`sigil/cli/config-resolver.mjs` line 7). The public listener uses `resolvePublicPort({ port, publicPort })` (`sigil/cli/sigil.mjs` lines 369-415). The 8793 overlap with the mesh skill's stream port remains a flag only. No port was changed.
+The operational plan values are relay `8791`, stream `8792`, cookie-only public `8793`, and reply ingress `8796`. The CLI source defaults `--port` and `--stream-port` to `0` and `port + 1` when an explicit port is supplied (`sigil/cli/sigil.mjs` lines 217-219), while the client default relay URL is `http://127.0.0.1:8791` (`sigil/cli/config-resolver.mjs` line 7). The public listener uses `resolvePublicPort({ port, publicPort })` (`sigil/cli/sigil.mjs` lines 369-415). The 8793 overlap with the mesh skill's stream port remains a flag only. The reply ingress uses port plus 5.
 
 `BRIDGES` is derived from `CLI_KINDS` plus `router` in `sigil/relay/v1/transport-tincan/wake-dispatcher.mjs` lines 1-3. It has no `floor-warden` entry, and Task 1-3 add none.

@@ -138,7 +138,7 @@ Why this choice:
 
 | Decision | Choice | Reason |
 |---|---|---|
-| D1. Listener | New loopback listener, the reply ingress, enabled only by `--ingress-origin <https bare origin>`. Default port is `--port` plus 3, override with `--ingress-port`. Exactly one route, `POST /v1/rooms/{room_id}/replies`. Everything else answers one fixed `404`. | A narrow listener cannot leak room routes. An unconfigured relay exposes nothing new, as with the AgentMail and federation routes. |
+| D1. Listener | New loopback listener, the reply ingress, enabled only by `--ingress-origin <https bare origin>`. Default port is `--port` plus 5, override with `--ingress-port`. Exactly one route, `POST /v1/rooms/{room_id}/replies`. Everything else answers one fixed `404`. | A narrow listener cannot leak room routes. An unconfigured relay exposes nothing new, as with the AgentMail and federation routes. |
 | D1 (startup checks) | The relay exits non-zero and starts nothing unless the origin is a bare https origin, `--database-url` and `--room-bot-key-wrap-key` are set, `--port` is non-zero, and the relay, stream, public and ingress ports are four distinct values. Bind `127.0.0.1` only. | Per-bot tokens need Postgres. Distinct ports stop a silent collision. |
 | D1 (request limits) | Body cap 96 KiB (`REPLY_BODY_MAX_BYTES`), request timeout 10 s, short keep-alive. `Content-Type` must be `application/json` or the answer is `415`. Oversize chunked bodies stop at the existing `readBody` cap. No `X-Forwarded-For` or provider identity header is read. | Small limits bound what a stranger can cost. Ignoring forwarded headers avoids a trusted-proxy setting. |
 | D2. Shared gate | Move the token check, the unconfigured `404`, the handler call and error mapping from `http-server.mjs` into `relay/v1/floor-warden-gate.mjs`. The main route and the ingress both call it. A gate option `distinguishEndpointPrincipal` (true for the main route, false for the ingress) controls the one intended difference. With it true, the gate keeps today's `401`/`403` split. With it false, the gate never calls the endpoint authenticator and answers `401 UNAUTHENTICATED` for every token that does not match. Steps 3-10 in `floor-warden-replies.mjs` do not change. | One module cannot drift between the two entry points. The phase 6 tests keep passing. The `403` split would tell an internet caller that a bearer is a valid endpoint token, and it would cost a database lookup before any limit. |
@@ -273,7 +273,7 @@ Migration `039_reply_ingress.sql`. The executor re-checks the number against `ma
 New `sigil relay up` flags:
 
 - `--ingress-origin <https bare origin>`. Enables the ingress.
-- `--ingress-port <n>`. Default is `--port` plus 3.
+- `--ingress-port <n>`. Default is `--port` plus 5.
 - `--ingress-rate-per-minute <n>`. Default 120.
 - `--ingress-allow-global-token`. Default off.
 
@@ -307,7 +307,7 @@ Changed behavior: `sigil agent run --room-bridge floor-warden` refuses an http r
 | Relay restarts with the ingress up | cloudflared stays up and answers `502` during the gap. | Wait for the relay. The caller's retry applies. |
 | Disabled bot | Step 4 answers `403 BOT_NOT_ON_ROSTER`. | `sigil bot disable` is the intended control. |
 
-**Stream port drift.** The stream port is 8792 in `C:\dev\scripts\run-sigil-daemon.ps1` and 8793 in the mesh skill. With relay port 8791, the cookie-only public listener defaults to port plus 2, which is 8793 and collides with the skill's stream port (derived from code defaults). This design does not resolve the drift. The ingress default of port plus 3 is 8794, and the startup check requires four distinct ports.
+**Stream port drift.** The stream port is 8792 in `C:\dev\scripts\run-sigil-daemon.ps1` and 8793 in the mesh skill. With relay port 8791, the cookie-only public listener defaults to port plus 2, which is 8793 and collides with the skill's stream port (derived from code defaults). This design does not resolve the drift. The ingress default of port plus 5 is 8796, and the startup check requires four distinct ports.
 
 ## Observability
 
@@ -406,7 +406,7 @@ All of these are unverified unless a label says otherwise.
 - **A6.** Hosted Grok computers egress through shared static IP ranges, so an IP allowlist identifies Grok Bot traffic and not Chris alone (PUB, https://docs.x.ai/grok-bot/security). This design does not rely on an IP allowlist.
 - **A7.** cloudflared or tailscaled can run as a Windows service on the PC. UNVERIFIED here. The runbook in plan Task 14 records the operator step. Closes in plan Task 14 and stage 3.
 - **A8.** The cookie-only listener answers `401` to a bearer-only reply POST. Verified in the repo by reading. A test in plan Task 1 proves it.
-- **A9.** Relay `--port` plus 3 is free on the mesh. Derived. The relay startup check enforces distinct ports and sigil ingress doctor reports overlaps when given the ports. Closes in plan Tasks 9 and 11.
+- **A9.** Relay `--port` plus 5 is free on the mesh. Derived. The relay startup check enforces distinct ports and sigil ingress doctor reports overlaps when given the ports. Closes in plan Tasks 9 and 11.
 - **A10.** Migration 039 does not clash with 036 to 038. Closes in plan Tasks 1 and 2 and the out-of-order migration test.
 - **A11.** One process serving four loopback listeners adds no thread-safety issue. Node runs on a single thread, and the quota writes are Postgres upserts. Closes in plan Task 12.
 - **A12.** The `quota_usage` check list at execution time still equals the 034 list plus any 036 to 038 additions. Closes when the executor re-reads the live constraint in plan Tasks 1 and 2.
