@@ -144,7 +144,7 @@ The Floor Warden calls this after a rostered bot answers. Chief and Helix do not
 - **Signing.** Sigil signs `room.message` internally with the answering endpoint's relay-held key and submits the signed broadcast through the same accept path as `POST /v1/envelopes`. It threads the answer under `in_reply_to` (`thread_root_id`). There is no message table and no signature field on this body. `mentions` is empty.
 - **Success.** `202` with `{request_id, message_id, room_seq, duplicate}`. A repeated `idempotency_key` returns the first accept and does not write again.
 - **Errors.** `400 INVALID_REQUEST`, `404 ROOM_NOT_FOUND`, `404 MESSAGE_NOT_FOUND`, `403 BOT_NOT_ON_ROSTER`, `403 BOT_NOT_A_MEMBER`, plus the existing `UNKNOWN_ENDPOINT`, `ENDPOINT_REVOKED`, and `DATABASE_UNAVAILABLE`.
-- **When.** The relay implements the route in phase 6. A call from Grok's cloud waits on the phase 7 tunnel, because Grok cannot reach localhost. That wait does not pull phase 8 forward. Phases 1-4 are unchanged. The inbound routine stays one webhook. No second webhook. No Zapier.
+- **When.** The relay implements the route in phase 6. A call from Grok's cloud uses the phase 7 tunnel (the reply ingress), because Grok cannot reach localhost. The tunnel does not pull phase 8 forward. Phases 1-4 are unchanged. The inbound routine stays one webhook. No second webhook. No Zapier.
 
 ### Hosted app agents (Muse, ChatGPT, Claude Cowork)
 
@@ -195,7 +195,7 @@ Agent-to-agent chat can run without limit. These guards are mandatory before mor
 
 | Phase | Adds | Depends on |
 |---|---|---|
-| Mobile | The same web client as an installable PWA. Remote access through a private tunnel (Tailscale first). Web Push for mentions and approval cards; this works on iOS 16.4+ only for an installed PWA. | v1 client |
+| Mobile (phase 7b) | The same web client as an installable PWA. Remote access through a private tunnel (Tailscale first). Web Push for mentions and approval cards; this works on iOS 16.4+ only for an installed PWA. | v1 client |
 | Other humans | Invites, the existing OIDC login (`2026-08-23-sigil-real-oidc-login.md`), and enforced roles. A per-agent `invokable_by` setting defaults to `owner`, so a guest cannot drive CLIs on your machine without your explicit grant. | Mobile phase for remote access |
 | Commercial | Multiple workspaces, a hosted relay, agent bridges that run on each customer's own machine (the bridge model already works this way), metering from invocation cost records, and an audit export. Cross-company rooms reuse Sigil federation. | Other humans |
 
@@ -219,8 +219,8 @@ Each phase ships with tests in the repo's `*.test.mjs` pattern and contract entr
 3. **Router.** @mention routing, the LLM router, decision events, and fallback behavior.
 4. **Local web client.** Split in two. 4a is the relay browser surface (`2026-10-05-sigil-rooms-phase-4a-relay-browser-surface-design.md`): WebSocket ticket, `room.updated` frame, human send, ack, and CORS. 4b is the React package `@sorensencc/sigil-rooms-web` (room list, timeline, threads, roster with response modes, Stop button). Approval cards are later.
 5. **More bridges.** GitHub Copilot CLI, Antigravity CLI, xAI Grok CLI, Hermes Agent, and Ironbots report posting.
-6. **Ironbots requests and Grok bots.** A request entry point and a command list for each Ironbot. Floor Warden bridge for Grok bots (Chief and Helix CI Triage). The inbound "Sigil rooms" webhook stays inbound only, and the reply route lands on the relay in this phase. Calls from Grok's cloud wait on the phase 7 tunnel.
-7. **Mobile.** PWA, tunnel, and push. The tunnel is also what lets the Floor Warden reach the phase 6 reply route from Grok's cloud. It does not pull phase 8 forward.
+6. **Ironbots requests and Grok bots.** A request entry point and a command list for each Ironbot. Floor Warden bridge for Grok bots (Chief and Helix CI Triage). The inbound "Sigil rooms" webhook stays inbound only, and the reply route lands on the relay in this phase. Calls from Grok's cloud use the phase 7 tunnel.
+7. **Mobile.** Split in two. **Phase 7 is the tunnel.** It is the reply ingress, which lets the Floor Warden reach the phase 6 reply route from Grok's cloud (see `2026-10-17-sigil-rooms-phase-7-tunnel-design.md`). **Phase 7b is the PWA and Web Push.** It is deferred. The tunnel does not pull phase 8 forward.
 8. **Rooms MCP plugin.** Remote MCP server (Streamable HTTP + OAuth) for Meta Muse, ChatGPT, Claude Cowork, and any other app with custom connectors. Needs the tunnel from the mobile phase. Tools stay `list_rooms`, `read_room`, `post_message`, and `my_mentions`. This phase is still later. Grok bot replies do not use it.
 9. **Other humans.** Invites, OIDC, roles, and `invokable_by`.
 
