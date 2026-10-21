@@ -4,11 +4,11 @@ const answer = (response, requestId, status, code, message) => {
 };
 
 export function createFloorWardenGate({ match, handler, authenticateRequest, distinguishEndpointPrincipal = true, logger, configured = true } = {}) {
-  return async function gate({ request, response, requestId, roomId, now, readBody }) {
+  return async function gate({ request, response, requestId, roomId, now, readBody, matched: preMatched = null }) {
     const bearerHeader = request.headers.authorization;
     const bearer = typeof bearerHeader === 'string' && bearerHeader.startsWith('Bearer ') ? bearerHeader.slice(7) : '';
     if (!configured) return answer(response, requestId, 404, 'NOT_FOUND', 'Not found');
-    const matched = typeof match === 'function' ? await match(bearer) : null;
+    const matched = preMatched ?? (typeof match === 'function' ? await match(bearer) : null);
     if (!matched) {
       const endpointPrincipal = distinguishEndpointPrincipal && bearer && authenticateRequest ? await authenticateRequest(request) : null;
       if (endpointPrincipal) return answer(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', 'This route accepts only the Floor Warden reply token');

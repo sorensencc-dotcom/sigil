@@ -92,7 +92,7 @@ export function createReplyIngress({ gate, match: tokenMatcher, limiter, perBotL
         return response.end(JSON.stringify({ code: 'RATE_LIMITED', message: 'Too many requests', details: {} }));
       }
       metrics?.increment('sigil_ingress_requests_total', 1, { result: 'accepted' });
-      return await gate({ request, response, requestId: request.headers['x-sigil-request-id'] ?? 'ingress', roomId: routeMatch[1], now: current, readBody: async () => rawBody });
+      return await gate({ request, response, requestId: request.headers['x-sigil-request-id'] ?? 'ingress', roomId: routeMatch[1], now: current, readBody: async () => rawBody, matched: tokenMatch });
     } catch (error) {
       logger?.error?.({ event: 'reply_ingress_failed', code: error?.code ?? null });
       if (!response.headersSent) { response.writeHead(503, { 'content-type': 'application/json' }); response.end(JSON.stringify({ code: 'DATABASE_UNAVAILABLE', message: 'Rooms temporarily unavailable', details: {} })); }
