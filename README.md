@@ -173,7 +173,46 @@ Where each secret lives:
 | Bot wrap key | Environment variable named by `--room-bot-key-wrap-key`. |
 | Bot relay token | The receive-only identity file from `sigil bot add`. |
 
-Replies from Grok's cloud reach the relay only through the phase 7 tunnel. Until then, the reply route works for callers that reach the relay directly. Copying the routine's webhook URL and sender key from the routine panel stays an open step; see the [phase 6 design](docs/superpowers/specs/2026-10-16-sigil-rooms-phase-6-floor-warden-bridge-design.md).
+Replies from Grok's cloud reach the relay through the [reply ingress](#reply-ingress), a separate loopback listener that a tunnel provider publishes. No real Grok reply has landed in a room yet, so the full path stays unproven. Copying the routine's webhook URL and sender key from the routine panel stays gated on Chris; see the [phase 6 design](docs/superpowers/specs/2026-10-16-sigil-rooms-phase-6-floor-warden-bridge-design.md).
+
+#### Reply ingress
+
+The reply ingress lets Grok's cloud deliver a bot's answer to the relay without publishing the relay. It is one loopback listener that serves one route, `POST /v1/rooms/{room_id}/replies`. Every other method and path gets one fixed `404`. A tunnel provider (a Cloudflare named tunnel with an Access service-token policy, or Tailscale Funnel as a fallback) makes the listener reachable from the internet, so the PC opens no inbound port. The ingress is off unless you pass `--ingress-origin`. The setup steps are in the [reply ingress runbook](docs/reply-ingress-runbook.md), and the design is in the [phase 7 design](docs/superpowers/specs/2026-10-17-sigil-rooms-phase-7-tunnel-design.md).
+
+Relay flags (`sigil relay up`):
+
+- `--ingress-origin <https bare origin>` enables the ingress. The relay refuses to start unless the origin is a bare `https` origin, a database URL and `--room-bot-key-wrap-key` are set, `--port` is non-zero, and the relay, stream, public and ingress ports are four distinct values.
+- `--ingress-port <n>` sets the loopback port. The default is `--port` plus 5, which is `8796` at port `8791`.
+- `--ingress-rate-per-minute <n>` sets the ceiling for all callers combined. The default is 120. A bot also has a fixed limit of 30 requests per minute.
+- `--ingress-allow-global-token` lets the global reply token from `--floor-warden-reply-token-env` work on the ingress. It is off by default, and the relay prints a warning when you set it.
+
+Commands:
+
+- `sigil bot token create --bot-id <id> [--expires-in-days N] [--database-url url]` prints a per-bot reply token once to stdout. The database keeps only its SHA-256 hash.
+- `sigil bot token rotate --bot-id <id> [--grace-minutes N]` creates a new token and retires the old one. The old token works until the grace period ends, 24 hours by default.
+- `sigil bot token revoke --bot-id <id> --token-id <id>` stops a token at once.
+- `sigil bot token list --bot-id <id>` shows token ids, statuses and ages, never plaintext.
+- `sigil ingress status [--database-url url]` shows token status and the replies accepted in the last hour for each bot.
+- `sigil ingress doctor --origin <url> [--access-client-id-env name --access-client-secret-env name] [--relay-port N --stream-port N --public-port N --ingress-port N]` probes the public origin and never sends a reply token. The two Access flags name environment variables that hold the Cloudflare Access service-token values.
+
+Where each secret lives:
+
+| Secret | Location |
+|---|---|
+| Per-bot reply token | The Grok bot's secret store. The command prints it once. Never put it on a command line or in a file. |
+| Access service-token values | Environment variables named by the doctor flags, and the Grok bot's request headers. |
+| Database URL and bot wrap key | Environment variables, as for the bridge. |
+
+The reply contract for the Grok side:
+
+- Send `POST` JSON with `room_id`, `target_bot_id`, `sender`, `in_reply_to`, `text` and `idempotency_key`, and the header `Authorization: Bearer <reply token>`.
+- Send one reply for each invocation. A later reply gets `403 ROOM_NOT_INVOKED`.
+- A token works only for its own bot. A different `target_bot_id` gets `403 BOT_NOT_ON_ROSTER`, and any unknown or revoked token gets `401 UNAUTHENTICATED`.
+- On a timeout, a network error, `429` or `5xx`, resend the identical body and `idempotency_key`. A `202` with `duplicate: true` means success. Do not retry other `4xx` answers.
+
+To stop the exposure, restart `sigil relay up` without `--ingress-origin`. No database change is needed.
+
+Open items: the live transport smoke passed, but a real Grok reply has not landed in a room. Assumptions A1 to A5 in the design stay open until the live Grok smoke. Creating the real bot endpoints and copying the routine URL and sender key stay gated on Chris. Signed requests are not part of phase 7, and the PWA and Web Push move to phase 7b.
 
 ## Current status
 

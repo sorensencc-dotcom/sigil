@@ -1,5 +1,20 @@
 # Status
 
+## Session update: 2026-10-21 Sigil Rooms Phase 7 Task 16 (reply ingress close)
+
+- Branch `docs/phase-7-task-16-close`, plan `docs/superpowers/plans/2026-10-17-sigil-rooms-phase-7-tunnel.md`, spec `docs/superpowers/specs/2026-10-17-sigil-rooms-phase-7-tunnel-design.md`. Tasks 1-15 merged through PRs #89 (runbook), #91 (live Cloudflare smoke notes), #92 (`relay up` passes the token matcher so the 30 per minute per-bot limit applies), #93 and #94 (`freeDistinctPorts` test helper), #95 (`--bot-id` in the spec revoke examples) and #96 (federation-directory minute-rollover test flake).
+- Phase 7 transport is proven. The live transport smoke passed on 2026-10-20 at about 10:23 PM ET through a Cloudflare named tunnel and an Access service-token policy to the ingress on `127.0.0.1:8796`. Notes: `docs/superpowers/plans/2026-10-17-reply-ingress-smoke-notes.md`.
+- Decisions: default ingress port 8796; limits of 120 per minute for the ingress and 30 per minute for each bot; per-bot reply tokens only, with the global token allowed only behind `--ingress-allow-global-token`; no signed request mode in phase 7; the PWA and Web Push move to phase 7b.
+- Proof bar still open: a real Grok reply landing in a room, then 7 days with no incidents before the old listener is retired.
+- Assumptions A1-A5 stay open until the live Grok smoke (spec "Assumptions"):
+  - A1: the Grok bot posts the reply with a curl step.
+  - A2: the bot can store the reply token where it can read it.
+  - A3: the bot retries a failed POST.
+  - A4: a Cloudflare-managed domain exists for the hostname.
+  - A5: the bot can send the Access service-token headers.
+- Still gated on Chris: copying the routine's webhook URL and sender key, and creating `ep_chief` and `ep_helix_ci`.
+- Verification (Linux, Node 22.23.4, 2026-10-21): `npm test` 2297 tests, 1939 pass, 1 fail, 357 skipped (pg tests skip without a database). The one failure, `sigil/cli/init-domain.test.mjs` "aborts identity creation when the domain does not resolve", is environmental: the verification host's DNS answers `nonexistent.invalid` with a synthetic address, so the domain resolves. The seven named pg files pass against a disposable `_test` database with zero skips: `039_reply_ingress` 5, `floor-warden-reply-tokens` 2, `bot-token-commands` 1, `ingress-commands` 1, `reply-ingress` 8, `floor-warden-ingress-e2e` 7, `floor-warden-e2e` 9. Secret scan passes. The repo defines no lint script.
+
 ## Session update: 2026-10-19 Sigil Rooms Phase 5 Task 9
 
 - Report-only mode implementation is staged locally on `feat/sigil-phase5-task9-report-only`; Antigravity remains omitted from the registry.
