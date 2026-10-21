@@ -281,7 +281,7 @@ New commands:
 
 - `sigil bot token create --bot-id <id> [--expires-in-days n]`. Prints the plaintext once to stdout.
 - `sigil bot token rotate --bot-id <id> [--grace-minutes n]`. Creates a new token and retires the old one (default 24 h overlap).
-- `sigil bot token revoke --token-id <id>`.
+- `sigil bot token revoke --bot-id <id> --token-id <id>`.
 - `sigil bot token list --bot-id <id>`. Shows ids, statuses and ages, never plaintext.
 - `sigil ingress status`. Reads Postgres.
 - `sigil ingress doctor --origin <url> [--access-client-id-env <name>] [--access-client-secret-env <name>] [--relay-port <n>] [--stream-port <n>] [--public-port <n>] [--ingress-port <n>]`. Probes the public origin. The two Access flags name environment variables and never carry a value on argv. When given, doctor sends the two Cloudflare Access service-token headers on its probes. The four port flags are optional and feed the port overlap checks. Doctor never sends a reply token.
@@ -297,7 +297,7 @@ Changed behavior: `sigil agent run --room-bridge floor-warden` refuses an http r
 | DNS or certificate problem | Grok's curl fails at connect. Doctor reports the certificate check failed. | Fix the hostname or certificate at the provider. |
 | Postgres down | `503 DATABASE_UNAVAILABLE`. | Restore Postgres. A retry with the same `idempotency_key` then succeeds. |
 | Signing key or wrap key missing | `503 BOT_SIGNING_UNAVAILABLE`. | Set `--room-bot-key-wrap-key` or fix the key row. |
-| Token leaked | An attacker can post one reply per running invocation of that bot. | `sigil bot token revoke --token-id <id>` at once, then `create`. Revoked tokens answer `401 UNAUTHENTICATED`. |
+| Token leaked | An attacker can post one reply per running invocation of that bot. | `sigil bot token revoke --bot-id <id> --token-id <id>` at once, then `create`. Revoked tokens answer `401 UNAUTHENTICATED`. |
 | Token rotation | The old token works for 24 h or `--grace-minutes`. | `sigil bot token rotate --bot-id <id>`. Update the Grok side within the grace period. |
 | Request flood | `429 RATE_LIMITED`, log lines aggregated to one per 10 s. | Use the edge WAF rule, lower `--ingress-rate-per-minute`, or use the kill switch. |
 | Kill switch | The ingress listener disappears and the hostname answers `502` from the provider. | Restart the relay without `--ingress-origin`. No database change is needed. |
