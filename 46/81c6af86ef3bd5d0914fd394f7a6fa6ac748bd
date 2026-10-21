@@ -1,0 +1,29 @@
+sigil/cli/relay-up-bind-fail-closed.test.mjs
+  s_3393102e819c4f::t_eaf2ab54692e52 10
+sigil/cli/relay-up-ingress.test.mjs
+  s_3393102e819c4f::t_5b635138a4c9eb 9
+sigil/integration/oauth-login.e2e.test.mjs
+  s_3393102e819c4f::t_4a27fd23b072e1 14
+sigil/relay/v1/floor-warden-ingress-e2e.pg.test.mjs
+  s_3393102e819c4f::t_0269bb1521416a 7
+sigil/relay/v1/oauth/relay-up.pg.test.mjs
+  s_3393102e819c4f::t_09cbfee436342c 11
+sigil/relay/v1/reply-ingress.pg.test.mjs
+  s_3393102e819c4f::t_ed3e6f2156b4ac 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4681c6af86ef3bd5d0914fd394f7a6fa6ac748bd",
+  "prompts": {},
+  "sessions": {
+    "s_3393102e819c4f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1b790d3a-44b6-4579-a418-e3c2237b9f7f",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
