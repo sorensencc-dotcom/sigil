@@ -16,6 +16,20 @@ const execFileAsync = promisify(execFile);
 const sigilPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'sigil.mjs');
 const connectionString = process.env.SIGIL_TEST_DATABASE_URL;
 
+// The CLI reads its own clock for the one-minute quota window. Seed both the
+// current and the next window: the gap between seeding and the CLI's clock
+// read is far under 60s, so the CLI always lands in one of the two.
+async function exhaustQuotaWindows(pool, scopeKind, scopeId, limit) {
+  const currentWindow = Math.floor(Date.now() / 60_000) * 60_000;
+  for (const start of [currentWindow, currentWindow + 60_000]) {
+    await pool.query(
+      `INSERT INTO quota_usage (scope_kind, scope_id, window_start, count) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (scope_kind, scope_id, window_start) DO UPDATE SET count = $4`,
+      [scopeKind, scopeId, new Date(start).toISOString(), limit],
+    );
+  }
+}
+
 // `sigil federation invite` only does anything against a real Postgres
 // directory, so the whole file skips without SIGIL_TEST_DATABASE_URL (matches
 // sigil-federation-outbox.test.mjs). CI live-DB runs it. SIGIL_DATABASE_URL is
@@ -184,15 +198,11 @@ test('sigil federation invite create reserves federation_directory_invite_create
   assert.equal(usage.rows.length, 1, 'expected exactly one quota_usage row for the endpoint:owner key');
   assert.equal(Number(usage.rows[0].count), 1);
 
-  // Push that same window straight to the default limit (20) rather than
-  // making 20 real CLI calls, then confirm the next create aborts and writes
-  // nothing.
-  const windowStart = new Date(Math.floor(Date.now() / 60_000) * 60_000).toISOString();
-  await pool.query(
-    `INSERT INTO quota_usage (scope_kind, scope_id, window_start, count) VALUES ($1, $2, $3, 20)
-     ON CONFLICT (scope_kind, scope_id, window_start) DO UPDATE SET count = 20`,
-    ['federation_directory_invite_create', scopeId, windowStart],
-  );
+  // Push the current and next window straight to the default limit (20) rather
+  // than making 20 real CLI calls, then confirm the next create aborts and
+  // writes nothing. Both windows are seeded so a minute rollover can't dodge
+  // the limit.
+  await exhaustQuotaWindows(pool, 'federation_directory_invite_create', scopeId, 20);
   const invitesBefore = await pool.query('SELECT count(*) FROM federation_directory_invites');
 
   const exhausted = await run(createArgs, dir);
@@ -244,14 +254,10 @@ test('sigil federation invite redeem reserves federation_directory_redeem quota 
   assert.equal(usage.rows.length, 1, 'expected exactly one quota_usage row for the endpoint:owner key');
   assert.equal(Number(usage.rows[0].count), 1);
 
-  // Push that same window straight to the default limit (10), then confirm
-  // the next accepted redemption aborts before writing the local link row.
-  const windowStart = new Date(Math.floor(Date.now() / 60_000) * 60_000).toISOString();
-  await pool.query(
-    `INSERT INTO quota_usage (scope_kind, scope_id, window_start, count) VALUES ($1, $2, $3, 10)
-     ON CONFLICT (scope_kind, scope_id, window_start) DO UPDATE SET count = 10`,
-    ['federation_directory_redeem', scopeId, windowStart],
-  );
+  // Push the current and next window straight to the default limit (10), then
+  // confirm the next accepted redemption aborts before writing the local link
+  // row. Both windows are seeded so a minute rollover can't dodge the limit.
+  await exhaustQuotaWindows(pool, 'federation_directory_redeem', scopeId, 10);
   const linksBefore = await pool.query('SELECT count(*) FROM federation_directory_links');
 
   const exhausted = await run(['federation', 'invite', 'redeem', codeFor(), '--identity', bobIdentity, '--database-url', connectionString], dir);
