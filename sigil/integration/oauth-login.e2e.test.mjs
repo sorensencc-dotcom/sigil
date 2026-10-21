@@ -8,10 +8,10 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
-import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { freeDistinctPorts } from '../test-support/free-ports.mjs';
 import { execFileSync, execSync, spawn } from 'node:child_process';
 import pg from 'pg';
 import { WebSocket } from 'ws';
@@ -29,12 +29,6 @@ const sigilCli = fileURLToPath(new URL('../cli/sigil.mjs', import.meta.url));
 const webBin = fileURLToPath(new URL('../../packages/sigil-rooms-web/bin/sigil-rooms-web.mjs', import.meta.url));
 const SESSION = SESSION_COOKIE;
 const FLOW = FLOW_COOKIE;
-
-const freePort = () => new Promise((resolve, reject) => {
-  const server = net.createServer();
-  server.listen(0, '127.0.0.1', () => { const { port } = server.address(); server.close(() => resolve(port)); });
-  server.once('error', reject);
-});
 
 async function killChild(child) {
   if (child.exitCode !== null || child.signalCode !== null) return;
@@ -113,13 +107,9 @@ async function setup(t) {
   saveIdentity(identityPath('relay_system'), systemIdentity);
 
   const github = await fakeGitHub(t);
-  const relayPort = await freePort();
-  const staticPort = await freePort();
   // The proxy port is the public origin, so reserve it before the relay starts.
-  const proxyPort = await freePort();
+  const [relayPort, staticPort, proxyPort, streamPort, publicPort] = await freeDistinctPorts(5);
   const origin = `https://127.0.0.1:${proxyPort}`;
-  const streamPort = await freePort();
-  const publicPort = await freePort();
 
   const relay = spawnLogged([sigilCli, 'relay', 'up', '--port', String(relayPort), '--stream-port', String(streamPort), '--public-port', String(publicPort), '--database-url', connectionString,
     '--public-origin', origin, '--enable-mock-oauth', '--room-key-wrap-key', 'SIGIL_WRAP_KEY_TEST',

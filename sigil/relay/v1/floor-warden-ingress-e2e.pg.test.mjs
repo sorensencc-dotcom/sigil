@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
-import net from 'node:net';
+import { freeDistinctPorts } from '../../test-support/free-ports.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -34,11 +34,6 @@ const world = {};
 
 const random = () => crypto.randomBytes(18).toString('base64url');
 const tokenFrom = (stdout) => stdout.split(/\r?\n/).findLast((line) => line.startsWith('fwr_'));
-const freePort = () => new Promise((resolve, reject) => {
-  const server = net.createServer();
-  server.listen(0, '127.0.0.1', () => { const port = server.address().port; server.close(() => resolve(port)); });
-  server.once('error', reject);
-});
 
 async function waitFor(check, label, timeoutMs = 15_000) {
   const deadline = Date.now() + timeoutMs;
@@ -167,11 +162,10 @@ test.before(async () => {
   saveIdentity(systemPath, createIdentity({ ownerId: 'relay_system', endpointId: 'ep_relay_system', kind: 'system' }));
   world.fake = startFakeFloorWarden();
   const webhookUrl = await world.fake.listen();
-  world.ingressPort = await freePort();
-  const relayPort = await freePort();
-  const streamPort = await freePort();
+  const [ingressPort, relayPort, streamPort, publicPort] = await freeDistinctPorts(4);
+  world.ingressPort = ingressPort;
   world.proxy = await startLoopbackTlsProxy({ relayPort: world.ingressPort, staticPort: relayPort });
-  const relay = startRelay(world.dir, ['--port', String(relayPort), '--stream-port', String(streamPort), '--ingress-port', String(world.ingressPort), '--ingress-origin', world.proxy.origin,
+  const relay = startRelay(world.dir, ['--port', String(relayPort), '--stream-port', String(streamPort), '--public-port', String(publicPort), '--ingress-port', String(world.ingressPort), '--ingress-origin', world.proxy.origin,
     '--database-url', connectionString, '--room-human-identity', path.join(world.dir, '.sigil', 'web.identity.json'), '--room-system-identity', systemPath, '--room-bot-key-wrap-key', 'SIGIL_E2E_BOT_WRAP_KEY'],
   { ...process.env, SIGIL_E2E_BOT_WRAP_KEY: BOT_WRAP_KEY });
   world.relayChild = relay.child;
