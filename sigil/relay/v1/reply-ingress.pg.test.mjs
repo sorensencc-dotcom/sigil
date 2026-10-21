@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import net from 'node:net';
+import { freeDistinctPorts } from '../../scripts/test-free-ports.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,14 +28,6 @@ const state = {};
 const skip = !databaseUrl;
 
 const random = () => crypto.randomBytes(16).toString('base64url');
-const freePort = () => new Promise((resolve, reject) => {
-  const server = net.createServer();
-  server.once('error', reject);
-  server.listen(0, '127.0.0.1', () => {
-    const port = server.address().port;
-    server.close(() => resolve(port));
-  });
-});
 
 async function cli(cwd, args, extraEnv = {}) {
   return run(process.execPath, [cliPath, ...args], {
@@ -154,8 +146,8 @@ test.before(async () => {
   await state.pool.query(`INSERT INTO floor_warden_bots (bot_id,endpoint_id,display_name,status,created_at) VALUES ('bot_other','ep_other','Other','active',NOW())`);
   await state.repository.insertReplyToken({ tokenId: other.tokenId, botId: 'bot_other', tokenSha256: other.sha256, status: 'active', createdAt: new Date(), expiresAt: null });
   state.otherToken = other.token;
-  const port = await freePort();
-  const relay = startRelay(state.dir, ['--port', String(port), '--stream-port', String(await freePort()), '--public-port', String(await freePort()), '--ingress-port', String(await freePort()),
+  const [port, streamPort, publicPort, ingressPort] = await freeDistinctPorts(4);
+  const relay = startRelay(state.dir, ['--port', String(port), '--stream-port', String(streamPort), '--public-port', String(publicPort), '--ingress-port', String(ingressPort),
     '--ingress-origin', 'https://test.invalid', '--database-url', databaseUrl, '--room-human-identity', path.join(state.dir, '.sigil', 'web.identity.json'),
     '--room-system-identity', systemPath, '--room-bot-key-wrap-key', 'SIGIL_E2E_BOT_WRAP_KEY', '--floor-warden-reply-token-env', 'SIGIL_TEST_GLOBAL_TOKEN'],
   { SIGIL_TEST_GLOBAL_TOKEN: globalToken, SIGIL_E2E_BOT_WRAP_KEY: botWrapKey });
@@ -213,9 +205,9 @@ test('retired token works inside its grace window and the global token stays ref
 });
 
 test('global token works only when allowGlobal is enabled', { skip, timeout: 60_000 }, async () => {
-  const port = await freePort();
+  const [port, streamPort, publicPort, ingressPort] = await freeDistinctPorts(4);
   const systemPath = path.join(state.dir, 'system.identity.json');
-  const relay = startRelay(state.dir, ['--port', String(port), '--stream-port', String(await freePort()), '--public-port', String(await freePort()), '--ingress-port', String(await freePort()),
+  const relay = startRelay(state.dir, ['--port', String(port), '--stream-port', String(streamPort), '--public-port', String(publicPort), '--ingress-port', String(ingressPort),
     '--ingress-origin', 'https://test.invalid', '--ingress-allow-global-token', '--database-url', databaseUrl,
     '--room-human-identity', path.join(state.dir, '.sigil', 'web.identity.json'), '--room-system-identity', systemPath,
     '--room-bot-key-wrap-key', 'SIGIL_E2E_BOT_WRAP_KEY', '--floor-warden-reply-token-env', 'SIGIL_TEST_GLOBAL_TOKEN'],

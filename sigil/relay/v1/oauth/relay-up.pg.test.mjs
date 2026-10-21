@@ -5,20 +5,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import net from 'node:net';
 import pg from 'pg';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, execSync, spawn } from 'node:child_process';
+import { freeDistinctPorts } from '../../../scripts/test-free-ports.mjs';
 import { assertDisposableTestDatabase } from '../../../scripts/assert-disposable-test-db.mjs';
 
 const connectionString = process.env.SIGIL_TEST_DATABASE_URL;
 const sigilCli = fileURLToPath(new URL('../../../cli/sigil.mjs', import.meta.url));
-
-const freePort = () => new Promise((resolve, reject) => {
-  const server = net.createServer();
-  server.listen(0, '127.0.0.1', () => { const { port } = server.address(); server.close(() => resolve(port)); });
-  server.once('error', reject);
-});
 
 async function killChild(child) {
   if (child.exitCode !== null || child.signalCode !== null) return;
@@ -43,9 +37,9 @@ test('relay up --public-origin prints the proxy table and serves only the cookie
   await pool.end();
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-relay-up-oauth-'));
   execFileSync(process.execPath, [sigilCli, 'init', 'alice'], { cwd, encoding: 'utf8' });
-  const port = await freePort();
+  const [port, streamPort, publicPort] = await freeDistinctPorts(3);
   const env = { ...process.env, SIGIL_WRAP_KEY_TEST: crypto.randomBytes(32).toString('base64'), GITHUB_OAUTH_CLIENT_ID: 'id', GITHUB_OAUTH_CLIENT_SECRET: 'secret' };
-  const child = spawn(process.execPath, [sigilCli, 'relay', 'up', '--port', String(port), '--database-url', connectionString,
+  const child = spawn(process.execPath, [sigilCli, 'relay', 'up', '--port', String(port), '--stream-port', String(streamPort), '--public-port', String(publicPort), '--database-url', connectionString,
     '--public-origin', 'https://rooms.test', '--room-key-wrap-key', 'SIGIL_WRAP_KEY_TEST',
     '--room-human-identity', path.join(cwd, '.sigil', 'alice.identity.json')], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
   const out = { text: '' };
@@ -57,7 +51,6 @@ test('relay up --public-origin prints the proxy table and serves only the cookie
     const poll = setInterval(() => { if (out.text.includes('Registered endpoints:')) { clearInterval(poll); clearTimeout(timer); resolve(); } }, 25);
     child.once('exit', (code) => { clearInterval(poll); clearTimeout(timer); reject(new Error(`exited early (${code}): ${out.text}`)); });
   });
-  const publicPort = port + 2;
   assert.match(out.text, /Public origin: https:\/\/rooms\.test/);
   assert.ok(out.text.includes(`Cookie-only listener: 127.0.0.1:${publicPort}`), out.text);
   assert.match(out.text, /Proxy table \(dedicated hostname required\):/);

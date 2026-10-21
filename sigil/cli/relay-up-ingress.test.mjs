@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync, execSync, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { freeDistinctPorts } from '../scripts/test-free-ports.mjs';
 
 const sigilCli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'sigil.mjs');
 const fakeDatabaseUrl = 'postgres://127.0.0.1:5432/sigil_fixture';
@@ -26,23 +26,6 @@ function run(args, env = {}) {
     timeout: 20_000,
   });
   return { result, out: `${result.stderr}${result.stdout}` };
-}
-
-async function freePort() {
-  const server = net.createServer();
-  await new Promise((resolve, reject) => server.listen(0, '127.0.0.1', resolve).once('error', reject));
-  const port = server.address().port;
-  await new Promise((resolve) => server.close(resolve));
-  return port;
-}
-
-async function freeDistinctPorts(count) {
-  const ports = [];
-  while (ports.length < count) {
-    const port = await freePort();
-    if (ports.every((other) => port !== other && port !== other + 2 && other !== port + 2)) ports.push(port);
-  }
-  return ports;
 }
 
 test('relay up help documents all ingress flags', () => {
@@ -92,9 +75,9 @@ test('relay up defaults ingress to relay port plus 5 before binding', () => {
 });
 
 test('relay up without ingress origin keeps the would-be ingress port closed', async () => {
-  const port = await freePort();
+  const [port, streamPort, publicPort] = await freeDistinctPorts(3);
   const cwd = fixtureCwd();
-  const child = spawn(process.execPath, [sigilCli, 'relay', 'up', '--port', String(port), '--stream-port', String(port + 1)], { cwd });
+  const child = spawn(process.execPath, [sigilCli, 'relay', 'up', '--port', String(port), '--stream-port', String(streamPort), '--public-port', String(publicPort)], { cwd });
   let output = '';
   try {
     await new Promise((resolve, reject) => {
@@ -112,9 +95,9 @@ test('relay up without ingress origin keeps the would-be ingress port closed', a
 
 test('relay up binds the ingress on loopback and warns only for the global-token flag', { skip: !process.env.SIGIL_TEST_DATABASE_URL, timeout: 90_000 }, async () => {
   const cwd = fixtureCwd();
-  const [port, streamPort, ingressPort] = await freeDistinctPorts(3);
+  const [port, streamPort, publicPort, ingressPort] = await freeDistinctPorts(4);
   const env = { ...process.env, SIGIL_TEST_BOT_WRAP: Buffer.alloc(32, 7).toString('base64') };
-  const child = spawn(process.execPath, [sigilCli, 'relay', 'up', '--port', String(port), '--stream-port', String(streamPort), '--database-url', process.env.SIGIL_TEST_DATABASE_URL, '--room-bot-key-wrap-key', 'SIGIL_TEST_BOT_WRAP', '--ingress-origin', 'https://relay.example', '--ingress-port', String(ingressPort)], { cwd, env });
+  const child = spawn(process.execPath, [sigilCli, 'relay', 'up', '--port', String(port), '--stream-port', String(streamPort), '--public-port', String(publicPort), '--database-url', process.env.SIGIL_TEST_DATABASE_URL, '--room-bot-key-wrap-key', 'SIGIL_TEST_BOT_WRAP', '--ingress-origin', 'https://relay.example', '--ingress-port', String(ingressPort)], { cwd, env });
   let output = '';
   try {
     await new Promise((resolve, reject) => {
