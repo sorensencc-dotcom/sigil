@@ -1,0 +1,19 @@
+sigil/relay/v1/reply-ingress-per-bot-limit.pg.test.mjs
+  s_72d7b57d3d90e1::t_388f6b66fd99d6 15,70,72-73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2030d945e01c792da63d7c16772c438764846a78",
+  "prompts": {},
+  "sessions": {
+    "s_72d7b57d3d90e1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a9ed53a4-bcf5-4eb3-97cf-f4c0ad76c2b7",
+        "model": "unknown"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
