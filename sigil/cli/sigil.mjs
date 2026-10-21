@@ -488,13 +488,14 @@ async function cmdRelayUp(argv) {
   let ingressListener = null;
   let ingressAddress = null;
   if (ingressOrigin) {
+    const ingressMatch = createReplyTokenMatcher({ repository, globalTokens: floorWardenReplies?.tokens, allowGlobal: ingressAllowGlobalToken, logger: relayLogger });
     const ingressGate = createFloorWardenGate({
-      match: createReplyTokenMatcher({ repository, globalTokens: floorWardenReplies?.tokens, allowGlobal: ingressAllowGlobalToken, logger: relayLogger }),
+      match: ingressMatch,
       handler: createFloorWardenReplyHandler({ repository, botSigner, buildAcceptOptions }),
       distinguishEndpointPrincipal: false,
       logger: relayLogger,
     });
-    ingressListener = createReplyIngress({ gate: ingressGate, repository, ratePerMinute: ingressRatePerMinute, metrics: relayMetrics, logger: relayLogger });
+    ingressListener = createReplyIngress({ gate: ingressGate, match: ingressMatch, repository, ratePerMinute: ingressRatePerMinute, metrics: relayMetrics, logger: relayLogger });
     try {
       ingressAddress = await ingressListener.listen(ingressPort);
       startupListeners.push(ingressListener.server);

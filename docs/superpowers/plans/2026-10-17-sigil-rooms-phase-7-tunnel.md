@@ -820,7 +820,7 @@ Record status codes only. Never record a token, header value or hostname.
 
 - [ ] **Step 5: Clean up**
 
-Revoke the smoke token with `sigil bot token revoke --token-id <id>`. Stop the relay. Confirm the ingress port is closed.
+Revoke the smoke token with `sigil bot token revoke --bot-id <id> --token-id <id>`. Stop the relay. Confirm the ingress port is closed.
 
 - [ ] **Step 6: Record the results**
 
