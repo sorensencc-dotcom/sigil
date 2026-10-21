@@ -11,7 +11,7 @@ import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { freeDistinctPorts } from '../test-support/free-ports.mjs';
+import { freeDistinctPorts } from '../scripts/test-free-ports.mjs';
 import { execFileSync, execSync, spawn } from 'node:child_process';
 import pg from 'pg';
 import { WebSocket } from 'ws';

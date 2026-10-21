@@ -6,7 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync, execSync, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { freeDistinctPorts } from '../test-support/free-ports.mjs';
+import { freeDistinctPorts } from '../scripts/test-free-ports.mjs';
 
 const sigilCli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'sigil.mjs');
 const fakeDatabaseUrl = 'postgres://127.0.0.1:5432/sigil_fixture';

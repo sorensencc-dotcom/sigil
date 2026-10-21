@@ -8,7 +8,7 @@ import http from 'node:http';
 import pg from 'pg';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, execSync, spawn } from 'node:child_process';
-import { freeDistinctPorts } from '../../../test-support/free-ports.mjs';
+import { freeDistinctPorts } from '../../../scripts/test-free-ports.mjs';
 import { assertDisposableTestDatabase } from '../../../scripts/assert-disposable-test-db.mjs';
 
 const connectionString = process.env.SIGIL_TEST_DATABASE_URL;

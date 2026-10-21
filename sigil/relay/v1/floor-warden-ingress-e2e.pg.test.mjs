@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
-import { freeDistinctPorts } from '../../test-support/free-ports.mjs';
+import { freeDistinctPorts } from '../../scripts/test-free-ports.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';

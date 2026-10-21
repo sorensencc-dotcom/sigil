@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { freeDistinctPorts } from '../../test-support/free-ports.mjs';
+import { freeDistinctPorts } from '../../scripts/test-free-ports.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
