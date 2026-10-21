@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +12,7 @@ import { assertDisposableTestDatabase } from '../../scripts/assert-disposable-te
 import { applyMigrations } from '../../scripts/apply-migrations.mjs';
 import { createIdentity, saveIdentity } from '../../cli/identity.mjs';
 import { PostgresRepository } from './postgres-repository.mjs';
+import { freeDistinctPorts } from '../../scripts/test-free-ports.mjs';
 
 const databaseUrl = process.env.SIGIL_TEST_DATABASE_URL;
 const cliPath = fileURLToPath(new URL('../../cli/sigil.mjs', import.meta.url));
@@ -25,14 +25,6 @@ const skip = !databaseUrl;
 const random = () => crypto.randomBytes(16).toString('base64url');
 const newToken = () => `fwr_${crypto.randomBytes(32).toString('base64url')}`;
 const sha256 = (token) => crypto.createHash('sha256').update(token).digest();
-const freePort = () => new Promise((resolve, reject) => {
-  const server = net.createServer();
-  server.once('error', reject);
-  server.listen(0, '127.0.0.1', () => {
-    const port = server.address().port;
-    server.close(() => resolve(port));
-  });
-});
 
 async function cli(cwd, args) {
   return run(process.execPath, [cliPath, ...args], { cwd, env: { ...process.env, SIGIL_E2E_BOT_WRAP_KEY: botWrapKey } });
@@ -75,9 +67,10 @@ function startRelay(cwd, args) {
 
 async function launchRelay(extraArgs = []) {
   const systemPath = path.join(state.dir, 'system.identity.json');
+  const [relayPort, streamPort, publicPort, ingressPort] = await freeDistinctPorts(4);
   const relay = startRelay(state.dir, [
-    '--port', String(await freePort()), '--stream-port', String(await freePort()),
-    '--public-port', String(await freePort()), '--ingress-port', String(await freePort()),
+    '--port', String(relayPort), '--stream-port', String(streamPort),
+    '--public-port', String(publicPort), '--ingress-port', String(ingressPort),
     '--ingress-origin', 'https://test.invalid', '--database-url', databaseUrl,
     '--room-human-identity', path.join(state.dir, '.sigil', 'web.identity.json'),
     '--room-system-identity', systemPath, '--room-bot-key-wrap-key', 'SIGIL_E2E_BOT_WRAP_KEY', ...extraArgs,
