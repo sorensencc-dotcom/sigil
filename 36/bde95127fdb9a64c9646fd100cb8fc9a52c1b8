@@ -1,0 +1,34 @@
+sigil/cli/relay-up-ingress.test.mjs
+  s_b4d4b303f7948a::t_cfd457c56b3f8a 9,80,98,100
+  s_b4d4b303f7948a::t_52defe55ab76d4 78
+sigil/test-support/free-ports.mjs
+  s_b4d4b303f7948a::t_ce56f6018ce08c 1-3,5-19,30-32,36-41
+  s_b4d4b303f7948a::t_2a72922f96360b 4,20-29,33-35
+sigil/integration/oauth-login.e2e.test.mjs
+  s_b4d4b303f7948a::t_52defe55ab76d4 14
+  s_b4d4b303f7948a::t_cfd457c56b3f8a 111
+sigil/cli/relay-up-bind-fail-closed.test.mjs
+  s_b4d4b303f7948a::t_cfd457c56b3f8a 10,20,22-23,34-35,38,46-47,51
+sigil/relay/v1/oauth/relay-up.pg.test.mjs
+  s_b4d4b303f7948a::t_cfd457c56b3f8a 11,40,42
+sigil/relay/v1/floor-warden-ingress-e2e.pg.test.mjs
+  s_b4d4b303f7948a::t_fc879e880f908c 7,165-166,168
+sigil/relay/v1/reply-ingress.pg.test.mjs
+  s_b4d4b303f7948a::t_fc879e880f908c 5,149-150,208,210
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "36bde95127fdb9a64c9646fd100cb8fc9a52c1b8",
+  "prompts": {},
+  "sessions": {
+    "s_b4d4b303f7948a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5dac1001-dc6d-497c-bb01-a38128f66f45",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
