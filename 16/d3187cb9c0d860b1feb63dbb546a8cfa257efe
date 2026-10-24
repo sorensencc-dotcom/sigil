@@ -1,0 +1,19 @@
+sigil/connectors/v1/mcp-stdio-server.mjs
+  s_eb62a187f56d6f::t_912d531abd6589 45
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "16d3187cb9c0d860b1feb63dbb546a8cfa257efe",
+  "prompts": {},
+  "sessions": {
+    "s_eb62a187f56d6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f61ea1c8-9f32-4a92-8e15-d9f05484228d",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
