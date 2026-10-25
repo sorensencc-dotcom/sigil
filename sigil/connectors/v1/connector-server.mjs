@@ -13,9 +13,9 @@ const routes = new Map([
 ]);
 
 async function readBody(request, maxBytes = 1024 * 1024) {
-  let raw = ''; let size = 0;
-  for await (const chunk of request) { size += Buffer.byteLength(chunk); if (size > maxBytes) throw Object.assign(new Error('Request body too large'), { code: 'REQUEST_TOO_LARGE' }); raw += chunk; }
-  return raw;
+  const chunks = []; let size = 0;
+  for await (const chunk of request) { const b = typeof chunk === 'string' ? Buffer.from(chunk) : chunk; size += b.length; if (size > maxBytes) throw Object.assign(new Error('Request body too large'), { code: 'REQUEST_TOO_LARGE' }); chunks.push(b); }
+  return Buffer.concat(chunks, size).toString('utf8');
 }
 
 function reply(response, status, body) {
