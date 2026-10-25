@@ -2,7 +2,7 @@
 // Sigil Wiki Synchronizer — Syncs docs/wiki/ markdown files to GitHub .wiki.git repository.
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -39,7 +39,7 @@ function sync() {
   const repoUrl = value('--repo-url', process.env.WIKI_REPO_URL);
   if (!fs.existsSync(wikiDir) && repoUrl) {
     console.log(`Cloning wiki repository from ${repoUrl}...`);
-    execSync(`git clone "${repoUrl}" "${wikiDir}"`, { stdio: 'inherit' });
+    execFileSync('git', ['clone', repoUrl, wikiDir], { stdio: 'inherit' });
   }
 
   if (!fs.existsSync(wikiDir)) {
@@ -90,13 +90,13 @@ function sync() {
 
   if (shouldPush) {
     try {
-      execSync('git add -A', { cwd: wikiDir, stdio: 'pipe' });
-      const status = execSync('git status --porcelain', { cwd: wikiDir, encoding: 'utf8' }).trim();
+      execFileSync('git', ['add', '-A'], { cwd: wikiDir, stdio: 'pipe' });
+      const status = execFileSync('git', ['status', '--porcelain'], { cwd: wikiDir, encoding: 'utf8' }).trim();
       if (status) {
         console.log(`Committing wiki changes...`);
-        execSync(`git commit -m "${commitMessage}"`, { cwd: wikiDir, stdio: 'inherit' });
+        execFileSync('git', ['commit', '-m', commitMessage], { cwd: wikiDir, stdio: 'inherit' });
         console.log(`Pushing to remote wiki...`);
-        execSync('git push origin HEAD', { cwd: wikiDir, stdio: 'inherit' });
+        execFileSync('git', ['push', 'origin', 'HEAD'], { cwd: wikiDir, stdio: 'inherit' });
         console.log(`✓ Wiki successfully synced and pushed to remote.`);
       } else {
         console.log(`✓ Wiki working tree clean; no remote push needed.`);
