@@ -1,0 +1,22 @@
+.claude/skills/verify-relay-job-leases/SKILL.md
+  h_5c172e9b435f5a 43,51
+packages/relay-jobs-verification/explore.mjs
+  h_5c172e9b435f5a 107-108,129-130,133-140,216-220,236-238,244,287-289
+packages/relay-jobs-verification/mutate.mjs
+  h_5c172e9b435f5a 46-50
+sigil/relay/v1/resend-worker.mjs
+  h_5c172e9b435f5a 25-29,86,99,107,116,124-125,131
+sigil/relay/v1/resend-worker.test.mjs
+  h_5c172e9b435f5a 20,34-37,106-146
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "da4b6369688c8fab1dd1ea1c9d8bdddc023d8841",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
