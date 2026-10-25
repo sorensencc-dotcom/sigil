@@ -192,12 +192,10 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     const moved = await repository.acknowledgeRoomDeliveries({ conversationId: roomId, endpointId: principal.endpoint_id, upToRoomSeq: upTo, now });
     // The repository call committed. sendReceiptFrame isolates its own failures,
     // so a failed sender lookup never turns a committed ack into an error.
-    for (const row of moved) {
-      await sendReceiptFrame({ stream, repository, logger }, {
-        message_id: row.message_id, delivery_id: row.delivery_id, recipient_endpoint_id: principal.endpoint_id,
-        state: 'acknowledged', at: now.toISOString(),
-      });
-    }
+    await Promise.all(moved.map((row) => sendReceiptFrame({ stream, repository, logger }, {
+      message_id: row.message_id, delivery_id: row.delivery_id, recipient_endpoint_id: principal.endpoint_id,
+      state: 'acknowledged', at: now.toISOString(),
+    })));
     return send(response, requestId, 200, { code: 'OK', acknowledged: moved.length });
   }
 
