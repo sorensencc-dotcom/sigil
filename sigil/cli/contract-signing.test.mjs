@@ -46,6 +46,13 @@ test('verifyContract rejects a changed contract', () => {
   assert.equal(verifyContract(signed, { publicKey }), false);
 });
 
+test('verifyContract handles missing or invalid publicKey safely', () => {
+  const { privateKey } = crypto.generateKeyPairSync('ed25519');
+  const signed = signContract({ task_id: 'task_1', task: 'dispatch' }, { privateKey, keyId: 'key_1' });
+  assert.equal(verifyContract(signed, { publicKey: null }), false);
+  assert.equal(verifyContract(signed, { publicKey: undefined }), false);
+});
+
 test('verify-contract CLI accepts an active registered signing key', () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const signed = signContract({ task_id: 'task_1', task: 'dispatch' }, { privateKey, keyId: 'key_1' });
