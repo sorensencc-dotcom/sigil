@@ -22,6 +22,11 @@ async function finalize(repository, row, state, patch) {
     repository.finalizeRelayJob('resend', row.id, row.claimToken, state, patch, client));
 }
 
+async function renewLease(repository, row, now) {
+  const { renewed } = await repository.renewRelayJobLease('resend', row.id, row.claimToken, now);
+  return renewed;
+}
+
 async function requeueOrDeadLetter({ repository, row, now, reasonCode, logger, metrics, result }) {
   const nextAttemptCount = row.attemptCount + 1;
   const context = jobContext(row);
@@ -78,6 +83,7 @@ export async function runResendWorkerPass({ repository, stream, now = new Date()
       let pushCount = 0;
       let resetCount = 0;
       let streamUnavailable = false;
+      let lostLease = false;
 
       for (const item of available) {
         const streamSeq = Number(item.streamSeq);
@@ -90,6 +96,7 @@ export async function runResendWorkerPass({ repository, stream, now = new Date()
             new_seq: streamSeq,
             reason: 'expired',
           };
+          if (!(await renewLease(repository, row, now))) { lostLease = true; break; }
           if (stream?.notifySequenceReset?.(row.payload.requester_endpoint_id, reset) !== true) {
             streamUnavailable = true;
             break;
@@ -97,6 +104,7 @@ export async function runResendWorkerPass({ repository, stream, now = new Date()
           resetCount += 1;
           logger?.warn?.({ event: 'session.sequence_reset', ...context, ...reset });
         }
+        if (!(await renewLease(repository, row, now))) { lostLease = true; break; }
         if (stream?.notifyResend?.(row.payload.requester_endpoint_id, { streamSeq: item.streamSeq, envelope: item.envelope }) !== true) {
           streamUnavailable = true;
           break;
@@ -105,7 +113,7 @@ export async function runResendWorkerPass({ repository, stream, now = new Date()
         logger?.debug?.({ event: 'session.resend_push', ...context, stream_seq: String(item.streamSeq) });
         expected = streamSeq + 1;
       }
-      if (!streamUnavailable && expected <= row.payload.end_seq) {
+      if (!lostLease && !streamUnavailable && expected <= row.payload.end_seq) {
         const reset = {
           conversation_id: row.payload.conversation_id,
           target_sender_endpoint_id: row.payload.target_sender_endpoint_id,
@@ -113,12 +121,14 @@ export async function runResendWorkerPass({ repository, stream, now = new Date()
           new_seq: row.payload.end_seq + 1,
           reason: 'expired',
         };
-        if (stream?.notifySequenceReset?.(row.payload.requester_endpoint_id, reset) !== true) streamUnavailable = true;
+        if (!(await renewLease(repository, row, now))) lostLease = true;
+        else if (stream?.notifySequenceReset?.(row.payload.requester_endpoint_id, reset) !== true) streamUnavailable = true;
         else {
           resetCount += 1;
           logger?.warn?.({ event: 'session.sequence_reset', ...context, ...reset });
         }
       }
+      if (lostLease) continue;
       if (streamUnavailable) {
         await requeueOrDeadLetter({ repository, row, now, reasonCode: 'REQUESTER_STREAM_UNAVAILABLE', logger, metrics, result });
         continue;

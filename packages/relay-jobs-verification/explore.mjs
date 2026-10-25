@@ -104,6 +104,8 @@ const SCENARIOS = {
   'two-jobs': { jobs: [{ attempts: 0 }, { attempts: 0 }], outcomes: ['ok', 'transport'], bOffsets: [120], crash: false },
   // A's pass dies with an unexpected error mid-batch.
   'crash': { jobs: [{ attempts: 0 }, { attempts: 0 }], outcomes: ['ok'], bOffsets: [5, 120], crash: true },
+  // Two directory rows. A reaches row 2 after its lease expired, same shape as two-jobs.
+  'directory-two-jobs': { kind: 'directory_confirmation', jobs: [{ attempts: 0 }, { attempts: 0 }], outcomes: ['ok', 'transport'], bOffsets: [120], crash: false },
 };
 
 export const PROPERTIES = {
@@ -124,13 +126,18 @@ async function runOnce(env, name, cfg, prefix, bound) {
     [PEER_DOMAIN]);
   const ids = [];
   for (const [i, j] of cfg.jobs.entries()) {
-    const messageId = `msg-${i}`;
-    const { row } = await repo.enqueueFederationForward({
+    const messageId = cfg.kind ? `link-${i}` : `msg-${i}`;
+    const common = {
       messageId, idempotencyKey: `idem-${i}`, recipientDomain: PEER_DOMAIN, originDomain: ORIGIN,
-      envelope: { message_id: messageId, expires_at: '2999-01-01T00:00:00Z', sender: { endpoint_id: 'ep_codex@local.example.com' } },
-      senderKey: { kid: 'k1', alg: 'Ed25519', publicKey: 'pub-1' }, senderOwnerId: 'owner-1',
       now: new Date(Date.now() - 1000),
-    });
+    };
+    const { row } = await repo.enqueueFederationForward(cfg.kind
+      ? { ...common, kind: cfg.kind, directoryPayload: { link_ref: messageId } }
+      : {
+        ...common,
+        envelope: { message_id: messageId, expires_at: '2999-01-01T00:00:00Z', sender: { endpoint_id: 'ep_codex@local.example.com' } },
+        senderKey: { kid: 'k1', alg: 'Ed25519', publicKey: 'pub-1' }, senderOwnerId: 'owner-1',
+      });
     ids.push(row.id);
     if (j.attempts) await db.query('UPDATE relay_jobs SET attempt_count = $2 WHERE id = $1', [row.id, j.attempts]);
   }
@@ -206,9 +213,12 @@ async function runOnce(env, name, cfg, prefix, bound) {
     },
   });
 
-  const postFor = (actor) => async (_peer, bytes) => {
+  const messageIdOf = (bytes) => {
+    const body = JSON.parse(Buffer.from(bytes).toString('utf8'));
+    return body.envelope?.message_id ?? body.link_ref;
+  };
+  const settlePost = async (actor, msg) => {
     await run.point(actor, 'post');
-    const msg = JSON.parse(Buffer.from(bytes).toString('utf8')).envelope.message_id;
     const id = [...id2msg].find(([, m]) => m === msg)[0];
     const row = (await db.query('SELECT claim_token FROM relay_jobs WHERE id = $1', [id])).rows[0];
     if (held[actor].get(id) !== row.claim_token) {
@@ -223,12 +233,15 @@ async function runOnce(env, name, cfg, prefix, bound) {
     if (o === 'crash') throw new Error('unexpected failure');
     throw Object.assign(new Error('transport'), { code: 'FORWARD_TRANSPORT_FAILED' });
   };
+  const postFor = (actor) => async (_peer, bytes) => settlePost(actor, messageIdOf(bytes));
+  // postDirectory is (peer, path, bytes, signed). postForward is (peer, bytes, signed).
+  const postDirFor = (actor) => async (_peer, _path, bytes) => settlePost(actor, messageIdOf(bytes));
 
   const actorBody = (actor) => async () => {
     try {
       results[actor] = await runFederationReaperPass({
         repository: view(actor), identity: identityKey, originDomain: ORIGIN, now: clocks[actor],
-        postForwardImpl: postFor(actor), limit: 10, leaseSeconds: LEASE_SECONDS,
+        postForwardImpl: postFor(actor), postDirectoryImpl: postDirFor(actor), limit: 10, leaseSeconds: LEASE_SECONDS,
       });
     } catch { aborted.add(actor); }
     run.done(actor);
@@ -271,7 +284,9 @@ async function runOnce(env, name, cfg, prefix, bound) {
   // recovery: a clean pass an hour later must finish whatever is left
   await runFederationReaperPass({
     repository: repo, identity: identityKey, originDomain: ORIGIN, now: new Date(T0 + 3600_000),
-    postForwardImpl: async () => ({ ok: true, status: 200 }), limit: 10, leaseSeconds: LEASE_SECONDS,
+    postForwardImpl: async () => ({ ok: true, status: 200 }),
+    postDirectoryImpl: async () => ({ ok: true, status: 202 }),
+    limit: 10, leaseSeconds: LEASE_SECONDS,
   });
   for (const r of await jobRows()) {
     if (!TERMINAL.has(r.state)) flag('abandoned-recoverable', `${r.message_id} still ${r.state} after a clean later pass`);

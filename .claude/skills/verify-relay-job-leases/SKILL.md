@@ -40,7 +40,7 @@ It runs the unmodified `runFederationReaperPass` and `PostgresRepository` on a P
 | `abandoned-recoverable` | a clean pass after the lease expiry finishes everything |
 | `send-owner-only` | a reaper POSTs only while it holds the lease (row skipped when the renewal fails) |
 
-Scenarios: `one-job`, `one-job-last-attempt` (fourth failure dead-letters), `two-jobs` (A reaches row 2 after its lease expired), `crash` (A throws mid-batch).
+Scenarios: `one-job`, `one-job-last-attempt` (fourth failure dead-letters), `two-jobs` (A reaches row 2 after its lease expired), `directory-two-jobs` (the same shape for a `directory_confirmation` row), `crash` (A throws mid-batch). `directory_revocation` uses the same skip as confirmation. The resend worker renews before each notify and is still not driven here.
 
 ## Fixed finding: duplicate send after lease expiry
 
@@ -48,7 +48,7 @@ The first run found that a slow pass POSTed rows another reaper had already recl
 
 Model assumption: a POST ends within 5 s (`postDirectory`'s `AbortSignal.timeout`), far below the 300 s lease, so a renewed lease covers the send. `explore.mjs` clamps a rival's claim clock to the in-flight send's deadline (`SEND_TIMEOUT_MS`). If that timeout or the default lease changes, revisit the assumption.
 
-Remaining at-least-once case: a send that outlives the lease, or a crash after the POST but before the finalize, still retries. Envelope duplicates are absorbed (`accept-federated-envelope.mjs:141` answers `202 duplicate: true`). Directory confirmation and revocation duplicates were not checked, and the scenarios only drive `envelope` rows.
+Remaining at-least-once case: a send that outlives the lease, or a crash after the POST but before the finalize, still retries. Envelope duplicates are absorbed (`accept-federated-envelope.mjs:141` answers `202 duplicate: true`). A resend frame already pushed before a later renewal fails can be pushed again by the next owner. The checker does not drive `resend` rows.
 
 ## Covered code and sync commit
 

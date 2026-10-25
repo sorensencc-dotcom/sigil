@@ -44,6 +44,11 @@ export const MUTATIONS = [
     to: '',
   },
   {
+    id: 'send-without-directory-lease-renewal', file: reaperFile, scenario: 'directory-two-jobs', expect: 'send-owner-only',
+    from: 'if (!(await renewLease(repository, row, sendNow))) return;',
+    to: '',
+  },
+  {
     id: 'finalize-clears-terminal-guard', file: repoFile, scenario: 'one-job', expect: 'terminal-absorbing',
     from: 'WHERE id = $2 AND job_type = $1 AND claim_token = $3`,\n      [jobType, id, claimToken, state, attemptCount, nextTs, reasonCode]',
     to: 'WHERE id = $2 AND job_type = $1 AND ($3::uuid IS NULL OR true)`,\n      [jobType, id, claimToken, state, attemptCount, nextTs, reasonCode]',
