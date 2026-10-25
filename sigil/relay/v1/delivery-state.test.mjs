@@ -39,3 +39,10 @@ test('terminal states cannot be mutated', () => {
   assert.equal(canTransition('processed', 'processing'), false);
   assert.equal(canTransition('dead_letter', 'processing'), false);
 });
+
+test('throws if delivery is missing or not an object', () => {
+  assert.throws(() => transitionDelivery(null, 'delivered'), { message: 'Delivery is required' });
+  assert.throws(() => transitionDelivery(undefined, 'delivered'), { message: 'Delivery is required' });
+  assert.throws(() => transitionDelivery('not an object', 'delivered'), { message: 'Delivery is required' });
+  assert.throws(() => transitionDelivery(42, 'delivered'), { message: 'Delivery is required' });
+});
