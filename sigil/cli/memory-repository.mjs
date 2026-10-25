@@ -190,6 +190,12 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       const oldest = active.length ? Math.min(...active.map((job) => Date.parse(job.createdAt))) : timestamp;
       return { depth: active.length, oldestAgeSeconds: Math.max(0, (timestamp - oldest) / 1000) };
     },
+    async renewRelayJobLease(jobType, id, claimToken, now = new Date()) {
+      const job = relayJobs.get(id);
+      if (!job || job.jobType !== jobType || job.claimToken !== claimToken || job.state !== 'processing') return { renewed: false };
+      job.claimedAt = (now instanceof Date ? now : new Date(now)).toISOString();
+      return { renewed: true };
+    },
     async finalizeRelayJob(jobType, id, claimToken, state, { attemptCount = null, nextAttemptAt = null, reasonCode = null } = {}) {
       const job = relayJobs.get(id);
       if (!job || job.jobType !== jobType || job.claimToken !== claimToken) return { updated: false };
