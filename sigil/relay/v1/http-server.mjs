@@ -519,15 +519,15 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       const publicItems = items.map(({ flipped, ...item }) => item);
       response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       response.end(JSON.stringify({ request_id: requestId, code: 'OK', items: publicItems, next_since: nextSince }));
-      for (const item of flippedItems) {
-        await sendReceiptFrame({ stream, repository, logger }, {
+      await Promise.all(flippedItems.map(item =>
+        sendReceiptFrame({ stream, repository, logger }, {
           message_id: item.message_id,
           delivery_id: item.delivery_id,
           recipient_endpoint_id: principal.endpoint_id,
           state: 'delivered',
           at: now.toISOString(),
-        });
-      }
+        })
+      ));
       return;
     }
     if (request.method === 'POST' && request.url === '/v1/endpoint-acknowledgements') {
