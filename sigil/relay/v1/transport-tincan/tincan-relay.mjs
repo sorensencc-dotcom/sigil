@@ -50,14 +50,15 @@ function bearerToken(header) {
 }
 
 async function readBody(request, maxBytes) {
-  let raw = '';
+  const chunks = [];
   let size = 0;
   for await (const chunk of request) {
-    size += Buffer.byteLength(chunk);
+    const b = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+    size += b.length;
     if (size > maxBytes) throw refuse('REQUEST_TOO_LARGE', 'Request body too large');
-    raw += chunk;
+    chunks.push(b);
   }
-  return raw;
+  return Buffer.concat(chunks, size).toString('utf8');
 }
 
 function sendJson(response, status, body) {

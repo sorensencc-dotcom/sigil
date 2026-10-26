@@ -11,13 +11,14 @@ export function resolvePublicPort({ port, publicPort }) {
 
 // Rejects when the body exceeds maxBytes.
 export async function readBody(request, maxBytes = 1024 * 1024) {
-  let raw = ''; let size = 0;
+  const chunks = []; let size = 0;
   for await (const chunk of request) {
-    size += Buffer.byteLength(chunk);
+    const b = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+    size += b.length;
     if (size > maxBytes) throw Object.assign(new Error('Request body too large'), { code: 'REQUEST_TOO_LARGE' });
-    raw += chunk;
+    chunks.push(b);
   }
-  return raw;
+  return Buffer.concat(chunks, size).toString('utf8');
 }
 
 export const MOCK_OAUTH_ISSUER = 'https://mock-oauth.sigil.invalid';

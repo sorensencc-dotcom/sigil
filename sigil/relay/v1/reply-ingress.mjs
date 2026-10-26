@@ -70,11 +70,15 @@ export function createReplyIngress({ gate, match: tokenMatcher, limiter, perBotL
       }
     }
     const readBody = (req, max = bodyMaxBytes) => new Promise((resolve, reject) => {
-      let raw = ''; let size = 0;
+      const chunks = []; let size = 0;
       const timer = setTimeout(() => { req.destroy(); reject(Object.assign(new Error('Request timed out'), { code: 'REQUEST_TIMEOUT' })); }, requestTimeoutMs);
-      req.setEncoding('utf8');
-      req.on('data', (chunk) => { size += Buffer.byteLength(chunk); if (size > max) { clearTimeout(timer); reject(Object.assign(new Error('Request body too large'), { code: 'REQUEST_TOO_LARGE' })); req.destroy(); return; } raw += chunk; });
-      req.on('end', () => { clearTimeout(timer); resolve(raw); });
+      req.on('data', (chunk) => {
+        const b = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+        size += b.length;
+        if (size > max) { clearTimeout(timer); reject(Object.assign(new Error('Request body too large'), { code: 'REQUEST_TOO_LARGE' })); req.destroy(); return; }
+        chunks.push(b);
+      });
+      req.on('end', () => { clearTimeout(timer); resolve(Buffer.concat(chunks, size).toString('utf8')); });
       req.on('error', (error) => { clearTimeout(timer); reject(error); });
     });
     try {
