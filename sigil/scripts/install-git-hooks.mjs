@@ -25,4 +25,11 @@ exec ${shellQuote(nodePath)} ${shellQuote(scanPath)}
 `;
 
 fs.writeFileSync(hookPath, hookBody, { mode: 0o755 });
+const prePushBody = `#!/bin/sh
+${shellQuote(nodePath)} sigil/scripts/prepush-preflight.mjs || exit 1
+npm run audit:jcs || exit 1
+exec npm test
+`;
+fs.writeFileSync(path.join(hooksDir, 'pre-push'), prePushBody, { mode: 0o755 });
 console.log('Installed pre-commit secret-scan hook.');
+console.log('Installed pre-push preflight hook.');
