@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyBrowserCors } from './browser-cors.mjs';
+import { applyBrowserCors, isBrowserRoute } from './browser-cors.mjs';
 
 function res() {
   const headers = {};
@@ -14,6 +14,32 @@ test('allowlisted origin gets CORS headers on a normal request', () => {
   assert.equal(applyBrowserCors(req('POST', 'https://app.example'), r, allowed), 'continue');
   assert.equal(r.headers['access-control-allow-origin'], 'https://app.example');
   assert.match(r.headers.vary, /Origin/);
+});
+
+test('isBrowserRoute accurately identifies valid browser routes', () => {
+  const validRoutes = [
+    '/v1/rooms',
+    '/v1/rooms/',
+    '/v1/rooms/something',
+    '/v1/rooms/something/else',
+  ];
+  for (const route of validRoutes) {
+    assert.equal(isBrowserRoute(route), true, route);
+  }
+});
+
+test('isBrowserRoute accurately rejects invalid browser routes', () => {
+  const invalidRoutes = [
+    '/v2/rooms',
+    '/v1/other',
+    '/v1/room',
+    '//v1/rooms',
+    'v1/rooms',
+    '/v1/rooms-something',
+  ];
+  for (const route of invalidRoutes) {
+    assert.equal(isBrowserRoute(route), false, route);
+  }
 });
 
 test('allowlisted preflight answers 204 with methods and headers', () => {

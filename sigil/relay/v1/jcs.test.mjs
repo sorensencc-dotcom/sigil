@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canonicalJson, assertCanonicalizable } from './jcs.mjs';
+import { canonicalJson, canonicalJsonBytes, assertCanonicalizable } from './jcs.mjs';
 
 test('JCS: object keys are sorted regardless of input order', () => {
   assert.equal(canonicalJson({ b: 1, a: 2 }), canonicalJson({ a: 2, b: 1 }));
@@ -42,4 +42,11 @@ test('JCS: canonical bytes for the envelope example fixture shape are pinned', a
     canonicalJson(unsigned),
     '{"body":{"deadline":"2026-08-13T00:00:00Z","dependencies":[],"instruction":"Review the API migration.","success_criteria":["Identify breaking route changes"],"task_id":"task_01JEXAMPLE"},"capabilities":[],"context_refs":[],"conversation_id":"conv_01JEXAMPLE","correlation_id":null,"created_at":"2026-08-12T00:00:00Z","expires_at":"2026-08-13T00:00:00Z","idempotency_key":"send_01JEXAMPLE","message_id":"msg_01JEXAMPLE","message_type":"task.request","protocol":"sigil/1","recipient":{"endpoint_id":"ep_claude","owner_id":"usr_claude_owner"},"sender":{"endpoint_id":"ep_codex","kind":"agent","owner_id":"usr_codex_owner"}}'
   );
+});
+
+test('canonicalJsonBytes returns a Buffer with utf8 encoded JCS', () => {
+  const input = { b: 1, a: 2, c: 'café 🔑' };
+  const bytes = canonicalJsonBytes(input);
+  assert.ok(Buffer.isBuffer(bytes));
+  assert.equal(bytes.toString('utf8'), canonicalJson(input));
 });

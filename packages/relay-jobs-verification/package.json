@@ -1,0 +1,1 @@
+{"name":"sigil-relay-jobs-verification","private":true,"type":"module","version":"0.0.0","dependencies":{"@electric-sql/pglite":"0.5.11"}}

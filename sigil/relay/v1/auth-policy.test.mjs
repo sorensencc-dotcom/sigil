@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ACCOUNT_LINK_TTL_MS, assertAccountLinkCeremony, assertAllowedIssuer, assertAssurance, boundedTokenExpiry, boundedCapabilityGrantExpiry, CAPABILITY_GRANT_MAX_LIFETIME_MS } from './auth-policy.mjs';
+import { ACCOUNT_LINK_TTL_MS, assertAccountLinkCeremony, assertAllowedIssuer, assertAssurance, boundedTokenExpiry, boundedDirectoryExpiry, DIRECTORY_EXPIRY_DEFAULT_MS } from './auth-policy.mjs';
 
 test('auth policy requires configured OIDC allow-list', () => {
   assert.throws(() => assertAllowedIssuer('https://idp.example', new Set()), (error) => error.code === 'OIDC_PROVIDER_NOT_CONFIGURED');
@@ -13,18 +13,19 @@ test('auth policy bounds endpoint tokens to 24 hours', () => {
   assert.throws(() => boundedTokenExpiry({ now, expiresAt: '2026-01-02T00:00:01Z' }), (error) => error.code === 'TOKEN_LIFETIME_INVALID');
 });
 
-test('auth policy bounds capability grants to 24 hours', () => {
+test('auth policy bounds directory expiry between 1 hour and 7 days', () => {
   const now = new Date('2026-01-01T00:00:00Z');
-  const validExpiresAt = new Date(now.getTime() + 12 * 60 * 60 * 1000); // 12 hours
-  const maxExpiresAt = new Date(now.getTime() + CAPABILITY_GRANT_MAX_LIFETIME_MS); // exactly 24 hours
+  // Default to 24 hours
+  assert.equal(boundedDirectoryExpiry({ now }).getTime() - now.getTime(), DIRECTORY_EXPIRY_DEFAULT_MS);
 
-  assert.equal(boundedCapabilityGrantExpiry({ now, expiresAt: validExpiresAt }).getTime(), validExpiresAt.getTime());
-  assert.equal(boundedCapabilityGrantExpiry({ now, expiresAt: maxExpiresAt }).getTime(), maxExpiresAt.getTime());
+  // Valid bounds
+  assert.equal(boundedDirectoryExpiry({ now, expiresAt: new Date(now.getTime() + 60 * 60 * 1000) }).getTime() - now.getTime(), 60 * 60 * 1000);
+  assert.equal(boundedDirectoryExpiry({ now, expiresAt: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000) }).getTime() - now.getTime(), 7 * 24 * 60 * 60 * 1000);
 
-  assert.throws(() => boundedCapabilityGrantExpiry({ now, expiresAt: new Date(now.getTime() + CAPABILITY_GRANT_MAX_LIFETIME_MS + 1) }), (error) => error.code === 'GRANT_LIFETIME_INVALID');
-  assert.throws(() => boundedCapabilityGrantExpiry({ now, expiresAt: now }), (error) => error.code === 'GRANT_LIFETIME_INVALID');
-  assert.throws(() => boundedCapabilityGrantExpiry({ now, expiresAt: new Date(now.getTime() - 1000) }), (error) => error.code === 'GRANT_LIFETIME_INVALID');
-  assert.throws(() => boundedCapabilityGrantExpiry({ now, expiresAt: 'invalid' }), (error) => error.code === 'GRANT_LIFETIME_INVALID');
+  // Invalid bounds
+  assert.throws(() => boundedDirectoryExpiry({ now, expiresAt: new Date(now.getTime() + 60 * 60 * 1000 - 1) }), (error) => error.code === 'DIRECTORY_EXPIRY_INVALID');
+  assert.throws(() => boundedDirectoryExpiry({ now, expiresAt: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000 + 1) }), (error) => error.code === 'DIRECTORY_EXPIRY_INVALID');
+  assert.throws(() => boundedDirectoryExpiry({ now, expiresAt: 'invalid-date' }), (error) => error.code === 'DIRECTORY_EXPIRY_INVALID');
 });
 
 test('auth policy restricts assurance and account-link ceremony lifetime', () => {

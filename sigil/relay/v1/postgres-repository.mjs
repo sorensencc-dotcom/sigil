@@ -2371,6 +2371,15 @@ export class PostgresRepository {
     );
     return { updated: result.rowCount > 0 };
   }
+  async renewRelayJobLease(jobType, id, claimToken, now = new Date(), client = this.pool) {
+    const ts = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const result = await client.query(
+      `UPDATE relay_jobs SET claimed_at = $4::timestamptz, updated_at = now()
+       WHERE id = $2 AND job_type = $1 AND claim_token = $3 AND state = 'processing'`,
+      [jobType, id, claimToken, ts]
+    );
+    return { renewed: result.rowCount > 0 };
+  }
   async retryRelayJob(jobType, id, now = new Date(), { terminalStates } = {}, client) {
     const ts = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     const allowed = terminalStates ?? ['dead_letter'];

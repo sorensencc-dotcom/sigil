@@ -93,6 +93,10 @@ function makeRepo({ rows = [], peers = {}, finalizeOverride, directoryLinks = []
       }
       return claimed;
     },
+    async renewRelayJobLease(jobType, id, claimToken, _now, _client) {
+      const r = store.get(id);
+      return { renewed: Boolean(r && r.claimToken === claimToken && r.state === 'processing') };
+    },
     async finalizeRelayJob(jobType, id, claimToken, state, patch, _client) {
       if (jobType !== 'federation') throw new Error(`unexpected job type ${jobType}`);
       finalizeCalls.push({ id, claimToken, state, patch });
@@ -152,6 +156,24 @@ test('one due row, postForward ok -> row forwarded + federation.forwarded audit'
   assert.equal(audit.subjectId, row.messageId);
   assert.equal(audit.endpointId, 'ep_codex@local.example.com');
   assert.ok(!JSON.stringify(audit.payload ?? {}).includes('expires_at'), 'audit payload must not carry the envelope body');
+});
+
+test('a lost envelope lease sends nothing and leaves the row processing', async () => {
+  const row = makeRow();
+  const repo = makeRepo({ rows: [row], peers: PEERS });
+  repo.renewRelayJobLease = async () => ({ renewed: false });
+  let posted = 0;
+  const counts = await runFederationReaperPass({
+    repository: repo,
+    identity: makeIdentity(),
+    originDomain: ORIGIN_DOMAIN,
+    now: new Date('2026-08-31T00:00:00Z'),
+    postForwardImpl: async () => { posted += 1; return { ok: true, status: 202 }; },
+  });
+  assert.equal(posted, 0);
+  assert.deepEqual(counts, { claimed: 1, forwarded: 0, rejected: 0, failed: 0, deadLettered: 0 });
+  assert.equal(repo.store.get(row.id).state, 'processing');
+  assert.equal(repo.audits.length, 0);
 });
 
 test('4xx from peer -> forward_rejected (terminal) + audit carries peer code', async () => {
@@ -409,6 +431,26 @@ test('a directory_revocation row posts a rebuilt body to /revocations', async ()
   assert.equal(posts[0].body.link_ref, 'LR1');
   assert.match(posts[0].body.nonce, /^[A-Za-z0-9_-]{22}$/);
   assert.equal(repo.store.get('rv1').state, 'forwarded');
+});
+
+test('a lost directory lease sends nothing and leaves the row processing', async () => {
+  for (const kind of ['directory_confirmation', 'directory_revocation']) {
+    const row = makeDirRow({ id: kind, kind, directoryPayload: { link_ref: 'L' } });
+    const repo = makeRepo({ rows: [row], peers: DIR_PEERS });
+    repo.renewRelayJobLease = async () => ({ renewed: false });
+    let posted = 0;
+    const counts = await runFederationReaperPass({
+      repository: repo,
+      identity: makeIdentity(),
+      originDomain: 'a.example',
+      now: new Date('2026-09-05T00:00:00.000Z'),
+      postDirectoryImpl: async () => { posted += 1; return { ok: true, status: 202 }; },
+    });
+    assert.equal(posted, 0, kind);
+    assert.deepEqual(counts, { claimed: 1, forwarded: 0, rejected: 0, failed: 0, deadLettered: 0 });
+    assert.equal(repo.store.get(kind).state, 'processing');
+    assert.equal(repo.audits.length, 0);
+  }
 });
 
 test('B3: a directory_confirmation row is re-signed with a fresh nonce + signed_at on every pass', async () => {
