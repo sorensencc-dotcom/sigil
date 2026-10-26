@@ -17,7 +17,7 @@ function job(overrides = {}) {
 }
 
 function repository({ jobs = [job()], envelopes = [] } = {}) {
-  const calls = { finalize: [], audits: [], lookups: [] };
+  const calls = { finalize: [], audits: [], lookups: [], renews: [] };
   return {
     calls,
     async claimDueRelayJobs(jobType, now, limit, leaseSeconds) {
@@ -30,6 +30,10 @@ function repository({ jobs = [job()], envelopes = [] } = {}) {
     async listResendEnvelopes(targetSenderEndpointId, conversationId, beginSeq, endSeq, now) {
       calls.lookups.push({ targetSenderEndpointId, conversationId, beginSeq, endSeq, now });
       return envelopes;
+    },
+    async renewRelayJobLease(jobType, id, claimToken, now) {
+      calls.renews.push({ jobType, id, claimToken, now });
+      return { renewed: true };
     },
     async withTransaction(fn) { return fn({ id: 'resend-worker-client' }); },
     async finalizeRelayJob(jobType, id, claimToken, state, patch) {
@@ -98,4 +102,45 @@ test('dead-letters a resend job only after the retry maximum', async () => {
   assert.equal(repo.calls.finalize[0].patch.attemptCount, 4);
   assert.equal(repo.calls.audits[0].eventType, 'session.resend_dead_letter');
   assert.equal(logs[0].event, 'session.resend_dead_letter');
+});
+
+test('a lost resend lease pushes nothing and does not finalize', async () => {
+  const repo = repository({
+    envelopes: [
+      { streamSeq: 1n, envelope: { message_id: 'msg_1' } },
+      { streamSeq: 3n, envelope: { message_id: 'msg_3' } },
+    ],
+  });
+  repo.renewRelayJobLease = async () => ({ renewed: false });
+  const frames = [];
+  const stream = {
+    notifyResend(endpointId, payload) { frames.push({ type: 'resend', endpointId, payload }); return true; },
+    notifySequenceReset(endpointId, payload) { frames.push({ type: 'reset', endpointId, payload }); return true; },
+  };
+  const result = await runResendWorkerPass({ repository: repo, stream, now: NOW });
+  assert.deepEqual(frames, []);
+  assert.deepEqual(repo.calls.finalize, []);
+  assert.deepEqual(result, { claimed: 1, fulfilled: 0, requeued: 0, deadLettered: 0, resets: 0, pushed: 0 });
+});
+
+test('a resend lease lost after the first push stops and does not finalize', async () => {
+  const repo = repository({
+    envelopes: [
+      { streamSeq: 1n, envelope: { message_id: 'msg_1' } },
+      { streamSeq: 3n, envelope: { message_id: 'msg_3' } },
+    ],
+  });
+  let renews = 0;
+  repo.renewRelayJobLease = async () => ({ renewed: ++renews === 1 });
+  const frames = [];
+  const stream = {
+    notifyResend() { frames.push('resend'); return true; },
+    notifySequenceReset() { frames.push('reset'); return true; },
+  };
+  const result = await runResendWorkerPass({ repository: repo, stream, now: NOW });
+  assert.deepEqual(frames, ['resend']);
+  assert.deepEqual(repo.calls.finalize, []);
+  assert.equal(result.fulfilled, 0);
+  assert.equal(result.pushed, 0);
+  assert.equal(result.resets, 0);
 });

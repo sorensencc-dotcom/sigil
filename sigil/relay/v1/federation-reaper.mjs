@@ -40,6 +40,11 @@ const PATH_BY_KIND = {
   directory_revocation: '/v1/federation/directory/revocations',
 };
 
+async function renewLease(repository, row, now) {
+  const { renewed } = await repository.renewRelayJobLease('federation', row.id, row.claimToken, now);
+  return renewed;
+}
+
 function finalize(repository, row, state, patch) {
   return repository.withTransaction((client) =>
     repository.finalizeRelayJob('federation', row.id, row.claimToken, state, patch, client));
@@ -145,6 +150,7 @@ async function dispatchDirectoryRow({ repository, row, identity, now, nowMs, now
   // RELAY_REQUEST_STALE -> terminal `forward_rejected`, silently dropping
   // envelopes and revocations). Lease/backoff/audit stay on the pass clock.
   const sendNow = nowProvider();
+  if (!(await renewLease(repository, row, sendNow))) return;
   let canonicalBytes;
   let signed;
   try {
@@ -261,6 +267,7 @@ export async function runFederationReaperPass({
     // pass start, or a slow peer earlier in the pass makes the receiver reject
     // this row 401 RELAY_REQUEST_STALE (terminal, no retry).
     const sendNow = nowProvider();
+    if (!(await renewLease(repository, row, sendNow))) continue;
     let canonicalBytes;
     let signed;
     try {
