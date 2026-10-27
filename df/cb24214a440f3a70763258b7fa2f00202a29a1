@@ -1,0 +1,16 @@
+.claude/skills/verify-relay-job-leases/SKILL.md
+  h_5c172e9b435f5a 20
+STATUS.md
+  h_5c172e9b435f5a 3-9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dfcb24214a440f3a70763258b7fa2f00202a29a1",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
