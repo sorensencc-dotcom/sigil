@@ -10,16 +10,20 @@ import path from 'node:path';
 
 function request(port, token, { method, path, body, headers = {}, metadata = true } = {}) {
   const contractHeaders = metadata ? { 'x-sigil-request-id': 'request-1234', 'x-sigil-contract': 'sigil.connector/v1', 'x-sigil-caller': 'test-host', 'x-sigil-capability-scope': 'sigil.task/*' } : {};
-  return new Promise((resolve, reject) => { const req = http.request({ port, method, path, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...contractHeaders, ...headers } }, (res) => { let text = ''; res.on('data', (chunk) => text += chunk); res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(text) })); }); req.on('error', reject); req.end(body ? JSON.stringify(body) : undefined); });
+  const authorizationHeader = token === null ? {} : { authorization: `Bearer ${token}` };
+  return new Promise((resolve, reject) => { const req = http.request({ port, method, path, headers: { ...authorizationHeader, 'content-type': 'application/json', ...contractHeaders, ...headers } }, (res) => { let text = ''; res.on('data', (chunk) => text += chunk); res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(text) })); }); req.on('error', reject); req.end(body ? JSON.stringify(body) : undefined); });
 }
 
 test('connector server authenticates and exposes connector RPCs', async () => {
   const calls = []; const connector = { async sendTask(input) { calls.push(input); return { accepted: true }; }, async checkInbox() { return { items: [] }; }, async getResult(id) { return { id }; }, async requestApproval() { return { approved: false }; }, async resolveContext() { return { found: true }; }, async processDelivery(input) { return { state: 'processed', input }; }, async submitResult(input) { return { accepted: true, input }; } };
   const token = 'local-secret'; const app = createConnectorServer({ connector, token }); await app.listen(); const port = app.address().port;
   const denied = await request(port, 'wrong', { method: 'POST', path: '/v1/tasks', body: {} });
+  const missing = await request(port, null, { method: 'POST', path: '/v1/tasks', body: {} });
   const sent = await request(port, token, { method: 'POST', path: '/v1/tasks', body: { envelope: { message_id: 'm1' } } });
   const result = await request(port, token, { method: 'GET', path: '/v1/results?task_id=t1' }); await app.close();
-  assert.equal(denied.status, 401); assert.equal(sent.status, 200); assert.deepEqual(calls, [{ envelope: { message_id: 'm1' } }]); assert.deepEqual(result.body.result, { id: 't1' });
+  assert.equal(denied.status, 401); assert.deepEqual(denied.body, { code: 'UNAUTHENTICATED', message: 'Authentication required' });
+  assert.equal(missing.status, 401); assert.deepEqual(missing.body, { code: 'UNAUTHENTICATED', message: 'Authentication required' });
+  assert.equal(sent.status, 200); assert.deepEqual(calls, [{ envelope: { message_id: 'm1' } }]); assert.deepEqual(result.body.result, { id: 't1' });
   assert.equal(app.address(), null);
 });
 
