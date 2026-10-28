@@ -76,4 +76,23 @@ describe('RosterPanel', () => {
     await vi.waitFor(() => expect(setInvokableBy).toHaveBeenCalledWith('room_1', 'ep_claude', 'members'));
     await vi.waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'members'] }));
   });
+
+  it('shows report_only members as a read-only Report only label with no mode control', () => {
+    const withReporter: Member[] = [
+      ...members,
+      { endpoint_id: 'ep_reporter', role: 'member', response_mode: 'report_only', added_at: 't', invokable_by: 'owner', owner_id: 'usr_a', display_name: 'Reporter' },
+    ];
+    renderWithClient(<RosterPanel roomId="room_1" members={withReporter} manager onGone={() => {}} />, {});
+    expect(screen.getByText('Report only')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Response mode for ep_reporter')).toBeNull();
+    // Editable agent still has exactly one mode select; report_only adds none.
+    expect(screen.getByLabelText('Response mode for ep_claude')).toBeInTheDocument();
+  });
+
+  it('keeps mode editor options to joins, mentions_only, and router without report_only', () => {
+    renderWithClient(<RosterPanel roomId="room_1" members={members} manager onGone={() => {}} />, {});
+    const select = screen.getByLabelText('Response mode for ep_claude');
+    const values = Array.from(select.querySelectorAll('option')).map((option) => (option as HTMLOptionElement).value);
+    expect(values).toEqual(['joins', 'mentions_only', 'router']);
+  });
 });

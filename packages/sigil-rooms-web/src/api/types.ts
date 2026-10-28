@@ -56,7 +56,7 @@ export interface RoomUpdatedFrame {
   changed: 'messages' | 'members' | 'room';
 }
 
-export type ResponseMode = 'joins' | 'mentions_only' | 'router';
+export type ResponseMode = 'joins' | 'mentions_only' | 'router' | 'report_only';
 
 export type InvokableBy = 'owner' | 'members';
 
