@@ -36,7 +36,9 @@ export function RosterPanel({ roomId, members, manager, viewer = null, onGone }:
             <span className="member-id">{member.display_name || member.endpoint_id}</span>
             <span className="badge">{member.role}</span>
             {member.response_mode !== null ? (
-              manager ? (
+              member.response_mode === 'report_only' ? (
+                <span className="badge">Report only</span>
+              ) : manager ? (
                 <select
                   aria-label={`Response mode for ${member.endpoint_id}`}
                   value={member.response_mode}

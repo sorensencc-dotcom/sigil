@@ -168,3 +168,12 @@ test('POST /v1/rooms/{room_id}/messages declares NO_OPERATOR_IDENTITY and ROOM_S
   assert.ok(route.errors.includes('NO_OPERATOR_IDENTITY'));
   assert.ok(route.errors.includes('ROOM_SEND_UNAVAILABLE'));
 });
+
+test('relay API response-mode notes list report_only among response modes', () => {
+  const route = api.routes.find((item) => item.path === '/v1/rooms/{room_id}/members/{endpoint_id}/response-mode');
+  assert.ok(route, 'response-mode route missing');
+  for (const mode of ['joins', 'mentions_only', 'router', 'report_only']) {
+    assert.match(route.notes, new RegExp(mode));
+  }
+});
+
