@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAgentDaemon } from './agent-daemon.mjs';
@@ -8,6 +10,33 @@ import { createIdentity } from './identity.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fakeWorkerScript = path.resolve(here, '..', 'scripts', 'claude-worker.mjs');
+
+test('agent daemon does not pass unrelated environment secrets to its worker', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sigil-worker-env-'));
+  const workerScript = path.join(tempDir, 'worker.mjs');
+  const originalSecret = process.env.AWS_SECRET_ACCESS_KEY;
+  const originalOllamaFallback = process.env.SIGIL_OLLAMA_FALLBACK;
+  process.env.AWS_SECRET_ACCESS_KEY = 'worker-env-regression-secret';
+  process.env.SIGIL_OLLAMA_FALLBACK = '1';
+
+  try {
+    await fs.writeFile(workerScript, 'process.stdout.write(JSON.stringify({ secret: process.env.AWS_SECRET_ACCESS_KEY ?? null, ollamaFallback: process.env.SIGIL_OLLAMA_FALLBACK ?? null }));\n');
+    const daemon = createAgentDaemon({
+      identity: createIdentity({ ownerId: 'usr_soren', endpointId: 'ep_claude', kind: 'agent' }),
+      relayUrl: 'http://127.0.0.1:8791',
+      workerCommand: process.execPath,
+      workerArgs: [workerScript]
+    });
+
+    assert.deepEqual(await daemon.executeWorker({}), { secret: null, ollamaFallback: '1' });
+  } finally {
+    if (originalSecret === undefined) delete process.env.AWS_SECRET_ACCESS_KEY;
+    else process.env.AWS_SECRET_ACCESS_KEY = originalSecret;
+    if (originalOllamaFallback === undefined) delete process.env.SIGIL_OLLAMA_FALLBACK;
+    else process.env.SIGIL_OLLAMA_FALLBACK = originalOllamaFallback;
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
 
 test('agent daemon executes local worker on task.request and sends signed task.result reply', async () => {
   const claudeIdentity = createIdentity({ ownerId: 'usr_soren', endpointId: 'ep_claude', kind: 'agent' });

@@ -7,6 +7,7 @@ import { RelayClient } from '../connectors/v1/relay-client.mjs';
 import { LocalOutbox } from '../connectors/v1/local-outbox.mjs';
 import { ConnectorDatabase } from '../connectors/v1/connector-db-adapter.mjs';
 import { WebSocketConnectionManager } from '../connectors/v1/connector-ws-manager.mjs';
+import { agentEnv } from '../bridges/v1/cli-runner.mjs';
 import { identityKeys } from './identity.mjs';
 
 const defaultSchemaPath = path.resolve(
@@ -89,6 +90,7 @@ export function createAgentDaemon({
       let stdout = '';
       let stderr = '';
       const child = spawn(workerCommand, workerArgs, {
+        env: agentEnv(process.env, { extraPrefixes: ['ANTHROPIC_', 'CLAUDE_', 'CODEX_', 'OPENAI_', 'SIGIL_', 'OLLAMA_'] }),
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true
       });
