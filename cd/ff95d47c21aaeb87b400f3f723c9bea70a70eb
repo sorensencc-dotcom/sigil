@@ -1,0 +1,26 @@
+packages/sigil-rooms-web/src/api/client.spec.ts
+  h_5c172e9b435f5a 118-132
+packages/sigil-rooms-web/src/api/client.ts
+  h_5c172e9b435f5a 29,90,95
+packages/sigil-rooms-web/src/rooms/RosterPanel.tsx
+  h_5c172e9b435f5a 58
+packages/sigil-rooms-web/src/rooms/resolveMentions.spec.ts
+  h_5c172e9b435f5a 1-59
+packages/sigil-rooms-web/src/rooms/resolveMentions.ts
+  h_5c172e9b435f5a 1-49
+packages/sigil-rooms-web/src/rooms/useSend.spec.tsx
+  h_5c172e9b435f5a 6,8,11-16,18,24,42,51,55-98
+packages/sigil-rooms-web/src/rooms/useSend.ts
+  h_5c172e9b435f5a 1,4,9-10,23-35,63-74
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cdff95d47c21aaeb87b400f3f723c9bea70a70eb",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
