@@ -163,3 +163,35 @@ test('resolveDomainOrThrow times out instead of hanging when lookupImpl never se
     (error) => error.code === 'DNS_TIMEOUT' && error.timeoutMs === 20,
   );
 });
+
+test('resolveDomainOrThrow rejects .invalid TLD without calling lookupImpl (RFC 6761; sinkhole-safe)', async () => {
+  let called = false;
+  await assert.rejects(
+    resolveDomainOrThrow('nonexistent.invalid', {
+      lookupImpl: async () => {
+        called = true;
+        return { address: '198.18.0.1', family: 4 };
+      },
+    }),
+    (error) => error.code === 'DNS_NOT_FOUND'
+      && /does not resolve/.test(error.message)
+      && error.domain === 'nonexistent.invalid',
+  );
+  assert.equal(called, false);
+});
+
+test('resolveDomainOrThrow rejects a case-insensitive .INVALID final label with port without calling lookupImpl', async () => {
+  let called = false;
+  await assert.rejects(
+    resolveDomainOrThrow('nowhere.INVALID:8443', {
+      lookupImpl: async () => {
+        called = true;
+        return { address: '198.18.0.1', family: 4 };
+      },
+    }),
+    (error) => error.code === 'DNS_NOT_FOUND'
+      && /does not resolve/.test(error.message)
+      && error.domain === 'nowhere.INVALID:8443',
+  );
+  assert.equal(called, false);
+});
