@@ -24,7 +24,7 @@ export function loadIdentity(filePath) {
 
 export function saveIdentity(filePath, identity) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(identity, null, 2));
+  fs.writeFileSync(filePath, JSON.stringify(identity, null, 2), { mode: 0o600 });
 }
 
 export function identityKeys(identity) {
