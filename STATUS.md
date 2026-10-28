@@ -1,5 +1,14 @@
 # Status
 
+## Session update: 2026-10-28 Sigil Rooms Phase 5 Task 15 (issue #100)
+
+- Branch `feat/issue-100-phase5-task15-docs-verify` on `origin/main` after Tasks 10–14 merged (#121–#125). Implements issue #100 Task 15 (docs + gated final verification).
+- Docs: README Room CLI bridges (`claude`, `codex`, `copilot`) and Ironbots room report (flags, exit codes 0-3); `sigil room report` / `--room-bridge` help text; Ironbots wiring note at `docs/superpowers/plans/2026-10-16-phase-5-ironbots-wiring-note.md`.
+- Deferred (unchanged): Grok CLI bridge (blocks tincan multi-host demo), Hermes bridge, Antigravity bridge, automatic report recreation past the freshness window, automatic stale-lock recovery. See design Deferred table and verification notes.
+- Verification (America/New_York, Node `/home/box/node24`, disposable `sigil_test` on `127.0.0.1:55432`): focused phase-5 core pass 87 / fail 0 / exit 0; `036_report_only_mode.test.mjs` pass 3 skipped 0; `room-report-only.pg.test.mjs` pass 5 skipped 0 (includes Task 11 response-loss / blocked-commit / skewed-clock). Full `npm test` exit 1 on this host only for environmental `init-domain.test.mjs` (`*.invalid` → `198.18.0.1`). Full `test:live` killed exit 137 with unrelated oauth/federation fails; required report-only pg files re-run sequentially. Notes: `docs/superpowers/plans/2026-10-16-phase-5-verification-notes.md`.
+- Phase 5 status for issue #100: **done** (Tasks 10–15 + pg `skipped 0` on the new paths). Do not claim AgentMail or production readiness. Do not claim launch complete. Phase 6/7 proof bar remains separate.
+
+
 ## Session update: 2026-10-28 Sigil Rooms Phase 5 Task 10 (issue #100)
 
 - Branch `feat/issue-100-phase5-report-only` off `origin/main` `b1b9642`. Implements issue #100 Task 10 (report_only post path).

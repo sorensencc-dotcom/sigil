@@ -133,6 +133,57 @@ Residual risk: `invokable_by` governs who starts an invocation, not what an agen
 - You cannot remove a guest's agent from a room. To stop it acting, suspend the guest with `sigil human suspend`.
 - `sigil human suspend` cancels invocations but posts no `invocation_stopped` room event; Stop and member removal do.
 
+#### Room CLI bridges
+
+Local CLI bridges answer `room.message` deliveries through `sigil agent run --room-bridge <kind>`. This release ships `claude`, `codex`, and `copilot`. The registry omits `grok`, `hermes`, and `antigravity` (deferred; see the [phase 5 verification notes](docs/superpowers/plans/2026-10-16-phase-5-verification-notes.md)).
+
+```powershell
+sigil agent run --identity .sigil/agent.identity.json --relay-url http://127.0.0.1:8791 --room-bridge copilot --room-sessions .sigil/room-sessions.json
+```
+
+On Windows, `--agent-command` must name an `.exe`. A `.cmd` shim fails with `CLI_START_FAILED` because the bridge spawns without a shell.
+
+Optional live smoke (credits; not part of `npm test`):
+
+```powershell
+$env:SIGIL_LIVE_BRIDGES = "1"
+node sigil/scripts/live-room-bridges.mjs
+```
+
+Without `SIGIL_LIVE_BRIDGES=1` the script exits 0 and skips. The smoke probes `copilot` (and `claude`/`codex` when present). Grok, Hermes, and Antigravity stay deferred.
+
+#### Ironbots room report
+
+`sigil room report` posts a clamped ASCII status as a signed `room.message` from a `report_only` endpoint. The poster keeps a durable pending envelope, retries inside a FRESH window (under 4 minutes), and reconciles through the receipts route in RECONCILE (at or after 4 minutes). It never auto-steals locks and never automatically recreates a stale envelope.
+
+```powershell
+sigil room report --identity .sigil/reporter.identity.json --relay-url http://127.0.0.1:8791 --room <room_id> --bot <bot_id> --status healthy --summary "ok" --state .sigil/ironbots-report-state.json --report-at 2026-10-28T18:00:00.000Z
+```
+
+Flags:
+
+| Flag | Effect |
+| :--- | :--- |
+| `--identity`, `--relay-url`, `--room` | Required. The operator supplies the room id; a `room_id` inside `--from-report` is not trusted. |
+| `--bot`, `--status`, `--summary`, `--alert` | Per-bot fields, or use `--from-report <json>` for a daily bundle such as `ironbots_daily_report.json`. |
+| `--state <path>` | Local-disk state file (pending + last_key). Lock files sit next to it and are advisory only. |
+| `--report-at <iso>` | Makes repeated calls the same report. Omit it to let each run be a distinct report decided by the post policy. |
+| `--drop-pending` | Operator drops the unresolved pending record. |
+| `--resend-as-new` | Operator-asserted that the original was not and will not be accepted; re-sends pending fields with an `_r<n>` idempotency key. |
+| `--break-lock <bot>` | Operator-asserted that no holder process is alive for that bot lock. |
+| `--break-state-lock` | Same assertion for the state-file lock. |
+
+Exit codes:
+
+| Code | Meaning |
+| :--- | :--- |
+| 0 | Posted, reconciled via receipts 200, skipped as `already_posted`, policy skip, or operator `--drop-pending` / lock-break success. |
+| 1 | Usage error. |
+| 2 | Permanent refusal (`report_refused`, pending dropped): deterministic content refusals on any send, plus `INVALID_ENVELOPE`, `DUPLICATE_MESSAGE`, and `REPLAY_DETECTED` on a first send (`state` was `signed` at run start). |
+| 3 | Transient failure, a rejected retry or RECONCILE whose receipts lookup returns 404 or fails (`report_pending_unresolved`), a later run skipped as `pending` while that record stays unresolved, or `lock_timeout`. |
+
+Without `--report-at`, each run is a distinct report and the post policy decides. Wiring details for a host script: [Ironbots wiring note](docs/superpowers/plans/2026-10-16-phase-5-ironbots-wiring-note.md).
+
 #### Floor Warden bridge
 
 The bridge forwards room messages for Grok bots to one Floor Warden webhook and accepts the answers on a relay reply route.

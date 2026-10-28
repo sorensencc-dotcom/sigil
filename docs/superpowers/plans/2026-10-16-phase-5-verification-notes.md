@@ -215,3 +215,126 @@ Implemented on branch `feat/issue-100-phase5-report-only`.
 - `node --test sigil/relay/v1/room-report-only-post.test.mjs` — pass 7
 - `SIGIL_TEST_DATABASE_URL=... node --test sigil/relay/v1/room-report-only.pg.test.mjs` — pass 2, skipped 0 (includes 36-post concurrency and membership-change)
 - Related regression: `accept-envelope.rooms.test.mjs`, `room-routes.report-only.test.mjs` — pass
+
+## Task 15 (docs + gated final verification) — 2026-10-28
+
+Branch `feat/issue-100-phase5-task15-docs-verify` rebased on `origin/main` after Tasks 10–14 merged (#121–#125). America/New_York. Node via `/home/box/node24`. Disposable DB: embedded-postgres on `127.0.0.1:55432`, database `sigil_test` (`SIGIL_TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:55432/sigil_test`).
+
+### Docs shipped
+- `README.md`: Room CLI bridges (`claude`, `codex`, `copilot`); Windows `.exe` requirement for `--agent-command`; `sigil room report` flags and exit codes 0–3; pointer to Ironbots wiring note. Grok/Hermes/Antigravity omitted.
+- `STATUS.md`: phase 5 Task 15 entry; deferred table rows called out; no AgentMail / production / launch-complete claims.
+- `sigil/cli/sigil.mjs`: `--room-bridge` help lists `copilot`; room report exit-code help expanded.
+- `docs/superpowers/plans/2026-10-16-phase-5-ironbots-wiring-note.md`: host wiring for per-bot and `--from-report` daily runs.
+- `sigil/cli/agent-run-floor-warden.test.mjs`: usage regex updated for `copilot` (matches help text).
+
+### Step 4 — core suite (`SIGIL_TEST_DATABASE_URL` unset)
+
+```bash
+(timeout --kill-after=30 1500 npm test > "$TMPDIR/phase5-core.log" 2>&1; echo "exit $?" >> "$TMPDIR/phase5-core.log") &
+```
+
+Full root `npm test` (first run, before usage-regex fix): tests 2425, pass 2062, fail 2, skipped 361, exit 1.
+Failing files:
+1. `sigil/cli/agent-run-floor-warden.test.mjs` — usage regex still expected `claude|codex|router|floor-warden` without `copilot` (fixed in this Task 15 commit; recheck pass).
+2. `sigil/cli/init-domain.test.mjs` — `sigil init --domain aborts identity creation when the domain does not resolve`. This host's resolver maps `*.invalid` → `198.18.0.1`, so RFC 2606 NXDOMAIN does not occur. Environmental; not a phase 5 regression. Recheck after usage fix: that file still fails alone; usage test passes.
+
+Focused phase-5 core files (same host, `SIGIL_TEST_DATABASE_URL` unset):
+
+```bash
+node --test --test-timeout=60000 \
+  sigil/bridges/v1/file-lock.test.mjs \
+  sigil/bridges/v1/ironbot-report.test.mjs \
+  sigil/bridges/v1/ironbot-report-concurrency.test.mjs \
+  sigil/cli/room-report-command.test.mjs \
+  sigil/bridges/v1/rooms-bridges-exit.test.mjs \
+  sigil/relay/v1/room-report-only-post.test.mjs \
+  sigil/relay/v1/room-routes.report-only.test.mjs \
+  sigil/migrations/036_report_only_mode.test.mjs \
+  sigil/cli/agent-run-floor-warden.test.mjs
+```
+
+Focused totals: pass 87, fail 0, skipped 2, exit 0. File-lock, concurrency, reconcile, room-report, rooms-bridges-exit, and report_only post/route coverage among the passes.
+
+### Step 5 — live pg gate
+
+```bash
+SIGIL_TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:55432/sigil_test \
+  (timeout --kill-after=30 1800 npm run test:live > "$TMPDIR/phase5-live.log" 2>&1; echo "exit $?" >> "$TMPDIR/phase5-live.log") &
+```
+
+Full `npm run test:live` was killed (exit 137) mid-run with unrelated oauth/federation failures. Plan criterion 1 requires the report-only files with `fail 0` and `skipped 0`; those were re-run sequentially on the same disposable DB:
+
+```bash
+SIGIL_TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:55432/sigil_test \
+  node --test --test-timeout=120000 sigil/migrations/036_report_only_mode.test.mjs
+# → tests 3, pass 3, fail 0, skipped 0
+
+SIGIL_TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:55432/sigil_test \
+  node --test --test-timeout=180000 sigil/relay/v1/room-report-only.pg.test.mjs
+# → tests 5, pass 5, fail 0, skipped 0
+```
+
+`room-report-only.pg.test.mjs` covers membership/marker, post path (refusals, rate cap, concurrency, receipts), and Task 11 pg (1) response-loss at +6m, (2) blocked-commit, (3) skewed-clock FRESH retry while held. Assumption 14 report_only sender evidence (including Task 11 cases) is present. Task 10 step 6 fallback was not taken.
+
+### Phase 5 completion ruling
+
+- Issue #100 acceptance (Tasks 10–15 + pg `skipped 0` on the new paths): **met**.
+- Plan step 5 criterion 1 (036 + room-report-only.pg `fail 0` / `skipped 0`): **met**.
+- Plan step 4 full `npm test` exit 0: **not met on this agent host** because `init-domain.test.mjs` depends on NXDOMAIN for `.invalid` and this resolver hijacks that TLD. Phase-5 focused suite exit 0. Re-run full `npm test` on a host with normal RFC 2606 behavior before treating the plan's strict "phase complete" box as closed in CI.
+- Do **not** claim AgentMail readiness, production readiness, or launch complete. Phase 6/7 proof bar and live Floor Warden ping remain separate.
+
+## Design-to-task checklist (Task 15 step 7)
+
+| Spec section | Task(s) |
+|---|---|
+| Scope reading and Decisions | 2–3 |
+| CLI bridge contract and registry | 2–4 |
+| Copilot | 5 |
+| Grok CLI | 1, 6 (written deferral / Branch B; registry omits `grok`) |
+| Hermes | 1, 7 (written deferral / Branch B; registry omits `hermes`) |
+| Antigravity | 1, 8 (written deferral / Branch B; registry omits `antigravity`) |
+| Replay and recovery | 4 |
+| Ironbots report posting (FRESH/RECONCILE, receipts reconcile, `baseKey` / pending skips, first-send vs retry refusal, fail-closed locks, `--drop-pending` / `--resend-as-new` / `--break-lock` / `--break-state-lock`) | 1, 9–12 |
+| Loop guards and catch-up | 3, 4, 10, 14 |
+| Data | 9, 10 |
+| CLI | 2, 7, 12 |
+| Deferred (incl. automatic report recreation and automatic stale-lock recovery; deferred Grok/Hermes/Antigravity; blocked tincan multi-host demo) | 15 |
+| Testing | 3–14 |
+| Open questions | Recorded, unchanged |
+| Interaction with phase 6 (migration 036, shared files in 2 and 10, shared session-store in 4, no overlap for receipts/lock helper; `http-server.mjs` only if Task 10 step 6 fallback — not taken) | 9, 10, 15 |
+
+### Assumptions map (design 1–16)
+
+| # | Status | Task |
+|---|---|---|
+| 1 | Verified for Copilot/Grok shapes in Task 1 notes | 1 |
+| 2 | Copilot stdin confirmed; Grok prompt-file; Hermes unverified | 1 |
+| 3 | Hermes resume false / replay; deferred | 1, 7 |
+| 4 | Unverified shipping gate for Grok → Branch B | 1, 6 |
+| 5 | Antigravity later verified for headless then deferred on tool boundary | 1, 8 |
+| 6 | Auth from stored login; no new prefixes | 1, 5 |
+| 7 | Versions recorded in fixtures | 1 |
+| 8 | Cap 30/hour and 4000 chars are starting values | 9–10 |
+| 9 | `.exe` required on Windows for `--agent-command` | 3, 15 docs |
+| 10 | Migration 036 (phase 6 took 035) | 9 |
+| 11 | Operator supplies room id | 12, 15 |
+| 12 | Unverified Hermes toolset gate → Branch B | 1, 7 |
+| 13 | PostgreSQL evidence required; Task 15 step 5 supplies final gate (`skipped 0` on 036 + room-report-only.pg) | 9, 10, 11, 15 |
+| 14 | Ordinary-message receipts verified Task 1; report_only sender Task 10; response-loss / blocked-commit / skewed-clock Task 11 pg | 1, 10, 11, 15 |
+| 15 | Clocks / HTTP timeout / advisory locks / rename; classified by Task 10 codes | 10, 11, 12, 15 |
+| 16 | Acceptance timestamp = `envelopes.created_at` (Task 9 choice; Task 10 same) | 1, 9, 10 |
+
+Unverified until Task 1 or a pg run (as of Task 15 close): assumption 4 (Grok cancel), 12 (Hermes toolsets) remain deferred Branch B. Assumption 14 is verified for ordinary + report_only paths including Task 11 pg cases (`skipped 0`). Assumption 13 is satisfied by the sequential pg re-run above.
+
+### Review changes map
+
+| Item | Tasks |
+|---|---|
+| 1–6 | 4, 6, 7, 10, 11, 15 |
+| 7 freshness / receipts reconcile | 1, 11, 12 (superseded by 11) |
+| 8 cross-process locking | 11 (stale-lock rules superseded by 12) |
+| 9 relay-assigned report marker | 9, 10 |
+| 10 second-round fixes | 1, 9–12 (retry exit 2 refined by 13; FINAL recreate/duplicate superseded by 11–12) |
+| 11 third-round Finding 1 (FRESH/RECONCILE only, `--resend-as-new`, pg blocked-commit) | 1, 11, 12, 15 |
+| 12 third-round Finding 2 (fail-closed locks, `--break-lock` / `--break-state-lock`) | 11, 12, 15 |
+| 13 fourth-round Findings 1–2 (first-send vs retry, pending key skip, `baseKey`, independent clocks, skewed-clock regressions) | 1, 11, 12, 15 |
