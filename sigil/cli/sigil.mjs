@@ -49,6 +49,7 @@ import { createFloorWardenReplyHandler } from '../relay/v1/floor-warden-replies.
 import { cmdBotAdd, cmdBotDisable, cmdBotToken } from './bot-commands.mjs';
 import { cmdIngressDoctor, cmdIngressStatus } from './ingress-commands.mjs';
 import { cmdAgentSetInvokable, cmdHumanAdd, cmdHumanAddToRoom, cmdHumanSuspend, cmdHumanUnsuspend } from './human-commands.mjs';
+import { runRoomReport } from './room-report-command.mjs';
 import { cmdIdentityRevoke, cmdInviteCreate, cmdInviteList, cmdInviteRevoke } from './oauth-commands.mjs';
 import { provisionIngressEndpoint } from './agentmail-provision.mjs';
 import { createAgentMailDeployment } from '../ingress/v1/agentmail-bootstrap.mjs';
@@ -96,6 +97,8 @@ Commands:
   ingress doctor --origin <url> [--access-client-id-env name --access-client-secret-env name] [--relay-port N --stream-port N --public-port N --ingress-port N]
                                                             Check the reply ingress through its public origin
   agent set-invokable --room <room_id> --agent <endpoint_id> --mode owner|members [--identity path] [--database-url url]   Set who may invoke an agent in a room; only the agent's owner (--identity) may change it
+  room report --identity path --relay-url url --room id (--bot id --status s --summary text [--alert t]... | --from-report json) [--state path] [--report-at iso] [--drop-pending] [--resend-as-new]
+                                                            Post an Ironbots report as a signed room.message (exit 0 posted/reconciled/policy/already_posted/operator; 1 usage; 2 refused; 3 transient/pending/lock_timeout). Also: --state path --break-lock <bot> | --break-state-lock
   endpoint revoke <endpoint_id> [--database-url url]       Revoke an endpoint and retire all of its signing keys
   federation outbox list [--database-url url]              List queue-mode federation forward jobs: state counts, then one row per job (no envelope bodies)
   federation outbox show <id> [--database-url url]         Show one relay_jobs federation row's metadata (no envelope body)
@@ -2096,6 +2099,10 @@ export async function main() {
     else if (command === 'bot' && sub === 'token') await cmdBotToken(rest);
     else if (command === 'ingress' && sub === 'status') await cmdIngressStatus(rest);
     else if (command === 'ingress' && sub === 'doctor') await cmdIngressDoctor(rest);
+    else if (command === 'room' && sub === 'report') {
+      const code = await runRoomReport(rest);
+      if (code) process.exitCode = code;
+    }
     else usage();
   } catch (error) {
     console.error(`sigil: ${error.message}`);
