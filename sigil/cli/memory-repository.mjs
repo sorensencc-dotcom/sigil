@@ -363,7 +363,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       const federationHop = row.federation_hop === true;
       undoMapSet(envelopes, row.message_id);
       undoMapSet(idempotency, idempotencyKey);
-      envelopes.set(row.message_id, { ...row, streamSeq: row.streamSeq ?? null, roomSeq: row.roomSeq ?? null, federation_hop: federationHop });
+      envelopes.set(row.message_id, { ...row, streamSeq: row.streamSeq ?? null, roomSeq: row.roomSeq ?? null, federation_hop: federationHop, report_post: row.reportPost === true });
       idempotency.set(idempotencyKey, { message_id: row.message_id, canonical_hash: row.canonical_hash });
       if (row.envelope.recipient?.endpoint_id) {
         const deliveryId = `del_${row.message_id}`;
@@ -469,6 +469,10 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     _debugSetHumanStatus(humanId, status) {
       humanStatuses.set(humanId, status);
     },
+    // Test-only: hop-budget counter for report_only isolation proofs.
+    _debugGetAgentTurns(roomId, threadRootId) {
+      return roomThreads.get(JSON.stringify([roomId, threadRootId]))?.agent_turns ?? 0;
+    },
     async lookupRoomMember(conversationId, endpointId) {
       const member = roomMembers.get(conversationId)?.get(endpointId);
       if (!member || member.removed_at !== null) return null;
@@ -517,6 +521,20 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     },
     // Serialization is a Postgres concern; the memory repo has no concurrent transactions.
     async lockRoom() {},
+    // Window column is envelopes.created_at (Task 9). Can be off by up to 5 minutes vs relay clock.
+    // No join to conversation_members: removed reporters still occupy the cap until the window passes.
+    async countRecentReports({ conversationId, sinceMs, now }) {
+      const endMs = (now instanceof Date ? now : new Date(now)).getTime();
+      const startMs = typeof sinceMs === 'number' ? sinceMs : endMs - 60 * 60 * 1000;
+      let n = 0;
+      for (const row of envelopes.values()) {
+        if (row.envelope.conversation_id !== conversationId) continue;
+        if (row.report_post !== true) continue;
+        const t = Date.parse(row.envelope.created_at);
+        if (Number.isFinite(t) && t >= startMs && t <= endMs) n += 1;
+      }
+      return n;
+    },
     async lookupRoomEventByKey(conversationId, idempotencyKey) {
       const row = [...envelopes.values()].find((r) => r.envelope.conversation_id === conversationId && r.envelope.message_type === 'room.event' && r.envelope.idempotency_key === idempotencyKey);
       return row ? { message_id: row.message_id } : null;
@@ -527,7 +545,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     async lookupRoomMessage(conversationId, messageId) {
       const row = envelopes.get(messageId);
       if (!row || row.envelope.conversation_id !== conversationId) return null;
-      return { room_seq: row.roomSeq == null ? null : String(row.roomSeq), message_id: row.message_id, display_name: registry.get(row.envelope.sender.endpoint_id)?.display_name || row.envelope.sender.endpoint_id, envelope: row.envelope };
+      return { room_seq: row.roomSeq == null ? null : String(row.roomSeq), message_id: row.message_id, display_name: registry.get(row.envelope.sender.endpoint_id)?.display_name || row.envelope.sender.endpoint_id, envelope: row.envelope, report_post: row.report_post === true };
     },
     async createRoomInvocation({ invocationId, roomId, workspaceId: _workspaceId, triggerMessageId, threadRootId, endpointId, decidedBy, reason = null, status, deliveryId = null, subjectHumanId, now = new Date() }) {
       if (!subjectHumanId) throw Object.assign(new Error('createRoomInvocation requires subjectHumanId'), { code: 'MISSING_SUBJECT' });

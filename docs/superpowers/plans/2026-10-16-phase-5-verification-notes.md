@@ -190,3 +190,28 @@ Read against Task 2 base `ce16bb1f2ae41c5985f870aa3867d2944c27b50c` before edits
 - `sigil/relay/v1/transport-tincan/wake-dispatcher.mjs:1-13`: `BRIDGES`, validation at line 6, and child argv at line 8. `tincan-relay.mjs:7,105,299-308` imports the set, validates config, and constructs the spawn dispatcher.
 
 Local graft caller tracing used depth 8 for `agentEnv`, `cmdAgentRun`, `createWakeDispatcher`, `createClaudeCli`, and `createCodexCli`, plus exhaustive `agentEnv` and `BRIDGES` searches. Existing direct factories retain legacy default/explicit-env behavior; registry-created adapters filter both supplied and inherited environments to runtime names plus their own auth prefixes. Claude uses `ANTHROPIC_`/`CLAUDE_`; Codex uses `CODEX_`/`OPENAI_`. No new auth prefix or provider probe is authorized.
+
+## Task 10 (report_only post path) — 2026-10-28
+
+Implemented on branch `feat/issue-100-phase5-report-only`.
+
+### Refusal codes (permanent for Task 11)
+- `REPORT_MENTIONS_FORBIDDEN` → 400
+- `REPORT_THREAD_FORBIDDEN` → 400
+- `REPORT_MESSAGE_TYPE_FORBIDDEN` → 400
+- `REPORT_TEXT_TOO_LONG` → 400 (limit `REPORT_TEXT_MAX` = 4000)
+- `REPORT_RATE_LIMITED` → 429 (cap `REPORT_RATE_LIMIT` = 30 / `REPORT_RATE_WINDOW_MS` = 1h)
+
+### Accept path
+- After idempotency lookup, `lockRoom` then `assertAgentMayPost` (with injected `now`).
+- `reportPost` set only when room plan sender `response_mode === 'report_only'` and `message_type === 'room.message'`.
+- Window column remains `envelopes.created_at` (Task 9 choice). `countRecentReports` joins no members table.
+
+### Receipts (real report_only sender)
+- Memory + Postgres: sender `GET /v1/messages/<id>/receipts` → 200; other endpoint → 404 `MESSAGE_NOT_FOUND`; unknown id → 404.
+- Task 10 step 6 fallback **not** taken (route usable). Spec assumption 14 verified for report_only accept/receipts; Task 11 response-loss / blocked-commit still pending.
+
+### Tests run (America/New_York)
+- `node --test sigil/relay/v1/room-report-only-post.test.mjs` — pass 7
+- `SIGIL_TEST_DATABASE_URL=... node --test sigil/relay/v1/room-report-only.pg.test.mjs` — pass 2, skipped 0 (includes 36-post concurrency and membership-change)
+- Related regression: `accept-envelope.rooms.test.mjs`, `room-routes.report-only.test.mjs` — pass

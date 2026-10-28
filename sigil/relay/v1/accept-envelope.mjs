@@ -34,6 +34,11 @@ const statusByCode = Object.freeze({
   REPLAY_DETECTED: 409,
   RATE_LIMITED: 429,
   QUOTA_EXCEEDED: 429,
+  REPORT_RATE_LIMITED: 429,
+  REPORT_MENTIONS_FORBIDDEN: 400,
+  REPORT_THREAD_FORBIDDEN: 400,
+  REPORT_MESSAGE_TYPE_FORBIDDEN: 400,
+  REPORT_TEXT_TOO_LONG: 400,
   DIRECTORY_LINK_REQUIRED: 403,
   MALFORMED_FEDERATED_ID: 400,
   RECIPIENT_NOT_LOCAL: 400,
@@ -409,7 +414,10 @@ async function acceptWithRepository(envelope, options) {
     const prior = await repository.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key, client);
     if (prior && prior.canonical_hash !== result.canonical_hash) throw reject('DUPLICATE_MESSAGE', 'Idempotency key conflicts with an existing body');
     if (prior) return { status: 202, body: { request_id: options.request_id ?? null, code: 'ACCEPTED', message_id: prior.message_id, duplicate: true } };
-    const completing = roomPlan ? await assertAgentMayPost(envelope, roomPlan.senderMember, repository, client, { expectedTriggerMessageId: options.expectedTriggerMessageId ?? null }) : null;
+    // Serialize report_only rate counts with the room row lock before assertAgentMayPost.
+    // assignRoomSequence takes the same lock later; holding it here closes the Task 1 gap.
+    if (roomPlan) await repository.lockRoom(client, envelope.conversation_id);
+    const completing = roomPlan ? await assertAgentMayPost(envelope, roomPlan.senderMember, repository, client, { expectedTriggerMessageId: options.expectedTriggerMessageId ?? null, now }) : null;
     // High-risk capability + approval gate already ran once for this
     // transaction via enforceCapabilityRiskGate above (line 247) -- it uses
     // the same sha256(signedBytes(envelope)) hash as result.canonical_hash,
@@ -453,7 +461,12 @@ async function acceptWithRepository(envelope, options) {
     // persistAccepted wrapper used to attach before calling the repository
     // directly -- kept here so repository-backed callers (postgres, memory)
     // still see the same row shape regardless of transport.
-    const persisted = await repository.persistAcceptedEnvelope({ envelope, ...result, canonical_bytes: signedBytes(envelope), action_hash: result.canonical_hash, streamSeq, roomSeq, roomFanout }, client);
+    const reportPost = Boolean(
+      roomPlan
+      && envelope.message_type === 'room.message'
+      && roomPlan.senderMember?.response_mode === 'report_only'
+    );
+    const persisted = await repository.persistAcceptedEnvelope({ envelope, ...result, canonical_bytes: signedBytes(envelope), action_hash: result.canonical_hash, streamSeq, roomSeq, roomFanout, reportPost }, client);
     if (room && envelope.message_type === 'room.message' && !persisted?.duplicate) {
       await notifyRoomHumans({ repository, stream: options.stream, registered: options.registered, client, roomId: envelope.conversation_id, roomSeq, changed: 'messages', logger: options.logger });
     }

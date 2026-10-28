@@ -1,5 +1,14 @@
 # Status
 
+## Session update: 2026-10-28 Sigil Rooms Phase 5 Task 10 (issue #100)
+
+- Branch `feat/issue-100-phase5-report-only` off `origin/main` `b1b9642`. Implements issue #100 Task 10 (report_only post path).
+- Accept path: after idempotency, `lockRoom` then `assertAgentMayPost` (with `now`). Relay assigns `report_post` when the room plan sender is `report_only` and `message_type` is `room.message`. Window column remains `envelopes.created_at` (Task 9).
+- Refusal codes (stable for Task 11): `REPORT_MENTIONS_FORBIDDEN`, `REPORT_THREAD_FORBIDDEN`, `REPORT_MESSAGE_TYPE_FORBIDDEN`, `REPORT_TEXT_TOO_LONG` (400); `REPORT_RATE_LIMITED` (429). Cap 30 / hour; text max 4000.
+- Receipts for a real report_only sender work (memory + Postgres HTTP). Task 10 step 6 fallback not taken.
+- Verification (Linux, Node via `/home/box/node24`, America/New_York): `room-report-only-post.test.mjs` 7 pass; `room-report-only.pg.test.mjs` 2 pass skipped 0 (includes 36-post concurrency → 30 accepted / 6 rate-limited, membership-change, receipts); `036_report_only_mode.test.mjs` 3 pass; related `accept-envelope.rooms` + `room-routes.report-only` regressions pass. Disposable DB via embedded-postgres on `127.0.0.1:55432` (`SIGIL_TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:55432/sigil_test`). Notes: `docs/superpowers/plans/2026-10-16-phase-5-verification-notes.md`.
+- Issue #100 Tasks 11–15 still open (ironbot-report / file-lock / sigil room report; web roster; exit/smoke/docs). Do not claim AgentMail or production readiness.
+
 ## Session update: 2026-10-25 relay job lease renewal
 
 - Branch `fix/relay-job-lease-renewal` is local only and is not pushed. Four commits sit on `45c193f`.
