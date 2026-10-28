@@ -93,3 +93,38 @@ test('createRoomInvocations posts the decision body and surfaces status on error
   await assert.rejects(client.createRoomInvocations('room_1', { trigger_message_id: 'm1', invoke: [], reason: 'router_unavailable', failed: true }), (e) => e.status === 403);
   assert.equal(calls[1][2].failed, true);
 });
+
+test('getMessageReceipts GETs /v1/messages/:id/receipts and surfaces errors', async () => {
+  const calls = [];
+  const client = new RelayClient({
+    baseUrl: 'http://relay.test',
+    token: 'tok',
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      if (String(url).includes('missing')) {
+        return { ok: false, status: 404, async text() { return JSON.stringify({ code: 'MESSAGE_NOT_FOUND', message: 'Message not found' }); } };
+      }
+      return { ok: true, status: 200, async text() { return JSON.stringify({ message_id: 'msg_1', receipts: [] }); } };
+    },
+  });
+  const body = await client.getMessageReceipts('msg_1');
+  assert.equal(body.message_id, 'msg_1');
+  assert.ok(String(calls[0].url).endsWith('/v1/messages/msg_1/receipts'));
+  await assert.rejects(() => client.getMessageReceipts('missing'), (error) => error.code === 'MESSAGE_NOT_FOUND' && error.status === 404);
+});
+
+test('sendEnvelope passes AbortSignal.timeout when timeoutMs is set', async () => {
+  const calls = [];
+  const client = new RelayClient({
+    baseUrl: 'http://relay.test',
+    token: 'tok',
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return { ok: true, status: 200, async text() { return JSON.stringify({ ok: true }); } };
+    },
+  });
+  await client.sendEnvelope({ message_id: 'msg_t' }, 'req_t', { timeoutMs: 1500 });
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].options.signal instanceof AbortSignal);
+  assert.equal(calls[0].options.timeoutMs, undefined);
+});
