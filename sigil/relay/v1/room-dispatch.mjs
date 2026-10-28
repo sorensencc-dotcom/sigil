@@ -28,8 +28,43 @@ export function threadRootOf(envelope) {
 // was promoted in the same thread after the route's own unlocked check.
 // If this read still sees an older running row, finishInvocation's
 // status-guarded update under the accept transaction refuses it instead.
-export async function assertAgentMayPost(envelope, senderMember, repository, client, { expectedTriggerMessageId = null } = {}) {
+// report_only members post signed room.message rows without an invocation.
+// Cap and text limits are named exports so operators and Task 11 can tune them.
+export const REPORT_TEXT_MAX = 4000;
+export const REPORT_RATE_LIMIT = 30;
+export const REPORT_RATE_WINDOW_MS = 60 * 60 * 1000;
+
+async function assertReportOnlyPost(envelope, repository, client, now) {
+  if (envelope.message_type !== 'room.message') {
+    throw reject('REPORT_MESSAGE_TYPE_FORBIDDEN', 'report_only members may only post room.message', { message_type: envelope.message_type });
+  }
+  const mentions = envelope.body?.mentions;
+  if (Array.isArray(mentions) && mentions.length > 0) {
+    throw reject('REPORT_MENTIONS_FORBIDDEN', 'report_only posts must not mention anyone', {});
+  }
+  if (envelope.body?.thread_root_id) {
+    throw reject('REPORT_THREAD_FORBIDDEN', 'report_only posts must be top-level', {});
+  }
+  const text = envelope.body?.text ?? '';
+  if (typeof text === 'string' && text.length > REPORT_TEXT_MAX) {
+    throw reject('REPORT_TEXT_TOO_LONG', `report_only text must be at most ${REPORT_TEXT_MAX} characters`, { limit: REPORT_TEXT_MAX });
+  }
+  // Window column is envelopes.created_at (Task 9). Can be off by up to 5 minutes vs relay clock.
+  // Caller holds lockRoom so concurrent accepts serialize the count and the insert.
+  const nowMs = (now instanceof Date ? now : new Date(now)).getTime();
+  const sinceMs = nowMs - REPORT_RATE_WINDOW_MS;
+  const count = await repository.countRecentReports({ conversationId: envelope.conversation_id, sinceMs, now: nowMs }, client);
+  if (count >= REPORT_RATE_LIMIT) {
+    throw reject('REPORT_RATE_LIMITED', 'report_only rate limit exceeded for this room', { limit: REPORT_RATE_LIMIT, window_ms: REPORT_RATE_WINDOW_MS });
+  }
+}
+
+export async function assertAgentMayPost(envelope, senderMember, repository, client, { expectedTriggerMessageId = null, now = new Date() } = {}) {
   if (!memberIsAgent(senderMember)) return null;
+  if (senderMember.response_mode === 'report_only') {
+    await assertReportOnlyPost(envelope, repository, client, now);
+    return null;
+  }
   const running = await repository.lookupRunningInvocation(envelope.conversation_id, envelope.sender.endpoint_id, client);
   if (!running) throw reject('ROOM_NOT_INVOKED', 'Agents may post only while invoked', { conversation_id: envelope.conversation_id });
   if (expectedTriggerMessageId !== null && running.trigger_message_id !== expectedTriggerMessageId) {

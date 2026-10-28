@@ -158,6 +158,7 @@ function roomMessageRow(row) {
     room_seq: String(row.room_seq),
     message_id: row.message_id,
     display_name: row.sender_display_name ?? row.sender_endpoint_id,
+    report_post: row.report_post === true,
     canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'),
     envelope: {
       protocol: row.protocol,
@@ -1163,9 +1164,9 @@ export class PostgresRepository {
       }
     }
     const result = await client.query(
-      `INSERT INTO envelopes (message_id, conversation_id, protocol, message_type, sender_endpoint_id, sender_owner_id, recipient_endpoint_id, broadcast_scope, body, context_refs, capabilities, correlation_id, idempotency_key, expires_at, created_at, signature_algorithm, signature_key_id, signature_value, canonical_bytes, action_hash, federation_hop, stream_seq, room_seq, envelope_status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,'accepted') RETURNING message_id`,
-      [row.envelope.message_id, row.envelope.conversation_id, row.envelope.protocol, row.envelope.message_type, row.envelope.sender.endpoint_id, row.envelope.sender.owner_id, row.envelope.recipient?.endpoint_id ?? null, row.envelope.broadcast_scope ? JSON.stringify(row.envelope.broadcast_scope) : null, JSON.stringify(row.envelope.body), JSON.stringify(row.envelope.context_refs ?? []), row.envelope.capabilities, row.envelope.correlation_id, row.envelope.idempotency_key, row.envelope.expires_at, row.envelope.created_at, row.envelope.signature.algorithm, row.envelope.signature.key_id, row.envelope.signature.value, row.canonical_bytes ?? null, row.action_hash ?? null, row.federation_hop === true, row.streamSeq ?? null, row.roomSeq ?? null]
+      `INSERT INTO envelopes (message_id, conversation_id, protocol, message_type, sender_endpoint_id, sender_owner_id, recipient_endpoint_id, broadcast_scope, body, context_refs, capabilities, correlation_id, idempotency_key, expires_at, created_at, signature_algorithm, signature_key_id, signature_value, canonical_bytes, action_hash, federation_hop, stream_seq, room_seq, report_post, envelope_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,'accepted') RETURNING message_id`,
+      [row.envelope.message_id, row.envelope.conversation_id, row.envelope.protocol, row.envelope.message_type, row.envelope.sender.endpoint_id, row.envelope.sender.owner_id, row.envelope.recipient?.endpoint_id ?? null, row.envelope.broadcast_scope ? JSON.stringify(row.envelope.broadcast_scope) : null, JSON.stringify(row.envelope.body), JSON.stringify(row.envelope.context_refs ?? []), row.envelope.capabilities, row.envelope.correlation_id, row.envelope.idempotency_key, row.envelope.expires_at, row.envelope.created_at, row.envelope.signature.algorithm, row.envelope.signature.key_id, row.envelope.signature.value, row.canonical_bytes ?? null, row.action_hash ?? null, row.federation_hop === true, row.streamSeq ?? null, row.roomSeq ?? null, row.reportPost === true]
     );
     const deliveryId = row.delivery_id ?? `del_${crypto.randomUUID()}`;
     if (row.envelope.recipient?.endpoint_id) {
@@ -2208,6 +2209,21 @@ export class PostgresRepository {
     if (client == null) throw new Error('lockRoom requires transaction client');
     await client.query('SELECT 1 FROM rooms WHERE conversation_id = $1 FOR UPDATE', [conversationId]);
   }
+  // Window column is envelopes.created_at (Task 9). Can be off by up to 5 minutes vs relay clock.
+  // No join to conversation_members: removed reporters still occupy the cap until the window passes.
+  async countRecentReports({ conversationId, sinceMs, now }, client = this.pool) {
+    const endMs = (now instanceof Date ? now : new Date(now)).getTime();
+    const startMs = typeof sinceMs === 'number' ? sinceMs : endMs - 60 * 60 * 1000;
+    const result = await client.query(
+      `SELECT COUNT(*)::int AS n FROM envelopes
+        WHERE conversation_id = $1
+          AND report_post = true
+          AND created_at >= to_timestamp($2 / 1000.0)
+          AND created_at <= to_timestamp($3 / 1000.0)`,
+      [conversationId, startMs, endMs],
+    );
+    return result.rows[0]?.n ?? 0;
+  }
   async lookupRoomEventByKey(conversationId, idempotencyKey, client) {
     if (client == null) throw new Error('lookupRoomEventByKey requires a transaction client');
     const result = await client.query(
@@ -2221,6 +2237,7 @@ export class PostgresRepository {
       `SELECT room_seq, message_id, protocol, message_type, body, context_refs, capabilities, correlation_id,
               sender_endpoint_id, sender_owner_id, broadcast_scope, conversation_id, idempotency_key,
               signature_algorithm, signature_key_id, signature_value, expires_at, created_at, canonical_bytes,
+              report_post,
               COALESCE(NULLIF((SELECT e.display_name FROM endpoints e WHERE e.endpoint_id = envelopes.sender_endpoint_id), ''), sender_endpoint_id) AS sender_display_name
          FROM envelopes
         WHERE conversation_id = $1 AND room_seq > $2
@@ -2249,6 +2266,7 @@ export class PostgresRepository {
       `SELECT room_seq, message_id, protocol, message_type, body, context_refs, capabilities, correlation_id,
               sender_endpoint_id, sender_owner_id, broadcast_scope, conversation_id, idempotency_key,
               signature_algorithm, signature_key_id, signature_value, expires_at, created_at, canonical_bytes,
+              report_post,
               COALESCE(NULLIF((SELECT e.display_name FROM endpoints e WHERE e.endpoint_id = envelopes.sender_endpoint_id), ''), sender_endpoint_id) AS sender_display_name
          FROM envelopes
         WHERE conversation_id = $1 AND message_id = $2`,
