@@ -55,7 +55,7 @@ export function RosterPanel({ roomId, members, manager, viewer = null, onGone }:
               viewerOwner !== null && member.owner_id === viewerOwner ? (
                 <select
                   aria-label={`Invokable by for ${member.endpoint_id}`}
-                  title="Who can invoke this agent. The web composer sends no mentions and the router answers for the room owner only, so 'members' does not yet make this agent answer web guests."
+                  title="Who can invoke this agent. @mentions from the composer create invocations when this is set to members; the router still answers for the room owner only."
                   value={member.invokable_by}
                   disabled={setInvokable.isPending}
                   onChange={(event) => setInvokable.mutate({ endpointId: member.endpoint_id, mode: event.target.value as InvokableBy })}

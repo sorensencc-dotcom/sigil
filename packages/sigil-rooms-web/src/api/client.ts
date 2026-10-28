@@ -26,7 +26,7 @@ export interface ApiClient {
   listRooms(): Promise<Room[]>;
   createRoom(name: string): Promise<Room>;
   history(roomId: string, afterSeq: string, limit?: number): Promise<HistoryPage>;
-  sendMessage(roomId: string, text: string, idempotencyKey: string, threadRootId?: string): Promise<SendResult>;
+  sendMessage(roomId: string, text: string, idempotencyKey: string, threadRootId?: string, mentions?: string[]): Promise<SendResult>;
   continueThread(roomId: string, threadRootId: string): Promise<SendResult>;
   listMembers(roomId: string): Promise<Member[]>;
   renameRoom(roomId: string, name: string): Promise<Room>;
@@ -87,11 +87,12 @@ export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized
     history(roomId, afterSeq, limit = 100) {
       return request<HistoryPage>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/messages?after_seq=${encodeURIComponent(afterSeq)}&limit=${limit}`);
     },
-    sendMessage(roomId, text, idempotencyKey, threadRootId) {
+    sendMessage(roomId, text, idempotencyKey, threadRootId, mentions) {
       return request<SendResult>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/messages`, {
         text,
         idempotency_key: idempotencyKey,
         ...(threadRootId ? { thread_root_id: threadRootId } : {}),
+        ...(mentions && mentions.length > 0 ? { mentions } : {}),
       });
     },
     continueThread(roomId, threadRootId) {
