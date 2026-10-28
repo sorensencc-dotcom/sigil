@@ -6,12 +6,32 @@ export class RelayClient {
     if (!this.baseUrl || !this.fetch) throw new Error('baseUrl and fetch implementation are required');
   }
   async request(path, options = {}) {
-    const response = await this.fetch(`${this.baseUrl}${path}`, { ...options, headers: { authorization: `Bearer ${this.token}`, 'content-type': 'application/json', ...(options.headers ?? {}) } });
+    const { timeoutMs, signal, headers, ...rest } = options;
+    const init = {
+      ...rest,
+      headers: { authorization: `Bearer ${this.token}`, 'content-type': 'application/json', ...(headers ?? {}) },
+    };
+    if (timeoutMs != null) init.signal = AbortSignal.timeout(Number(timeoutMs));
+    else if (signal) init.signal = signal;
+    const response = await this.fetch(`${this.baseUrl}${path}`, init);
     const text = await response.text(); const body = text ? JSON.parse(text) : null;
     if (!response.ok) throw Object.assign(new Error(body?.message ?? `Relay request failed: ${response.status}`), { code: body?.code ?? 'DELIVERY_UNAVAILABLE', status: response.status, details: body?.details ?? {} });
     return body;
   }
-  async sendEnvelope(envelope, requestId = crypto.randomUUID()) { return this.request('/v1/envelopes', { method: 'POST', headers: { 'x-sigil-request-id': requestId }, body: JSON.stringify(envelope) }); }
+  async sendEnvelope(envelope, requestId = crypto.randomUUID(), options = {}) {
+    const id = typeof requestId === 'string' && requestId ? requestId : crypto.randomUUID();
+    const { timeoutMs, headers, ...rest } = options ?? {};
+    return this.request('/v1/envelopes', {
+      method: 'POST',
+      headers: { 'x-sigil-request-id': id, ...(headers ?? {}) },
+      body: JSON.stringify(envelope),
+      ...(timeoutMs != null ? { timeoutMs } : {}),
+      ...rest,
+    });
+  }
+  async getMessageReceipts(messageId) {
+    return this.request(`/v1/messages/${encodeURIComponent(messageId)}/receipts`);
+  }
   async pollInbox(since = '') { return this.request(`/v1/inbox?since=${encodeURIComponent(since)}`); }
   async reconcileInbox(since = '') {
     const page = await this.pollInbox(since);
