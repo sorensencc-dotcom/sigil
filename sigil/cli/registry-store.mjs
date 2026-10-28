@@ -11,7 +11,7 @@ export function loadRegistryFile(filePath) {
 
 export function saveRegistryFile(filePath, data) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), { mode: 0o600 });
 }
 
 export function addEndpointToRegistry(filePath, identity) {
