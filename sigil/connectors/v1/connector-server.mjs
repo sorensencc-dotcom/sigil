@@ -28,11 +28,14 @@ export function createConnectorServer({ connector, token, manifest, publisherKey
   const verifiedManifest = manifest ? verifyPluginManifest(manifest, { publisherKeys, revokedPublisherKeys }) : null;
   const callerAllowList = new Set(allowedCallers);
   const idempotency = new Map();
+  const expectedTokenDigest = crypto.createHash('sha256').update(String(token)).digest();
   let inFlight = 0;
   const callerWindows = new Map();
   const server = http.createServer(async (request, response) => {
-    const expected = `Bearer ${token}`;
-    if (request.headers.authorization !== expected) return reply(response, 401, { code: 'UNAUTHENTICATED', message: 'Authentication required' });
+    const authorization = request.headers.authorization;
+    const suppliedToken = typeof authorization === 'string' && authorization.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : '';
+    const suppliedTokenDigest = crypto.createHash('sha256').update(suppliedToken).digest();
+    if (expectedTokenDigest.length !== suppliedTokenDigest.length || !crypto.timingSafeEqual(expectedTokenDigest, suppliedTokenDigest)) return reply(response, 401, { code: 'UNAUTHENTICATED', message: 'Authentication required' });
     const now = Date.now();
     const caller = resolveCaller ? await resolveCaller(request) : token;
     const window = callerWindows.get(caller) ?? { started: now, requests: 0 };
