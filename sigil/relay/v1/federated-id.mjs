@@ -71,6 +71,12 @@ export async function resolveDomainOrThrow(domain, { timeoutMs = 5000, lookupImp
   const { host } = parseDomain(domain);
   if (host === 'local' || host === 'localhost') return;
 
+  // RFC 6761: .invalid must not resolve. Reject before lookup so a sinkhole
+  // resolver (e.g. 198.18.0.1) cannot make init --domain succeed for .invalid.
+  if (host.split('.').pop().toLowerCase() === 'invalid') {
+    throw Object.assign(new Error(`Domain "${host}" does not resolve`), { code: 'DNS_NOT_FOUND', domain, timeoutMs });
+  }
+
   let timer;
   const timeout = new Promise((resolve) => {
     timer = setTimeout(() => resolve({ timedOut: true }), timeoutMs);

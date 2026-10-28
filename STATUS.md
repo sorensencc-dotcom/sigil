@@ -1,5 +1,15 @@
 # Status
 
+## Session update: 2026-10-28 Sigil Rooms Phase 5 Task 15 (issue #100)
+
+- Branch `feat/issue-100-phase5-task15-docs-verify` on `origin/main` after Tasks 10–14 merged (#121–#125). Implements issue #100 Task 15 (docs + gated final verification) plus `.invalid` DNS harden.
+- Docs: README Room CLI bridges (`claude`, `codex`, `copilot`) and Ironbots room report (flags, exit codes 0-3); `sigil room report` / `--room-bridge` help text; Ironbots wiring note at `docs/superpowers/plans/2026-10-16-phase-5-ironbots-wiring-note.md`.
+- Deferred (unchanged): Grok CLI bridge (blocks tincan multi-host demo), Hermes bridge, Antigravity bridge, automatic report recreation past the freshness window, automatic stale-lock recovery. See design Deferred table and verification notes.
+- DNS: `resolveDomainOrThrow` rejects RFC 6761 `.invalid` before lookup so sinkholes (`198.18.0.1`) cannot false-pass `init --domain`. `federated-id` + `init-domain` tests pass on this host after the harden.
+- Verification (America/New_York): required report-only pg files `skipped 0` (`036_report_only_mode`, `room-report-only.pg` incl. Task 11 response-loss / blocked-commit / skewed-clock). Full live suite still not exit 0 on this host (residual admin-listener / oauth web `dist`). Notes: `docs/superpowers/plans/2026-10-16-phase-5-verification-notes.md`.
+- Phase 5 status: **in progress** until plan-strict full core + full live exit 0. Do not claim AgentMail or production readiness. Do not claim launch complete.
+
+
 ## Session update: 2026-10-28 Sigil Rooms Phase 5 Task 10 (issue #100)
 
 - Branch `feat/issue-100-phase5-report-only` off `origin/main` `b1b9642`. Implements issue #100 Task 10 (report_only post path).

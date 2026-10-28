@@ -399,7 +399,7 @@ test('agent run usage text lists floor-warden and its flags', () => {
   const { status, out } = runCli(['--room-bridge', 'floor-warden', '--config', path.join(dir, 'none.json')], { cwd: dir });
   assert.notEqual(status, 0);
   assert.match(out, /usage: sigil agent run --identity/);
-  assert.match(out, /claude\|codex\|router\|floor-warden/);
+  assert.match(out, /claude\|codex\|copilot\|router\|floor-warden/);
   for (const flag of ['--floor-warden-url-env', '--floor-warden-key-env', '--floor-warden-key-header', '--floor-warden-reply-url', '--floor-warden-bot-id', '--reply-timeout-ms']) {
     assert.ok(out.includes(flag), `usage lists ${flag}`);
   }

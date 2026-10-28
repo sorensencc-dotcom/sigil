@@ -62,13 +62,12 @@ test('sigil init rejects a name with a disallowed character', () => {
 });
 
 test('sigil init --domain aborts identity creation when the domain does not resolve', () => {
-  // "nonexistent.invalid" uses the .invalid TLD reserved by RFC 2606 --
-  // guaranteed to never resolve, so this is a real, deterministic DNS
-  // failure without needing to reach the live internet or mock a resolver.
+  // "nonexistent.invalid" uses the RFC 6761 .invalid TLD. resolveDomainOrThrow
+  // rejects that final label before lookup, so sinkhole resolvers that return
+  // 198.18.0.1 cannot make this CLI path succeed.
   const cwd = tmpCwd();
   try {
-    // DNS_NOT_FOUND from resolveDomainOrThrow: the .invalid TLD is
-    // guaranteed by RFC 2606 to never resolve (ENOTFOUND).
+    // DNS_NOT_FOUND from resolveDomainOrThrow (.invalid rejected per RFC 6761).
     assert.throws(
       () => runInit(['alice', '--domain', 'nonexistent.invalid'], cwd),
       (error) => /does not resolve/.test(String(error.stderr ?? error.message)),
