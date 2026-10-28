@@ -188,7 +188,7 @@ Relay flags (`sigil relay up`):
 
 Commands:
 
-- `sigil bot token create --bot-id <id> [--expires-in-days N] [--database-url url]` prints a per-bot reply token once to stdout. The database keeps only its SHA-256 hash.
+- `sigil bot token create --bot-id <id> [--canary] [--expires-in-days N] [--database-url url]` prints a per-bot reply token once to stdout. The database keeps only its SHA-256 hash. `--canary` stores status `canary`: the token never authorizes a reply.
 - `sigil bot token rotate --bot-id <id> [--grace-minutes N]` creates a new token and retires the old one. The old token works until the grace period ends, 24 hours by default.
 - `sigil bot token revoke --bot-id <id> --token-id <id>` stops a token at once.
 - `sigil bot token list --bot-id <id>` shows token ids, statuses and ages, never plaintext.

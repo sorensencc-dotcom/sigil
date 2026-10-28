@@ -12,13 +12,15 @@ test('generates and validates the fixed reply token shape', () => {
   }
 });
 
-test('evaluates active, retired, expired, revoked, and unknown rows', () => {
+test('evaluates active, retired, expired, revoked, canary, and unknown rows', () => {
   const now = new Date('2026-01-01T00:00:00Z');
   assert.deepEqual(evaluateReplyToken(null, now), { ok: false, reason: 'unknown' });
   assert.deepEqual(evaluateReplyToken({ status: 'active' }, now), { ok: true });
   assert.deepEqual(evaluateReplyToken({ status: 'retired', expires_at: '2026-01-01T00:01:00Z' }, now), { ok: true });
   assert.deepEqual(evaluateReplyToken({ status: 'retired', expires_at: '2025-12-31T23:59:00Z' }, now), { ok: false, reason: 'expired' });
   assert.deepEqual(evaluateReplyToken({ status: 'revoked' }, now), { ok: false, reason: 'revoked' });
+  assert.deepEqual(evaluateReplyToken({ status: 'canary' }, now), { ok: false, reason: 'canary' });
+  assert.deepEqual(evaluateReplyToken({ status: 'paused' }, now), { ok: false, reason: 'unknown' });
 });
 
 test('matches bot tokens before optional global tokens and does not leak touch failures', async () => {
@@ -48,4 +50,37 @@ test('global tokens are optional and malformed values make no repository call', 
   assert.equal(lookups, 1);
   assert.equal(await matcher('fwr_bad'), null);
   assert.equal(lookups, 1);
+});
+
+test('matcher returns a canary verdict and null for revoked or unknown hashes', async () => {
+  const canary = generateReplyToken();
+  const revoked = generateReplyToken();
+  const active = generateReplyToken();
+  const unknown = generateReplyToken();
+  const rows = new Map([
+    [canary.sha256.toString('hex'), { token_id: 'frt_canary', bot_id: 'bot_canary', status: 'canary' }],
+    [revoked.sha256.toString('hex'), { token_id: 'frt_revoked', bot_id: 'bot_revoked', status: 'revoked' }],
+    [active.sha256.toString('hex'), { token_id: 'frt_active', bot_id: 'bot_active', status: 'active' }],
+  ]);
+  const touches = [];
+  const repository = {
+    async lookupReplyTokenByHash(hash) { return rows.get(Buffer.from(hash).toString('hex')) ?? null; },
+    async touchReplyTokenLastUsed(...args) { touches.push(args); },
+  };
+  const matcher = createReplyTokenMatcher({ repository, now: () => new Date() });
+  assert.deepEqual(await matcher(canary.token), { kind: 'canary', botId: 'bot_canary', tokenId: 'frt_canary' });
+  assert.equal(await matcher(revoked.token), null);
+  assert.equal(await matcher(unknown.token), null);
+  assert.deepEqual(await matcher(active.token), { kind: 'bot', botId: 'bot_active', tokenId: 'frt_active' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(touches.length, 1);
+  assert.equal(touches[0][0], 'frt_active');
+
+  const withGlobal = createReplyTokenMatcher({
+    repository,
+    now: () => new Date(),
+    allowGlobal: true,
+    globalTokens: { matches: () => true },
+  });
+  assert.deepEqual(await withGlobal(canary.token), { kind: 'canary', botId: 'bot_canary', tokenId: 'frt_canary' });
 });

@@ -2,11 +2,17 @@ import http from 'node:http';
 import { DEFAULT_REPLY_INGRESS_LIMITS } from './relay-config.mjs';
 
 const NOT_FOUND_BODY = JSON.stringify({ code: 'NOT_FOUND', message: 'Not found', details: {} });
+const UNAUTHENTICATED_BODY = JSON.stringify({ code: 'UNAUTHENTICATED', message: 'Authentication required', details: {} });
 const REPLY_PATH = /^\/v1\/rooms\/([^/]+)\/replies$/;
 
 function notFound(response) {
   response.writeHead(404, { 'content-type': 'application/json' });
   response.end(NOT_FOUND_BODY);
+}
+
+function unauthenticated(response) {
+  response.writeHead(401, { 'content-type': 'application/json' });
+  response.end(UNAUTHENTICATED_BODY);
 }
 
 export function createReplyIngress({ gate, match: tokenMatcher, limiter, perBotLimiter, repository, ratePerMinute = DEFAULT_REPLY_INGRESS_LIMITS.ingress, perBotRatePerMinute = DEFAULT_REPLY_INGRESS_LIMITS.perBot, metrics = null, logger = console, bodyMaxBytes = 96 * 1024, requestTimeoutMs = 10_000, now = () => new Date() } = {}) {
@@ -52,16 +58,30 @@ export function createReplyIngress({ gate, match: tokenMatcher, limiter, perBotL
         response.writeHead(503, { 'content-type': 'application/json' });
         return response.end(JSON.stringify({ code: 'DATABASE_UNAVAILABLE', message: 'Rooms temporarily unavailable', details: {} }));
       }
-      if (!tokenMatch) {
+      if (!tokenMatch || tokenMatch.kind === 'canary') {
         metrics?.increment('sigil_ingress_auth_failed_total');
         const window = Math.floor(new Date(current).getTime() / 10_000);
         if (authFailures.window !== window) { authFailures.window = window; authFailures.count = 0; }
         authFailures.count += 1;
         logger?.warn?.({ event: 'reply_ingress_auth_failed', count: authFailures.count });
         metrics?.increment('sigil_ingress_requests_total', 1, { result: 'auth_failed' });
+        if (tokenMatch?.kind === 'canary') {
+          try {
+            await repository?.recordAuditEvent?.({
+              eventType: 'ingress.canary_used',
+              subjectId: tokenMatch.botId,
+              objectType: 'floor_warden_reply_token',
+              objectId: tokenMatch.tokenId,
+              outcome: 'rejected',
+              payload: { token_id: tokenMatch.tokenId, bot_id: tokenMatch.botId },
+              now: current,
+            });
+          } catch (error) {
+            logger?.error?.({ event: 'reply_ingress_canary_audit_failed', code: error?.code ?? null });
+          }
+        }
         request.resume();
-        response.writeHead(401, { 'content-type': 'application/json' });
-        return response.end(JSON.stringify({ code: 'UNAUTHENTICATED', message: 'Authentication required', details: {} }));
+        return unauthenticated(response);
       }
       if (request.headers['content-type']?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
         metrics?.increment('sigil_ingress_requests_total', 1, { result: 'invalid_content_type' });

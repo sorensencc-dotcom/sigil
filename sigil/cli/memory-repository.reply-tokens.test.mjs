@@ -21,10 +21,12 @@ test('retireActiveReplyTokens retires only active tokens for the selected bot', 
   await repository.insertReplyToken(tokenRow('frt_a1', 'bot_a', 1));
   await repository.insertReplyToken(tokenRow('frt_a2', 'bot_a', 2, at(1)));
   await repository.insertReplyToken(tokenRow('frt_b1', 'bot_b', 3));
+  await repository.insertReplyToken({ ...tokenRow('frt_canary', 'bot_a', 4), status: 'canary' });
   assert.equal(await repository.retireActiveReplyTokens('bot_a', at(10)), 2);
   assert.equal((await repository.lookupReplyTokenByHash(hash(1))).status, 'retired');
   assert.equal((await repository.lookupReplyTokenByHash(hash(1))).expires_at, at(10).toISOString());
   assert.equal((await repository.lookupReplyTokenByHash(hash(3))).status, 'active');
+  assert.equal((await repository.lookupReplyTokenByHash(hash(4))).status, 'canary');
 });
 
 test('revokeReplyToken is idempotent and records revoked_at', async () => {

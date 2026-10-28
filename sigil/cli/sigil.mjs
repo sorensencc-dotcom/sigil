@@ -91,7 +91,7 @@ Commands:
   human unsuspend <human_id> [--identity path] [--database-url url]   Restore a suspended human and the endpoints the suspension flipped
   bot add --bot-id <id> --endpoint <endpoint_id> --name <display name> [--identity path] [--out path] [--database-url url] [--room-bot-key-wrap-key env_var]   Create a Floor Warden bot endpoint with a relay-held signing key and a receive-only identity file
   bot disable --bot-id <id> [--database-url url]   Disable a Floor Warden bot (idempotent)
-  bot token create|rotate|revoke|list --bot-id <id> [--token-id id] [--expires-in-days N] [--grace-minutes N] [--database-url url]   Manage per-bot reply tokens
+  bot token create|rotate|revoke|list --bot-id <id> [--canary] [--token-id id] [--expires-in-days N] [--grace-minutes N] [--database-url url]   Manage per-bot reply tokens
   ingress status [--database-url url]                         Show reply token status and accepted replies
   ingress doctor --origin <url> [--access-client-id-env name --access-client-secret-env name] [--relay-port N --stream-port N --public-port N --ingress-port N]
                                                             Check the reply ingress through its public origin

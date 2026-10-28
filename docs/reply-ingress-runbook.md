@@ -114,6 +114,25 @@ Optionally add `--expires-in-days <n>`. Put the token in the Grok bot's secret s
 sigil bot token list --bot-id <bot-id>
 ```
 
+## Plant a canary token
+
+A canary is a reply token that never authorizes a reply. Plant one where an attacker might steal it. If it is used, the ingress answers `401 UNAUTHENTICATED` with the same body as an unknown or revoked token, writes an `ingress.canary_used` audit event with `token_id` and `bot_id` only, and does not run the accept path.
+
+```powershell
+$token = sigil bot token create --bot-id <bot-id> --canary | Select-Object -Last 1
+sigil bot token list --bot-id <bot-id>
+```
+
+List shows `canary` in the status column. Revoke still works. Rotate creates a new active token and leaves canaries unchanged.
+
+After a suspected hit, run `sigil ingress status` and look for `ingress.canary_used` in the audit log. Status still shows the canary token id and status. A canary use does not update `last_used_at` the way a successful reply does.
+
+```powershell
+sigil ingress status
+```
+
+Do not put the canary plaintext in the repo, a log, or an issue.
+
 ## Fall back to Tailscale Funnel
 
 Use Funnel only to unblock the first smoke test when Cloudflare is not ready. Do not run production traffic through it.

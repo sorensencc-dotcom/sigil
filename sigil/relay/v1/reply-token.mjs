@@ -22,6 +22,7 @@ export function generateReplyToken() {
 export function evaluateReplyToken(row, now = new Date()) {
   if (!row) return { ok: false, reason: 'unknown' };
   if (row.status === 'revoked') return { ok: false, reason: 'revoked' };
+  if (row.status === 'canary') return { ok: false, reason: 'canary' };
   if (row.status === 'retired' && row.expires_at != null && new Date(row.expires_at) <= new Date(now)) {
     return { ok: false, reason: 'expired' };
   }
@@ -41,6 +42,7 @@ export function createReplyTokenMatcher({ repository, now = () => new Date(), gl
       });
       return { kind: 'bot', botId: row.bot_id, tokenId: row.token_id };
     }
+    if (verdict.reason === 'canary') return { kind: 'canary', botId: row.bot_id, tokenId: row.token_id };
     if (allowGlobal && globalTokens?.matches(bearer)) return { kind: 'global' };
     return null;
   };
