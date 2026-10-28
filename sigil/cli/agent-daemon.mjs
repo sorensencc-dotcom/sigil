@@ -90,7 +90,7 @@ export function createAgentDaemon({
       let stdout = '';
       let stderr = '';
       const child = spawn(workerCommand, workerArgs, {
-        env: agentEnv(process.env),
+        env: agentEnv(process.env, { extraPrefixes: ['ANTHROPIC_', 'CLAUDE_', 'CODEX_', 'OPENAI_', 'SIGIL_', 'OLLAMA_'] }),
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true
       });

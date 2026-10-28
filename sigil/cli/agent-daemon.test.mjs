@@ -14,11 +14,13 @@ const fakeWorkerScript = path.resolve(here, '..', 'scripts', 'claude-worker.mjs'
 test('agent daemon does not pass unrelated environment secrets to its worker', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sigil-worker-env-'));
   const workerScript = path.join(tempDir, 'worker.mjs');
-  const originalSecret = process.env.SIGIL_TEST_SECRET;
-  process.env.SIGIL_TEST_SECRET = 'worker-env-regression-secret';
+  const originalSecret = process.env.AWS_SECRET_ACCESS_KEY;
+  const originalOllamaFallback = process.env.SIGIL_OLLAMA_FALLBACK;
+  process.env.AWS_SECRET_ACCESS_KEY = 'worker-env-regression-secret';
+  process.env.SIGIL_OLLAMA_FALLBACK = '1';
 
   try {
-    await fs.writeFile(workerScript, 'process.stdout.write(JSON.stringify({ secret: process.env.SIGIL_TEST_SECRET ?? null }));\n');
+    await fs.writeFile(workerScript, 'process.stdout.write(JSON.stringify({ secret: process.env.AWS_SECRET_ACCESS_KEY ?? null, ollamaFallback: process.env.SIGIL_OLLAMA_FALLBACK ?? null }));\n');
     const daemon = createAgentDaemon({
       identity: createIdentity({ ownerId: 'usr_soren', endpointId: 'ep_claude', kind: 'agent' }),
       relayUrl: 'http://127.0.0.1:8791',
@@ -26,10 +28,12 @@ test('agent daemon does not pass unrelated environment secrets to its worker', a
       workerArgs: [workerScript]
     });
 
-    assert.deepEqual(await daemon.executeWorker({}), { secret: null });
+    assert.deepEqual(await daemon.executeWorker({}), { secret: null, ollamaFallback: '1' });
   } finally {
-    if (originalSecret === undefined) delete process.env.SIGIL_TEST_SECRET;
-    else process.env.SIGIL_TEST_SECRET = originalSecret;
+    if (originalSecret === undefined) delete process.env.AWS_SECRET_ACCESS_KEY;
+    else process.env.AWS_SECRET_ACCESS_KEY = originalSecret;
+    if (originalOllamaFallback === undefined) delete process.env.SIGIL_OLLAMA_FALLBACK;
+    else process.env.SIGIL_OLLAMA_FALLBACK = originalOllamaFallback;
     await fs.rm(tempDir, { recursive: true, force: true });
   }
 });
