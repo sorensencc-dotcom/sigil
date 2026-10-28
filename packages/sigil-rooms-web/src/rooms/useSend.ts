@@ -1,11 +1,13 @@
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useCallback, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
-import type { HistoryItem } from '../api/types';
+import type { HistoryItem, Member } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { getSender, setSender } from '../auth/tokenStore';
 import { fetchHistory, historyKey } from './historyQuery';
 import type { PendingMessage } from './mergeRows';
+import { extractMentionTokens, resolveMentions } from './resolveMentions';
+import { membersKey } from './useMembers';
 
 const NONE: PendingMessage[] = [];
 
@@ -16,6 +18,19 @@ function isRetryable(error: unknown): boolean {
   if (error.status === 403 && error.code === 'NO_SIGNING_KEY') return false;
   if (error.code === 'ROOM_SEND_UNAVAILABLE') return false;
   return true;
+}
+
+async function loadMembers(
+  queryClient: QueryClient,
+  listMembers: (roomId: string) => Promise<Member[]>,
+  roomId: string,
+): Promise<Member[]> {
+  const cached = queryClient.getQueryData<Member[]>(membersKey(roomId));
+  if (cached) return cached;
+  return queryClient.fetchQuery({
+    queryKey: membersKey(roomId),
+    queryFn: () => listMembers(roomId),
+  });
 }
 
 export function useSend(roomId: string) {
@@ -45,7 +60,18 @@ export function useSend(roomId: string) {
       patch(room, idempotencyKey, { status: 'sending', error: undefined, retryable: undefined });
       let messageId: string;
       try {
-        const result = await client.sendMessage(room, text, idempotencyKey, threadRootId);
+        let mentions: string[] | undefined;
+        if (extractMentionTokens(text).length > 0) {
+          try {
+            const members = await loadMembers(queryClient, client.listMembers, room);
+            const resolved = resolveMentions(text, members);
+            mentions = resolved.length > 0 ? resolved : undefined;
+          } catch {
+            // Roster unavailable: still send the text; unresolved @tokens stay plain text.
+            mentions = undefined;
+          }
+        }
+        const result = await client.sendMessage(room, text, idempotencyKey, threadRootId, mentions);
         messageId = result.message_id;
         patch(room, idempotencyKey, { messageId });
       } catch (error) {

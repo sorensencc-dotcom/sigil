@@ -115,4 +115,19 @@ describe('api client: room management', () => {
     expect(JSON.parse(String(calls[4]![1].body))).toEqual({ text: 'hi', idempotency_key: 'key-1', thread_root_id: 'msg_root' });
     expect(JSON.parse(String(calls[5]![1].body))).toEqual({ text: 'top', idempotency_key: 'key-2' });
   });
+
+  it('includes mentions in the send body when provided and omits them when empty', async () => {
+    const calls: Array<[string, RequestInit]> = [];
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push([url, init]);
+      return jsonResponse(200, { code: 'OK', message_id: 'm', room_seq: '1' });
+    });
+    const { client } = make(fetchImpl as unknown as typeof fetch);
+    await client.sendMessage('room_1', '@ep_chief hi', 'key-m', undefined, ['ep_chief']);
+    await client.sendMessage('room_1', 'plain', 'key-plain', undefined, []);
+    await client.sendMessage('room_1', 'plain2', 'key-plain2');
+    expect(JSON.parse(String(calls[0]![1].body))).toEqual({ text: '@ep_chief hi', idempotency_key: 'key-m', mentions: ['ep_chief'] });
+    expect(JSON.parse(String(calls[1]![1].body))).toEqual({ text: 'plain', idempotency_key: 'key-plain' });
+    expect(JSON.parse(String(calls[2]![1].body))).toEqual({ text: 'plain2', idempotency_key: 'key-plain2' });
+  });
 });
