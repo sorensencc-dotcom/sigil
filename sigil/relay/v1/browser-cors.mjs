@@ -5,6 +5,7 @@ export function isAllowedOrigin(origin, allowedOrigins) {
 
 const BROWSER_ROUTES = [
   /^\/v1\/rooms(\/.*)?$/,
+  /^\/v1\/me\/contacts(\/.*)?$/,
 ];
 export const isBrowserRoute = (pathname) => BROWSER_ROUTES.some((pattern) => pattern.test(pathname));
 
@@ -18,7 +19,7 @@ export function applyBrowserCors(request, response, allowedOrigins) {
     if (!allowed) { response.writeHead(403, { vary: 'Origin' }); response.end(); return 'preflight'; }
     response.writeHead(204, {
       'access-control-allow-origin': origin,
-      'access-control-allow-methods': 'GET, POST, OPTIONS',
+      'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
       'access-control-allow-headers': 'authorization, content-type',
       'access-control-max-age': '600',
       vary: 'Origin',

@@ -10,6 +10,8 @@ import { mapReceiptState, toReceiptRow } from './receipt-state.mjs';
 import { sendReceiptFrame } from './receipt-notify.mjs';
 import { createBearerAuthenticator } from './transport-auth.mjs';
 import { handleRoomRoute } from './room-routes.mjs';
+import { handleContactsRoute } from './contacts.mjs';
+import { lookupTrustedEntry } from './trusted-endpoint.mjs';
 import { createFloorWardenReplyHandler } from './floor-warden-replies.mjs';
 import { createFloorWardenGate } from './floor-warden-gate.mjs';
 import { applyBrowserCors, isBrowserRoute } from './browser-cors.mjs';
@@ -464,6 +466,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       return response.end(result.body ? JSON.stringify(result.body) : '');
     }
     try {
+      if (await handleContactsRoute({ request, response, parsedUrl, principal, repository, requestId, now, readBody, isAgent: async (p) => (await lookupTrustedEntry(repository, registry, p.endpoint_id))?.kind === 'agent' })) return;
       if (await handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream, inboxDepthLimit: DEFAULT_INBOX_DEPTH_LIMIT, systemIdentity: roomSystemIdentity, logger, ticketStore, humanSigner, buildAcceptOptions })) return;
     } catch (error) {
       logger?.error?.('room route failed', error);

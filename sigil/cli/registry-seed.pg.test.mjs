@@ -137,3 +137,19 @@ test('a legacy file row with no kind fails with REGISTRY_CONFLICT until --reconc
   await seedRegistry(pool, { endpoints: [legacy] });
   assert.equal((await row(pool, 'ep_legacy')).kind, 'human');
 });
+
+test('display_name from the file is inserted and refreshed on re-seed; absent leaves it alone', { skip: !connectionString }, async (t) => {
+  const pool = await freshPool(t);
+  const a = createIdentity({ ownerId: 'usr_a', endpointId: 'ep_a', kind: 'agent' });
+  const b = createIdentity({ ownerId: 'usr_a', endpointId: 'ep_b', kind: 'agent' });
+  const name = async (id) => (await pool.query('SELECT display_name FROM endpoints WHERE endpoint_id=$1', [id])).rows[0].display_name;
+  await seedRegistry(pool, { endpoints: [entry(a, { display_name: 'Chief' }), entry(b)] });
+  assert.equal(await name('ep_a'), 'Chief');
+  assert.equal(await name('ep_b'), 'ep_b');
+  await seedRegistry(pool, { endpoints: [entry(a, { display_name: '  Chief   of Staff ' }), entry(b, { display_name: 'Bee' })] });
+  assert.equal(await name('ep_a'), 'Chief of Staff');
+  assert.equal(await name('ep_b'), 'Bee');
+  await seedRegistry(pool, { endpoints: [entry(a), entry(b, { display_name: 'x'.repeat(41) })] });
+  assert.equal(await name('ep_a'), 'Chief of Staff');
+  assert.equal(await name('ep_b'), 'Bee');
+});

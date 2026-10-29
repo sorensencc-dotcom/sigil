@@ -3,7 +3,9 @@
 // Postgres owns identity once a row exists: the file never raises a status and
 // never rewrites owner, kind, or key. It may only lower status (revoke/suspend)
 // and may only insert rows that are missing. Differences in owner_id, kind, or
-// public key fail startup with REGISTRY_CONFLICT.
+// public key fail startup with REGISTRY_CONFLICT. An optional display_name
+// (1-40 characters) is the global default name and is refreshed on re-seed;
+// an entry without one leaves the stored name alone.
 import crypto from 'node:crypto';
 
 const STATUS_RANK = { active: 0, suspended: 1, revoked: 2 };
@@ -22,6 +24,12 @@ export class RegistryConflictError extends Error {
   }
 }
 
+export function registryDisplayName(value) {
+  if (typeof value !== 'string') return null;
+  const name = value.trim().replace(/\s+/g, ' ');
+  return name && [...name].length <= 40 && !/\p{Cc}/u.test(name) ? name : null;
+}
+
 export async function seedRegistry(pool, data, { reconcileKind = new Map() } = {}) {
   const client = await pool.connect();
   try {
@@ -30,6 +38,7 @@ export async function seedRegistry(pool, data, { reconcileKind = new Map() } = {
     for (const ep of data.endpoints) {
       const fileKind = ep.kind ?? 'human';
       const fileStatus = ep.status in STATUS_RANK ? ep.status : 'active';
+      const fileName = registryDisplayName(ep.display_name);
       await client.query(
         `INSERT INTO humans (human_id, status, created_at) VALUES ($1, 'active', NOW()) ON CONFLICT (human_id) DO NOTHING`,
         [ep.owner_id]);
@@ -37,7 +46,10 @@ export async function seedRegistry(pool, data, { reconcileKind = new Map() } = {
         INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
         ON CONFLICT (endpoint_id) DO NOTHING
-      `, [ep.endpoint_id, ep.owner_id, ep.kind ?? 'agent', fileKind, `install_${ep.endpoint_id}`, ep.endpoint_id, fileStatus]);
+      `, [ep.endpoint_id, ep.owner_id, ep.kind ?? 'agent', fileKind, `install_${ep.endpoint_id}`, fileName ?? ep.endpoint_id, fileStatus]);
+      if (fileName) {
+        await client.query('UPDATE endpoints SET display_name = $2 WHERE endpoint_id = $1 AND display_name IS DISTINCT FROM $2', [ep.endpoint_id, fileName]);
+      }
 
       const { rows: [pgRow] } = await client.query(
         'SELECT owner_id, kind, status FROM endpoints WHERE endpoint_id = $1', [ep.endpoint_id]);
