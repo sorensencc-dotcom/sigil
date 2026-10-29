@@ -12,6 +12,7 @@ const TYPES = {
   '.png': 'image/png',
   '.ico': 'image/x-icon',
   '.map': 'application/json; charset=utf-8',
+  '.woff2': 'font/woff2',
 };
 
 export function defaultStreamUrl(relayUrl) {

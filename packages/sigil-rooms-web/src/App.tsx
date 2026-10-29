@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tan
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ApiError } from './api/client';
 import { AuthProvider, useAuth, useSelfEndpoint } from './auth/AuthContext';
-import { ThemeSelect } from './auth/GateHeader';
+import { Mark, normalizeTheme, ThemeToggle } from './auth/GateHeader';
 import { TokenGate } from './auth/TokenGate';
 import { loadConfig, type WebConfig } from './config';
 import { describeError, ErrorBanner } from './errors/ErrorBanner';
@@ -18,7 +18,7 @@ import { useAck } from './rooms/useAck';
 import { useSend } from './rooms/useSend';
 
 const THEME_KEY = 'sigil.theme';
-const DEFAULT_THEME = 'rewrite-labs';
+const DEFAULT_THEME = 'dark';
 
 function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
   const { client } = useAuth();
@@ -76,6 +76,12 @@ function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
 function Shell({ theme, onThemeChange }: { theme: string; onThemeChange: (next: string) => void }) {
   const { mode, isLoggedIn, loading, login, signOut, rejected } = useAuth();
   const [roomId, setRoomId] = useState<string | null>(null);
+  // On a phone the room list is a drawer; choosing a room closes it.
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const selectRoom = useCallback((id: string) => {
+    setRoomId(id);
+    setDrawerOpen(false);
+  }, []);
   const queryClient = useQueryClient();
   const live = useLive();
   const onGone = useCallback(() => {
@@ -91,17 +97,35 @@ function Shell({ theme, onThemeChange }: { theme: string; onThemeChange: (next: 
     }
   } else if (!isLoggedIn) return <TokenGate onSubmit={login} rejected={rejected} theme={theme} onThemeChange={onThemeChange} />;
   return (
-    <main className="app">
+    <main className="app" data-drawer={drawerOpen ? 'open' : 'closed'}>
       <header className="topbar">
-        <strong className="brand">Sigil rooms</strong>
+        <button
+          type="button"
+          className="menu-btn"
+          aria-label="Rooms"
+          aria-expanded={drawerOpen}
+          aria-controls="rooms-drawer"
+          onClick={() => setDrawerOpen((open) => !open)}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" fill="none" />
+          </svg>
+        </button>
+        <strong className="brand wordmark">
+          <Mark />
+          <span>
+            Sigil <span className="wordmark__sub">rooms</span>
+          </span>
+        </strong>
         <span className="chip" data-live={live === 'live' ? 'true' : 'false'}>{live === 'live' ? 'Live' : 'Live: off'}</span>
-        <ThemeSelect theme={theme} onThemeChange={onThemeChange} />
+        <ThemeToggle theme={theme} onThemeChange={onThemeChange} />
         <button className="ghost" onClick={signOut}>Sign out</button>
       </header>
       <div className="body">
-        <aside className="sidebar">
-          <RoomList selectedId={roomId} onSelect={setRoomId} />
+        <aside className="sidebar" id="rooms-drawer">
+          <RoomList selectedId={roomId} onSelect={selectRoom} />
         </aside>
+        {drawerOpen ? <button type="button" className="scrim" aria-label="Close rooms" onClick={() => setDrawerOpen(false)} /> : null}
         <section className="pane">
           {roomId ? <RoomView key={roomId} roomId={roomId} onGone={onGone} /> : <p className="empty">Pick a room.</p>}
         </section>
@@ -117,7 +141,7 @@ export function App() {
   const [error, setError] = useState<unknown>(null);
   const [theme, setTheme] = useState<string>(() => {
     try {
-      return sessionStorage.getItem(THEME_KEY) || DEFAULT_THEME;
+      return normalizeTheme(sessionStorage.getItem(THEME_KEY) || DEFAULT_THEME);
     } catch {
       return DEFAULT_THEME;
     }
