@@ -593,3 +593,16 @@ test('a second handle for an already-forwarded invocation makes no POST', async 
   assert.deepEqual(await bridge.handle({ envelope }), { outcome: 'skipped' });
   assert.equal(s.posts.length, 1);
 });
+
+// Replay of verify/room-delivery AgentRunsOnce path: a webhook POST the bot
+// received but the bridge saw as a timeout is sent again with the same
+// delivery_key, so the bot gets the same invocation twice (at-least-once).
+test('room-delivery replay: a timed-out POST the bot received is resent with the same delivery_key', async (t) => {
+  const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+  const s = setup(t, { respond: (n) => { if (n === 1) throw timeout; return { status: 200 }; } });
+  const bridge = s.make({ maxAttempts: 3, retryBackoffMs: [1000], sleep: async () => {} });
+  assert.deepEqual(await bridge.handle({ envelope: envelopeFor(s.relay, 'msg_t') }), { outcome: 'forwarded' });
+  assert.equal(s.posts.length, 2);
+  assert.equal(s.posts[0].body.delivery_key, 'inv_1');
+  assert.equal(s.posts[1].body.delivery_key, 'inv_1');
+});

@@ -1,0 +1,7 @@
+sigil/relay/v1/room-dispatch.mjs
+sigil/relay/v1/floor-warden-replies.mjs
+sigil/relay/v1/accept-envelope.mjs
+sigil/relay/v1/delivery-state.mjs
+sigil/bridges/v1/floor-warden-bridge.mjs
+sigil/bridges/v1/floor-warden-payload.mjs
+sigil/cli/agent-daemon.mjs
