@@ -82,11 +82,30 @@ describe('Timeline threads', () => {
   const rows = [msg(1, 'm1', 'root text'), reply(2, 'r2', 'reply text', 'm1'), msg(3, 'm3', 'later top-level')];
   const history = vi.fn(async () => ({ code: 'OK', items: rows, next_after_seq: '3' }));
 
-  it('hides replies from the main timeline and shows a reply count on the root', async () => {
+  it('keeps replies off the main list rows but previews the latest under the root', async () => {
     renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { history });
     expect(await screen.findByText('root text')).toBeInTheDocument();
-    expect(screen.queryByText('reply text')).toBeNull();
+    // Preview shows the latest reply text; it is not a second top-level row.
+    expect(screen.getByText('reply text')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '1 reply' })).toBeInTheDocument();
+    expect(screen.getAllByText('reply text')).toHaveLength(1);
+  });
+
+  it('previews only the latest reply when a root has several', async () => {
+    const multi = [msg(1, 'm1', 'root text'), reply(2, 'r2', 'older reply', 'm1'), reply(3, 'r3', 'newest reply', 'm1')];
+    const multiHistory = vi.fn(async () => ({ code: 'OK', items: multi, next_after_seq: '3' }));
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { history: multiHistory });
+    expect(await screen.findByText('newest reply')).toBeInTheDocument();
+    expect(screen.queryByText('older reply')).toBeNull();
+    expect(screen.getByRole('button', { name: '2 replies' })).toBeInTheDocument();
+  });
+
+  it('opens the thread when the reply preview is clicked', async () => {
+    const onOpenThread = vi.fn();
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} onOpenThread={onOpenThread} />, { history });
+    await screen.findByText('root text');
+    await userEvent.click(screen.getByRole('button', { name: /reply text/i }));
+    expect(onOpenThread).toHaveBeenCalledWith('m1');
   });
 
   it('opens the thread for the canonical root when Reply is clicked', async () => {

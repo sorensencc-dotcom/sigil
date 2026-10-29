@@ -53,6 +53,11 @@ export function threadReplies(items: HistoryItem[], byId: Map<string, HistoryIte
     .sort(bySeq);
 }
 
+export function latestReply(items: HistoryItem[], byId: Map<string, HistoryItem>, rootId: string): HistoryItem | null {
+  const replies = threadReplies(items, byId, rootId);
+  return replies.length === 0 ? null : replies[replies.length - 1]!;
+}
+
 // The ack route marks every delivery at or below the seq as read, so the client reports only a seq
 // it has shown: the highest S such that every row at or below S is in the main timeline, an event,
 // or in a thread the user has opened. seenRoots only grows, so closing a thread keeps its rows seen.

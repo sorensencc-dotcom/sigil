@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HistoryItem } from '../api/types';
-import { ackWatermark, isReply, isTopLevel, replyCounts, rowsById, threadReplies, threadRootOf } from './threads';
+import { ackWatermark, isReply, isTopLevel, latestReply, replyCounts, rowsById, threadReplies, threadRootOf } from './threads';
 
 function row(seq: number, id: string, opts: { root?: string; type?: string } = {}): HistoryItem {
   const type = opts.type ?? 'room.message';
@@ -86,6 +86,29 @@ describe('replyCounts and threadReplies', () => {
   it('puts out-of-order rows in room_seq order', () => {
     const shuffled = [row(5, 'e', { root: 'a' }), row(1, 'a'), row(2, 'b', { root: 'a' })];
     expect(threadReplies(shuffled, rowsById(shuffled), 'a').map((i) => i.message_id)).toEqual(['b', 'e']);
+  });
+});
+
+
+describe('latestReply', () => {
+  it('returns null when the root has no replies', () => {
+    const items = [row(1, 'a'), row(2, 'd')];
+    expect(latestReply(items, rowsById(items), 'a')).toBeNull();
+  });
+
+  it('returns the highest room_seq reply for the canonical root', () => {
+    const items = [row(1, 'a'), row(2, 'b', { root: 'a' }), row(3, 'c', { root: 'b' }), row(5, 'e', { root: 'a' })];
+    expect(latestReply(items, rowsById(items), 'a')?.message_id).toBe('e');
+  });
+
+  it('follows nested replies to the same canonical root', () => {
+    const items = [row(1, 'a'), row(2, 'b', { root: 'a' }), row(4, 'c', { root: 'b' })];
+    expect(latestReply(items, rowsById(items), 'a')?.message_id).toBe('c');
+  });
+
+  it('picks by room_seq even when items are out of order', () => {
+    const items = [row(5, 'e', { root: 'a' }), row(1, 'a'), row(2, 'b', { root: 'a' })];
+    expect(latestReply(items, rowsById(items), 'a')?.message_id).toBe('e');
   });
 });
 
