@@ -15,7 +15,7 @@
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-  [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
+  [string]$RepoRoot,
   [string]$SecretsFile = (Join-Path $env:USERPROFILE '.sigil-secrets\floor-warden.env'),
   [string]$FloorWardenBotId = '016f0b34-f0da-49b2-a32f-482d6e635825',
   [string]$ReplyUrl = 'https://sigil-ingress.rewritelabs.io',
@@ -30,6 +30,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not $RepoRoot) { $RepoRoot = (Resolve-Path (Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) '..\..')).Path }
 if (-not $Only -or $Only.Count -eq 0) { throw "No children selected: -Only must include at least one of relay, chief, rooms-web" }
 Set-Location $RepoRoot
 $logDir = Join-Path $RepoRoot '.sigil\logs'
@@ -71,7 +72,7 @@ function Get-Children {
         '--room-bot-key-wrap-key', $WrapKeyEnv,
         '--floor-warden-reply-token-env', 'SIGIL_FLOOR_WARDEN_REPLY_TOKEN',
         '--ingress-origin', $ReplyUrl,
-        '--ingress-port', "$IngressPort", '--browser-origin', 'http://127.0.0.1:5173') },
+        '--ingress-port', "$IngressPort", '--browser-origin', 'http://127.0.0.1:5173', '--browser-origin', 'http://localhost:5173') },
     [pscustomobject]@{ Name = 'chief'; Port = $null; Match = 'chief.identity.json'; DependsOn = 'relay'; Args = @(
         'sigil/cli/sigil.mjs', 'agent', 'run', '--identity', '.sigil/chief.identity.json',
         '--relay-url', "http://127.0.0.1:$RelayPort", '--room-bridge', 'floor-warden',

@@ -1,11 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdtempSync, mkdirSync, copyFileSync, existsSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { RELAY_UP_OPTIONS, AGENT_RUN_OPTIONS } from './sigil.mjs';
 
 const root = new URL('../../', import.meta.url);
-const script = readFileSync(new URL('scripts/windows/start-sigil-stack.ps1', root), 'utf8');
+const rootPath = fileURLToPath(root);
+const scriptPath = fileURLToPath(new URL('scripts/windows/start-sigil-stack.ps1', root));
+const registerScriptPath = fileURLToPath(new URL('scripts/windows/register-sigil-task.ps1', root));
+const script = readFileSync(scriptPath, 'utf8');
 const roomsWebSource = readFileSync(new URL('packages/sigil-rooms-web/bin/sigil-rooms-web.mjs', root), 'utf8');
 
 const paramDefaults = Object.fromEntries(
@@ -50,5 +57,114 @@ test('launcher rooms-web flags are known to sigil-rooms-web', () => {
   for (const flag of rest.filter((a) => a.startsWith('--'))) {
     const name = flag.slice(2);
     assert.ok(roomsWebSource.includes(`'${name}':`) || roomsWebSource.includes(`  ${name}:`), `rooms-web knows ${flag}`);
+  }
+});
+
+test('no ps1 under scripts/windows references $PSScriptRoot inside param()', () => {
+  const winDir = join(rootPath, 'scripts', 'windows');
+  const ps1Files = readdirSync(winDir).filter((f) => f.endsWith('.ps1'));
+  assert.ok(ps1Files.length > 0, 'found ps1 files under scripts/windows');
+  for (const file of ps1Files) {
+    const src = readFileSync(join(winDir, file), 'utf8');
+    const paramBlock = src.match(/param\([\s\S]*?\n\)/);
+    if (paramBlock) {
+      assert.doesNotMatch(paramBlock[0], /\$PSScriptRoot/, `${file} must not use $PSScriptRoot inside param()`);
+    }
+  }
+});
+
+function findPowerShell() {
+  const candidates = process.platform === 'win32' ? ['powershell.exe', 'pwsh'] : ['pwsh'];
+  for (const cmd of candidates) {
+    const res = spawnSync(cmd, ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.Major'], { encoding: 'utf8' });
+    if (!res.error && res.status === 0 && /^\d+/.test((res.stdout || '').trim())) {
+      return cmd;
+    }
+  }
+  return null;
+}
+
+const psHost = findPowerShell();
+
+test('launcher resolves RepoRoot when Windows PowerShell 5.1 runs it via -File', (t) => {
+  if (process.platform !== 'win32') return t.skip('Windows PowerShell 5.1 only exists on Windows');
+  const tmp = mkdtempSync(join(tmpdir(), 'sigil-ps-test-'));
+  const cwdTmp = mkdtempSync(join(tmpdir(), 'sigil-ps-cwd-'));
+  try {
+    const scriptsWin = join(tmp, 'scripts', 'windows');
+    mkdirSync(scriptsWin, { recursive: true });
+    const copiedLauncher = join(scriptsWin, 'start-sigil-stack.ps1');
+    copyFileSync(scriptPath, copiedLauncher);
+    const missingEnv = join(tmp, 'missing.env');
+    const res = spawnSync(
+      'powershell.exe',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', copiedLauncher, '-SecretsFile', missingEnv],
+      { cwd: cwdTmp, encoding: 'utf8', env: { ...process.env, USERPROFILE: tmp } },
+    );
+    const combined = `${res.stdout || ''}\n${res.stderr || ''}`;
+    assert.doesNotMatch(combined, /Cannot bind argument to parameter 'Path'/);
+    assert.notEqual(res.status, 0, combined);
+    assert.match(combined, /Secrets file not found/, 'stopped at the secrets check, before spawning anything');
+    assert.ok(existsSync(join(tmp, '.sigil', 'logs')), 'RepoRoot resolved to the copied script tree');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+    rmSync(cwdTmp, { recursive: true, force: true });
+  }
+});
+
+test('register-sigil-task fails loudly when Register-ScheduledTask throws', (t) => {
+  if (!psHost) return t.skip('no PowerShell host available');
+  const tmp = mkdtempSync(join(tmpdir(), 'sigil-reg-fail-'));
+  try {
+    const cmd = `
+      function New-ScheduledTaskAction { param($Execute, $Argument, $WorkingDirectory, [Parameter(ValueFromRemainingArguments)]$rest) [pscustomobject]@{ Execute = $Execute; Arguments = $Argument } }
+      function New-ScheduledTaskTrigger { param([Parameter(ValueFromRemainingArguments)]$rest) [pscustomobject]@{} }
+      function New-ScheduledTaskPrincipal { param([Parameter(ValueFromRemainingArguments)]$rest) [pscustomobject]@{} }
+      function New-ScheduledTaskSettingsSet { param([Parameter(ValueFromRemainingArguments)]$rest) [pscustomobject]@{} }
+      function Register-ScheduledTask { param($TaskName, $Action, $Trigger, $Principal, $Settings, [switch]$Force, [Parameter(ValueFromRemainingArguments)]$rest) throw 'Access is denied.' }
+      function Get-ScheduledTask { param($TaskName, $ErrorAction, [Parameter(ValueFromRemainingArguments)]$rest) return $null }
+      function Start-ScheduledTask { param($TaskName, [Parameter(ValueFromRemainingArguments)]$rest) }
+      & '${registerScriptPath.replace(/'/g, "''")}' -StartNow
+      exit $LASTEXITCODE
+    `;
+    const res = spawnSync(psHost, ['-NoProfile', '-Command', cmd], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: { ...process.env, USERPROFILE: tmp, USERDOMAIN: 'TESTDOM', USERNAME: 'testuser' },
+    });
+    const combined = `${res.stdout || ''}\n${res.stderr || ''}`;
+    assert.notEqual(res.status, 0, combined);
+    assert.match(combined, /Access is denied/);
+    assert.doesNotMatch(combined, /Registered/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('register-sigil-task verifies registered task action and succeeds', (t) => {
+  if (!psHost) return t.skip('no PowerShell host available');
+  const tmp = mkdtempSync(join(tmpdir(), 'sigil-reg-ok-'));
+  try {
+    const cmd = `
+      function New-ScheduledTaskAction { param($Execute, $Argument, $WorkingDirectory, [Parameter(ValueFromRemainingArguments)]$rest) [pscustomobject]@{ Execute = $Execute; Arguments = $Argument } }
+      function New-ScheduledTaskTrigger { param([Parameter(ValueFromRemainingArguments)]$rest) [pscustomobject]@{} }
+      function New-ScheduledTaskPrincipal { param([Parameter(ValueFromRemainingArguments)]$rest) [pscustomobject]@{} }
+      function New-ScheduledTaskSettingsSet { param([Parameter(ValueFromRemainingArguments)]$rest) [pscustomobject]@{} }
+      function Register-ScheduledTask { param($TaskName, $Action, $Trigger, $Principal, $Settings, [switch]$Force, [Parameter(ValueFromRemainingArguments)]$rest) $global:a = $Action; [pscustomobject]@{} }
+      function Get-ScheduledTask { param($TaskName, $ErrorAction, [Parameter(ValueFromRemainingArguments)]$rest) [pscustomobject]@{ Actions = @($global:a) } }
+      function Start-ScheduledTask { param($TaskName, [Parameter(ValueFromRemainingArguments)]$rest) }
+      & '${registerScriptPath.replace(/'/g, "''")}' -StartNow
+      exit $LASTEXITCODE
+    `;
+    const res = spawnSync(psHost, ['-NoProfile', '-Command', cmd], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: { ...process.env, USERPROFILE: tmp, USERDOMAIN: 'TESTDOM', USERNAME: 'testuser' },
+    });
+    const combined = `${res.stdout || ''}\n${res.stderr || ''}`;
+    assert.equal(res.status, 0, combined);
+    assert.match(combined, /Registered/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
   }
 });
