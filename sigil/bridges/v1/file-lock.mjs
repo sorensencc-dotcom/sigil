@@ -79,7 +79,10 @@ export async function acquireLock(lockPath, {
         },
       };
     } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
+      // Windows returns EPERM, not EEXIST, when the lock file is still delete-pending
+      // after the previous holder's unlink; that is contention, not a real failure.
+      const busy = error.code === 'EEXIST' || (process.platform === 'win32' && error.code === 'EPERM');
+      if (!busy) throw error;
       const elapsed = Date.now() - startedWall;
       if (elapsed >= waitMs) {
         const diagnostics = readLockDiagnostics(lockPath);
