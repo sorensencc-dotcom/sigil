@@ -90,6 +90,7 @@ export function createAgentDaemon({
   let since = '';
   let missedHeartbeats = 0;
   let reconnectDelay = 250;
+  let reconnectTimer = null;
 
   async function executeWorker(taskPayload) {
     return new Promise((resolve, reject) => {
@@ -373,7 +374,7 @@ export function createAgentDaemon({
             logger.warn?.(`Relay stream closed; polling every ${pollIntervalMs} ms until it reconnects`);
             schedulePoll();
           }
-          setTimeout(connectSocket, reconnectDelay);
+          reconnectTimer = setTimeout(() => { reconnectTimer = null; connectSocket(); }, reconnectDelay);
           reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
         });
         current.on('error', () => {
@@ -394,6 +395,7 @@ export function createAgentDaemon({
     }
     if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     if (socket) {
       try { socket.close(); } catch {}
       socket = null;
