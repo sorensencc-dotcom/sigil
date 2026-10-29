@@ -402,12 +402,16 @@ li[data-pending='failed'] .status { color: var(--danger); font-weight: 600; }
 .row-actions { display: flex; gap: 0.5rem; margin-top: 0.4rem; }
 
 .reply-preview {
-  display: grid; gap: 0.1rem; width: 100%; margin-top: 0.45rem; padding: 0.4rem 0.55rem;
+  display: grid; gap: 0.3rem; width: 100%; margin-top: 0.45rem; padding: 0.4rem 0.55rem;
   text-align: left; cursor: pointer;
   background: var(--surface-subtle); border: 1px solid var(--border); border-radius: var(--radius);
   color: var(--muted); font-family: var(--font-ui); font-size: 0.8rem; line-height: 1.35;
 }
 .reply-preview:hover { border-color: var(--border-strong); color: var(--text); }
+.reply-preview-item { display: grid; gap: 0.05rem; }
+.reply-preview-item + .reply-preview-item { padding-top: 0.3rem; border-top: 1px solid var(--border); }
+.reply-preview-meta { display: flex; gap: 0.5rem; align-items: baseline; }
+.reply-preview-meta time { font-size: 0.75rem; color: var(--muted); }
 .reply-preview-sender { font-weight: 700; color: var(--text); }
 .reply-preview-text {
   display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;

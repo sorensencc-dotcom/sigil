@@ -53,9 +53,22 @@ export function threadReplies(items: HistoryItem[], byId: Map<string, HistoryIte
     .sort(bySeq);
 }
 
-export function latestReply(items: HistoryItem[], byId: Map<string, HistoryItem>, rootId: string): HistoryItem | null {
-  const replies = threadReplies(items, byId, rootId);
-  return replies.length === 0 ? null : replies[replies.length - 1]!;
+export const PREVIEW_REPLIES = 2;
+
+export function latestReplies(items: HistoryItem[], byId: Map<string, HistoryItem>, rootId: string, count = PREVIEW_REPLIES): HistoryItem[] {
+  return threadReplies(items, byId, rootId).slice(-count);
+}
+
+// Seq of the newest row in each thread (root or reply), so a root sorts by its latest activity.
+export function lastActivitySeq(items: HistoryItem[], byId: Map<string, HistoryItem>): Map<string, bigint> {
+  const activity = new Map<string, bigint>();
+  for (const item of items) {
+    if (item.envelope.message_type !== 'room.message') continue;
+    const root = isReply(item) ? threadRootOf(item, byId) : item.message_id;
+    const seq = toSeq(item.room_seq);
+    if (seq > (activity.get(root) ?? -1n)) activity.set(root, seq);
+  }
+  return activity;
 }
 
 // The ack route marks every delivery at or below the seq as read, so the client reports only a seq

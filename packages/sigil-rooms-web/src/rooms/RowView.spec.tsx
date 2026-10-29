@@ -56,7 +56,7 @@ describe('RowView', () => {
           row={row('Ada')}
           sender={null}
           replies={2}
-          latestReply={replyItem({ display: 'Chief', text: 'pong from chief' })}
+          latestReplies={[replyItem({ display: 'Chief', text: 'pong from chief' })]}
           onReply={onReply}
         />
       </ul>,
@@ -71,7 +71,7 @@ describe('RowView', () => {
   it('falls back to endpoint id in the preview when display_name is absent', () => {
     render(
       <ul>
-        <RowView row={row('Ada')} sender={null} replies={1} latestReply={replyItem()} onReply={() => {}} />
+        <RowView row={row('Ada')} sender={null} replies={1} latestReplies={[replyItem()]} onReply={() => {}} />
       </ul>,
     );
     expect(screen.getByText('ep_chief')).toBeInTheDocument();
@@ -82,7 +82,7 @@ describe('RowView', () => {
     const long = 'x'.repeat(140);
     render(
       <ul>
-        <RowView row={row('Ada')} sender={null} replies={1} latestReply={replyItem({ text: long })} onReply={() => {}} />
+        <RowView row={row('Ada')} sender={null} replies={1} latestReplies={[replyItem({ text: long })]} onReply={() => {}} />
       </ul>,
     );
     const preview = screen.getByText(/…$/);

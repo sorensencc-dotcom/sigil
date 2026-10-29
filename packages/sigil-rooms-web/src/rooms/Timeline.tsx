@@ -6,7 +6,7 @@ import { ErrorBanner } from '../errors/ErrorBanner';
 import { useAuth, useSelfEndpoint } from '../auth/AuthContext';
 import { mergeRows, type PendingMessage } from './mergeRows';
 import { RowView } from './RowView';
-import { ackWatermark, isTopLevel, latestReply, replyCounts, rowsById, threadRootOf } from './threads';
+import { ackWatermark, isTopLevel, lastActivitySeq, latestReplies, replyCounts, rowsById, threadRootOf } from './threads';
 import { historyKey } from './historyQuery';
 import { useHistory } from './useHistory';
 
@@ -39,15 +39,16 @@ export function Timeline({
   const byId = useMemo(() => rowsById(items), [items]);
   const counts = useMemo(() => replyCounts(items, byId), [items, byId]);
   const latestByRoot = useMemo(() => {
-    const map = new Map<string, HistoryItem | null>();
+    const map = new Map<string, HistoryItem[]>();
     for (const rootId of counts.keys()) {
-      map.set(rootId, latestReply(items, byId, rootId));
+      map.set(rootId, latestReplies(items, byId, rootId));
     }
     return map;
   }, [items, byId, counts]);
+  const activity = useMemo(() => lastActivitySeq(items, byId), [items, byId]);
   const rows = useMemo(
-    () => mergeRows(items.filter((item) => isTopLevel(item, byId)), pending.filter((message) => !message.threadRootId)),
-    [items, byId, pending],
+    () => mergeRows(items.filter((item) => isTopLevel(item, byId)), pending.filter((message) => !message.threadRootId), activity),
+    [items, byId, pending, activity],
   );
   const watermark = useMemo(() => ackWatermark(items, seenThreadRoots, byId), [items, seenThreadRoots, byId]);
 
@@ -55,7 +56,7 @@ export function Timeline({
   useEffect(() => {
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [rows.length]);
+  }, [items.length, pending.length]);
 
   useEffect(() => {
     if (watermark !== '0') onVisibleSeq(watermark);
@@ -77,7 +78,7 @@ export function Timeline({
             row={row}
             sender={sender}
             replies={row.item ? counts.get(row.item.message_id) ?? 0 : 0}
-            latestReply={row.item ? latestByRoot.get(row.item.message_id) ?? null : null}
+            latestReplies={row.item ? latestByRoot.get(row.item.message_id) ?? [] : []}
             onContinue={(threadRootId) => { if (!resume.isPending) resume.mutate(threadRootId); }}
             onReply={row.item && row.item.envelope.message_type === 'room.message' ? () => onOpenThread(threadRootOf(row.item!, byId)) : undefined}
           />
