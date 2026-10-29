@@ -20,6 +20,10 @@ param(
   [string]$FloorWardenBotId = '016f0b34-f0da-49b2-a32f-482d6e635825',
   [string]$ReplyUrl = 'https://sigil-ingress.rewritelabs.io',
   [string]$WrapKeyEnv = 'SIGIL_ROOM_BOT_KEY_WRAP_KEY',
+  [string]$DatabaseUrlFile = (Join-Path $env:USERPROFILE '.sigil-secrets\sigil-database-url.txt'),
+  [int]$RelayPort = 8791,
+  [int]$IngressPort = 8796,
+  [ValidateSet('relay', 'chief', 'rooms-web')][string[]]$Only = @('relay', 'chief', 'rooms-web'),
   [string]$Node = 'node',
   [int]$MaxBackoffSeconds = 300,
   [switch]$Once
@@ -54,32 +58,30 @@ function Import-SecretsFile([string]$path) {
   Write-Log ("loaded {0} secret(s) from {1}: {2}" -f $names.Count, $path, ($names -join ', '))
 }
 
-$wrapKey = if ($WhatIfPreference) { '***' } else { $null }
-
 function Get-Children {
   @(
-    [pscustomobject]@{ Name = 'relay'; Port = 8791; Args = @(
-        'sigil/cli/sigil.mjs', 'relay', 'up', '--registry', '.sigil/registry.json', '--port', '8791',
+    [pscustomobject]@{ Name = 'relay'; Port = $RelayPort; Args = @(
+        'sigil/cli/sigil.mjs', 'relay', 'up', '--registry', '.sigil/registry.json', '--port', "$RelayPort",
         '--federation-mode', 'queue', '--domain', 'local',
         '--federation-identity', '.sigil/grokbot.identity.json',
         '--reconcile-kind', 'ep_grokbot=agent', '--reconcile-kind', 'ep_chief=agent', '--reconcile-kind', 'ep_helix_ci=agent',
         '--room-system-identity', '.sigil/relay-system.identity.json',
         '--room-human-identity', '.sigil/antigravity.identity.json',
-        '--room-bot-key-wrap-key', $script:wrapKey,
+        '--room-bot-key-wrap-key', $WrapKeyEnv,
         '--floor-warden-reply-token-env', 'SIGIL_FLOOR_WARDEN_REPLY_TOKEN',
-        '--floor-warden-reply-url', $ReplyUrl,
-        '--ingress-port', '8796', '--browser-origin', 'http://127.0.0.1:5173') },
+        '--ingress-origin', $ReplyUrl,
+        '--ingress-port', "$IngressPort", '--browser-origin', 'http://127.0.0.1:5173') },
     [pscustomobject]@{ Name = 'chief'; Port = $null; Match = 'chief.identity.json'; DependsOn = 'relay'; Args = @(
         'sigil/cli/sigil.mjs', 'agent', 'run', '--identity', '.sigil/chief.identity.json',
-        '--relay-url', 'http://127.0.0.1:8791', '--room-bridge', 'floor-warden',
+        '--relay-url', "http://127.0.0.1:$RelayPort", '--room-bridge', 'floor-warden',
         '--floor-warden-url-env', 'SIGIL_FLOOR_WARDEN_WEBHOOK_URL',
         '--floor-warden-key-env', 'SIGIL_FLOOR_WARDEN_WEBHOOK_KEY',
         '--floor-warden-reply-url', $ReplyUrl,
         '--floor-warden-bot-id', $FloorWardenBotId,
-        '--stream-url', 'ws://127.0.0.1:8792/v1/stream') },
+        '--stream-url', "ws://127.0.0.1:$($RelayPort + 1)/v1/stream") },
     [pscustomobject]@{ Name = 'rooms-web'; Port = 5173; Args = @(
-        'packages/sigil-rooms-web/bin/sigil-rooms-web.mjs', '--relay-url', 'http://127.0.0.1:8791', '--port', '5173') }
-  )
+        'packages/sigil-rooms-web/bin/sigil-rooms-web.mjs', '--relay-url', "http://127.0.0.1:$RelayPort", '--port', '5173') }
+  ) | Where-Object { $Only -contains $_.Name }
 }
 
 function Test-Running($child) {
@@ -91,7 +93,7 @@ function Test-Running($child) {
 }
 
 function Format-Args($argList) {
-  ($argList | ForEach-Object { if ($_ -eq $script:wrapKey -and $_ -ne '***') { '***' } elseif ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' '
+  ($argList | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' '
 }
 
 function Start-Child($child) {
@@ -110,14 +112,19 @@ if ($WhatIfPreference) {
 }
 
 Import-SecretsFile $SecretsFile
-$script:wrapKey = [Environment]::GetEnvironmentVariable($WrapKeyEnv, 'Process')
-if (-not $script:wrapKey) { throw "$WrapKeyEnv is not set in $SecretsFile (relay needs --room-bot-key-wrap-key)" }
+if (Test-Path $DatabaseUrlFile) {
+  [Environment]::SetEnvironmentVariable('SIGIL_DATABASE_URL', (Get-Content -Raw -Path $DatabaseUrlFile).Trim(), 'Process')
+  Write-Log "loaded SIGIL_DATABASE_URL from $DatabaseUrlFile"
+}
+foreach ($required in $WrapKeyEnv, 'SIGIL_DATABASE_URL') {
+  if (-not [Environment]::GetEnvironmentVariable($required, 'Process')) { throw "$required is not set (relay ingress needs it)" }
+}
 
 $state = @{}
 foreach ($c in Get-Children) { $state[$c.Name] = @{ Child = $c; Proc = $null; Backoff = 1; NextTry = [datetime]::MinValue } }
 
 while ($true) {
-  foreach ($name in 'relay', 'chief', 'rooms-web') {
+  foreach ($name in @('relay', 'chief', 'rooms-web') | Where-Object { $state.ContainsKey($_) }) {
     $s = $state[$name]; $c = $s.Child
     if ($s.Proc -and -not $s.Proc.HasExited) { continue }
     if ($s.Proc -and $s.Proc.HasExited) {
@@ -127,7 +134,7 @@ while ($true) {
       $s.Proc = $null
     }
     if ((Get-Date) -lt $s.NextTry) { continue }
-    if ($c.DependsOn -and -not (Test-Running $state[$c.DependsOn].Child)) { continue }
+    if ($c.DependsOn -and $state.ContainsKey($c.DependsOn) -and -not (Test-Running $state[$c.DependsOn].Child)) { continue }
     if (Test-Running $c) {
       if (-not $s.External) { Write-Log "$name already running; leaving it alone"; $s.External = $true }
       continue
