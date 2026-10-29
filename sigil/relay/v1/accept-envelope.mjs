@@ -1,3 +1,4 @@
+import { logHop } from './hop-log.mjs';
 import crypto from 'node:crypto';
 import { validateEnvelope, reject, signedBytes, checkRecipientLocality } from './validate-envelope.mjs';
 import { assertAgentMayPost, applyRoomDispatch } from './room-dispatch.mjs';
@@ -587,7 +588,14 @@ function recordFederationAudit(repository, eventType, outcome, envelope, payload
 }
 
 export async function acceptEnvelopeAsync(envelope, options = {}) {
-  if (options.repository?.withTransaction) return acceptWithRepository(envelope, options);
+  if (options.repository?.withTransaction) {
+    const ids = { message_id: envelope?.message_id ?? null, sender_endpoint_id: envelope?.sender?.endpoint_id ?? null, conversation_id: envelope?.conversation_id ?? null };
+    const startedAt = performance.now();
+    logHop('relay.accept_received', ids);
+    const response = await acceptWithRepository(envelope, options);
+    logHop('relay.accept_done', { ...ids, status: response?.status ?? null, duration_ms: Math.round(performance.now() - startedAt) });
+    return response;
+  }
   // Legacy / unit-test path: no repository, caller supplies plain
   // lookupIdempotency + persist callbacks (map-backed, no transaction).
   try {
