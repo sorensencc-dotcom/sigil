@@ -87,5 +87,7 @@ export interface Contact {
   kind: 'endpoint' | 'human' | 'email';
   login: string;
   display_name: string;
+  created_at: string;
+  updated_at: string;
   endpoint_ids: string[];
 }

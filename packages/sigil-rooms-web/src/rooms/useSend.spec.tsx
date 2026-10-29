@@ -80,7 +80,7 @@ describe('useSend mentions', () => {
   it('sends viewer contact mentions as endpoint IDs in both text and mentions', async () => {
     const sendMessage = vi.fn().mockResolvedValue({ code: 'OK', message_id: 'm3', room_seq: '3' });
     const listContacts = vi.fn(async () => [
-      { contact_id: 'ct_1', kind: 'human' as const, login: 'usr_chief', display_name: 'Chief Contact', endpoint_ids: ['ep_chief'] },
+      { contact_id: 'ct_1', kind: 'human' as const, login: 'usr_chief', display_name: 'Chief Contact', created_at: '', updated_at: '', endpoint_ids: ['ep_chief'] },
     ]);
     const { result } = setup({ sendMessage, listContacts, history });
     act(() => result.current.send('hello @Chief Contact'));

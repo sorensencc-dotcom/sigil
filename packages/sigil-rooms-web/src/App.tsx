@@ -9,6 +9,7 @@ import { describeError, ErrorBanner } from './errors/ErrorBanner';
 import { useLive } from './live/useLive';
 import { captureInviteFragment, InvitePage } from './pages/InvitePage';
 import { LoginPage } from './pages/LoginPage';
+import { SettingsPage } from './pages/SettingsPage';
 import { Composer } from './rooms/Composer';
 import { RoomHeader } from './rooms/RoomHeader';
 import { RoomList } from './rooms/RoomList';
@@ -82,12 +83,23 @@ function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
 
 function Shell({ theme, onThemeChange }: { theme: string; onThemeChange: (next: string) => void }) {
   const { mode, isLoggedIn, loading, login, signOut, rejected } = useAuth();
+  const [pathname, setPathname] = useState(() => window.location.pathname);
   const [roomId, setRoomId] = useState<string | null>(null);
   // On a phone the room list is a drawer; choosing a room closes it.
   const [drawerOpen, setDrawerOpen] = useState(false);
   const selectRoom = useCallback((id: string) => {
     setRoomId(id);
     setDrawerOpen(false);
+  }, []);
+  const navigate = useCallback((path: string) => {
+    window.history.pushState(null, '', path);
+    setPathname(path);
+    setDrawerOpen(false);
+  }, []);
+  useEffect(() => {
+    const syncPathname = () => setPathname(window.location.pathname);
+    window.addEventListener('popstate', syncPathname);
+    return () => window.removeEventListener('popstate', syncPathname);
   }, []);
   const queryClient = useQueryClient();
   const live = useLive();
@@ -124,19 +136,27 @@ function Shell({ theme, onThemeChange }: { theme: string; onThemeChange: (next: 
             Sigil <span className="wordmark__sub">rooms</span>
           </span>
         </strong>
+        <nav className="top-nav" aria-label="Main navigation">
+          <button type="button" className="ghost" aria-current={pathname !== '/settings' ? 'page' : undefined} onClick={() => navigate('/')}>Rooms</button>
+          <button type="button" className="ghost" aria-current={pathname === '/settings' ? 'page' : undefined} onClick={() => navigate('/settings')}>Settings</button>
+        </nav>
         <span className="chip" data-live={live === 'live' ? 'true' : 'false'}>{live === 'live' ? 'Live' : 'Live: off'}</span>
         <ThemeToggle theme={theme} onThemeChange={onThemeChange} />
         <button className="ghost" onClick={signOut}>Sign out</button>
       </header>
-      <div className="body">
-        <aside className="sidebar" id="rooms-drawer">
-          <RoomList selectedId={roomId} onSelect={selectRoom} />
-        </aside>
-        {drawerOpen ? <button type="button" className="scrim" aria-label="Close rooms" onClick={() => setDrawerOpen(false)} /> : null}
-        <section className="pane">
-          {roomId ? <RoomView key={roomId} roomId={roomId} onGone={onGone} /> : <p className="empty">Pick a room.</p>}
-        </section>
-      </div>
+      {pathname === '/settings' ? (
+        <SettingsPage onBackToRooms={() => navigate('/')} />
+      ) : (
+        <div className="body">
+          <aside className="sidebar" id="rooms-drawer">
+            <RoomList selectedId={roomId} onSelect={selectRoom} />
+          </aside>
+          {drawerOpen ? <button type="button" className="scrim" aria-label="Close rooms" onClick={() => setDrawerOpen(false)} /> : null}
+          <section className="pane">
+            {roomId ? <RoomView key={roomId} roomId={roomId} onGone={onGone} /> : <p className="empty">Pick a room.</p>}
+          </section>
+        </div>
+      )}
     </main>
   );
 }

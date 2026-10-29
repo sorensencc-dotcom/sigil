@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 
@@ -9,6 +10,7 @@ function stubFetch(config: unknown, me: { status: number; body?: unknown }) {
       if (url === '/config.json') return new Response(JSON.stringify(config), { status: 200 });
       if (url === '/v1/auth/me') return new Response(JSON.stringify(me.body ?? { code: 'UNAUTHENTICATED' }), { status: me.status });
       if (url === '/v1/rooms') return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      if (url === '/v1/me/contacts') return new Response(JSON.stringify({ items: [] }), { status: 200 });
       return new Response('{}', { status: 200 });
     }),
   );
@@ -67,5 +69,17 @@ describe('App', () => {
     render(<App />);
     expect(await screen.findByRole('button', { name: 'Continue with GitHub' })).toBeInTheDocument();
     expect(document.querySelector('input[name="invite"]')).not.toBeNull();
+  });
+
+  it('navigates to Settings and back to Rooms', async () => {
+    stubFetch({ authMode: 'cookie' }, { status: 200, body: { human_id: 'h', endpoint_id: 'ep', display_name: 'Ada', is_operator: false } });
+    render(<App />);
+    await screen.findByText('No rooms yet.');
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(await screen.findByRole('heading', { name: 'Settings' })).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/settings');
+    await userEvent.click(screen.getByRole('button', { name: 'Back to rooms' }));
+    expect(await screen.findByText('No rooms yet.')).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/');
   });
 });
