@@ -30,6 +30,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not $Only -or $Only.Count -eq 0) { throw "No children selected: -Only must include at least one of relay, chief, rooms-web" }
 Set-Location $RepoRoot
 $logDir = Join-Path $RepoRoot '.sigil\logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null

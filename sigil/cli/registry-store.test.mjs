@@ -24,7 +24,7 @@ test('toRegistryMap keeps an explicit kind', () => {
 });
 
 test('identity and registry files are written with owner-only permissions', (t) => {
-  if (process.platform === 'win32') t.skip('POSIX file mode bits are not available on Windows');
+  if (process.platform === 'win32') return t.skip('POSIX file mode bits are not available on Windows');
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-file-mode-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
