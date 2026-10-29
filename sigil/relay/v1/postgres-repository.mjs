@@ -2247,6 +2247,60 @@ export class PostgresRepository {
     );
     return result.rows.map(roomMessageRow);
   }
+  // Per-viewer contacts (/v1/me/contacts). endpoint_ids: an endpoint contact
+  // resolves to its login as typed; a human contact to that human's endpoints
+  // the viewer can already see (their own, or ones sharing an active room with
+  // one of the viewer's endpoints); an email contact to nothing yet.
+  async listContacts(ownerHumanId, client = this.pool) {
+    const result = await client.query(
+      `SELECT c.contact_id, c.kind, c.login, c.display_name, c.created_at, c.updated_at,
+              CASE c.kind
+                WHEN 'endpoint' THEN ARRAY[c.login]
+                WHEN 'human' THEN COALESCE((
+                  SELECT array_agg(e.endpoint_id ORDER BY e.endpoint_id) FROM endpoints e
+                   WHERE e.owner_id = c.login AND e.status = 'active'
+                     AND (e.owner_id = c.owner_human_id OR EXISTS (
+                       SELECT 1 FROM conversation_members theirs
+                         JOIN conversation_members mine ON mine.conversation_id = theirs.conversation_id AND mine.removed_at IS NULL
+                         JOIN endpoints me ON me.endpoint_id = mine.endpoint_id AND me.owner_id = c.owner_human_id
+                        WHERE theirs.endpoint_id = e.endpoint_id AND theirs.removed_at IS NULL))
+                ), ARRAY[]::text[])
+                ELSE ARRAY[]::text[]
+              END AS endpoint_ids
+         FROM contacts c WHERE c.owner_human_id = $1
+        ORDER BY lower(c.display_name), c.contact_id`,
+      [ownerHumanId]);
+    return result.rows.map(contactRow);
+  }
+
+  async createContact({ contactId, ownerHumanId, kind, login, displayName, now = new Date() }, client = this.pool) {
+    try {
+      const result = await client.query(
+        `INSERT INTO contacts (contact_id, owner_human_id, kind, login, display_name, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $6)
+         RETURNING contact_id, kind, login, display_name, created_at, updated_at`,
+        [contactId, ownerHumanId, kind, login, displayName, now]);
+      return contactRow(result.rows[0]);
+    } catch (error) {
+      if (error.code === '23505' && error.constraint === 'contacts_owner_login_unique') throw Object.assign(new Error('Contact login already exists'), { code: 'CONTACT_LOGIN_EXISTS' });
+      throw error;
+    }
+  }
+
+  async updateContact({ contactId, ownerHumanId, displayName, now = new Date() }, client = this.pool) {
+    const result = await client.query(
+      `UPDATE contacts SET display_name = $3, updated_at = $4
+        WHERE contact_id = $1 AND owner_human_id = $2
+       RETURNING contact_id, kind, login, display_name, created_at, updated_at`,
+      [contactId, ownerHumanId, displayName, now]);
+    return result.rows[0] ? contactRow(result.rows[0]) : null;
+  }
+
+  async deleteContact({ contactId, ownerHumanId }, client = this.pool) {
+    const result = await client.query('DELETE FROM contacts WHERE contact_id = $1 AND owner_human_id = $2', [contactId, ownerHumanId]);
+    return result.rowCount > 0;
+  }
+
   async listMentionsForEndpoint(endpointId, limit = 50, client = this.pool) {
     const cap = Math.min(Math.max(Number(limit) || 50, 1), 100);
     const result = await client.query(
@@ -2672,4 +2726,10 @@ export class PostgresRepository {
     return r.rows[0] ? rowToFederationDirectoryLink(r.rows[0]) : null;
   }
   async close() { await this.pool.end(); }
+}
+
+function contactRow(row) {
+  const out = { contact_id: row.contact_id, kind: row.kind, login: row.login, display_name: row.display_name, created_at: new Date(row.created_at).toISOString(), updated_at: new Date(row.updated_at).toISOString() };
+  if (row.endpoint_ids !== undefined) out.endpoint_ids = row.endpoint_ids ?? [];
+  return out;
 }
