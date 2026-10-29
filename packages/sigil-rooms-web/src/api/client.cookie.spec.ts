@@ -52,4 +52,14 @@ describe('api client in cookie mode', () => {
     expect(init.method).toBe('POST');
     expect((init.headers as Record<string, string>)['X-Sigil-CSRF']).toBe('1');
   });
+
+  it('lists contacts with same-origin credentials', async () => {
+    const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse(200, { items: [] }));
+    const { client } = make(fetchImpl as unknown as typeof fetch);
+    await client.listContacts();
+    const [url, init] = fetchImpl.mock.calls[0]! as [string, RequestInit];
+    expect(url).toBe('/v1/me/contacts');
+    expect(init.method).toBe('GET');
+    expect(init.credentials).toBe('same-origin');
+  });
 });

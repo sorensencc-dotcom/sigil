@@ -81,3 +81,11 @@ export interface Session {
   display_name: string;
   is_operator: boolean;
 }
+
+export interface Contact {
+  contact_id: string;
+  kind: 'endpoint' | 'human' | 'email';
+  login: string;
+  display_name: string;
+  endpoint_ids: string[];
+}

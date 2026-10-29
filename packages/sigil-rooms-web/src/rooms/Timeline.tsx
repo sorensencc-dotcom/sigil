@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef } from 'react';
 import { ApiError } from '../api/client';
-import type { HistoryItem } from '../api/types';
+import type { HistoryItem, Member } from '../api/types';
 import { ErrorBanner } from '../errors/ErrorBanner';
 import { useAuth, useSelfEndpoint } from '../auth/AuthContext';
 import { mergeRows, type PendingMessage } from './mergeRows';
@@ -9,6 +9,7 @@ import { RowView } from './RowView';
 import { ackWatermark, isTopLevel, lastActivitySeq, latestReplies, replyCounts, rowsById, threadRootOf } from './threads';
 import { historyKey } from './historyQuery';
 import { useHistory } from './useHistory';
+import type { LoginFor, NameFor } from './useContacts';
 
 const NO_ROOTS: ReadonlySet<string> = new Set();
 
@@ -19,6 +20,9 @@ export function Timeline({
   onGone,
   seenThreadRoots = NO_ROOTS,
   onOpenThread = () => {},
+  nameFor,
+  loginFor,
+  members = [],
 }: {
   roomId: string;
   pending: PendingMessage[];
@@ -26,6 +30,9 @@ export function Timeline({
   onGone: () => void;
   seenThreadRoots?: ReadonlySet<string>;
   onOpenThread?: (rootId: string) => void;
+  nameFor?: NameFor;
+  loginFor?: LoginFor;
+  members?: Member[];
 }) {
   const { items, isLoading, error } = useHistory(roomId);
   const sender = useSelfEndpoint();
@@ -77,6 +84,9 @@ export function Timeline({
             key={row.key}
             row={row}
             sender={sender}
+            nameFor={nameFor}
+            loginFor={loginFor}
+            members={members}
             replies={row.item ? counts.get(row.item.message_id) ?? 0 : 0}
             latestReplies={row.item ? latestByRoot.get(row.item.message_id) ?? [] : []}
             onContinue={(threadRootId) => { if (!resume.isPending) resume.mutate(threadRootId); }}

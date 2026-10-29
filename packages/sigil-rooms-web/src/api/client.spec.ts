@@ -38,6 +38,18 @@ describe('api client', () => {
     await expect(client.listRooms()).rejects.toMatchObject({ code: 'NETWORK', status: 0 });
   });
 
+  it('lists the signed-in viewer contacts', async () => {
+    const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse(200, {
+      items: [{ contact_id: 'ct_1', kind: 'endpoint', login: 'ep_ada', display_name: 'Ada', endpoint_ids: ['ep_ada'] }],
+    }));
+    const { client } = make(fetchImpl as unknown as typeof fetch);
+    await expect(client.listContacts()).resolves.toEqual([
+      { contact_id: 'ct_1', kind: 'endpoint', login: 'ep_ada', display_name: 'Ada', endpoint_ids: ['ep_ada'] },
+    ]);
+    expect(fetchImpl.mock.calls[0]![0]).toBe('http://relay.test/v1/me/contacts');
+    expect((fetchImpl.mock.calls[0]![1] as RequestInit).method).toBe('GET');
+  });
+
   it('rejects without a token and does not call fetch', async () => {
     const fetchImpl = vi.fn();
     const { client } = make(fetchImpl as unknown as typeof fetch, null);

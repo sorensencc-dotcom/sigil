@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import type { HistoryItem } from '../api/types';
+import type { HistoryItem, Member } from '../api/types';
 import { RowView } from './RowView';
 
 function row(displayName: string | undefined): { key: string; seq: bigint; item: HistoryItem } {
@@ -48,6 +48,26 @@ describe('RowView', () => {
     expect(screen.getByText('ep_ada')).toBeInTheDocument();
   });
 
+  it('renders endpoint mentions and sender labels with the viewer contact name', () => {
+    const item = row('Roster Ada');
+    item.item.envelope.body.text = 'hello @ep_ada';
+    const nameFor = (id: string, fallback?: string) => id === 'ep_ada' ? 'Contact Ada' : fallback || id;
+    render(<ul><RowView row={item} sender={null} nameFor={nameFor} /></ul>);
+    expect(screen.getByText('Contact Ada')).toBeInTheDocument();
+    expect(screen.getByText('hello @Contact Ada')).toBeInTheDocument();
+  });
+
+  it('uses the room roster display name when no contact name exists', () => {
+    const item = row(undefined);
+    item.item.envelope.body.text = 'hello @ep_ada';
+    const members: Member[] = [
+      { endpoint_id: 'ep_ada', role: 'member', response_mode: null, added_at: 't', invokable_by: 'owner', owner_id: null, display_name: 'Roster Ada' },
+    ];
+    render(<ul><RowView row={item} sender={null} members={members} /></ul>);
+    expect(screen.getByText('Roster Ada')).toBeInTheDocument();
+    expect(screen.getByText('hello @Roster Ada')).toBeInTheDocument();
+  });
+
   it('previews the latest reply under the root and opens the thread on click', async () => {
     const onReply = vi.fn();
     render(
@@ -87,5 +107,14 @@ describe('RowView', () => {
     );
     const preview = screen.getByText(/…$/);
     expect(preview.textContent?.length).toBeLessThanOrEqual(120);
+  });
+
+  it('renders endpoint mentions in reply previews with contact names', () => {
+    render(
+      <ul>
+        <RowView row={row('Ada')} sender={null} nameFor={(id) => id === 'ep_chief' ? 'Chief Contact' : id} replies={1} latestReplies={[replyItem({ text: 'hi @ep_chief' })]} onReply={() => {}} />
+      </ul>,
+    );
+    expect(screen.getByText('hi @Chief Contact')).toBeInTheDocument();
   });
 });

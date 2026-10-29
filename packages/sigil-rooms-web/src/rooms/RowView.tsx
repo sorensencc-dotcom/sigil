@@ -1,5 +1,8 @@
-import type { HistoryItem } from '../api/types';
+import type { HistoryItem, Member } from '../api/types';
 import type { Row } from './mergeRows';
+import { formatMentionText, roomMemberName } from './resolveMentions';
+import { previewText } from './threads';
+import type { LoginFor, NameFor } from './useContacts';
 
 function Stamp({ at }: { at: string }) {
   const date = new Date(at);
@@ -7,21 +10,12 @@ function Stamp({ at }: { at: string }) {
   return <time dateTime={at}>{date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>;
 }
 
-const PREVIEW_MAX = 120;
-
-function previewLabel(item: HistoryItem): string {
-  return item.display_name || item.envelope.sender.endpoint_id;
-}
-
-function previewText(text: string | undefined): string {
-  const value = (text ?? '').trim();
-  if (value.length <= PREVIEW_MAX) return value;
-  return `${value.slice(0, PREVIEW_MAX - 1)}…`;
-}
-
 export function RowView({
   row,
   sender,
+  nameFor,
+  loginFor,
+  members = [],
   replies = 0,
   latestReplies = [],
   onReply,
@@ -29,6 +23,9 @@ export function RowView({
 }: {
   row: Row;
   sender: string | null;
+  nameFor?: NameFor;
+  loginFor?: LoginFor;
+  members?: Member[];
   replies?: number;
   latestReplies?: HistoryItem[];
   onReply?: () => void;
@@ -57,22 +54,29 @@ export function RowView({
     );
   }
   const mine = sender !== null && envelope.sender.endpoint_id === sender;
+  const senderName = members.length > 0
+    ? roomMemberName({ endpoint_id: envelope.sender.endpoint_id, display_name: row.item!.display_name ?? '' }, members, nameFor, loginFor)
+    : nameFor?.(envelope.sender.endpoint_id, row.item!.display_name) || row.item!.display_name || envelope.sender.endpoint_id;
   return (
     <li data-mine={mine ? 'true' : undefined}>
       <div className="meta">
-        <small className="sender">{row.item!.display_name || envelope.sender.endpoint_id}</small>
+        <small className="sender">{senderName}</small>
         <Stamp at={envelope.created_at} />
       </div>
-      <span className="text">{envelope.body.text}</span>
+      <span className="text">{formatMentionText(envelope.body.text, nameFor, members)}</span>
       {latestReplies.length > 0 && onReply ? (
         <button type="button" className="reply-preview" onClick={onReply}>
           {latestReplies.map((reply) => (
             <span key={reply.message_id} className="reply-preview-item">
               <span className="reply-preview-meta">
-                <span className="reply-preview-sender">{previewLabel(reply)}</span>
+                <span className="reply-preview-sender">
+                  {members.length > 0
+                    ? roomMemberName({ endpoint_id: reply.envelope.sender.endpoint_id, display_name: reply.display_name ?? '' }, members, nameFor, loginFor)
+                    : nameFor?.(reply.envelope.sender.endpoint_id, reply.display_name) || reply.display_name || reply.envelope.sender.endpoint_id}
+                </span>
                 <Stamp at={reply.envelope.created_at} />
               </span>
-              <span className="reply-preview-text">{previewText(reply.envelope.body.text)}</span>
+              <span className="reply-preview-text">{previewText(reply.envelope.body.text, nameFor, members)}</span>
             </span>
           ))}
         </button>

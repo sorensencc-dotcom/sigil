@@ -15,6 +15,8 @@ import { RoomList } from './rooms/RoomList';
 import { ThreadPanel } from './rooms/ThreadPanel';
 import { Timeline } from './rooms/Timeline';
 import { useAck } from './rooms/useAck';
+import { useContacts } from './rooms/useContacts';
+import { useMembers } from './rooms/useMembers';
 import { useSend } from './rooms/useSend';
 
 const THEME_KEY = 'sigil.theme';
@@ -23,6 +25,8 @@ const DEFAULT_THEME = 'dark';
 function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
   const { client } = useAuth();
   const sender = useSelfEndpoint();
+  const membersQuery = useMembers(roomId);
+  const { nameFor, loginFor } = useContacts();
   const rooms = useQuery({ queryKey: ['rooms'], queryFn: () => client.listRooms() });
   const roomName = rooms.data?.find((room) => room.conversation_id === roomId)?.name ?? roomId;
   const { pending, send, retry, sendError } = useSend(roomId);
@@ -44,7 +48,7 @@ function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
       <RoomHeader roomId={roomId} name={roomName} sender={sender} onGone={onGone} />
       <div className="room-body">
         <div className="room-main">
-          <Timeline roomId={roomId} pending={pending} onVisibleSeq={reportSeq} onGone={onGone} seenThreadRoots={seenRoots} onOpenThread={openThreadRoot} />
+          <Timeline roomId={roomId} pending={pending} onVisibleSeq={reportSeq} onGone={onGone} seenThreadRoots={seenRoots} onOpenThread={openThreadRoot} nameFor={nameFor} loginFor={loginFor} members={membersQuery.data ?? []} />
           <div className="notices">
             {pending
               .filter((row) => row.status === 'failed' && row.retryable !== false)
@@ -55,7 +59,7 @@ function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
               ))}
             <ErrorBanner error={sendError && !disabledReason ? sendError : null} />
           </div>
-          <Composer send={(text) => send(text)} disabledReason={disabledReason} />
+          <Composer send={(text) => send(text)} disabledReason={disabledReason} members={membersQuery.data ?? []} nameFor={nameFor} loginFor={loginFor} />
         </div>
         {openThread ? (
           <ThreadPanel
@@ -66,6 +70,9 @@ function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
             onSend={(text) => send(text, openThread)}
             onClose={() => setOpenThread(null)}
             disabledReason={disabledReason}
+            members={membersQuery.data ?? []}
+            nameFor={nameFor}
+            loginFor={loginFor}
           />
         ) : null}
       </div>

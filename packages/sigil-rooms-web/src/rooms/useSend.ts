@@ -1,12 +1,13 @@
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useCallback, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
-import type { HistoryItem, Member } from '../api/types';
+import type { Contact, HistoryItem, Member } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { getSender, setSender } from '../auth/tokenStore';
 import { fetchHistory, historyKey } from './historyQuery';
 import type { PendingMessage } from './mergeRows';
-import { extractMentionTokens, resolveMentions } from './resolveMentions';
+import { extractMentionTokens, normalizeMentions } from './resolveMentions';
+import { contactsKey, createLoginFor, createNameFor } from './useContacts';
 import { membersKey } from './useMembers';
 
 const NONE: PendingMessage[] = [];
@@ -31,6 +32,15 @@ async function loadMembers(
     queryKey: membersKey(roomId),
     queryFn: () => listMembers(roomId),
   });
+}
+
+async function loadContacts(
+  queryClient: QueryClient,
+  listContacts: () => Promise<Contact[]>,
+): Promise<Contact[]> {
+  const cached = queryClient.getQueryData<Contact[]>(contactsKey);
+  if (cached) return cached;
+  return queryClient.fetchQuery({ queryKey: contactsKey, queryFn: listContacts });
 }
 
 export function useSend(roomId: string) {
@@ -61,17 +71,25 @@ export function useSend(roomId: string) {
       let messageId: string;
       try {
         let mentions: string[] | undefined;
+        let sentText = text;
         if (extractMentionTokens(text).length > 0) {
           try {
             const members = await loadMembers(queryClient, client.listMembers, room);
-            const resolved = resolveMentions(text, members);
-            mentions = resolved.length > 0 ? resolved : undefined;
+            let contacts: Contact[] = [];
+            try {
+              contacts = await loadContacts(queryClient, () => client.listContacts());
+            } catch {
+              // Contact names are optional; room display names and endpoint IDs still resolve.
+            }
+            const resolved = normalizeMentions(text, members, createNameFor(contacts), createLoginFor(contacts));
+            sentText = resolved.text;
+            mentions = resolved.mentions.length > 0 ? resolved.mentions : undefined;
           } catch {
             // Roster unavailable: still send the text; unresolved @tokens stay plain text.
             mentions = undefined;
           }
         }
-        const result = await client.sendMessage(room, text, idempotencyKey, threadRootId, mentions);
+        const result = await client.sendMessage(room, sentText, idempotencyKey, threadRootId, mentions);
         messageId = result.message_id;
         patch(room, idempotencyKey, { messageId });
       } catch (error) {

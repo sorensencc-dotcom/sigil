@@ -1,4 +1,4 @@
-import type { AckResult, Session, HistoryPage, InvokableBy, Member, ResponseMode, Room, SendResult, StopResult, TicketResult } from './types';
+import type { AckResult, Contact, Session, HistoryPage, InvokableBy, Member, ResponseMode, Room, SendResult, StopResult, TicketResult } from './types';
 
 export class ApiError extends Error {
   readonly code: string;
@@ -36,6 +36,7 @@ export interface ApiClient {
   ack(roomId: string, upToRoomSeq: string): Promise<AckResult>;
   wsTicket(): Promise<TicketResult>;
   me(): Promise<Session>;
+  listContacts(): Promise<Contact[]>;
   logout(): Promise<void>;
 }
 
@@ -126,6 +127,9 @@ export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized
     },
     me() {
       return request<Session>('GET', '/v1/auth/me');
+    },
+    async listContacts() {
+      return (await request<{ items: Contact[] }>('GET', '/v1/me/contacts')).items;
     },
     async logout() {
       await request<unknown>('POST', '/v1/auth/logout');

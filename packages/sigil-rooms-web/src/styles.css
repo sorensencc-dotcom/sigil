@@ -183,8 +183,12 @@ li[data-kind='event'] .ghost { background: var(--color-paper-2); border-color: v
 .retry { color: var(--color-bad); border-color: color-mix(in oklab, var(--color-bad) 55%, var(--color-paper)); background: transparent; font-size: var(--text-sm); }
 
 /* ── COMPOSER ───────────────────────────────────────────── */
-.composer { display: flex; gap: var(--space-sm); align-items: flex-end; flex-wrap: wrap; padding: var(--space-md) var(--space-lg); background: var(--color-paper); border-top: var(--rule-hair) solid var(--color-rule); }
+.composer { position: relative; display: flex; gap: var(--space-sm); align-items: flex-end; flex-wrap: wrap; padding: var(--space-md) var(--space-lg); background: var(--color-paper); border-top: var(--rule-hair) solid var(--color-rule); }
 .composer textarea { flex: 1; min-width: 0; min-height: 44px; max-height: 10rem; resize: vertical; }
+.mention-picker { position: absolute; z-index: 2; right: var(--space-lg); bottom: calc(100% - 1px); left: var(--space-lg); max-height: 15rem; overflow-y: auto; list-style: none; margin: 0; padding: var(--space-2xs); background: var(--color-paper-2); border: var(--rule-hair) solid var(--color-rule-2); border-radius: var(--radius-card); box-shadow: 0 8px 24px color-mix(in oklab, var(--color-paper-3) 65%, transparent); }
+.mention-picker li { display: block; }
+.mention-picker button { width: 100%; justify-content: flex-start; background: transparent; border-color: transparent; text-align: left; }
+.mention-picker button:hover:not(:disabled), .mention-picker button:focus-visible { background: var(--color-paper-3); border-color: transparent; }
 .composer button[type='submit'], .gate button[type='submit'] { min-height: 44px; background: var(--color-accent); border-color: var(--color-accent); color: var(--color-accent-ink); }
 .composer button[type='submit']:hover:not(:disabled), .gate button[type='submit']:hover:not(:disabled) { background: color-mix(in oklab, var(--color-accent) 86%, var(--color-ink)); border-color: color-mix(in oklab, var(--color-accent) 86%, var(--color-ink)); }
 .reason { flex-basis: 100%; margin: 0; color: var(--color-muted); font-size: var(--text-sm); }
