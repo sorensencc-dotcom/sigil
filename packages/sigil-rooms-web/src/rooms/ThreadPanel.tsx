@@ -1,10 +1,13 @@
 import { useMemo } from 'react';
+import type { Member } from '../api/types';
 import { useSelfEndpoint } from '../auth/AuthContext';
 import { Composer } from './Composer';
 import { mergeRows, type PendingMessage } from './mergeRows';
+import { formatMentionText } from './resolveMentions';
 import { RowView } from './RowView';
 import { rowsById, threadReplies } from './threads';
 import { useHistory } from './useHistory';
+import type { LoginFor, NameFor } from './useContacts';
 
 export function ThreadPanel({
   roomId,
@@ -13,6 +16,9 @@ export function ThreadPanel({
   onSend,
   onClose,
   disabledReason,
+  nameFor,
+  loginFor,
+  members = [],
 }: {
   roomId: string;
   rootId: string;
@@ -20,6 +26,9 @@ export function ThreadPanel({
   onSend: (text: string) => void;
   onClose: () => void;
   disabledReason: string | null;
+  nameFor?: NameFor;
+  loginFor?: LoginFor;
+  members?: Member[];
 }) {
   // The same query the timeline reads, so the panel adds no fetch.
   const { items } = useHistory(roomId);
@@ -38,13 +47,13 @@ export function ThreadPanel({
       </header>
       <ul className="thread-rows">
         <li data-root="true">
-          {root ? <span className="text">{root.envelope.body.text}</span> : <em>Original message not loaded</em>}
+          {root ? <span className="text">{formatMentionText(root.envelope.body.text, nameFor, members)}</span> : <em>Original message not loaded</em>}
         </li>
         {rows.map((row) => (
-          <RowView key={row.key} row={row} sender={sender} />
+          <RowView key={row.key} row={row} sender={sender} nameFor={nameFor} loginFor={loginFor} members={members} />
         ))}
       </ul>
-      <Composer send={onSend} disabledReason={disabledReason} label="Reply in thread" />
+      <Composer send={onSend} disabledReason={disabledReason} label="Reply in thread" members={members} nameFor={nameFor} loginFor={loginFor} />
     </aside>
   );
 }

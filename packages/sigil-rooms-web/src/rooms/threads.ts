@@ -1,4 +1,6 @@
-import type { HistoryItem } from '../api/types';
+import type { HistoryItem, Member } from '../api/types';
+import { formatMentionText } from './resolveMentions';
+import type { NameFor } from './useContacts';
 import { toSeq } from './seq';
 
 export function rowsById(items: HistoryItem[]): Map<string, HistoryItem> {
@@ -54,6 +56,13 @@ export function threadReplies(items: HistoryItem[], byId: Map<string, HistoryIte
 }
 
 export const PREVIEW_REPLIES = 2;
+const PREVIEW_MAX = 120;
+
+export function previewText(text: string | undefined, nameFor?: NameFor, members?: Member[]): string {
+  const value = formatMentionText(text, nameFor, members).trim();
+  if (value.length <= PREVIEW_MAX) return value;
+  return `${value.slice(0, PREVIEW_MAX - 1)}…`;
+}
 
 export function latestReplies(items: HistoryItem[], byId: Map<string, HistoryItem>, rootId: string, count = PREVIEW_REPLIES): HistoryItem[] {
   return threadReplies(items, byId, rootId).slice(-count);

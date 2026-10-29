@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HistoryItem } from '../api/types';
-import { ackWatermark, isReply, isTopLevel, lastActivitySeq, latestReplies, replyCounts, rowsById, threadReplies, threadRootOf } from './threads';
+import { ackWatermark, isReply, isTopLevel, lastActivitySeq, latestReplies, previewText, replyCounts, rowsById, threadReplies, threadRootOf } from './threads';
 
 function row(seq: number, id: string, opts: { root?: string; type?: string } = {}): HistoryItem {
   const type = opts.type ?? 'room.message';
@@ -96,6 +96,12 @@ describe('latestReplies', () => {
   it('returns nothing when the root has no replies', () => {
     const items = [row(1, 'a'), row(2, 'd')];
     expect(latestReplies(items, rowsById(items), 'a')).toEqual([]);
+  });
+
+  describe('previewText', () => {
+    it('renders contact names in mention IDs before truncating', () => {
+      expect(previewText('hello @ep_chief', (id) => id === 'ep_chief' ? 'Chief' : id)).toBe('hello @Chief');
+    });
   });
 
   it('returns the two highest room_seq replies for the canonical root, oldest first', () => {

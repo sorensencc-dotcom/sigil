@@ -60,6 +60,15 @@ describe('RosterPanel', () => {
     expect(screen.queryByText('ep_web')).toBeNull();
   });
 
+  it('uses the viewer contact name for a roster member', async () => {
+    const listContacts = vi.fn(async () => [
+      { contact_id: 'ct_1', kind: 'endpoint' as const, login: 'ep_web', display_name: 'Personal Ada', endpoint_ids: ['ep_web'] },
+    ]);
+    renderWithClient(<RosterPanel roomId="room_1" members={members} manager={false} onGone={() => {}} />, { listContacts });
+    expect(await screen.findByText('Personal Ada')).toBeInTheDocument();
+    expect(screen.queryByText('Ada')).toBeNull();
+  });
+
   it('shows the invokable-by mode to everyone but the control only to the agent owner', () => {
     renderWithClient(<RosterPanel roomId="room_1" members={members} manager={false} viewer="ep_web" onGone={() => {}} />, {});
     expect(screen.getByLabelText('Invokable by for ep_claude')).toHaveValue('owner');

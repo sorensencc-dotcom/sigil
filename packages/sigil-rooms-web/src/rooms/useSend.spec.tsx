@@ -77,6 +77,17 @@ describe('useSend mentions', () => {
     expect(sendMessage.mock.calls[1]![4]).toEqual(['ep_chief']);
   });
 
+  it('sends viewer contact mentions as endpoint IDs in both text and mentions', async () => {
+    const sendMessage = vi.fn().mockResolvedValue({ code: 'OK', message_id: 'm3', room_seq: '3' });
+    const listContacts = vi.fn(async () => [
+      { contact_id: 'ct_1', kind: 'human' as const, login: 'usr_chief', display_name: 'Chief Contact', endpoint_ids: ['ep_chief'] },
+    ]);
+    const { result } = setup({ sendMessage, listContacts, history });
+    act(() => result.current.send('hello @Chief Contact'));
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    expect(sendMessage.mock.calls[0]).toEqual(['room_1', 'hello @ep_chief', expect.any(String), undefined, ['ep_chief']]);
+  });
+
   it('fetches members when the cache is empty', async () => {
     const listMembers = vi.fn(async () => members);
     const sendMessage = vi.fn().mockResolvedValue({ code: 'OK', message_id: 'm1', room_seq: '1' });

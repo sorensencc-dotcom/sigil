@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, type ApiClient } from '../api/client';
+import type { Member } from '../api/types';
 import { TestAuthProvider } from '../auth/AuthContext';
 import { getSender } from '../auth/tokenStore';
 import { renderWithClient } from '../testUtils';
@@ -43,6 +44,19 @@ describe('Composer', () => {
     renderWithClient(<Composer send={() => {}} disabledReason="Sending is not configured." />, {});
     expect(screen.getByRole('textbox')).toBeDisabled();
     expect(screen.getByText('Sending is not configured.')).toBeInTheDocument();
+  });
+
+  it('offers room members by name and inserts the selected name', async () => {
+    const send = vi.fn();
+    const members: Member[] = [
+      { endpoint_id: 'ep_ada', role: 'member', response_mode: null, added_at: 't', invokable_by: 'owner', owner_id: null, display_name: 'Ada' },
+    ];
+    renderWithClient(<Composer send={send} disabledReason={null} members={members} />, {});
+    await userEvent.type(screen.getByRole('textbox'), '@Ad');
+    await userEvent.click(screen.getByRole('option', { name: 'Mention Ada' }));
+    expect(screen.getByRole('textbox')).toHaveValue('@Ada ');
+    await userEvent.click(screen.getByRole('button', { name: /send/i }));
+    expect(send).toHaveBeenCalledWith('@Ada');
   });
 });
 

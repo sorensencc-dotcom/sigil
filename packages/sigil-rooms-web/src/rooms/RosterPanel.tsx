@@ -4,12 +4,15 @@ import { ApiError } from '../api/client';
 import type { InvokableBy, Member, ResponseMode } from '../api/types';
 import { ErrorBanner } from '../errors/ErrorBanner';
 import { membersKey } from './useMembers';
+import { roomMemberName } from './resolveMentions';
+import { useContacts } from './useContacts';
 
 const MODES: ResponseMode[] = ['joins', 'mentions_only', 'router'];
 const INVOKABLE: InvokableBy[] = ['owner', 'members'];
 
 export function RosterPanel({ roomId, members, manager, viewer = null, onGone }: { roomId: string; members: Member[]; manager: boolean; viewer?: string | null; onGone: () => void }) {
   const { client } = useAuth();
+  const { nameFor, loginFor } = useContacts();
   const queryClient = useQueryClient();
   const setMode = useMutation({
     mutationFn: ({ endpointId, mode }: { endpointId: string; mode: ResponseMode }) => client.setResponseMode(roomId, endpointId, mode),
@@ -33,7 +36,7 @@ export function RosterPanel({ roomId, members, manager, viewer = null, onGone }:
       <ul>
         {members.map((member) => (
           <li key={member.endpoint_id}>
-            <span className="member-id">{member.display_name || member.endpoint_id}</span>
+            <span className="member-id">{roomMemberName(member, members, nameFor, loginFor)}</span>
             <span className="badge">{member.role}</span>
             {member.response_mode !== null ? (
               member.response_mode === 'report_only' ? (

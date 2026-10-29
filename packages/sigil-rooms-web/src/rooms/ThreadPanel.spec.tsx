@@ -34,6 +34,14 @@ describe('ThreadPanel', () => {
     expect(screen.getByText('Original message not loaded')).toBeInTheDocument();
   });
 
+  it('renders contact names in the root, reply, and sender label', async () => {
+    const items = [msg(1, 'm1', 'root @ep_a'), msg(2, 'm2', 'reply @ep_a', 'm1')];
+    panel(items, { nameFor: (id: string) => id === 'ep_a' ? 'Contact A' : id });
+    expect(await screen.findByText('root @Contact A')).toBeInTheDocument();
+    expect(screen.getByText('reply @Contact A')).toBeInTheDocument();
+    expect(screen.getByText('Contact A')).toBeInTheDocument();
+  });
+
   it('sends a reply through onSend and shows a failed pending reply for this thread only', async () => {
     const pending = [
       { idempotencyKey: 'k1', text: 'in this thread', status: 'failed' as const, error: 'boom', threadRootId: 'm1' },
