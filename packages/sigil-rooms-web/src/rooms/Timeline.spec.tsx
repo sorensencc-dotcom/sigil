@@ -91,13 +91,35 @@ describe('Timeline threads', () => {
     expect(screen.getAllByText('reply text')).toHaveLength(1);
   });
 
-  it('previews only the latest reply when a root has several', async () => {
-    const multi = [msg(1, 'm1', 'root text'), reply(2, 'r2', 'older reply', 'm1'), reply(3, 'r3', 'newest reply', 'm1')];
-    const multiHistory = vi.fn(async () => ({ code: 'OK', items: multi, next_after_seq: '3' }));
+  it('previews the last two replies when a root has several, the rest behind N replies', async () => {
+    const multi = [msg(1, 'm1', 'root text'), reply(2, 'r2', 'oldest reply', 'm1'), reply(3, 'r3', 'middle reply', 'm1'), reply(4, 'r4', 'newest reply', 'm1')];
+    const multiHistory = vi.fn(async () => ({ code: 'OK', items: multi, next_after_seq: '4' }));
     renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { history: multiHistory });
     expect(await screen.findByText('newest reply')).toBeInTheDocument();
-    expect(screen.queryByText('older reply')).toBeNull();
-    expect(screen.getByRole('button', { name: '2 replies' })).toBeInTheDocument();
+    expect(screen.getByText('middle reply')).toBeInTheDocument();
+    expect(screen.queryByText('oldest reply')).toBeNull();
+    expect(screen.getByRole('button', { name: '3 replies' })).toBeInTheDocument();
+  });
+
+  it('moves a root below later top-level messages when it gets a newer reply', async () => {
+    const items = [msg(1, 'm1', 'old root'), msg(2, 'm2', 'middle top-level'), reply(3, 'r3', 'fresh reply', 'm1')];
+    const bumpHistory = vi.fn(async () => ({ code: 'OK', items, next_after_seq: '3' }));
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { history: bumpHistory });
+    await screen.findByText('old root');
+    const order = [...document.querySelectorAll('.timeline > ul > li .text')].map((el) => el.textContent);
+    expect(order).toEqual(['middle top-level', 'old root']);
+  });
+
+  it('keeps every room.message visible on the timeline, in a preview, or behind its root reply count', async () => {
+    const items = [
+      msg(1, 'm1', 'root'), reply(2, 'r2', 'reply a', 'm1'), reply(3, 'r3', 'reply b', 'm1'), reply(4, 'r4', 'reply c', 'm1'),
+      reply(5, 'r5', 'orphan reply', 'missing'), msg(6, 'm6', 'plain'), reply(7, 'r7', 'nested', 'r2'),
+    ];
+    const allHistory = vi.fn(async () => ({ code: 'OK', items, next_after_seq: '7' }));
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { history: allHistory });
+    await screen.findByText('root');
+    for (const text of ['root', 'plain', 'orphan reply', 'reply c', 'nested']) expect(screen.getByText(text)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '4 replies' })).toBeInTheDocument();
   });
 
   it('opens the thread when the reply preview is clicked', async () => {

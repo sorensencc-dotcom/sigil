@@ -23,14 +23,14 @@ export function RowView({
   row,
   sender,
   replies = 0,
-  latestReply,
+  latestReplies = [],
   onReply,
   onContinue,
 }: {
   row: Row;
   sender: string | null;
   replies?: number;
-  latestReply?: HistoryItem | null;
+  latestReplies?: HistoryItem[];
   onReply?: () => void;
   onContinue?: (threadRootId: string) => void;
 }) {
@@ -57,7 +57,6 @@ export function RowView({
     );
   }
   const mine = sender !== null && envelope.sender.endpoint_id === sender;
-  const preview = latestReply ?? null;
   return (
     <li data-mine={mine ? 'true' : undefined}>
       <div className="meta">
@@ -65,10 +64,17 @@ export function RowView({
         <Stamp at={envelope.created_at} />
       </div>
       <span className="text">{envelope.body.text}</span>
-      {preview && onReply ? (
+      {latestReplies.length > 0 && onReply ? (
         <button type="button" className="reply-preview" onClick={onReply}>
-          <span className="reply-preview-sender">{previewLabel(preview)}</span>
-          <span className="reply-preview-text">{previewText(preview.envelope.body.text)}</span>
+          {latestReplies.map((reply) => (
+            <span key={reply.message_id} className="reply-preview-item">
+              <span className="reply-preview-meta">
+                <span className="reply-preview-sender">{previewLabel(reply)}</span>
+                <Stamp at={reply.envelope.created_at} />
+              </span>
+              <span className="reply-preview-text">{previewText(reply.envelope.body.text)}</span>
+            </span>
+          ))}
         </button>
       ) : null}
       {onReply ? (

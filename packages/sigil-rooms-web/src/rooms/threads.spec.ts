@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HistoryItem } from '../api/types';
-import { ackWatermark, isReply, isTopLevel, latestReply, replyCounts, rowsById, threadReplies, threadRootOf } from './threads';
+import { ackWatermark, isReply, isTopLevel, lastActivitySeq, latestReplies, replyCounts, rowsById, threadReplies, threadRootOf } from './threads';
 
 function row(seq: number, id: string, opts: { root?: string; type?: string } = {}): HistoryItem {
   const type = opts.type ?? 'room.message';
@@ -90,25 +90,31 @@ describe('replyCounts and threadReplies', () => {
 });
 
 
-describe('latestReply', () => {
-  it('returns null when the root has no replies', () => {
+describe('latestReplies', () => {
+  const ids = (list: { message_id: string }[]) => list.map((item) => item.message_id);
+
+  it('returns nothing when the root has no replies', () => {
     const items = [row(1, 'a'), row(2, 'd')];
-    expect(latestReply(items, rowsById(items), 'a')).toBeNull();
+    expect(latestReplies(items, rowsById(items), 'a')).toEqual([]);
   });
 
-  it('returns the highest room_seq reply for the canonical root', () => {
+  it('returns the two highest room_seq replies for the canonical root, oldest first', () => {
     const items = [row(1, 'a'), row(2, 'b', { root: 'a' }), row(3, 'c', { root: 'b' }), row(5, 'e', { root: 'a' })];
-    expect(latestReply(items, rowsById(items), 'a')?.message_id).toBe('e');
-  });
-
-  it('follows nested replies to the same canonical root', () => {
-    const items = [row(1, 'a'), row(2, 'b', { root: 'a' }), row(4, 'c', { root: 'b' })];
-    expect(latestReply(items, rowsById(items), 'a')?.message_id).toBe('c');
+    expect(ids(latestReplies(items, rowsById(items), 'a'))).toEqual(['c', 'e']);
   });
 
   it('picks by room_seq even when items are out of order', () => {
     const items = [row(5, 'e', { root: 'a' }), row(1, 'a'), row(2, 'b', { root: 'a' })];
-    expect(latestReply(items, rowsById(items), 'a')?.message_id).toBe('e');
+    expect(ids(latestReplies(items, rowsById(items), 'a'))).toEqual(['b', 'e']);
+  });
+});
+
+describe('lastActivitySeq', () => {
+  it('maps each root to its newest reply seq and a lone message to its own seq', () => {
+    const items = [row(1, 'a'), row(2, 'm'), row(3, 'b', { root: 'a' }), row(4, 'c', { root: 'b' })];
+    const activity = lastActivitySeq(items, rowsById(items));
+    expect(activity.get('a')).toBe(4n);
+    expect(activity.get('m')).toBe(2n);
   });
 });
 
