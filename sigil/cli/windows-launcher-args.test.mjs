@@ -122,7 +122,7 @@ test('register-sigil-task fails loudly when Register-ScheduledTask throws', (t) 
       function New-ScheduledTaskPrincipal { param([Parameter(ValueFromRemainingArguments)]$rest) [pscustomobject]@{} }
       function New-ScheduledTaskSettingsSet { param([Parameter(ValueFromRemainingArguments)]$rest) [pscustomobject]@{} }
       function Register-ScheduledTask { param($TaskName, $Action, $Trigger, $Principal, $Settings, [switch]$Force, [Parameter(ValueFromRemainingArguments)]$rest) throw 'Access is denied.' }
-      function Get-ScheduledTask { param($TaskName, $ErrorAction, [Parameter(ValueFromRemainingArguments)]$rest) return $null }
+      function Get-ScheduledTask { param($TaskName, [Parameter(ValueFromRemainingArguments)]$rest) return $null }
       function Start-ScheduledTask { param($TaskName, [Parameter(ValueFromRemainingArguments)]$rest) }
       & '${registerScriptPath.replace(/'/g, "''")}' -StartNow
       exit $LASTEXITCODE
@@ -134,7 +134,7 @@ test('register-sigil-task fails loudly when Register-ScheduledTask throws', (t) 
     });
     const combined = `${res.stdout || ''}\n${res.stderr || ''}`;
     assert.notEqual(res.status, 0, combined);
-    assert.match(combined, /Access is denied/);
+    assert.match(combined, /Access\s+is\s+denied/);
     assert.doesNotMatch(combined, /Registered/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
@@ -151,7 +151,7 @@ test('register-sigil-task verifies registered task action and succeeds', (t) => 
       function New-ScheduledTaskPrincipal { param([Parameter(ValueFromRemainingArguments)]$rest) [pscustomobject]@{} }
       function New-ScheduledTaskSettingsSet { param([Parameter(ValueFromRemainingArguments)]$rest) [pscustomobject]@{} }
       function Register-ScheduledTask { param($TaskName, $Action, $Trigger, $Principal, $Settings, [switch]$Force, [Parameter(ValueFromRemainingArguments)]$rest) $global:a = $Action; [pscustomobject]@{} }
-      function Get-ScheduledTask { param($TaskName, $ErrorAction, [Parameter(ValueFromRemainingArguments)]$rest) [pscustomobject]@{ Actions = @($global:a) } }
+      function Get-ScheduledTask { param($TaskName, [Parameter(ValueFromRemainingArguments)]$rest) [pscustomobject]@{ Actions = @($global:a) } }
       function Start-ScheduledTask { param($TaskName, [Parameter(ValueFromRemainingArguments)]$rest) }
       & '${registerScriptPath.replace(/'/g, "''")}' -StartNow
       exit $LASTEXITCODE
