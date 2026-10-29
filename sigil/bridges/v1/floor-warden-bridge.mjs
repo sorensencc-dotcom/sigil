@@ -22,7 +22,10 @@
 //   replyTimeoutMs  reply deadline after a forward (default 15 minutes)
 //   maxAttempts     forward attempts per invocation before FLOOR_WARDEN_UNREACHABLE (default 5)
 //   pollIntervalMs  halt / completion poll (default 2000, the CLI bridges' Stop poll)
-//   postTimeoutMs   AbortSignal.timeout for each POST (default 30 seconds)
+//   postTimeoutMs   AbortSignal.timeout for each POST (default 10 seconds)
+//   retryBackoffMs  waits between in-bridge retries of a retryable forward (default 1s, 2s, 4s);
+//                   past the list, or at maxAttempts, the daemon's next poll or a failure takes over
+//   sleep           (ms) => Promise, injectable for tests
 //   logger          console-like; never receives the webhook URL or key (origin only, errors scrubbed)
 //
 // handle outcomes: skipped | forwarded | failed (with reason). It throws only
@@ -35,6 +38,7 @@
 //     floor_warden: { attempts: { [inv]: n }, forwards: { [inv]: { thread_root_id,
 //       trigger_message_id, trigger_room_seq, forwarded_at, bot } }, halts: { [inv]: iso } } }
 import { buildForwardPayload, buildHaltPayload, PAYLOAD_MAX_BYTES } from './floor-warden-payload.mjs';
+import { logHop } from '../../relay/v1/hop-log.mjs';
 
 const DEFAULT_MAX_TURNS = 6;
 const PAGE = 500;
@@ -65,7 +69,8 @@ const toSeq = (value) => {
 
 export function createFloorWardenBridge({
   identity, bot, relay, sessions, fetchImpl = globalThis.fetch, webhook, replyUrl,
-  replyTimeoutMs = 15 * 60_000, maxAttempts = 5, pollIntervalMs = 2000, postTimeoutMs = 30_000, logger = console,
+  replyTimeoutMs = 15 * 60_000, maxAttempts = 5, pollIntervalMs = 2000, postTimeoutMs = 10_000, logger = console,
+  retryBackoffMs = [1000, 2000, 4000], sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }) {
   const self = identity.endpoint_id;
   if (!webhook?.url || !webhook?.key) throw Object.assign(new Error('Floor Warden webhook URL and key are required'), { code: 'INVALID_CONFIG' });
@@ -279,6 +284,10 @@ export function createFloorWardenBridge({
     const roomId = envelope.conversation_id;
     const invocation = await runningFor(roomId);
     if (!invocation || invocation.trigger_message_id !== envelope.message_id) return { outcome: 'skipped' };
+    // Already forwarded (a redelivery, or a poll racing a stream trigger): the
+    // reply watch owns it now, and a second POST would run the bot twice.
+    if (roomValue(roomId).floor_warden.forwards[invocation.invocation_id]) return { outcome: 'skipped' };
+    logHop('bridge.invocation_seen', { invocation_id: invocation.invocation_id, room_id: roomId, trigger_message_id: envelope.message_id }, logger);
     try {
       return await forward(envelope, roomId, invocation);
     } catch (error) {
@@ -335,19 +344,26 @@ export function createFloorWardenBridge({
     // The builder drops thread entries to fit, but never clips trigger.text.
     if (Buffer.byteLength(JSON.stringify(payload)) > PAYLOAD_MAX_BYTES) return fail(roomId, invocationId, 'PAYLOAD_TOO_LARGE');
 
-    const result = await post(payload);
-    if (result.kind === 'reject') {
-      warn(`floor warden: webhook ${origin} rejected ${invocationId} with HTTP ${result.status}`);
-      return fail(roomId, invocationId, 'FLOOR_WARDEN_REJECTED');
-    }
-    if (result.kind === 'retry') {
-      const stored = Number(value.floor_warden.attempts[invocationId] ?? 0);
-      const attempt = Math.max(attemptCounts.get(invocationId) ?? 0, Number.isFinite(stored) ? stored : 0) + 1;
+    const startedAt = Date.now();
+    const stored = Number(value.floor_warden.attempts[invocationId] ?? 0);
+    let attempt = Math.max(attemptCounts.get(invocationId) ?? 0, Number.isFinite(stored) ? stored : 0);
+    let result;
+    for (let retry = 0; ; retry += 1) {
+      result = await post(payload);
+      if (result.kind !== 'retry') break;
+      attempt += 1;
       warn(`floor warden: webhook ${origin} unavailable for ${invocationId} (${result.detail}), attempt ${attempt} of ${maxAttempts}`);
       if (attempt >= maxAttempts) return fail(roomId, invocationId, 'FLOOR_WARDEN_UNREACHABLE');
       attemptCounts.set(invocationId, attempt);
       update(roomId, (next) => { next.floor_warden.attempts[invocationId] = attempt; });
-      throw Object.assign(new Error(`Floor Warden webhook unavailable (${result.detail}); attempt ${attempt} of ${maxAttempts}`), { code: RETRY });
+      if (closed || retry >= retryBackoffMs.length) {
+        throw Object.assign(new Error(`Floor Warden webhook unavailable (${result.detail}); attempt ${attempt} of ${maxAttempts}`), { code: RETRY });
+      }
+      await sleep(retryBackoffMs[retry]);
+    }
+    if (result.kind === 'reject') {
+      warn(`floor warden: webhook ${origin} rejected ${invocationId} with HTTP ${result.status}`);
+      return fail(roomId, invocationId, 'FLOOR_WARDEN_REJECTED');
     }
 
     const forwardedAt = Date.now();
@@ -359,6 +375,7 @@ export function createFloorWardenBridge({
       next.floor_warden.forwards[invocationId] = { thread_root_id: threadRootId, trigger_message_id: envelope.message_id, trigger_room_seq: triggerSeq, forwarded_at: new Date(forwardedAt).toISOString(), bot: target };
     });
     logger.info?.(`floor warden: forwarded ${invocationId} to ${origin}`);
+    logHop('bridge.forwarded', { invocation_id: invocationId, room_id: roomId, trigger_message_id: envelope.message_id, attempts: attempt + 1, forward_ms: forwardedAt - startedAt }, logger);
     arm(roomId, invocationId, forwardedAt + replyTimeoutMs);
     return { outcome: 'forwarded' };
   }

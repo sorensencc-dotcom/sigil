@@ -110,6 +110,7 @@ function setup(t, { invocations, messages, rooms, respond = () => ({ status: 200
       replyTimeoutMs: TIMEOUT,
       pollIntervalMs: POLL,
       logger,
+      retryBackoffMs: [],
       ...options,
       ...extra,
     });
@@ -552,4 +553,43 @@ test('halt: halt records older than a day are pruned when a new one is recorded'
   await flush();
   const halts = s.sessions.get('room_1').floor_warden.halts;
   assert.deepEqual(Object.keys(halts).sort(), ['inv_1', 'inv_recent']);
+});
+
+test('retries a retryable forward in-bridge with 1s/2s/4s backoff and forwards on success', async (t) => {
+  const s = setup(t, { respond: (n) => ({ status: n < 3 ? 503 : 202 }) });
+  const waits = [];
+  const bridge = s.make({ retryBackoffMs: [1000, 2000, 4000], sleep: async (ms) => { waits.push(ms); } });
+  assert.deepEqual(await bridge.handle({ envelope: envelopeFor(s.relay, 'msg_t') }), { outcome: 'forwarded' });
+  assert.equal(s.posts.length, 3);
+  assert.deepEqual(waits, [1000, 2000]);
+  assert.equal(s.relay.failed.length, 0);
+  assert.equal(s.sessions.get('room_1').floor_warden.attempts.inv_1, undefined);
+});
+
+test('in-bridge retries stop at maxAttempts and fail FLOOR_WARDEN_UNREACHABLE', async (t) => {
+  const s = setup(t, { respond: () => ({ status: 503 }) });
+  const waits = [];
+  const bridge = s.make({ maxAttempts: 3, retryBackoffMs: [1000, 2000, 4000], sleep: async (ms) => { waits.push(ms); } });
+  assert.deepEqual(await bridge.handle({ envelope: envelopeFor(s.relay, 'msg_t') }), { outcome: 'failed', reason: 'FLOOR_WARDEN_UNREACHABLE' });
+  assert.equal(s.posts.length, 3);
+  assert.deepEqual(waits, [1000, 2000]);
+});
+
+test('past the backoff list the delivery is left for the next poll', async (t) => {
+  const s = setup(t, { respond: () => ({ status: 503 }) });
+  const waits = [];
+  const bridge = s.make({ retryBackoffMs: [1000], sleep: async (ms) => { waits.push(ms); } });
+  await assert.rejects(bridge.handle({ envelope: envelopeFor(s.relay, 'msg_t') }), (error) => error.code === 'FLOOR_WARDEN_RETRY');
+  assert.equal(s.posts.length, 2);
+  assert.deepEqual(waits, [1000]);
+  assert.equal(s.sessions.get('room_1').floor_warden.attempts.inv_1, 2);
+});
+
+test('a second handle for an already-forwarded invocation makes no POST', async (t) => {
+  const s = setup(t);
+  const bridge = s.make();
+  const envelope = envelopeFor(s.relay, 'msg_t');
+  assert.deepEqual(await bridge.handle({ envelope }), { outcome: 'forwarded' });
+  assert.deepEqual(await bridge.handle({ envelope }), { outcome: 'skipped' });
+  assert.equal(s.posts.length, 1);
 });

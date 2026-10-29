@@ -7,6 +7,7 @@
 // No error body, audit row, log line or thrown message here carries the reply
 // token, the reply text, or key material.
 import crypto from 'node:crypto';
+import { logHop } from './hop-log.mjs';
 import { LocalOutbox } from '../../connectors/v1/local-outbox.mjs';
 import { acceptEnvelopeAsync } from './accept-envelope.mjs';
 import { validateRoomMessageBody } from '../../contracts/v1/room-message-schema.mjs';
@@ -50,6 +51,7 @@ async function runReply({ request, requestId, roomId, now, readBody, repository,
   const parsed = parseReplyBody(raw, roomId);
   if (parsed.error) return parsed.error;
   const { reply } = parsed;
+  logHop('relay.reply_received', { room_id: roomId, in_reply_to: reply.inReplyTo, bot_id: reply.targetBotId });
   if (botId && botId !== reply.targetBotId) return { ...fail(403, 'BOT_NOT_ON_ROSTER', 'target_bot_id does not match the reply token bot'), noAudit: true };
   // Caller-claimed and unverified until step 4 passes: on refusal rows these
   // name what the caller asserted, not a checked identity.
@@ -137,6 +139,7 @@ async function runReply({ request, requestId, roomId, now, readBody, repository,
   // Step 10.
   facts.messageId = result.body.message_id;
   const row = await repository.lookupRoomMessage(roomId, result.body.message_id);
+  logHop('relay.reply_persisted', { room_id: roomId, in_reply_to: reply.inReplyTo, message_id: result.body.message_id, room_seq: row?.room_seq ?? null, duplicate: Boolean(result.body.duplicate) });
   return { status: 202, body: { message_id: result.body.message_id, room_seq: row?.room_seq ?? null, duplicate: Boolean(result.body.duplicate) } };
 }
 
