@@ -16,6 +16,10 @@ const resumeIndex = process.argv.indexOf('--resume');
 const codexResume = process.argv.indexOf('resume');
 const priorSession = resumeIndex > 0 ? process.argv[resumeIndex + 1] : codexResume > 0 ? process.argv[codexResume + 1] : null;
 const sessionId = priorSession ?? `sess_${process.pid}`;
+const writeAtomic = (file, text) => {
+  fs.writeFileSync(`${file}.tmp`, text);
+  fs.renameSync(`${file}.tmp`, file);
+};
 let prompt = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => { prompt += chunk; });
@@ -35,7 +39,7 @@ process.stdin.on('end', async () => {
     return;
   }
   if (fixtureMode === 'grandchild') {
-    if (process.argv[4]) fs.writeFileSync(process.argv[4], String(process.pid));
+    if (process.argv[4]) writeAtomic(process.argv[4], String(process.pid));
     setInterval(() => {}, 1000);
     return;
   }
@@ -49,11 +53,11 @@ process.stdin.on('end', async () => {
       process.stderr.write('grandchild did not start');
       process.exit(1);
     }
-    if (process.argv[4]) fs.writeFileSync(process.argv[4], JSON.stringify({ parent: process.pid, grandchild: grandchild.pid }));
+    if (process.argv[4]) writeAtomic(process.argv[4], JSON.stringify({ parent: process.pid, grandchild: grandchild.pid }));
     setInterval(() => {}, 1000);
     return;
   }
-  if (process.env.FAKE_PID_FILE) fs.writeFileSync(process.env.FAKE_PID_FILE, String(process.pid));
+  if (process.env.FAKE_PID_FILE) writeAtomic(process.env.FAKE_PID_FILE, String(process.pid));
   if (process.env.FAKE_SLEEP_MS) await new Promise((resolve) => setTimeout(resolve, Number(process.env.FAKE_SLEEP_MS)));
   if (process.env.FAKE_EXIT) { process.stderr.write('fake failure'); process.exit(Number(process.env.FAKE_EXIT)); }
   const turn = (prompt.match(/\[seq /g) ?? []).length;

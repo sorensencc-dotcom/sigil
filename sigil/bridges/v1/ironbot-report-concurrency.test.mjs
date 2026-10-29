@@ -216,10 +216,10 @@ test('(b) two bots share state: both pendings survive transient then both clear'
       const ca = spawnChild(payloadA);
       const cb = spawnChild(payloadB);
       children.push(ca.child, cb.child);
-      await Promise.all([ca.done, cb.done]);
+      const [da, db] = await Promise.all([ca.done, cb.done]);
       const state = createReportState({ statePath });
-      assert.ok(await state.loadPending('botA'), `round ${round} botA pending`);
-      assert.ok(await state.loadPending('botB'), `round ${round} botB pending`);
+      assert.ok(await state.loadPending('botA'), `round ${round} botA pending: ${JSON.stringify(da.result)} ${da.stderr}`);
+      assert.ok(await state.loadPending('botB'), `round ${round} botB pending: ${JSON.stringify(db.result)} ${db.stderr}`);
 
       const retryA = spawnChild({ ...payloadA, relayUrl: world.relayUrl });
       const retryB = spawnChild({ ...payloadB, relayUrl: world.relayUrl });
