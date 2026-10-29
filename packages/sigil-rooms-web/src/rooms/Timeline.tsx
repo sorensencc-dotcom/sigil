@@ -1,11 +1,12 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef } from 'react';
 import { ApiError } from '../api/client';
+import type { HistoryItem } from '../api/types';
 import { ErrorBanner } from '../errors/ErrorBanner';
 import { useAuth, useSelfEndpoint } from '../auth/AuthContext';
 import { mergeRows, type PendingMessage } from './mergeRows';
 import { RowView } from './RowView';
-import { ackWatermark, isTopLevel, replyCounts, rowsById, threadRootOf } from './threads';
+import { ackWatermark, isTopLevel, latestReply, replyCounts, rowsById, threadRootOf } from './threads';
 import { historyKey } from './historyQuery';
 import { useHistory } from './useHistory';
 
@@ -37,6 +38,13 @@ export function Timeline({
   });
   const byId = useMemo(() => rowsById(items), [items]);
   const counts = useMemo(() => replyCounts(items, byId), [items, byId]);
+  const latestByRoot = useMemo(() => {
+    const map = new Map<string, HistoryItem | null>();
+    for (const rootId of counts.keys()) {
+      map.set(rootId, latestReply(items, byId, rootId));
+    }
+    return map;
+  }, [items, byId, counts]);
   const rows = useMemo(
     () => mergeRows(items.filter((item) => isTopLevel(item, byId)), pending.filter((message) => !message.threadRootId)),
     [items, byId, pending],
@@ -69,6 +77,7 @@ export function Timeline({
             row={row}
             sender={sender}
             replies={row.item ? counts.get(row.item.message_id) ?? 0 : 0}
+            latestReply={row.item ? latestByRoot.get(row.item.message_id) ?? null : null}
             onContinue={(threadRootId) => { if (!resume.isPending) resume.mutate(threadRootId); }}
             onReply={row.item && row.item.envelope.message_type === 'room.message' ? () => onOpenThread(threadRootOf(row.item!, byId)) : undefined}
           />
