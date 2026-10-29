@@ -9,6 +9,7 @@ import { ConnectorDatabase } from '../connectors/v1/connector-db-adapter.mjs';
 import { WebSocketConnectionManager } from '../connectors/v1/connector-ws-manager.mjs';
 import { agentEnv } from '../bridges/v1/cli-runner.mjs';
 import { identityKeys } from './identity.mjs';
+import { logHop } from '../relay/v1/hop-log.mjs';
 
 const defaultSchemaPath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -29,7 +30,12 @@ export function createAgentDaemon({
   workerArgs = [],
   autoReply = true,
   logger = console,
+  // Stream frames drive the inbox. The timer only backs them up: every
+  // safetyPollIntervalMs while the stream is open, every pollIntervalMs while
+  // it is down or absent.
   pollIntervalMs = 15000,
+  safetyPollIntervalMs = 60000,
+  WebSocketImpl = WebSocket,
   heartbeatIntervalMs = 15000,
   missedHeartbeatsLimit = 3,
   onRoomMessage = null,
@@ -116,7 +122,22 @@ export function createAgentDaemon({
     });
   }
 
+  // Delivery ids being processed right now: a frame-triggered poll and a timer
+  // poll that overlap never hand the same delivery to the bridge twice.
+  const inFlight = new Set();
+
   async function processItem(item) {
+    const deliveryId = item.delivery_id;
+    if (deliveryId && inFlight.has(deliveryId)) return { delivery_id: deliveryId, outcome: 'in_flight' };
+    if (deliveryId) inFlight.add(deliveryId);
+    try {
+      return await processItemOnce(item);
+    } finally {
+      if (deliveryId) inFlight.delete(deliveryId);
+    }
+  }
+
+  async function processItemOnce(item) {
     const deliveryId = item.delivery_id;
     const envelope = item.envelope ?? item;
     const messageType = envelope.message_type;
@@ -216,6 +237,7 @@ export function createAgentDaemon({
       // The bridge fails its own invocation for any error once it knows the
       // invocation. A throw here means it never got that far (the invocation
       // lookup failed), so the delivery stays unacked for the next poll.
+      logHop('bridge.delivery_picked', { endpoint_id: identity.endpoint_id, delivery_id: deliveryId ?? null, message_id: envelope.message_id ?? null, room_id: envelope.conversation_id ?? null }, logger);
       let outcome;
       try {
         outcome = (await onRoomMessage({ deliveryId, envelope }))?.outcome ?? 'failed';
@@ -233,10 +255,24 @@ export function createAgentDaemon({
     return { delivery_id: deliveryId, outcome: 'acknowledged' };
   }
 
-  let polling = false;
-  async function poll() {
-    if (polling) return 0;
-    polling = true;
+  // One poll at a time. A trigger that lands mid-poll sets `again`, so the
+  // poll runs once more instead of dropping a delivery queued after its read.
+  let polling = null;
+  let again = false;
+  function poll() {
+    if (polling) { again = true; return polling; }
+    polling = (async () => {
+      let total = 0;
+      do {
+        again = false;
+        total += await pollOnce();
+      } while (again);
+      return total;
+    })().finally(() => { polling = null; });
+    return polling;
+  }
+
+  async function pollOnce() {
     try {
       const page = await relay.reconcileInbox(since);
       let leftUnacked = false;
@@ -250,72 +286,104 @@ export function createAgentDaemon({
     } catch (err) {
       logger.error?.(`Daemon inbox poll error: ${err.message}`);
       return 0;
-    } finally {
-      polling = false;
     }
   }
+
+  let ready = false;
+  let streamOpen = false;
+  function trigger() {
+    if (!running || !ready) return;
+    poll();
+  }
+
+  function schedulePoll() {
+    if (pollTimer) clearTimeout(pollTimer);
+    if (!running) return;
+    const interval = streamOpen ? safetyPollIntervalMs : pollIntervalMs;
+    pollTimer = setTimeout(() => {
+      pollTimer = null;
+      if (ready) poll();
+      schedulePoll();
+    }, interval);
+  }
+
+  // Frames that can mean new inbox work for this endpoint.
+  const TRIGGER_FRAMES = new Set(['delivered', 'resend', 'sequence_reset']);
 
   function start() {
     if (running) return;
     running = true;
+    const begin = () => { ready = true; poll(); };
     if (onStart) {
       // The first poll waits for the start hook (the Floor Warden bridge's
       // recover()), so recovery does not race the first forward.
       Promise.resolve()
         .then(() => onStart())
         .catch((err) => logger.error?.(`Daemon start hook failed: ${err?.message ?? String(err)}`))
-        .finally(() => { if (running) poll(); });
+        .finally(() => { if (running) begin(); });
     } else {
-      poll();
+      begin();
     }
 
     if (streamUrl) {
       const connectSocket = () => {
         if (!running) return;
-        socket = new WebSocket(streamUrl, {
+        const current = new WebSocketImpl(streamUrl, {
           headers: { authorization: `Bearer ${identity.relay_token}` }
         });
-        socket.on('open', () => {
+        socket = current;
+        current.on('open', () => {
           missedHeartbeats = 0;
           reconnectDelay = 250;
+          streamOpen = true;
+          logger.info?.('Relay stream connected; inbox is event-driven');
+          schedulePoll();
+          // Anything queued while the stream was down.
+          trigger();
           if (heartbeatTimer) clearInterval(heartbeatTimer);
           heartbeatTimer = setInterval(() => {
-            if (socket?.readyState === WebSocket.OPEN) {
+            if (current.readyState === WebSocket.OPEN) {
               missedHeartbeats += 1;
               if (missedHeartbeats >= missedHeartbeatsLimit) {
                 logger.warn?.('Relay heartbeat timeout; reconnecting stream...');
-                socket.terminate();
+                current.terminate();
                 return;
               }
-              socket.send(JSON.stringify({ type: 'ping', timestamp: new Date().toISOString() }));
+              current.send(JSON.stringify({ type: 'ping', timestamp: new Date().toISOString() }));
             }
           }, heartbeatIntervalMs);
         });
-        socket.on('message', (raw) => {
-          try {
-            const msg = JSON.parse(raw);
-            if (msg.type === 'pong') {
-              missedHeartbeats = 0;
-            } else if (msg.type === 'delivered') {
-              poll();
-            }
-          } catch {}
-        });
-        socket.on('close', () => {
-          if (heartbeatTimer) clearInterval(heartbeatTimer);
-          if (running) {
-            setTimeout(connectSocket, reconnectDelay);
-            reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
+        current.on('message', (raw) => {
+          let msg;
+          try { msg = JSON.parse(raw); } catch { return; }
+          missedHeartbeats = 0;
+          if (msg.type === 'pong') return;
+          if (TRIGGER_FRAMES.has(msg.type)) {
+            logHop('bridge.stream_frame', { endpoint_id: identity.endpoint_id, type: msg.type, delivery_id: msg.delivery_id ?? null }, logger);
+            trigger();
           }
         });
-        socket.on('error', () => {
-          try { socket.close(); } catch {}
+        current.on('close', () => {
+          if (heartbeatTimer) clearInterval(heartbeatTimer);
+          if (socket === current) socket = null;
+          const wasOpen = streamOpen;
+          streamOpen = false;
+          if (!running) return;
+          if (wasOpen) {
+            logger.warn?.(`Relay stream closed; polling every ${pollIntervalMs} ms until it reconnects`);
+            schedulePoll();
+          }
+          setTimeout(connectSocket, reconnectDelay);
+          reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
+        });
+        current.on('error', () => {
+          try { current.close(); } catch {}
         });
       };
       connectSocket();
     }
 
-    pollTimer = setInterval(poll, pollIntervalMs);
+    schedulePoll();
   }
 
   function stop() {
@@ -324,7 +392,7 @@ export function createAgentDaemon({
     if (onStop) {
       try { onStop(); } catch (err) { logger.error?.(`Daemon stop hook failed: ${err?.message ?? String(err)}`); }
     }
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
     if (socket) {
       try { socket.close(); } catch {}
@@ -339,6 +407,7 @@ export function createAgentDaemon({
   return {
     start,
     stop,
+    get streamOpen() { return streamOpen; },
     poll,
     processItem,
     executeWorker,

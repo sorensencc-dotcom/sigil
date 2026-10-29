@@ -65,7 +65,7 @@ Commands:
   init <name> [--owner <owner_id> | --federation-owner <federated_id>] [--registry path] [--domain domain]      Create a local identity and register it (domain defaults to "local"; --federation-owner allows an owner id whose domain differs from --domain)
   sign-contract --contract path --identity path [--output path]          Sign a TorqueQuery agent dispatch contract
   verify-contract --contract path --registry path                        Verify a signed TorqueQuery agent dispatch contract
-  agent run --identity path --relay-url url [--worker path] [--room-bridge claude|codex|copilot|router|floor-warden] [--room-sessions path] [--agent-command cmd] [--agent-cwd dir] [--router-model m] [--router-ollama-url u] [--router-timeout-ms n] [--router-context-messages n] [--router-sole-agent-fallback on|off] [--floor-warden-url-env N --floor-warden-key-env N [--floor-warden-key-header name] --floor-warden-reply-url url [--floor-warden-bot-id id] [--reply-timeout-ms n]]
+  agent run --identity path --relay-url url [--worker path] [--room-bridge claude|codex|copilot|router|floor-warden] [--room-sessions path] [--agent-command cmd] [--agent-cwd dir] [--router-model m] [--router-ollama-url u] [--router-timeout-ms n] [--router-context-messages n] [--router-sole-agent-fallback on|off] [--floor-warden-url-env N --floor-warden-key-env N [--floor-warden-key-header name] --floor-warden-reply-url url [--floor-warden-bot-id id] [--reply-timeout-ms n] [--floor-warden-post-timeout-ms n]] [--stream-url url] [--poll-interval-ms n] [--safety-poll-ms n]
                                                             Run the agent daemon; --room-bridge answers room.message deliveries via a local CLI (claude, codex, or copilot), or via a local Ollama router (--router-* flags: model, Ollama URL, timeout, context messages, sole-agent fallback on|off, default on), or forwards them to the Floor Warden webhook (--room-bridge floor-warden: webhook URL and key read from the named environment variables; a receive-only identity from sigil bot add is enough)
   agentmail provision --identity path --installation-id id [--registry path] [--audit-output path]
                                                             Explicitly provision non-mailbox ep_ingress; creates no grants or inbox mapping
@@ -1182,7 +1182,7 @@ async function cmdVerifyContract(argv) {
   console.log(JSON.stringify(valid ? { valid: true, key_id: contract.signature.key_id } : { valid: false, reason: 'SIGNATURE_INVALID' }));
   if (!valid) process.exitCode = 1;
 }
-const AGENT_RUN_USAGE = 'usage: sigil agent run --identity path --relay-url url [--worker path] [--room-bridge claude|codex|copilot|router|floor-warden] [--room-sessions path] [--agent-command cmd] [--agent-cwd dir] [--router-model m] [--router-ollama-url u] [--router-timeout-ms n] [--router-context-messages n] [--router-sole-agent-fallback on|off] [--floor-warden-url-env N --floor-warden-key-env N [--floor-warden-key-header name] --floor-warden-reply-url url [--floor-warden-bot-id id] [--reply-timeout-ms n]]';
+const AGENT_RUN_USAGE = 'usage: sigil agent run --identity path --relay-url url [--worker path] [--room-bridge claude|codex|copilot|router|floor-warden] [--room-sessions path] [--agent-command cmd] [--agent-cwd dir] [--router-model m] [--router-ollama-url u] [--router-timeout-ms n] [--router-context-messages n] [--router-sole-agent-fallback on|off] [--floor-warden-url-env N --floor-warden-key-env N [--floor-warden-key-header name] --floor-warden-reply-url url [--floor-warden-bot-id id] [--reply-timeout-ms n] [--floor-warden-post-timeout-ms n]] [--stream-url url] [--poll-interval-ms n] [--safety-poll-ms n]';
 
 function positiveIntFlag(args, flag, fallback) {
   const raw = opt(args, [flag]);
@@ -1222,6 +1222,7 @@ async function buildFloorWardenRoomBridge({ args, identity, relayUrl }) {
   const botId = identityBotId ?? flagBotId;
   if (!botId) throw new Error('Floor Warden bot id missing: the identity file has no bot_id (re-create it with sigil bot add) and --floor-warden-bot-id was not given');
   const replyTimeoutMs = positiveIntFlag(args, 'reply-timeout-ms', 15 * 60_000);
+  const postTimeoutMs = positiveIntFlag(args, 'floor-warden-post-timeout-ms', 10_000);
 
   const { createRedactingLogger, floorWardenSecrets } = await import('./redacting-logger.mjs');
   const secrets = floorWardenSecrets({ webhookUrl, key, relayToken: identity.relay_token });
@@ -1238,13 +1239,24 @@ async function buildFloorWardenRoomBridge({ args, identity, relayUrl }) {
     webhook: { url: webhookUrl, key, keyHeader: opt(args, ['floor-warden-key-header']) },
     replyUrl,
     replyTimeoutMs,
+    postTimeoutMs,
     logger,
   });
   return { bridge, logger, botId, origin: parsedUrl.origin, sessionsPath };
 }
 
+// The relay serves its stream on the next port at /v1/stream (as `send --wait-for-receipt` assumes).
+function defaultStreamUrl(relayUrl) {
+  const url = new URL(relayUrl);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.port = String(Number(url.port || (url.protocol === 'wss:' ? 443 : 80)) + 1);
+  url.pathname = '/v1/stream';
+  url.search = '';
+  return url.toString();
+}
+
 async function cmdAgentRun(argv) {
-  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, worker: { type: 'string' }, config: { type: 'string' }, 'room-bridge': { type: 'string' }, 'room-sessions': { type: 'string' }, 'agent-command': { type: 'string' }, 'agent-cwd': { type: 'string' }, 'router-model': { type: 'string' }, 'router-ollama-url': { type: 'string' }, 'router-timeout-ms': { type: 'string' }, 'router-context-messages': { type: 'string' }, 'router-sole-agent-fallback': { type: 'string' }, 'floor-warden-url-env': { type: 'string' }, 'floor-warden-key-env': { type: 'string' }, 'floor-warden-key-header': { type: 'string' }, 'floor-warden-reply-url': { type: 'string' }, 'floor-warden-bot-id': { type: 'string' }, 'reply-timeout-ms': { type: 'string' } } });
+  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, worker: { type: 'string' }, config: { type: 'string' }, 'room-bridge': { type: 'string' }, 'room-sessions': { type: 'string' }, 'agent-command': { type: 'string' }, 'agent-cwd': { type: 'string' }, 'router-model': { type: 'string' }, 'router-ollama-url': { type: 'string' }, 'router-timeout-ms': { type: 'string' }, 'router-context-messages': { type: 'string' }, 'router-sole-agent-fallback': { type: 'string' }, 'floor-warden-url-env': { type: 'string' }, 'floor-warden-key-env': { type: 'string' }, 'floor-warden-key-header': { type: 'string' }, 'floor-warden-reply-url': { type: 'string' }, 'floor-warden-bot-id': { type: 'string' }, 'reply-timeout-ms': { type: 'string' }, 'floor-warden-post-timeout-ms': { type: 'string' }, 'poll-interval-ms': { type: 'string' }, 'safety-poll-ms': { type: 'string' } } });
   const config = loadConfigFile(opt(args, ['config']) ?? DEFAULT_CLI_CONFIG);
   const resolved = resolveConfig({ flags: { relayUrl: opt(args, ['relay-url']), streamUrl: opt(args, ['stream-url']), identity: opt(args, ['identity']) }, config });
   if (!resolved.identityPath) throw new Error(AGENT_RUN_USAGE);
@@ -1305,7 +1317,10 @@ async function cmdAgentRun(argv) {
   const daemon = createAgentDaemon({
     identity,
     relayUrl: resolved.relayUrl,
-    streamUrl: resolved.streamUrl,
+    // The stream drives the inbox; without one the daemon falls back to timer polls.
+    streamUrl: resolved.streamUrl ?? defaultStreamUrl(resolved.relayUrl),
+    pollIntervalMs: positiveIntFlag(args, 'poll-interval-ms', 15_000),
+    safetyPollIntervalMs: positiveIntFlag(args, 'safety-poll-ms', 60_000),
     workerCommand: process.execPath,
     workerArgs: [workerScript],
     autoReply: true,

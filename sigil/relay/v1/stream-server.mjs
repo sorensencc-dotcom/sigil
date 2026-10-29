@@ -1,4 +1,5 @@
 import { WebSocketServer } from 'ws';
+import { logHop } from './hop-log.mjs';
 import { createBearerAuthenticator } from './transport-auth.mjs';
 import { isAllowedOrigin } from './browser-cors.mjs';
 import { isSocketLive } from './liveness.mjs';
@@ -186,7 +187,9 @@ export function createStreamServer({ server, authenticate, tokenHashes, ticketSt
   livenessTimer?.unref?.();
   return {
     notify(endpointId, deliveryId, streamSeq = null) {
-      return notifyLatest(endpointId, sequenceFrame('delivered', { delivery_id: deliveryId, streamSeq }));
+      const sent = notifyLatest(endpointId, sequenceFrame('delivered', { delivery_id: deliveryId, streamSeq }));
+      logHop('relay.stream_delivered', { endpoint_id: endpointId, delivery_id: deliveryId, sent: Boolean(sent) });
+      return sent;
     },
     notifyReceipt(endpointId, receipt) {
       return notifyAll(endpointId, sequenceFrame('delivery.receipt', receipt));
@@ -204,6 +207,7 @@ export function createStreamServer({ server, authenticate, tokenHashes, ticketSt
       if (!sockets.length) return false;
       const frame = JSON.stringify({ type: 'room.updated', room_id, ...(room_seq == null ? {} : { room_seq }), changed });
       for (const socket of sockets) socket.send(frame);
+      logHop('relay.stream_room_updated', { endpoint_id: endpointId, room_id, room_seq: room_seq ?? null, changed, sockets: sockets.length });
       return true;
     },
     // Closes every open (or still-upgrading) socket bound to this session.

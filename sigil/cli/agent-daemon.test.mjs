@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAgentDaemon } from './agent-daemon.mjs';
 import { createIdentity } from './identity.mjs';
+import { EventEmitter } from 'node:events';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fakeWorkerScript = path.resolve(here, '..', 'scripts', 'claude-worker.mjs');
@@ -432,15 +433,17 @@ test('agent daemon hands room.message deliveries to onRoomMessage and acks them'
   }
 });
 
-test('agent daemon poll() is not re-entrant: concurrent polls run onRoomMessage once', async () => {
+test('agent daemon poll() is not re-entrant: concurrent polls share one run, then re-read once', async () => {
   const identity = createIdentity({ ownerId: 'usr_soren', endpointId: 'ep_claude', kind: 'agent' });
   const originalFetch = globalThis.fetch;
   const envelope = { message_id: 'msg_slow', message_type: 'room.message', conversation_id: 'room_1', body: { text: 'hi' } };
   let inboxFetches = 0;
+  let acked = false;
   globalThis.fetch = async (url) => {
-    if (url.toString().includes('/ack')) return { ok: true, status: 200, text: async () => '{}' };
+    if (url.toString().includes('/ack')) { acked = true; return { ok: true, status: 200, text: async () => '{}' }; }
     inboxFetches += 1;
-    return { ok: true, status: 200, text: async () => JSON.stringify({ items: [{ delivery_id: 'del_slow', envelope }], next_since: 'c1' }) };
+    const items = acked ? [] : [{ delivery_id: 'del_slow', envelope }];
+    return { ok: true, status: 200, text: async () => JSON.stringify({ items, next_since: 'c1' }) };
   };
   try {
     let calls = 0;
@@ -452,11 +455,8 @@ test('agent daemon poll() is not re-entrant: concurrent polls run onRoomMessage 
     });
     const [a, b] = await Promise.all([daemon.poll(), daemon.poll()]);
     assert.equal(calls, 1);
-    assert.equal(inboxFetches, 1);
-    assert.deepEqual([a, b].sort(), [0, 1]);
-    // flag cleared afterwards
-    await daemon.poll();
-    assert.equal(calls, 2);
+    assert.equal(inboxFetches, 2, 'the poll requested mid-run re-read the inbox once');
+    assert.deepEqual([a, b], [1, 1]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -496,6 +496,132 @@ test('agent daemon does not ack a room delivery when onRoomMessage throws, and t
     assert.equal(calls, 2, 'the next poll handed the same delivery to the bridge again');
     assert.deepEqual(sinces.slice(0, 2), ['', ''], 'since did not advance past the unacked delivery');
     assert.equal(acks.length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+class FakeSocket extends EventEmitter {
+  static instances = [];
+  constructor(url, options) { super(); this.url = url; this.options = options; this.readyState = 0; this.sent = []; FakeSocket.instances.push(this); }
+  open() { this.readyState = 1; this.emit('open'); }
+  frame(obj) { this.emit('message', Buffer.from(JSON.stringify(obj))); }
+  send(data) { this.sent.push(data); if (JSON.parse(data).type === 'ping') queueMicrotask(() => this.frame({ type: 'pong' })); }
+  close() { if (this.readyState === 3) return; this.readyState = 3; this.emit('close'); }
+  terminate() { this.close(); }
+}
+
+function streamHarness(t, { pollIntervalMs = 15000, safetyPollIntervalMs = 60000 } = {}) {
+  FakeSocket.instances = [];
+  const originalFetch = globalThis.fetch;
+  const queue = [];
+  const reads = [];
+  globalThis.fetch = async (url) => {
+    const text = url.toString();
+    if (text.includes('/ack')) { const id = decodeURIComponent(text.split('/').at(-2)); const i = queue.findIndex((q) => q.delivery_id === id); if (i >= 0) queue.splice(i, 1); return { ok: true, status: 200, text: async () => '{}' }; }
+    reads.push(Date.now());
+    return { ok: true, status: 200, text: async () => JSON.stringify({ items: [...queue], next_since: '' }) };
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const handled = [];
+  const daemon = createAgentDaemon({
+    identity: createIdentity({ ownerId: 'usr_soren', endpointId: 'ep_chief', kind: 'agent' }),
+    relayUrl: 'http://127.0.0.1:8791',
+    streamUrl: 'ws://127.0.0.1:8792/v1/stream',
+    WebSocketImpl: FakeSocket,
+    pollIntervalMs,
+    safetyPollIntervalMs,
+    logger: { error: () => {}, warn: () => {}, info: () => {}, log: () => {} },
+    onRoomMessage: async ({ envelope }) => { handled.push(envelope.message_id); return { outcome: 'forwarded' }; },
+  });
+  t.after(() => daemon.stop());
+  const enqueue = (id) => queue.push({ delivery_id: `del_${id}`, envelope: { message_id: id, message_type: 'room.message', conversation_id: 'room_1', body: { text: 'hi' } } });
+  return { daemon, handled, reads, enqueue };
+}
+
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+async function settle() { for (let i = 0; i < 10; i += 1) await flush(); }
+async function advance(t, ms) { for (let left = ms; left > 0; left -= 5000) { t.mock.timers.tick(Math.min(5000, left)); await settle(); } }
+
+test('agent daemon processes a delivery as soon as the stream sends a delivered frame, without waiting for a timer', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const h = streamHarness(t);
+  h.daemon.start();
+  await settle();
+  const socket = FakeSocket.instances[0];
+  assert.equal(socket.url, 'ws://127.0.0.1:8792/v1/stream');
+  socket.open();
+  await settle();
+  assert.equal(h.daemon.streamOpen, true);
+  h.enqueue('msg_live');
+  socket.frame({ type: 'delivered', delivery_id: 'del_msg_live', stream_seq: '1' });
+  await settle();
+  assert.deepEqual(h.handled, ['msg_live']);
+});
+
+test('agent daemon backs the stream with a slow safety poll, and polls at the fallback interval while the stream is down', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const h = streamHarness(t, { pollIntervalMs: 5000, safetyPollIntervalMs: 60000 });
+  h.daemon.start();
+  await settle();
+  FakeSocket.instances[0].open();
+  await settle();
+  const connectedReads = h.reads.length;
+  h.enqueue('msg_missed');
+  t.mock.timers.tick(5000);
+  await settle();
+  assert.deepEqual(h.handled, [], 'no 5s poll while the stream is open');
+  await advance(t, 55000);
+  assert.deepEqual(h.handled, ['msg_missed'], 'the safety poll caught a delivery whose frame was lost');
+  assert.ok(h.reads.length > connectedReads);
+
+  FakeSocket.instances[0].close();
+  await settle();
+  assert.equal(h.daemon.streamOpen, false);
+  h.enqueue('msg_down');
+  t.mock.timers.tick(5000);
+  await settle();
+  assert.deepEqual(h.handled, ['msg_missed', 'msg_down'], 'fallback poll ran at pollIntervalMs while disconnected');
+  assert.ok(FakeSocket.instances.length >= 2, 'reconnected with backoff');
+});
+
+test('agent daemon re-reads the inbox when the stream reconnects', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const h = streamHarness(t, { pollIntervalMs: 15000 });
+  h.daemon.start();
+  await settle();
+  FakeSocket.instances[0].open();
+  await settle();
+  FakeSocket.instances[0].close();
+  await settle();
+  h.enqueue('msg_gap');
+  t.mock.timers.tick(250);
+  await settle();
+  FakeSocket.instances[1].open();
+  await settle();
+  assert.deepEqual(h.handled, ['msg_gap']);
+});
+
+test('agent daemon never hands the same delivery to the bridge twice while it is in flight', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => '{}' });
+  try {
+    let calls = 0;
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const daemon = createAgentDaemon({
+      identity: createIdentity({ ownerId: 'usr_soren', endpointId: 'ep_chief', kind: 'agent' }),
+      relayUrl: 'http://127.0.0.1:8791',
+      logger: { error: () => {}, warn: () => {}, info: () => {} },
+      onRoomMessage: async () => { calls += 1; await gate; return { outcome: 'forwarded' }; },
+    });
+    const item = { delivery_id: 'del_dup', envelope: { message_id: 'msg_dup', message_type: 'room.message', conversation_id: 'room_1' } };
+    const first = daemon.processItem(item);
+    const second = await daemon.processItem(item);
+    assert.equal(second.outcome, 'in_flight');
+    release();
+    assert.equal((await first).outcome, 'room_forwarded');
+    assert.equal(calls, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }

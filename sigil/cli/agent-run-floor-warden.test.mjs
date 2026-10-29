@@ -224,6 +224,7 @@ async function runBridgeOnce({ webhookFetch, logger }) {
     webhook: webhookFetch.webhook,
     replyUrl: 'https://relay.example.test',
     pollIntervalMs: 60_000,
+    sleep: async () => {},
     logger,
   });
   let result;
@@ -261,7 +262,8 @@ test('redaction: a 503 webhook logs the origin only and leaves the delivery unac
   const { lines, logger } = captureLogger();
   const { result, identity } = await runBridgeOnce({ webhookFetch: hook.fetchImpl, logger });
   assert.equal(result.outcome, 'room_unacked');
-  assert.equal(hook.posts.length, 1);
+  // One post plus the three in-bridge backoff retries (1s, 2s, 4s), then left for the next poll.
+  assert.equal(hook.posts.length, 4);
   const text = lines.join('\n');
   assert.match(text, /webhook\.example\.test/);
   assertClean(text, { ...hook, relayToken: identity.relay_token });
@@ -494,7 +496,7 @@ test('redaction: sigil agent run against a 503 webhook prints neither the URL pa
   try {
     const { stdout, stderr, key, identity, exited } = await cliRedactionRun(origin, hookPath);
     assert.ok(!exited, `CLI exited early: ${stdout}${stderr}`);
-    assert.equal(posted, 1);
+    assert.equal(posted, 4, 'one post plus three in-bridge retries before leaving it for the next poll');
     assert.match(stdout, /Room bridge: floor-warden/);
     for (const text of [stdout, stderr]) assertClean(text, { pathPart: hookPath, key, relayToken: identity.relay_token });
     assert.ok(`${stdout}${stderr}`.includes(origin), 'origin may appear');

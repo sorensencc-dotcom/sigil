@@ -13,6 +13,7 @@
 // target) gates every dispatch site: mention, assignee, router pick, router
 // delivery, and queued-row promotion.
 import crypto from 'node:crypto';
+import { logHop } from './hop-log.mjs';
 import { reject } from './validate-envelope.mjs';
 import { clampReason } from '../../contracts/v1/room-event-schema.mjs';
 import { emitRoomEvent } from './room-events.mjs';
@@ -160,6 +161,7 @@ export async function promoteNextInvocation({ roomId, endpointId, repository, cl
     }
     const deliveryId = await repository.createRoomDelivery({ messageId: next.trigger_message_id, endpointId, now }, client);
     await repository.startInvocation(next.invocation_id, { deliveryId, now }, client);
+    logHop('relay.invocation_created', { invocation_id: next.invocation_id, delivery_id: deliveryId, room_id: roomId, trigger_message_id: next.trigger_message_id, endpoint_id: endpointId, promoted: true });
     return { endpoint_id: endpointId, delivery_id: deliveryId, message_id: next.trigger_message_id };
   }
 }
@@ -185,6 +187,7 @@ export async function dispatchToTarget({ room, triggerMessageId, threadRootId, e
   if (busy) return { invocation: await repository.createRoomInvocation({ ...row, status: 'queued' }, client), roomDelivery: null };
   const deliveryId = await repository.createRoomDelivery({ messageId: triggerMessageId, endpointId, now }, client);
   const invocation = await repository.createRoomInvocation({ ...row, status: 'running', deliveryId }, client);
+  logHop('relay.invocation_created', { invocation_id: row.invocationId, delivery_id: deliveryId, room_id: roomId, trigger_message_id: triggerMessageId, endpoint_id: endpointId });
   return { invocation, roomDelivery: { endpoint_id: endpointId, delivery_id: deliveryId, message_id: triggerMessageId } };
 }
 
