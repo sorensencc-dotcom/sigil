@@ -37,11 +37,14 @@ export interface ApiClient {
   wsTicket(): Promise<TicketResult>;
   me(): Promise<Session>;
   listContacts(): Promise<Contact[]>;
+  createContact(login: string, displayName: string): Promise<Contact>;
+  updateContact(contactId: string, displayName: string): Promise<Contact>;
+  deleteContact(contactId: string): Promise<void>;
   logout(): Promise<void>;
 }
 
 export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized, fetchImpl = (...args) => fetch(...args) }: ClientOptions): ApiClient {
-  async function request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
+  async function request<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<T> {
     let response: Response;
     try {
       if (mode === 'cookie') {
@@ -130,6 +133,15 @@ export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized
     },
     async listContacts() {
       return (await request<{ items: Contact[] }>('GET', '/v1/me/contacts')).items;
+    },
+    async createContact(login, displayName) {
+      return (await request<{ contact: Contact }>('POST', '/v1/me/contacts', { login, display_name: displayName })).contact;
+    },
+    async updateContact(contactId, displayName) {
+      return (await request<{ contact: Contact }>('PUT', `/v1/me/contacts/${encodeURIComponent(contactId)}`, { display_name: displayName })).contact;
+    },
+    async deleteContact(contactId) {
+      await request<void>('DELETE', `/v1/me/contacts/${encodeURIComponent(contactId)}`);
     },
     async logout() {
       await request<unknown>('POST', '/v1/auth/logout');

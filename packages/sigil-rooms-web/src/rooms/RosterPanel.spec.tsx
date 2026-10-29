@@ -62,7 +62,7 @@ describe('RosterPanel', () => {
 
   it('uses the viewer contact name for a roster member', async () => {
     const listContacts = vi.fn(async () => [
-      { contact_id: 'ct_1', kind: 'endpoint' as const, login: 'ep_web', display_name: 'Personal Ada', endpoint_ids: ['ep_web'] },
+      { contact_id: 'ct_1', kind: 'endpoint' as const, login: 'ep_web', display_name: 'Personal Ada', created_at: '', updated_at: '', endpoint_ids: ['ep_web'] },
     ]);
     renderWithClient(<RosterPanel roomId="room_1" members={members} manager={false} onGone={() => {}} />, { listContacts });
     expect(await screen.findByText('Personal Ada')).toBeInTheDocument();

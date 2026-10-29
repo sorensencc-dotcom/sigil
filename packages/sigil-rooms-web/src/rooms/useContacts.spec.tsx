@@ -8,9 +8,9 @@ import { TestAuthProvider } from '../auth/AuthContext';
 import { useContacts } from './useContacts';
 
 const contacts: Contact[] = [
-  { contact_id: 'ct_1', kind: 'endpoint', login: 'ep_ada', display_name: 'Ada Contact', endpoint_ids: ['ep_ada'] },
-  { contact_id: 'ct_2', kind: 'human', login: 'usr_lee', display_name: 'Lee Contact', endpoint_ids: ['ep_lee', 'ep_lee_alt'] },
-  { contact_id: 'ct_3', kind: 'email', login: 'jo@example.com', display_name: 'Jo Email', endpoint_ids: [] },
+  { contact_id: 'ct_1', kind: 'endpoint', login: 'ep_ada', display_name: 'Ada Contact', created_at: '', updated_at: '', endpoint_ids: ['ep_ada'] },
+  { contact_id: 'ct_2', kind: 'human', login: 'usr_lee', display_name: 'Lee Contact', created_at: '', updated_at: '', endpoint_ids: ['ep_lee', 'ep_lee_alt'] },
+  { contact_id: 'ct_3', kind: 'email', login: 'jo@example.com', display_name: 'Jo Email', created_at: '', updated_at: '', endpoint_ids: [] },
 ];
 
 function wrapper(client: Partial<ApiClient>) {
@@ -37,7 +37,7 @@ describe('useContacts', () => {
   it('prefers an endpoint contact over a human contact', () => {
     const listContacts = vi.fn(async () => [
       ...contacts,
-      { contact_id: 'ct_4', kind: 'endpoint' as const, login: 'ep_lee', display_name: 'Endpoint Lee', endpoint_ids: ['ep_lee'] },
+      { contact_id: 'ct_4', kind: 'endpoint' as const, login: 'ep_lee', display_name: 'Endpoint Lee', created_at: '', updated_at: '', endpoint_ids: ['ep_lee'] },
     ]);
     const { result } = renderHook(() => useContacts(), { wrapper: wrapper({ listContacts }) });
     return waitFor(() => expect(result.current.nameFor('ep_lee')).toBe('Endpoint Lee'));
