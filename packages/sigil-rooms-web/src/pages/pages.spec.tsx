@@ -65,17 +65,22 @@ describe.each([
     expect(container.querySelector('.gate-header h1')).toHaveTextContent('Sigil rooms');
   });
 
-  it('omits the theme picker when no theme handler is given', () => {
+  it('omits the theme toggle when no theme handler is given', () => {
     render(<Page />);
-    expect(screen.queryByRole('combobox', { name: 'Theme' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /theme/i })).toBeNull();
   });
 
-  it('shows the theme picker and reports a change', async () => {
+  it('shows the theme toggle and reports the opposite theme on click', async () => {
     const onThemeChange = vi.fn();
-    render(<Page theme="rewrite-labs" onThemeChange={onThemeChange} />);
-    const select = screen.getByRole('combobox', { name: 'Theme' });
-    expect(select).toHaveValue('rewrite-labs');
-    await userEvent.selectOptions(select, 'cast-iron-charlie');
-    expect(onThemeChange).toHaveBeenCalledWith('cast-iron-charlie');
+    render(<Page theme="dark" onThemeChange={onThemeChange} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Switch to light theme' }));
+    expect(onThemeChange).toHaveBeenCalledWith('light');
+  });
+
+  it('reads a theme saved by the retired picker as dark or light', async () => {
+    const onThemeChange = vi.fn();
+    render(<Page theme="cast-iron-charlie-light" onThemeChange={onThemeChange} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Switch to dark theme' }));
+    expect(onThemeChange).toHaveBeenCalledWith('dark');
   });
 });
