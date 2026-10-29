@@ -112,8 +112,8 @@ input:disabled, textarea:disabled, select:disabled { opacity: 0.55; cursor: not-
 .scrim { display: none; }
 
 .body { display: flex; flex: 1; min-height: 0; }
-.sidebar { width: 17rem; flex-shrink: 0; overflow-y: auto; padding: var(--space-md); background: var(--color-paper); border-right: var(--rule-hair) solid var(--color-rule); }
-.sidebar ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2xs); }
+.sidebar { width: 17rem; flex-shrink: 0; overflow-y: auto; overflow-x: hidden; padding: var(--space-md); background: var(--color-paper); border-right: var(--rule-hair) solid var(--color-rule); }
+.sidebar ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2xs); }
 .sidebar li { display: flex; align-items: stretch; gap: var(--space-2xs); }
 .sidebar button { background: transparent; border-color: transparent; }
 .sidebar button:hover:not(:disabled) { background: var(--color-paper-2); border-color: transparent; }
