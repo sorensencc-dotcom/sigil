@@ -208,7 +208,8 @@ li[data-kind='event'] .ghost { background: var(--color-paper-2); border-color: v
 .gate form { display: grid; }
 
 @media (max-width: 60rem) {
-  .sidebar { width: 13rem; }
+  .sidebar { width: 15rem; }
+  .new-room { grid-template-columns: minmax(0, 1fr); }
   .thread { position: fixed; right: 0; top: 0; bottom: 0; z-index: 70; width: min(24rem, 100%); max-width: none; }
 }
 
