@@ -141,6 +141,38 @@ test('register-sigil-task fails loudly when Register-ScheduledTask throws', (t) 
   }
 });
 
+test('register-sigil-task exits 1 when Register-ScheduledTask writes a non-terminating error', (t) => {
+  if (!psHost) return t.skip('no PowerShell host available');
+  const tmp = mkdtempSync(join(tmpdir(), 'sigil-reg-nonterm-'));
+  try {
+    const cmd = `
+      function New-ScheduledTaskAction { param($Execute, $Argument, $WorkingDirectory, [Parameter(ValueFromRemainingArguments)]$rest) $global:a = [pscustomobject]@{ Execute = $Execute; Arguments = $Argument }; $global:a }
+      function New-ScheduledTaskTrigger { param([Parameter(ValueFromRemainingArguments)]$rest) [pscustomobject]@{} }
+      function New-ScheduledTaskPrincipal { param([Parameter(ValueFromRemainingArguments)]$rest) [pscustomobject]@{} }
+      function New-ScheduledTaskSettingsSet { param([Parameter(ValueFromRemainingArguments)]$rest) [pscustomobject]@{} }
+      New-Module -Name FakeScheduledTasks -ScriptBlock {
+        function Register-ScheduledTask { [CmdletBinding()] param($TaskName, $Action, $Trigger, $Principal, $Settings, [switch]$Force) Write-Error 'Access is denied.' }
+        Export-ModuleMember -Function Register-ScheduledTask
+      } | Import-Module
+      function Get-ScheduledTask { param($TaskName, [Parameter(ValueFromRemainingArguments)]$rest) [pscustomobject]@{ Actions = @($global:a) } }
+      function Start-ScheduledTask { param($TaskName, [Parameter(ValueFromRemainingArguments)]$rest) }
+      & '${registerScriptPath.replace(/'/g, "''")}' -StartNow
+      exit $LASTEXITCODE
+    `;
+    const res = spawnSync(psHost, ['-NoProfile', '-Command', cmd], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: { ...process.env, USERPROFILE: tmp, USERDOMAIN: 'TESTDOM', USERNAME: 'testuser' },
+    });
+    const combined = `${res.stdout || ''}\n${res.stderr || ''}`;
+    assert.equal(res.status, 1, combined);
+    assert.match(combined, /Access\s+is\s+denied/);
+    assert.doesNotMatch(combined, /Registered|Started/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('register-sigil-task verifies registered task action and succeeds', (t) => {
   if (!psHost) return t.skip('no PowerShell host available');
   const tmp = mkdtempSync(join(tmpdir(), 'sigil-reg-ok-'));

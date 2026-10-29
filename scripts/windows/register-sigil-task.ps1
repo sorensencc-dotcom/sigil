@@ -33,7 +33,7 @@ $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoi
 
 if ($PSCmdlet.ShouldProcess($TaskName, "Register logon task: powershell.exe $argLine")) {
   try {
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
   } catch {
     Write-Error "Failed to register scheduled task ${TaskName}: $($_.Exception.Message). If the task was created from an elevated shell, rerun this from an elevated shell or delete it first."
     exit 1
@@ -46,7 +46,7 @@ if ($PSCmdlet.ShouldProcess($TaskName, "Register logon task: powershell.exe $arg
   Write-Host "Registered $TaskName for $user."
   if ($StartNow) {
     try {
-      Start-ScheduledTask -TaskName $TaskName
+      Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
       Write-Host "Started $TaskName."
     } catch {
       Write-Error "Failed to start scheduled task ${TaskName}: $($_.Exception.Message)"
