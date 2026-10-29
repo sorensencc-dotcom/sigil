@@ -1,11 +1,12 @@
 // Task 11: `sigil agent run --room-bridge floor-warden` with a receive-only
 // identity. Fixtures only: no real Grok routine, no real webhook, no real
 // relay. Identities are built in a temp directory; nothing under .sigil/ is read.
-import test from 'node:test';
+import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import util from 'node:util';
@@ -25,9 +26,13 @@ const BOT_EP = 'ep_test_bot';
 const HUMAN_EP = 'ep_test_human';
 const random = () => crypto.randomBytes(18).toString('base64url');
 
+const tempDirs = [];
 function tempDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-fw-run-test-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-fw-run-test-'));
+  tempDirs.push(dir);
+  return dir;
 }
+test.after(() => { for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true }); });
 
 // The shape `sigil bot add` writes: a relay token, a public key, no private key.
 function receiveOnlyIdentity({ botId = 'bot_test_one' } = {}) {
@@ -77,11 +82,14 @@ const taskEnvelope = () => ({
 // bridge (rooms, members, messages, invocations, fail). Records every call.
 function fakeRelay({ inbox = [] } = {}) {
   const calls = [];
+  const waiters = new Map();
   let served = false;
+  const called = (p) => (calls.some((c) => c.path === p) ? Promise.resolve() : new Promise((resolve) => waiters.set(p, resolve)));
   const route = (method, url, body) => {
     const u = new URL(url, 'http://relay.invalid');
     const p = u.pathname;
     calls.push({ method, path: p, body });
+    waiters.get(p)?.();
     if (p === '/v1/inbox') {
       const items = served ? [] : inbox;
       served = true;
@@ -105,7 +113,7 @@ function fakeRelay({ inbox = [] } = {}) {
     }
     return { status: 404, json: { code: 'NOT_FOUND', message: 'not found' } };
   };
-  return { calls, route };
+  return { calls, route, called };
 }
 
 function asFetch(route) {
@@ -118,8 +126,17 @@ function asFetch(route) {
 
 function captureLogger() {
   const lines = [];
-  const push = (level) => (...args) => lines.push(`${level} ${args.map((a) => (typeof a === 'string' ? a : util.inspect(a, { depth: 5 }))).join(' ')}`);
-  return { lines, logger: { info: push('info'), log: push('log'), warn: push('warn'), error: push('error'), debug: push('debug') } };
+  const waiters = [];
+  const push = (level) => (...args) => {
+    lines.push(`${level} ${args.map((a) => (typeof a === 'string' ? a : util.inspect(a, { depth: 5 }))).join(' ')}`);
+    for (const w of waiters.splice(0)) if (!w.check()) waiters.push(w);
+  };
+  // Resolves once some logged line matches; no timers, so it cannot race the clock.
+  const waitForLine = (pattern) => new Promise((resolve) => {
+    const w = { check: () => { const hit = lines.find((l) => pattern.test(l)); if (hit) resolve(hit); return Boolean(hit); } };
+    if (!w.check()) waiters.push(w);
+  });
+  return { lines, waitForLine, logger: { info: push('info'), log: push('log'), warn: push('warn'), error: push('error'), debug: push('debug') } };
 }
 
 async function withFetch(fetchImpl, fn) {
@@ -186,7 +203,7 @@ test('daemon start calls onStart and stop calls onStop', async () => {
       onStop: () => { events.push('stop'); },
     });
     daemon.start();
-    await new Promise((resolve) => setImmediate(resolve));
+    await relay.called('/v1/inbox');
     daemon.stop();
   });
   assert.deepEqual(events, ['start', 'stop']);
@@ -195,14 +212,14 @@ test('daemon start calls onStart and stop calls onStop', async () => {
 test('daemon logs an onStart rejection and keeps running', async () => {
   const identity = receiveOnlyIdentity();
   const relay = fakeRelay();
-  const { lines, logger } = captureLogger();
+  const { lines, logger, waitForLine } = captureLogger();
   await withFetch(asFetch(relay.route), async () => {
     const daemon = createAgentDaemon({
       identity, relayUrl: 'http://relay.invalid', logger, pollIntervalMs: 60_000,
       onStart: async () => { throw new Error('recover boom'); },
     });
     daemon.start();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForLine(/recover boom/);
     daemon.stop();
   });
   assert.ok(lines.some((l) => l.includes('recover boom')));
@@ -292,6 +309,10 @@ test('redaction: a forwarded message logs the origin only', async () => {
 });
 
 // ---- CLI ------------------------------------------------------------------------
+
+// Every CLI test spawns its own node process in its own temp dir, so they run
+// side by side; serial spawns on a Windows runner approach the per-file timeout.
+describe('sigil agent run CLI', { concurrency: 4 }, () => {
 
 function runCli(args, { env = {}, cwd = tempDir() } = {}) {
   const result = spawnSync(process.execPath, [sigilCli, 'agent', 'run', ...args], {
@@ -402,7 +423,7 @@ test('agent run usage text lists floor-warden and its flags', () => {
   assert.notEqual(status, 0);
   assert.match(out, /usage: sigil agent run --identity/);
   assert.match(out, /claude\|codex\|copilot\|router\|floor-warden/);
-  for (const flag of ['--floor-warden-url-env', '--floor-warden-key-env', '--floor-warden-key-header', '--floor-warden-reply-url', '--floor-warden-bot-id', '--reply-timeout-ms']) {
+  for (const flag of ['--floor-warden-url-env', '--floor-warden-key-env', '--floor-warden-key-header', '--floor-warden-reply-url', '--floor-warden-bot-id', '--reply-timeout-ms', '--floor-warden-retry-backoff-ms']) {
     assert.ok(out.includes(flag), `usage lists ${flag}`);
   }
 });
@@ -427,6 +448,18 @@ for (const bad of ['0', 'abc', '-1']) {
   });
 }
 
+for (const bad of ['abc', '1,,2', '-1', '1.5']) {
+  test(`agent run --room-bridge floor-warden rejects --floor-warden-retry-backoff-ms ${bad}`, () => {
+    const dir = tempDir();
+    const env = secretEnv();
+    const idFile = writeIdentity(dir, receiveOnlyIdentity());
+    const { status, out } = runCli([...floorWardenArgs(idFile), `--floor-warden-retry-backoff-ms=${bad}`], { env, cwd: dir });
+    assert.notEqual(status, 0);
+    assert.match(out, /--floor-warden-retry-backoff-ms must be a comma-separated list of non-negative integers/);
+    assertNoValues(out, env);
+  });
+}
+
 function killTree(child) {
   if (child.exitCode !== null || child.signalCode !== null) return;
   try {
@@ -436,17 +469,26 @@ function killTree(child) {
 }
 
 // Spawn the CLI until `until` matches its combined output, then kill it.
+// Resolves only after the child has exited, so Windows releases its handles
+// on the temp directory and nothing outlives the test.
 function spawnUntil(args, { env, cwd, until }) {
   const child = spawn(process.execPath, [sigilCli, 'agent', 'run', ...args], { cwd, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, SIGIL_IDENTITY: '', ...env } });
   let stdout = '';
   let stderr = '';
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { killTree(child); reject(new Error(`timed out: ${stdout}${stderr}`)); }, 15_000);
-    const check = () => { if (until.test(`${stdout}${stderr}`)) { clearTimeout(timer); killTree(child); resolve({ stdout, stderr }); } };
+  let matched = false;
+  const exited = new Promise((resolve) => child.once('close', resolve));
+  const done = new Promise((resolve) => {
+    const check = () => { if (!matched && until.test(`${stdout}${stderr}`)) { matched = true; killTree(child); resolve(); } };
     child.stdout.on('data', (d) => { stdout += d; check(); });
     child.stderr.on('data', (d) => { stderr += d; check(); });
-    child.once('exit', () => { clearTimeout(timer); resolve({ stdout, stderr, exited: true }); });
+    exited.then(resolve);
   });
+  return done.then(() => exited).then(() => (matched ? { stdout, stderr } : { stdout, stderr, exited: true }));
+}
+
+function closeServer(server) {
+  server.closeAllConnections?.();
+  return new Promise((resolve) => server.close(() => resolve()));
 }
 
 function listen(handler) {
@@ -479,11 +521,12 @@ async function cliRedactionRun(webhookOrigin, hookPath) {
   try {
     const args = ['--identity', idFile, '--relay-url', `http://127.0.0.1:${relaySrv.address().port}`, '--config', path.join(dir, 'none.json'),
       '--room-bridge', 'floor-warden', '--floor-warden-url-env', 'SIGIL_TEST_FW_URL', '--floor-warden-key-env', 'SIGIL_TEST_FW_KEY',
-      '--floor-warden-reply-url', 'https://relay.example.test', '--room-sessions', path.join(dir, 'sessions.json')];
+      '--floor-warden-reply-url', 'https://relay.example.test', '--room-sessions', path.join(dir, 'sessions.json'),
+      '--floor-warden-retry-backoff-ms', '0,0,0'];
     const out = await spawnUntil(args, { env, cwd: dir, until: /delivery left for the next poll/ });
     return { ...out, key, identity };
   } finally {
-    relaySrv.close();
+    await closeServer(relaySrv);
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
@@ -501,18 +544,24 @@ test('redaction: sigil agent run against a 503 webhook prints neither the URL pa
     for (const text of [stdout, stderr]) assertClean(text, { pathPart: hookPath, key, relayToken: identity.relay_token });
     assert.ok(`${stdout}${stderr}`.includes(origin), 'origin may appear');
   } finally {
-    hook.close();
+    await closeServer(hook);
   }
 });
 
 test('redaction: sigil agent run against an unreachable webhook prints neither the URL path, the key, nor the relay token', async () => {
-  const closed = await listen(() => {});
-  const port = closed.address().port;
-  await new Promise((resolve) => closed.close(resolve));
+  // A listener that resets every connection fails like a dead host, without
+  // Windows' multi-second SYN retries against a closed port or a port-reuse race.
+  const hook = net.createServer((socket) => socket.resetAndDestroy());
+  await new Promise((resolve) => hook.listen(0, '127.0.0.1', resolve));
   const hookPath = `/hooks/${random()}`;
-  const { stdout, stderr, key, identity, exited } = await cliRedactionRun(`http://127.0.0.1:${port}`, hookPath);
-  assert.ok(!exited, `CLI exited early: ${stdout}${stderr}`);
-  for (const text of [stdout, stderr]) assertClean(text, { pathPart: hookPath, key, relayToken: identity.relay_token });
+  try {
+    const { stdout, stderr, key, identity, exited } = await cliRedactionRun(`http://127.0.0.1:${hook.address().port}`, hookPath);
+    assert.ok(!exited, `CLI exited early: ${stdout}${stderr}`);
+    assert.match(`${stdout}${stderr}`, /unavailable/);
+    for (const text of [stdout, stderr]) assertClean(text, { pathPart: hookPath, key, relayToken: identity.relay_token });
+  } finally {
+    await new Promise((resolve) => hook.close(resolve));
+  }
 });
 
 // ---- bridges still accepted, bot id sourcing, recover on start --------------------
@@ -557,6 +606,7 @@ test('agent run --room-bridge floor-warden refuses a --floor-warden-bot-id that 
   assert.match(out, /--floor-warden-bot-id does not match the bot_id in the identity file/);
   assertNoValues(out, env);
 });
+});
 
 test('daemon start runs the bridge recover() and stop closes it', async () => {
   const identity = receiveOnlyIdentity();
@@ -579,7 +629,7 @@ test('daemon start runs the bridge recover() and stop closes it', async () => {
       onRoomMessage: bridge.handle, onStart: () => bridge.recover(), onStop: () => { closed += 1; realClose(); },
     });
     daemon.start();
-    for (let i = 0; i < 50 && !relay.calls.some((c) => c.path === `/v1/rooms/${ROOM}/invocations`); i += 1) await new Promise((r) => setTimeout(r, 10));
+    await relay.called(`/v1/rooms/${ROOM}/invocations`);
     daemon.stop();
   });
   fs.rmSync(dir, { recursive: true, force: true });
