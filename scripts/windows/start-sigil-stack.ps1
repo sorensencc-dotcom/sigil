@@ -7,9 +7,9 @@
   `sigil service install` (see the tracking issue linked in scripts/windows/README.md).
 
   Loads a KEY=VALUE secrets file into this process's environment without printing values,
-  starts each child that is not already listening on its port, logs to .sigil\logs, and
+  starts each child that is not already healthy, logs to .sigil\logs, and
   restarts dead children with exponential backoff. Re-running it is safe: anything already
-  listening is left alone and adopted as "external".
+  healthy is left alone and adopted as "external".
 
   -WhatIf prints the planned commands (secret values masked) and exits without starting anything.
 #>
@@ -23,6 +23,8 @@ param(
   [string]$DatabaseUrlFile = (Join-Path $env:USERPROFILE '.sigil-secrets\sigil-database-url.txt'),
   [int]$RelayPort = 8791,
   [int]$IngressPort = 8796,
+  [int]$PublicPort = 8797,
+  [string]$PublicOrigin = 'https://rooms.rewritelabs.io',
   [ValidateSet('relay', 'chief', 'rooms-web')][string[]]$Only = @('relay', 'chief', 'rooms-web'),
   [string]$Node = 'node',
   [int]$MaxBackoffSeconds = 300,
@@ -72,7 +74,7 @@ function Get-Children {
         '--room-bot-key-wrap-key', $WrapKeyEnv,
         '--floor-warden-reply-token-env', 'SIGIL_FLOOR_WARDEN_REPLY_TOKEN',
         '--ingress-origin', $ReplyUrl,
-        '--ingress-port', "$IngressPort", '--browser-origin', 'http://127.0.0.1:5173', '--browser-origin', 'http://localhost:5173') },
+        '--ingress-port', "$IngressPort", '--public-origin', $PublicOrigin, '--public-port', "$PublicPort", '--browser-origin', 'http://127.0.0.1:5173', '--browser-origin', 'http://localhost:5173') },
     [pscustomobject]@{ Name = 'chief'; Port = $null; Match = 'chief.identity.json'; DependsOn = 'relay'; Args = @(
         'sigil/cli/sigil.mjs', 'agent', 'run', '--identity', '.sigil/chief.identity.json',
         '--relay-url', "http://127.0.0.1:$RelayPort", '--room-bridge', 'floor-warden',
@@ -82,16 +84,56 @@ function Get-Children {
         '--floor-warden-bot-id', $FloorWardenBotId,
         '--stream-url', "ws://127.0.0.1:$($RelayPort + 1)/v1/stream") },
     [pscustomobject]@{ Name = 'rooms-web'; Port = 5173; Args = @(
-        'packages/sigil-rooms-web/bin/sigil-rooms-web.mjs', '--relay-url', "http://127.0.0.1:$RelayPort", '--port', '5173') }
+        'packages/sigil-rooms-web/bin/sigil-rooms-web.mjs', '--relay-url', "http://127.0.0.1:$RelayPort", '--port', '5173',
+        '--auth-mode', 'cookie', '--public-origin', $PublicOrigin) }
   ) | Where-Object { $Only -contains $_.Name }
 }
 
-function Test-Running($child) {
-  if ($child.Port) {
-    return [bool](Get-NetTCPConnection -LocalPort $child.Port -State Listen -ErrorAction SilentlyContinue)
+function Test-ListeningPort([int]$port) {
+  return [bool](Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+}
+
+function Get-ChildStatus($child) {
+  if ($child.Name -eq 'relay') {
+    $ports = @($RelayPort, ($RelayPort + 1), $IngressPort, $PublicPort)
+    $listening = @()
+    foreach ($port in $ports) {
+      if (Test-ListeningPort $port) { $listening += $port }
+    }
+    if ($listening.Count -eq $ports.Count) {
+      return [pscustomobject]@{ Running = $true; Occupied = $true; Reason = $null }
+    }
+    if ($listening.Count -gt 0) {
+      $missing = @($ports | Where-Object { $listening -notcontains $_ })
+      return [pscustomobject]@{
+        Running = $false
+        Occupied = $true
+        Reason = "relay listeners are incomplete (listening: $($listening -join ', '); missing: $($missing -join ', '))"
+      }
+    }
+    return [pscustomobject]@{ Running = $false; Occupied = $false; Reason = $null }
   }
-  return [bool](Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
+  if ($child.Name -eq 'rooms-web') {
+    if (-not (Test-ListeningPort $child.Port)) {
+      return [pscustomobject]@{ Running = $false; Occupied = $false; Reason = $null }
+    }
+    try {
+      $config = Invoke-RestMethod -Uri 'http://127.0.0.1:5173/config.json' -TimeoutSec 3 -ErrorAction Stop
+      if ($config.authMode -eq 'cookie') {
+        return [pscustomobject]@{ Running = $true; Occupied = $true; Reason = $null }
+      }
+      return [pscustomobject]@{ Running = $false; Occupied = $true; Reason = 'rooms-web /config.json does not report authMode=cookie' }
+    } catch {
+      return [pscustomobject]@{ Running = $false; Occupied = $true; Reason = 'rooms-web /config.json could not be read as JSON' }
+    }
+  }
+  $running = [bool](Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
       Where-Object { $_.CommandLine -like "*$($child.Match)*" })
+  return [pscustomobject]@{ Running = $running; Occupied = $running; Reason = $null }
+}
+
+function Test-Running($child) {
+  return (Get-ChildStatus $child).Running
 }
 
 function Format-Args($argList) {
@@ -137,11 +179,22 @@ while ($true) {
     }
     if ((Get-Date) -lt $s.NextTry) { continue }
     if ($c.DependsOn -and $state.ContainsKey($c.DependsOn) -and -not (Test-Running $state[$c.DependsOn].Child)) { continue }
-    if (Test-Running $c) {
+    $status = Get-ChildStatus $c
+    if ($status.Running) {
       if (-not $s.External) { Write-Log "$name already running; leaving it alone"; $s.External = $true }
+      $s.RefusalReason = $null
+      continue
+    }
+    if ($status.Occupied) {
+      if ($s.RefusalReason -ne $status.Reason) {
+        Write-Log ("REFUSING to adopt {0}: {1}; another launcher (e.g. a scheduled healer) owns the port. Stop it and disable that launcher." -f $name, $status.Reason)
+        $s.RefusalReason = $status.Reason
+      }
+      $s.External = $false
       continue
     }
     $s.External = $false
+    $s.RefusalReason = $null
     $s.Proc = Start-Child $c
     $s.StartedAt = Get-Date
   }
