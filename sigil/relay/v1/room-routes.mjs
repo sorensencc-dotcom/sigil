@@ -276,9 +276,9 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
       }
       const rows = await repository.cancelRoomInvocations(roomId, { subjectHumanId: target.owner_id, now }, client);
       if (!systemIdentity) return;
-      for (const invocation of rows) {
-        await emitRoomEvent({ identity: systemIdentity, repository, client, room: access.room, body: { kind: 'invocation_stopped', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: 'stopped' }, idempotencyKey: `evt_stopped_${invocation.invocation_id}`, now, inboxDepthLimit, registered: registry, stream });
-      }
+      await Promise.all(rows.map(invocation =>
+        emitRoomEvent({ identity: systemIdentity, repository, client, room: access.room, body: { kind: 'invocation_stopped', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: 'stopped' }, idempotencyKey: `evt_stopped_${invocation.invocation_id}`, now, inboxDepthLimit, registered: registry, stream })
+      ));
       await emitRoomHalted({ systemIdentity, repository, client, room: access.room, rows, reason: 'left', now, inboxDepthLimit, registered: registry, stream });
     });
     await notifyRoomChange(roomId, 'members');
@@ -463,9 +463,9 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
       // Stop reaches only the caller's own agents and the chains the caller started.
       const rows = await repository.cancelRoomInvocations(roomId, { ownerHumanId: principal.human_id, subjectHumanId: principal.human_id, now }, client);
       if (systemIdentity && rows.length) {
-        for (const invocation of rows) {
-          await emitRoomEvent({ identity: systemIdentity, repository, client, room: access.room, body: { kind: 'invocation_stopped', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: 'stopped' }, idempotencyKey: `evt_stopped_${invocation.invocation_id}`, now, inboxDepthLimit, registered: registry, stream });
-        }
+        await Promise.all(rows.map(invocation =>
+          emitRoomEvent({ identity: systemIdentity, repository, client, room: access.room, body: { kind: 'invocation_stopped', invocation_id: invocation.invocation_id, endpoint_ids: [invocation.endpoint_id], reason: 'stopped' }, idempotencyKey: `evt_stopped_${invocation.invocation_id}`, now, inboxDepthLimit, registered: registry, stream })
+        ));
         await emitRoomHalted({ systemIdentity, repository, client, room: access.room, rows, reason: 'stopped', now, inboxDepthLimit, registered: registry, stream });
       }
       return rows;
