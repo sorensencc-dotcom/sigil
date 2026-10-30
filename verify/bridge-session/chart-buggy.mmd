@@ -1,0 +1,52 @@
+---
+title: "Resume bridge: two mentions in a row (one room)"
+---
+stateDiagram-v2
+  direction LR
+  state "Legend" as legend {
+    lg0: Breaks EveryTurnResumes or NoThreadForgotten
+    lg1: Path to the EveryTurnResumes or NoThreadForgotten bug
+  }
+  class lg0 breaks
+  class lg1 bugPath
+  state "At the same time" as all {
+    state "Turn A (thread A)" as r0 {
+      s0: waiting
+      s1: agent thinking
+      s2: reply visible
+      s3: session saved
+      [*] --> s0
+      s0 --> s1: mention arrives
+      s1 --> s2: agent replies, reply posted
+      s2 --> s3: session + thread cursor saved
+    }
+    --
+    state "Turn B (thread B)" as r1 {
+      s4: waiting
+      s5: agent thinking, started without session
+      s6: reply visible, started without session
+      s7: agent thinking
+      s8: session saved, started without session
+      s9: reply visible
+      s10: session saved
+      [*] --> s4
+      s4 --> s5: next mention starts [before A's session is saved]
+      s5 --> s6: agent replies, reply posted
+      s4 --> s7: mention arrives [when session saved]
+      s6 --> s8: session + thread cursor saved
+      s7 --> s9: agent replies, reply posted
+      s9 --> s10: session + thread cursor saved
+    }
+  }
+  classDef breaks fill:#ffecee,stroke:#e72e3b,stroke-width:2.5px,color:#cd2834
+  class s0 bugPath
+  class s1 bugPath
+  class s2 bugPath
+  class s3 bugPath
+  class s4 bugPath
+  class s5 breaks
+  class s5 bugPath
+  class s6 breaks
+  class s6 bugPath
+  class s8 breaks
+  class s8 bugPath
