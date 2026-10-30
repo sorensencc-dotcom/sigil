@@ -28,12 +28,14 @@ test('isSocketLive checks a ticket session when one is given', () => {
 
 test('isSocketLive checks identity status and idle time for a cookie session', () => {
   const now = Date.parse('2026-10-12T12:00:00Z');
-  const hoursAgo = (h) => new Date(now - h * 3600_000).toISOString();
-  const session = { revoked_at: null, expires_at: '2026-10-13T12:00:00Z', identity_status: 'active', last_seen_at: hoursAgo(1) };
+  const daysAgo = (d) => new Date(now - d * 24 * 3600_000).toISOString();
+  const session = {
+    revoked_at: null, expires_at: '2026-10-20T12:00:00Z',
+    identity_status: 'active', last_seen_at: new Date(now - 3600_000).toISOString(),
+  };
   assert.equal(isSocketLive(live, session, now), true);
   assert.equal(isSocketLive(live, { ...session, identity_status: 'revoked' }, now), false);
-  assert.equal(isSocketLive(live, { ...session, last_seen_at: hoursAgo(9) }, now), false);
-  assert.equal(isSocketLive(live, { ...session, last_seen_at: new Date(now - 3600_000) }, now), true);
-  assert.equal(isSocketLive(live, { ...session, last_seen_at: new Date(now - 9 * 3600_000) }, now), false);
+  assert.equal(isSocketLive(live, { ...session, last_seen_at: daysAgo(3) }, now), true);
+  assert.equal(isSocketLive(live, { ...session, last_seen_at: new Date(now - 7 * 24 * 3600_000 - 1) }, now), false);
   assert.equal(isSocketLive(live, null, now), true);
 });

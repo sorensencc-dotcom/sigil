@@ -1,6 +1,6 @@
 import { parseCookies, hashCookie, SESSION_COOKIE } from './cookies.mjs';
 
-export const SESSION_IDLE_MS = 8 * 3600_000;
+export const SESSION_IDLE_MS = 7 * 24 * 3600_000;
 export const TOUCH_AFTER_MS = 5 * 60_000;
 
 const ms = (value) => new Date(value).getTime();

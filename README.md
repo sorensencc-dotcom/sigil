@@ -108,7 +108,7 @@ Operator commands (each takes `--database-url`; `--identity` names the operator)
 | `sigil relay invite list` and `sigil relay invite revoke <invite_id>` | Lists invites with their state; revokes an unused one. |
 | `sigil relay identity revoke --provider github (--login <login> \| --subject <id>)` | Revokes the GitHub identity and its sessions, and closes its open streams. The person needs a new invite to return. |
 
-Sessions expire after 8 hours idle or 7 days absolute. Logout and revocation close live sockets. `start` is protected by an exact `Origin` check (a browser form cannot send the `X-Sigil-CSRF` header); every other cookie-authenticated write needs both `Origin` and `X-Sigil-CSRF`.
+Sessions expire after 7 days idle or 7 days absolute. Logout and revocation close live sockets. `start` is protected by an exact `Origin` check (a browser form cannot send the `X-Sigil-CSRF` header); every other cookie-authenticated write needs both `Origin` and `X-Sigil-CSRF`.
 
 Known limitation: a targeted (`--human`) invite that reactivates a revoked identity is consumed but adds no rooms. Use `sigil human add-to-room` afterward.
 
