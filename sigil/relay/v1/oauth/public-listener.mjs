@@ -21,12 +21,14 @@ export function matchPublicRoute(method, rawUrl) {
   if (b === 'auth' && c === 'oauth' && d && e === 'callback' && segments.length === 5) return method === 'GET' ? 'oauth_public' : null;
   if (b === 'auth' && c === 'me' && segments.length === 3) return method === 'GET' ? 'oauth_session' : null;
   if (b === 'auth' && c === 'logout' && segments.length === 3) return method === 'POST' ? 'oauth_session' : null;
+  if (b === 'me' && c === 'contacts' && segments.length === 3) return method === 'GET' || method === 'POST' ? 'contacts' : null;
+  if (b === 'me' && c === 'contacts' && d && segments.length === 4) return method === 'PUT' || method === 'DELETE' ? 'contacts' : null;
   if (b === 'rooms') return method === 'GET' || method === 'POST' ? 'rooms' : null;
   if (b === 'mentions' && segments.length === 2) return method === 'GET' ? 'rooms' : null;
   return null;
 }
 
-export function createPublicListener({ publicOrigin, authenticateCookie, handleOAuthPublicRoute, handleOAuthSessionRoute, handleRoomRoute, roomRouteContext = () => ({}), logger = null }) {
+export function createPublicListener({ publicOrigin, authenticateCookie, handleOAuthPublicRoute, handleOAuthSessionRoute, handleRoomRoute, handleContactsRoute, roomRouteContext = () => ({}), logger = null }) {
   return http.createServer(async (request, response) => {
     try {
       const route = matchPublicRoute(request.method, request.url);
@@ -39,7 +41,7 @@ export function createPublicListener({ publicOrigin, authenticateCookie, handleO
       const principal = await authenticateCookie(request);
       if (!principal) return json(response, 401, { code: 'UNAUTHENTICATED', message: 'Authentication required', details: {} });
       if (!checkCookieCsrf(request, publicOrigin)) return json(response, 403, { code: 'CSRF_REJECTED', message: 'Forbidden', details: {} });
-      const handler = route === 'oauth_session' ? handleOAuthSessionRoute : handleRoomRoute;
+      const handler = route === 'oauth_session' ? handleOAuthSessionRoute : route === 'contacts' ? handleContactsRoute : handleRoomRoute;
       if (await handler({ request, response, parsedUrl, principal, requestId: crypto.randomUUID(), ...roomRouteContext() })) return;
       return notFound(response);
     } catch (error) {
