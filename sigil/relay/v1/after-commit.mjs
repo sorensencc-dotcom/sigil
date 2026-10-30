@@ -31,8 +31,8 @@ export async function withAfterCommitScope(run, { logger = console } = {}) {
   }
   const queue = [];
   const result = await queueStore.run(queue, run);
-  for (const fn of queue) {
+  await Promise.allSettled(queue.map(async fn => {
     try { await fn(); } catch (error) { logger?.error?.('after-commit callback failed', error); }
-  }
+  }));
   return result;
 }
