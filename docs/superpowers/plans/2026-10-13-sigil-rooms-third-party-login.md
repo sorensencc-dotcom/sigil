@@ -17,7 +17,7 @@
 - Every provider fetch uses `outboundFetchOptions` (5 s timeout, `redirect: 'error'`). No provider URL is read from a request.
 - GitHub requests no scope. `subject` is the numeric account `id` as a string, never `login`. Issuer is the fixed string `https://github.com`.
 - Cookies: `__Host-sigil_session` and `__Host-sigil_oauth`, both `HttpOnly; Secure; SameSite=Lax; Path=/`, no `Domain`. Values are 256 random bits; only the SHA-256 is stored or keyed.
-- Session: 7-day absolute cap (`expires_at`), 8-hour idle window (`last_seen_at`, written only when stale by more than 5 minutes). OAuth rows use `authentication_method = 'oauth_github'`, `assurance = 'standard'`.
+- Session: 7-day absolute cap (`expires_at`), 7-day idle window (`last_seen_at`, written only when stale by more than 5 minutes). OAuth rows use `authentication_method = 'oauth_github'`, `assurance = 'standard'`.
 - Each listener has one credential type. The main listener stays bearer-only. The public listener authenticates cookies only and ignores `Authorization`.
 - Cookie-authenticated non-GET requests require `X-Sigil-CSRF: 1` and `Origin` exactly equal to `--public-origin`, else 403.
 - Provider tokens, secrets, and codes never appear in logs or audit rows. `audit_events.subject_id` is NOT NULL.
@@ -944,7 +944,7 @@ git commit -m "feat(sigil): oauth callback decision with link, returning login, 
 
 **Interfaces:**
 - Produces (`session-auth.mjs`):
-  - `SESSION_IDLE_MS = 8 * 3600_000`, `TOUCH_AFTER_MS = 5 * 60_000`
+  - `SESSION_IDLE_MS = 7 * 24 * 3600_000`, `TOUCH_AFTER_MS = 5 * 60_000`
   - `createCookieAuthenticator({ repository, now = () => new Date() }): (request) => Promise<principal | null>` where `principal = { endpoint_id, owner_id, human_id, session_id, display_name }`. Reads only `Cookie`, never `Authorization`.
   - `loadSessionRow(repository, sessionId, client?) -> { session_id, endpoint_id, human_id, expires_at, revoked_at, last_seen_at, identity_status, endpoint_kind, endpoint_status, human_status, display_name } | null` — one join over `human_sessions`, `endpoints`, `humans`, `oidc_identities` (on the identity pair). Rows with `endpoint_id IS NULL` return null.
 - `liveness.mjs`: `isSocketLive(snapshot, session, now)` additionally requires `session.identity_status === 'active'` and `now - Date.parse(session.last_seen_at) < SESSION_IDLE_MS` when `session` is given. Keep the existing `revoked_at` and `expires_at` checks.
@@ -956,10 +956,10 @@ git commit -m "feat(sigil): oauth callback decision with link, returning login, 
   1. Valid cookie → principal with the endpoint, owner, human, session ids and `display_name`.
   2. No cookie, unknown cookie, `Authorization: Bearer <valid agent token>` only → `null`.
   3. A step-up session row (null `endpoint_id`) → `null` even with a valid hash.
-  4. Revoked session, expired session, `last_seen_at` older than 8 h, revoked identity, suspended human, suspended endpoint, non-`human` endpoint kind → each `null`.
+  4. Revoked session, expired session, `last_seen_at` older than 7 days, revoked identity, suspended human, suspended endpoint, non-`human` endpoint kind → each `null`.
   5. `last_seen_at` is rewritten only when the stored value is more than 5 minutes old (assert unchanged after a request 1 minute later, updated after 6 minutes; inject `now`).
 
-`liveness.test.mjs`: with a `session` argument, `identity_status: 'revoked'` fails; `last_seen_at` 9 h old fails; 1 h old passes; no `session` argument behaves as before.
+`liveness.test.mjs`: with a `session` argument, `identity_status: 'revoked'` fails; `last_seen_at` 7 days + 1 ms old fails; 3 days old passes; no `session` argument behaves as before.
 
 `ticket-store.test.mjs`: `issue` with `session_id` round-trips through `redeem`; `revokeSession(id)` makes an unredeemed ticket unredeemable and leaves other sessions' tickets.
 
@@ -971,7 +971,7 @@ git commit -m "feat(sigil): oauth callback decision with link, returning login, 
 // session-auth.mjs
 import { parseCookies, hashCookie, SESSION_COOKIE } from './cookies.mjs';
 
-export const SESSION_IDLE_MS = 8 * 3600_000;
+export const SESSION_IDLE_MS = 7 * 24 * 3600_000;
 export const TOUCH_AFTER_MS = 5 * 60_000;
 
 export async function loadSessionRow(repository, sessionId, client = repository.pool) {
@@ -1016,7 +1016,7 @@ export function createCookieAuthenticator({ repository, now = () => new Date() }
 
 ```js
     if (session.identity_status !== undefined && session.identity_status !== 'active') return false;
-    if (session.last_seen_at && now - Date.parse(session.last_seen_at) >= 8 * 3600_000) return false;
+    if (session.last_seen_at && now - Date.parse(session.last_seen_at) >= 7 * 24 * 3600_000) return false;
 ```
 
 `ticket-store.mjs`: store `session_id` on the entry (`entries.set(digest(ticket), { endpoint_id, owner_id, human_id, session_id, expiresAt })`), return it from `redeem`, and add:

@@ -55,6 +55,7 @@ function messageText(envelope) {
 
 export function createRoomBridge({ identity, relay, outbox, cli, sessions, pollIntervalMs = 2000, threadContextLimit = 20, logger = console }) {
   const self = identity.endpoint_id;
+  const roomTails = new Map();
 
   async function runningFor(roomId) {
     const [running] = await relay.listRoomInvocations(roomId, { endpointId: self, status: 'running' });
@@ -96,8 +97,7 @@ export function createRoomBridge({ identity, relay, outbox, cli, sessions, pollI
     return { outcome: 'failed', reason };
   }
 
-  async function handle({ envelope }) {
-    const roomId = envelope.conversation_id;
+  async function handleInvocation(envelope, roomId) {
     const invocation = await runningFor(roomId);
     if (!invocation || invocation.trigger_message_id !== envelope.message_id) return { outcome: 'skipped' };
     try {
@@ -106,6 +106,17 @@ export function createRoomBridge({ identity, relay, outbox, cli, sessions, pollI
       logger.error?.(`room bridge: ${error.message}`);
       return fail(roomId, invocation, error.code ?? 'BRIDGE_ERROR');
     }
+  }
+
+  function handle({ envelope }) {
+    const roomId = envelope.conversation_id;
+    const previous = roomTails.get(roomId) ?? Promise.resolve();
+    const current = previous.then(() => handleInvocation(envelope, roomId));
+    const tail = current.catch(() => {});
+    roomTails.set(roomId, tail);
+    return current.finally(() => {
+      if (roomTails.get(roomId) === tail) roomTails.delete(roomId);
+    });
   }
 
   async function runInvocation(envelope, roomId, invocation) {

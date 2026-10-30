@@ -232,6 +232,47 @@ test('a trigger in thread B is shown after a turn in thread A read past it (per-
   assert.deepEqual(sessions.get('room_1'), { session_id: 's', last_seq_by_thread: { msg_a: '2', msg_b: '2' } });
 });
 
+test('serializes overlapping turns in a room before reading and merging their sessions', async () => {
+  const triggerA = { message_id: 'msg_a', conversation_id: 'room_1', sender: { endpoint_id: 'ep_web' }, body: { text: 'question A @ep_claude', mentions: ['ep_claude'] } };
+  const triggerB = { message_id: 'msg_b', conversation_id: 'room_1', sender: { endpoint_id: 'ep_web' }, body: { text: 'question B @ep_claude', mentions: ['ep_claude'] } };
+  const all = [{ room_seq: '1', message_id: 'msg_a', envelope: triggerA }, { room_seq: '2', message_id: 'msg_b', envelope: triggerB }];
+  const relay = fakeRelay();
+  let running = [{ invocation_id: 'inv_a', trigger_message_id: 'msg_a', thread_root_id: 'msg_a', status: 'running' }];
+  relay.listRoomInvocations = async () => running;
+  relay.listRoomMessages = async (_roomId, afterSeq = '0') => {
+    const items = all.filter((item) => BigInt(item.room_seq) > BigInt(afterSeq));
+    return { items, next_after_seq: items.at(-1)?.room_seq ?? afterSeq };
+  };
+  let resolveAReply;
+  let signalAReplyStarted;
+  const aReplyPending = new Promise((resolve) => { resolveAReply = resolve; });
+  const aReplyStarted = new Promise((resolve) => { signalAReplyStarted = resolve; });
+  relay.sendEnvelope = async (envelope) => {
+    relay.sent.push(envelope);
+    if (envelope.idempotency_key === 'room_reply_inv_a') {
+      signalAReplyStarted();
+      return aReplyPending;
+    }
+    return { code: 'ACCEPTED' };
+  };
+  const sessionIds = [];
+  const { instance, sessions } = bridge(relay, {
+    name: 'claude',
+    run: async (input) => { sessionIds.push(input.sessionId); return { text: 'ok', sessionId: 'sess_a' }; },
+  });
+
+  const turnA = instance.handle({ envelope: triggerA });
+  await aReplyStarted;
+  running = [{ invocation_id: 'inv_b', trigger_message_id: 'msg_b', thread_root_id: 'msg_b', status: 'running' }];
+  const turnB = instance.handle({ envelope: triggerB });
+  await new Promise((resolve) => setImmediate(resolve));
+  resolveAReply({ code: 'ACCEPTED' });
+  assert.deepEqual(await Promise.all([turnA, turnB]), [{ outcome: 'replied' }, { outcome: 'replied' }]);
+
+  assert.deepEqual(sessionIds, [null, 'sess_a']);
+  assert.deepEqual(sessions.get('room_1'), { session_id: 'sess_a', last_seq_by_thread: { msg_a: '2', msg_b: '2' } });
+});
+
 test('a resumed thread only gets messages after its own cursor', async () => {
   const relay = fakeRelay();
   const seenAfter = [];

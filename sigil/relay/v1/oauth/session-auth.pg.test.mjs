@@ -91,8 +91,8 @@ test('4. each unusable state yields null', { skip }, async (t) => {
   const { pool } = ctx;
   const cases = [
     ['revoked session', 'UPDATE human_sessions SET revoked_at = $1 WHERE session_id = $2', (s) => [NOW, s.sessionId], MIN],
-    ['expired session', null, null, 8 * 24 * 3600_000],
-    ['idle past 8 h', null, null, SESSION_IDLE_MS + MIN],
+    ['expired session despite recent activity', `UPDATE human_sessions SET expires_at = $1 WHERE session_id = $2`, (s) => [at(2 * MIN), s.sessionId], 3 * MIN],
+    ['idle past 7 days', null, null, SESSION_IDLE_MS + MIN + 1],
     ['revoked identity', `UPDATE oidc_identities SET status = 'revoked' WHERE issuer = '${GITHUB}' AND subject = $1`, (s) => [s.subject], MIN],
     ['suspended human', `UPDATE humans SET status = 'suspended' WHERE human_id = $1`, (s) => [s.human_id], MIN],
     ['suspended endpoint', `UPDATE endpoints SET status = 'suspended' WHERE endpoint_id = $1`, (s) => [s.endpoint_id], MIN],
@@ -107,6 +107,15 @@ test('4. each unusable state yields null', { skip }, async (t) => {
     if (sql) await pool.query(sql, params(s));
     const auth = createCookieAuthenticator({ repository: ctx.repository, now: () => at(offset) });
     assert.equal(await auth(req(s.cookie)), null, name);
+  }
+});
+
+test('active sessions remain usable before the 7-day idle limit', { skip }, async (t) => {
+  const ctx = await setup(t);
+  for (const [n, offset] of [[1, 7 * 3600_000 + 59 * MIN], [2, 3 * 24 * 3600_000]]) {
+    const s = await loggedIn(ctx, n);
+    const auth = createCookieAuthenticator({ repository: ctx.repository, now: () => at(offset) });
+    assert.ok(await auth(req(s.cookie)), `session is usable after ${offset} ms`);
   }
 });
 

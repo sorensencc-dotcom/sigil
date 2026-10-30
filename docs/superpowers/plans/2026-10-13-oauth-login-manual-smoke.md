@@ -95,4 +95,4 @@ Spec: `docs/superpowers/specs/2026-10-11-sigil-rooms-third-party-login-design.md
 ## Known limits worth knowing before you share a link
 
 - A targeted invite (`--human <human_id>`) that reactivates a previously revoked identity is consumed, but it adds no rooms. Add rooms afterward with `sigil human add-to-room`.
-- Sessions expire after 8 hours idle or 7 days absolute, whichever comes first.
+- Sessions expire after 7 days idle or 7 days absolute, whichever comes first.

@@ -213,7 +213,11 @@ test('the periodic pass closes an idle-expired session socket and leaves token-m
   assert.ok(idle.opened && token.opened && bearer.opened);
   await settle(80);
   assert.equal(idle.socket.readyState, 1, 'live session survives the pass');
-  sessions.set('sess_idle', liveSessionRow({ session_id: 'sess_idle', last_seen_at: new Date(Date.now() - 8 * 3600_000 - 1000).toISOString() }));
+  sessions.set('sess_idle', liveSessionRow({
+    session_id: 'sess_idle',
+    expires_at: new Date(Date.now() + 8 * 24 * 3600_000).toISOString(),
+    last_seen_at: new Date(Date.now() - 7 * 24 * 3600_000 - 1).toISOString(),
+  }));
   assert.equal(await r.closeCode(idle.socket), 1008);
   await settle(80);
   assert.equal(token.socket.readyState, 1);
