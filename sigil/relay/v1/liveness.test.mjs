@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { isSocketLive } from './liveness.mjs';
+import { SESSION_IDLE_MS } from './oauth/session-auth.mjs';
 
 const live = { endpoint_status: 'active', has_active_key: true, human_status: 'active' };
 
@@ -38,4 +39,19 @@ test('isSocketLive checks identity status and idle time for a cookie session', (
   assert.equal(isSocketLive(live, { ...session, last_seen_at: daysAgo(3) }, now), true);
   assert.equal(isSocketLive(live, { ...session, last_seen_at: new Date(now - 7 * 24 * 3600_000 - 1) }, now), false);
   assert.equal(isSocketLive(live, null, now), true);
+});
+
+test('isSocketLive enforces the idle limit independently of session expiry', () => {
+  const now = Date.parse('2026-10-12T12:00:00Z');
+  const session = {
+    revoked_at: null,
+    expires_at: '2099-10-12T12:00:00Z',
+    identity_status: 'active',
+    last_seen_at: new Date(now - SESSION_IDLE_MS - 1).toISOString(),
+  };
+  assert.equal(isSocketLive(live, session, now), false);
+  assert.equal(isSocketLive(live, {
+    ...session,
+    last_seen_at: new Date(now - SESSION_IDLE_MS + 1).toISOString(),
+  }, now), true);
 });

@@ -92,7 +92,7 @@ test('4. each unusable state yields null', { skip }, async (t) => {
   const cases = [
     ['revoked session', 'UPDATE human_sessions SET revoked_at = $1 WHERE session_id = $2', (s) => [NOW, s.sessionId], MIN],
     ['expired session despite recent activity', `UPDATE human_sessions SET expires_at = $1 WHERE session_id = $2`, (s) => [NOW, s.sessionId], MIN],
-    ['idle past 7 days', `UPDATE human_sessions SET expires_at = $1 WHERE session_id = $2`, (s) => [at(8 * 24 * 3600_000), s.sessionId], SESSION_IDLE_MS + MIN + 1],
+    ['idle past 7 days', null, null, SESSION_IDLE_MS + MIN + 1],
     ['revoked identity', `UPDATE oidc_identities SET status = 'revoked' WHERE issuer = '${GITHUB}' AND subject = $1`, (s) => [s.subject], MIN],
     ['suspended human', `UPDATE humans SET status = 'suspended' WHERE human_id = $1`, (s) => [s.human_id], MIN],
     ['suspended endpoint', `UPDATE endpoints SET status = 'suspended' WHERE endpoint_id = $1`, (s) => [s.endpoint_id], MIN],
