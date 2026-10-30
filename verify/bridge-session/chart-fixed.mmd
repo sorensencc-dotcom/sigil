@@ -1,0 +1,28 @@
+---
+title: "Resume bridge: two mentions in a row (one room)"
+---
+stateDiagram-v2
+  direction LR
+  state "At the same time" as all {
+    state "Turn A (thread A)" as r0 {
+      s0: waiting
+      s1: agent thinking
+      s2: reply visible
+      s3: session saved
+      [*] --> s0
+      s0 --> s1: mention arrives
+      s1 --> s2: agent replies, reply posted
+      s2 --> s3: session + thread cursor saved
+    }
+    --
+    state "Turn B (thread B)" as r1 {
+      s4: waiting
+      s5: agent thinking
+      s6: reply visible
+      s7: session saved
+      [*] --> s4
+      s4 --> s5: mention arrives [when session saved]
+      s5 --> s6: agent replies, reply posted
+      s6 --> s7: session + thread cursor saved
+    }
+  }

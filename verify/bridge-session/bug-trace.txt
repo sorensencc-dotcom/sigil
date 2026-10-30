@@ -1,0 +1,29 @@
+# BridgeSession
+
+TLC reached 14 states and 17 steps. The chart draws 11 states and 9 arrows.
+The view hides 3 steps, so the chart does not draw them.
+The step mention arrives changes only one of Turn A (thread A) and Turn B (thread B) at a time.
+The step agent replies, reply posted changes only one of Turn A (thread A) and Turn B (thread B) at a time.
+The step session + thread cursor saved changes only one of Turn A (thread A) and Turn B (thread B) at a time.
+
+## EveryTurnResumes breaks
+The shortest path has 3 steps:
+0. Turn A (thread A) waiting, Turn B (thread B) waiting
+1. mention arrives: Turn A (thread A) agent thinking, Turn B (thread B) waiting
+2. agent replies, reply posted: Turn A (thread A) reply visible, Turn B (thread B) waiting
+3. next mention starts [before A's session is saved]: Turn A (thread A) reply visible, Turn B (thread B) agent thinking, started without session
+
+## NoThreadForgotten breaks
+The shortest path has 6 steps:
+0. Turn A (thread A) waiting, Turn B (thread B) waiting
+1. mention arrives: Turn A (thread A) agent thinking, Turn B (thread B) waiting
+2. agent replies, reply posted: Turn A (thread A) reply visible, Turn B (thread B) waiting
+3. next mention starts [before A's session is saved]: Turn A (thread A) reply visible, Turn B (thread B) agent thinking, started without session
+4. agent replies, reply posted: Turn A (thread A) reply visible, Turn B (thread B) reply visible, started without session
+5. session + thread cursor saved: Turn A (thread A) session saved, Turn B (thread B) reply visible, started without session
+6. session + thread cursor saved: Turn A (thread A) session saved, Turn B (thread B) session saved, started without session
+
+## Rules that hold
+NoDeadlock
+
+Wrote out-buggy
