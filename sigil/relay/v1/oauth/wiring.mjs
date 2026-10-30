@@ -4,6 +4,8 @@ import { createCookieAuthenticator } from './session-auth.mjs';
 import { createOAuthRoutes } from './oauth-routes.mjs';
 import { createPublicListener } from './public-listener.mjs';
 import { handleRoomRoute } from '../room-routes.mjs';
+import { handleContactsRoute } from '../contacts.mjs';
+import { lookupTrustedEntry } from '../trusted-endpoint.mjs';
 
 export function resolvePublicPort({ port, publicPort }) {
   return publicPort ?? (port ? port + 2 : 0);
@@ -72,7 +74,17 @@ export function buildOAuthStack({ repository, publicOrigin, wrapKey, operatorHum
     handleOAuthPublicRoute: routes.handleOAuthPublicRoute,
     handleOAuthSessionRoute: routes.handleOAuthSessionRoute,
     handleRoomRoute,
-    roomRouteContext: () => ({ readBody, ...roomRouteContext() }),
+    handleContactsRoute,
+    roomRouteContext: () => {
+      const context = roomRouteContext();
+      return {
+        ...context,
+        repository,
+        now: context.now ?? new Date(),
+        readBody,
+        isAgent: async (principal) => (await lookupTrustedEntry(repository, context.registry, principal.endpoint_id))?.kind === 'agent',
+      };
+    },
     logger,
   });
   return { listener, providers, flowStore };

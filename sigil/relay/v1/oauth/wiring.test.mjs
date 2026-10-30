@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import { Readable } from 'node:stream';
 import { MOCK_OAUTH_ISSUER, validateOAuthConfig, resolvePublicPort, buildOAuthStack, readBody } from './wiring.mjs';
+import { SESSION_COOKIE } from './cookies.mjs';
 
 const GOOD = {
   databaseUrl: 'postgres://x/y',
@@ -54,6 +56,68 @@ test('buildOAuthStack names the missing GitHub env variable', () => {
   assert.equal(typeof stack.listener.listen, 'function');
   assert.ok(stack.providers.github);
   assert.ok(stack.flowStore);
+});
+
+test('buildOAuthStack dispatches authenticated contacts through its public listener', async (t) => {
+  const agentLookups = [];
+  const repository = {
+    pool: {
+      query: async () => ({
+        rows: [{
+          session_id: 'session',
+          endpoint_id: 'ep_human',
+          human_id: 'usr_human',
+          expires_at: new Date(Date.now() + 60_000),
+          revoked_at: null,
+          last_seen_at: new Date(),
+          identity_status: 'active',
+          endpoint_kind: 'human',
+          endpoint_status: 'active',
+          display_name: 'Human',
+          human_status: 'active',
+        }],
+      }),
+    },
+    lookupTrustedEndpoint: async (endpointId) => {
+      agentLookups.push(endpointId);
+      return { kind: 'human' };
+    },
+    listContacts: async () => [],
+    createContact: async () => null,
+    updateContact: async () => null,
+    deleteContact: async () => false,
+  };
+  const stack = buildOAuthStack({
+    repository,
+    publicOrigin: 'https://rooms.test',
+    wrapKey: Buffer.alloc(32),
+    operatorHumanId: 'usr_human',
+    ticketStore: {},
+    stream: {},
+    roomRouteContext: () => ({ registry: new Map(), now: new Date() }),
+    env: { GITHUB_OAUTH_CLIENT_ID: 'i', GITHUB_OAUTH_CLIENT_SECRET: 's' },
+  });
+  await new Promise((resolve) => stack.listener.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => stack.listener.close(resolve)));
+
+  const response = await new Promise((resolve, reject) => {
+    const request = http.request({
+      host: '127.0.0.1',
+      port: stack.listener.address().port,
+      method: 'GET',
+      path: '/v1/me/contacts',
+      headers: { cookie: `${SESSION_COOKIE}=session-cookie` },
+    }, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode, body }));
+    });
+    request.on('error', reject);
+    request.end();
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(JSON.parse(response.body).items, []);
+  assert.deepEqual(agentLookups, ['ep_human']);
 });
 
 const MOCK_BASE = { repository: {}, publicOrigin: 'https://rooms.test', wrapKey: Buffer.alloc(32), operatorHumanId: 'h', ticketStore: {}, stream: {}, roomRouteContext: () => ({}) };

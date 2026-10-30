@@ -20,6 +20,7 @@ async function start(overrides = {}) {
     handleOAuthPublicRoute: rec('public'),
     handleOAuthSessionRoute: rec('session'),
     handleRoomRoute: rec('room'),
+    handleContactsRoute: rec('contacts'),
     roomRouteContext: () => ({ repository: {} }),
     ...overrides,
   });
@@ -136,4 +137,39 @@ test('matchPublicRoute exact segments', () => {
   assert.equal(matchPublicRoute('GET', '/v1/rooms/r1/messages?x=1'), 'rooms');
   assert.equal(matchPublicRoute('GET', '/v1/roomsfoo'), null);
   assert.equal(matchPublicRoute('GET', '/v1//rooms'), null);
+  assert.equal(matchPublicRoute('GET', '/v1/me/contacts'), 'contacts');
+  assert.equal(matchPublicRoute('POST', '/v1/me/contacts'), 'contacts');
+  assert.equal(matchPublicRoute('PUT', '/v1/me/contacts/ct_1'), 'contacts');
+  assert.equal(matchPublicRoute('DELETE', '/v1/me/contacts/ct_1'), 'contacts');
+  assert.equal(matchPublicRoute('PATCH', '/v1/me/contacts'), null);
+  assert.equal(matchPublicRoute('GET', '/v1/me/contacts/ct_1'), null);
+  assert.equal(matchPublicRoute('GET', '/v1/me/other'), null);
+});
+
+test('contacts require a cookie and dispatch to the contacts handler', async () => {
+  let received;
+  const t = await start({
+    handleContactsRoute: async (args) => {
+      received = args;
+      t.calls.push('contacts');
+      args.response.writeHead(200, { 'content-type': 'application/json' });
+      args.response.end('{"ok":true}');
+      return true;
+    },
+  });
+  try {
+    t.auth.principal = null;
+    const unauthenticated = await t.send('GET', '/v1/me/contacts');
+    assert.equal(unauthenticated.status, 401);
+    assert.equal(JSON.parse(unauthenticated.body).code, 'UNAUTHENTICATED');
+    assert.deepEqual(t.calls, []);
+
+    t.auth.principal = { endpoint_id: 'e1', human_id: 'h1' };
+    const authenticated = await t.send('GET', '/v1/me/contacts', { cookie: 's=1' });
+    assert.equal(authenticated.status, 200);
+    assert.deepEqual(t.calls, ['contacts']);
+    assert.equal(received.principal.human_id, 'h1');
+    assert.ok(received.requestId);
+    assert.deepEqual(received.repository, {});
+  } finally { await t.close(); }
 });
