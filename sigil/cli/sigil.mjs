@@ -317,7 +317,8 @@ async function cmdRelayUp(argv) {
     await applyMigrations(databaseUrl);
     const { PostgresRepository } = await import('../relay/v1/postgres-repository.mjs');
     const { default: pg } = await import('pg');
-    pool = new pg.Pool({ connectionString: databaseUrl });
+    const { instrumentPool, relayPoolOptions, positiveIntFromEnv, DEFAULT_SLOW_QUERY_MS } = await import('../relay/v1/pool-instrumentation.mjs');
+    pool = instrumentPool(new pg.Pool({ connectionString: databaseUrl, ...relayPoolOptions(process.env) }), { slowQueryMs: positiveIntFromEnv(process.env.SIGIL_DB_SLOW_QUERY_MS, DEFAULT_SLOW_QUERY_MS) });
     repository = new PostgresRepository({ pool });
 
     if (enableMockOidc) {
@@ -620,6 +621,9 @@ async function cmdRelayUp(argv) {
   }
   const { startResendWorker } = await import('../relay/v1/resend-worker.mjs');
   const resendWorkerTimer = startResendWorker({ repository, stream, logger: relayLogger, metrics: relayMetrics });
+  const { startEventLoopMonitor, DEFAULT_EVENT_LOOP_WARN_MS } = await import('../relay/v1/event-loop-monitor.mjs');
+  const { positiveIntFromEnv: envInt } = await import('../relay/v1/pool-instrumentation.mjs');
+  const eventLoopMonitor = startEventLoopMonitor({ thresholdMs: envInt(process.env.SIGIL_EVENT_LOOP_WARN_MS, DEFAULT_EVENT_LOOP_WARN_MS) });
   if (resendWorkerTimer) console.log('Session resend worker running (60s interval).');
   if (enableMockOidc) console.log('WARNING: mock-OIDC login is enabled (--enable-mock-oidc). This is for local development and CI only -- never expose this relay to untrusted networks.');
   if (ingressOrigin && ingressAllowGlobalToken) console.log('WARNING: --ingress-allow-global-token enables the legacy global reply token on the ingress.');
@@ -642,6 +646,7 @@ async function cmdRelayUp(argv) {
   console.log(databaseUrl ? `Persisting to PostgreSQL database (${databaseUrl.replace(/:[^:@]+@/, ':***@')}). Ctrl+C to stop.` : 'In-memory only -- state is lost when this process exits. Ctrl+C to stop.');
   await new Promise((resolve) => {
     const shutdown = async () => {
+      eventLoopMonitor.stop();
       agentmailDeployment?.close();
       await adminListener?.close();
       if (p2pHost) await p2pHost.stop();
