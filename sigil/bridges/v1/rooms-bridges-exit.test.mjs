@@ -235,7 +235,8 @@ test('mentions of resume and replay bridges yield signed replies; replay second 
     const resumeRoot = await world.say('hello @ep_test_resume', ['ep_test_resume']);
     const resumeReply = await waitFor(async () => {
       const messages = await world.repository.listRoomMessages(ROOM, 0n, 100);
-      return messages.find((m) => m.envelope.sender.endpoint_id === 'ep_test_resume' && m.envelope.body.thread_root_id === resumeRoot);
+      const reply = messages.find((m) => m.envelope.sender.endpoint_id === 'ep_test_resume' && m.envelope.body.thread_root_id === resumeRoot);
+      return reply && world.resumeSessions.get(ROOM)?.session_id === 'sess_resume_1' ? reply : false;
     });
     assert.equal(resumeReply.envelope.message_type, 'room.message');
     assert.equal(resumeReply.envelope.body.thread_root_id, resumeRoot);
@@ -291,13 +292,20 @@ test('lost session on resume bridge retries once with sessionId null and replace
     const threadA = await world.say('thread A root @ep_test_resume', ['ep_test_resume']);
     await waitFor(async () => {
       const msgs = await world.repository.listRoomMessages(ROOM, 0n, 100);
-      return msgs.some((m) => m.envelope.sender.endpoint_id === 'ep_test_resume' && m.envelope.body.thread_root_id === threadA);
+      const stored = world.resumeSessions.get(ROOM);
+      return msgs.some((m) => m.envelope.sender.endpoint_id === 'ep_test_resume' && m.envelope.body.thread_root_id === threadA)
+        && stored?.session_id === 'sess_initial'
+        && Object.hasOwn(stored.last_seq_by_thread, threadA);
     });
 
     const threadB = await world.say('thread B root @ep_test_resume', ['ep_test_resume']);
     await waitFor(async () => {
       const msgs = await world.repository.listRoomMessages(ROOM, 0n, 100);
-      return msgs.some((m) => m.envelope.sender.endpoint_id === 'ep_test_resume' && m.envelope.body.thread_root_id === threadB);
+      const stored = world.resumeSessions.get(ROOM);
+      return msgs.some((m) => m.envelope.sender.endpoint_id === 'ep_test_resume' && m.envelope.body.thread_root_id === threadB)
+        && stored?.session_id === 'sess_initial'
+        && Object.hasOwn(stored.last_seq_by_thread, threadA)
+        && Object.hasOwn(stored.last_seq_by_thread, threadB);
     });
 
     const storedBoth = world.resumeSessions.get(ROOM);
@@ -312,7 +320,11 @@ test('lost session on resume bridge retries once with sessionId null and replace
     await world.say('thread A follow-up @ep_test_resume', ['ep_test_resume'], threadA);
     await waitFor(async () => {
       const msgs = await world.repository.listRoomMessages(ROOM, 0n, 100);
-      return msgs.filter((m) => m.envelope.sender.endpoint_id === 'ep_test_resume' && m.envelope.body.thread_root_id === threadA).length === 2;
+      const stored = world.resumeSessions.get(ROOM);
+      return msgs.filter((m) => m.envelope.sender.endpoint_id === 'ep_test_resume' && m.envelope.body.thread_root_id === threadA).length === 2
+        && stored?.session_id === 'sess_replaced'
+        && Object.keys(stored.last_seq_by_thread).length === 1
+        && Object.hasOwn(stored.last_seq_by_thread, threadA);
     });
 
     // Two CLI calls for this turn: first with sess_initial, retry with null
