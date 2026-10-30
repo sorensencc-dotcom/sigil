@@ -54,10 +54,23 @@ test('launcher chief argv parses under sigil agent run', () => {
 test('launcher rooms-web flags are known to sigil-rooms-web', () => {
   const [entry, ...rest] = plannedArgv('rooms-web');
   assert.equal(entry, 'packages/sigil-rooms-web/bin/sigil-rooms-web.mjs');
+  assert.ok(rest.includes('--auth-mode'));
+  assert.ok(rest.includes('cookie'));
+  assert.ok(rest.includes('--public-origin'));
+  assert.ok(rest.includes('https://rooms.rewritelabs.io'));
   for (const flag of rest.filter((a) => a.startsWith('--'))) {
     const name = flag.slice(2);
     assert.ok(roomsWebSource.includes(`'${name}':`) || roomsWebSource.includes(`  ${name}:`), `rooms-web knows ${flag}`);
   }
+});
+
+test('launcher only adopts relay and rooms-web after their health checks pass', () => {
+  assert.match(script, /\[int\]\$PublicPort = 8797/);
+  assert.match(script, /\$ports = @\(\$RelayPort, \(\$RelayPort \+ 1\), \$IngressPort, \$PublicPort\)/);
+  assert.match(script, /if \(\$listening\.Count -eq \$ports\.Count\)/);
+  assert.match(script, /http:\/\/127\.0\.0\.1:5173\/config\.json/);
+  assert.match(script, /\$config\.authMode -eq 'cookie'/);
+  assert.match(script, /REFUSING to adopt \{0\}: \{1\}; another launcher/);
 });
 
 test('no ps1 under scripts/windows references $PSScriptRoot inside param()', () => {

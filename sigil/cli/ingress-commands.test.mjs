@@ -23,6 +23,7 @@ test('doctor passes the Sigil reply gate and route probes without an Authorizati
   const out = output();
   const result = await runIngressDoctor({
     origin: 'https://ingress.example.test',
+    probePort: async () => true,
     fetchImpl: fakeFetch([
       response(401, { code: 'UNAUTHENTICATED' }),
       response(404, { code: 'NOT_FOUND' }),
@@ -39,6 +40,7 @@ test('doctor rejects successful or unauthenticated answers on fixed route probes
   const out = output();
   const result = await runIngressDoctor({
     origin: 'https://ingress.example.test',
+    probePort: async () => true,
     fetchImpl: fakeFetch([
       response(401, { code: 'UNAUTHENTICATED' }),
       response(200, { code: 'OK' }),
@@ -55,6 +57,7 @@ test('doctor identifies an edge response without a Sigil code', { timeout: 60_00
   const out = output();
   const result = await runIngressDoctor({
     origin: 'https://ingress.example.test',
+    probePort: async () => true,
     fetchImpl: fakeFetch([response(403, { error: 'Access denied' }), response(404, { code: 'NOT_FOUND' }), response(404, { code: 'NOT_FOUND' })]),
     write: out.write,
   });
@@ -72,6 +75,7 @@ test('doctor sends Access headers named by environment variables and never print
     accessClientIdEnv: 'SIGIL_TEST_ACCESS_ID',
     accessClientSecretEnv: 'SIGIL_TEST_ACCESS_SECRET',
     env: { SIGIL_TEST_ACCESS_ID: clientValue, SIGIL_TEST_ACCESS_SECRET: accessValue },
+    probePort: async () => true,
     fetchImpl: fakeFetch([response(401, { code: 'UNAUTHENTICATED' }), response(404, { code: 'NOT_FOUND' }), response(404, { code: 'NOT_FOUND' })], seen),
     write: out.write,
   });
@@ -86,7 +90,7 @@ test('doctor sends Access headers named by environment variables and never print
 test('doctor names an unset Access environment variable before probing', { timeout: 60_000 }, async () => {
   let probes = 0;
   await assert.rejects(
-    runIngressDoctor({ origin: 'https://ingress.example.test', accessClientIdEnv: 'SIGIL_MISSING_ACCESS_ID', accessClientSecretEnv: 'SIGIL_ACCESS_SECRET', env: {}, fetchImpl: async () => { probes += 1; } }),
+    runIngressDoctor({ origin: 'https://ingress.example.test', accessClientIdEnv: 'SIGIL_MISSING_ACCESS_ID', accessClientSecretEnv: 'SIGIL_ACCESS_SECRET', env: {}, probePort: async () => true, fetchImpl: async () => { probes += 1; } }),
     /SIGIL_MISSING_ACCESS_ID/,
   );
   assert.equal(probes, 0);
@@ -97,6 +101,7 @@ test('doctor reports certificate failures and every port overlap with the collis
   const result = await runIngressDoctor({
     origin: 'https://ingress.example.test',
     ports: resolveIngressPorts({ 'public-port': '8793', 'ingress-port': '8793' }),
+    probePort: async () => true,
     fetchImpl: async () => { throw new Error('certificate has expired'); },
     write: out.write,
   });
@@ -105,6 +110,30 @@ test('doctor reports certificate failures and every port overlap with the collis
   assert.match(out.lines.join('\n'), /public 8793 = ingress 8793/);
   assert.match(out.lines.join('\n'), /8792\/8793/);
   assert.match(out.lines.join('\n'), /certificate: fail/);
+});
+
+test('doctor fails and exits non-zero when local public and ingress listeners are down', { timeout: 60_000 }, async () => {
+  const out = output();
+  const ports = resolveIngressPorts();
+  const originalExitCode = process.exitCode;
+  process.exitCode = 0;
+  try {
+    const result = await cmdIngressDoctor(['--origin', 'https://ingress.example.test'], {
+      probePort: async () => false,
+      fetchImpl: fakeFetch([
+        response(401, { code: 'UNAUTHENTICATED' }),
+        response(404, { code: 'NOT_FOUND' }),
+        response(404, { code: 'NOT_FOUND' }),
+      ]),
+      write: out.write,
+    });
+    assert.equal(result.pass, false);
+    assert.equal(process.exitCode, 1);
+    assert.ok(out.lines.includes(`FAIL: public listener 127.0.0.1:${ports.public} is down`));
+    assert.ok(out.lines.includes(`FAIL: ingress listener 127.0.0.1:${ports.ingress} is down`));
+  } finally {
+    process.exitCode = originalExitCode;
+  }
 });
 
 test('doctor keeps relay defaults and derives stream, public, and ingress ports', { timeout: 60_000 }, () => {

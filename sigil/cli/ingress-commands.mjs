@@ -1,4 +1,5 @@
 import { parseArgs } from 'node:util';
+import { createConnection } from 'node:net';
 
 export const DEFAULT_INGRESS_PORTS = Object.freeze({
   relay: 8791,
@@ -49,6 +50,24 @@ function probeHeaders(env, idName, secretName) {
   return headers;
 }
 
+function probeLocalListener(port, timeoutMs = 1000) {
+  return new Promise((resolve) => {
+    const socket = createConnection({ host: '127.0.0.1', port });
+    let settled = false;
+    let timer;
+    const finish = (listening) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(listening);
+    };
+    socket.once('connect', () => finish(true));
+    socket.once('error', () => finish(false));
+    timer = setTimeout(() => finish(false), timeoutMs);
+  });
+}
+
 async function responseBody(response) {
   try {
     if (typeof response.json === 'function') return await response.json();
@@ -74,6 +93,7 @@ export async function runIngressDoctor({
   env = process.env,
   fetchImpl = fetch,
   fetch: fetchOption,
+  probePort = probeLocalListener,
   write = console.log,
 } = {}) {
   if (!origin) throw new Error(DOCTOR_USAGE);
@@ -84,6 +104,20 @@ export async function runIngressDoctor({
     ['root route', 'GET', '/', 404],
     ['rooms route', 'GET', '/v1/rooms', 404],
   ];
+
+  const listenerChecks = [];
+  for (const [name, port] of [['public', ports.public], ['ingress', ports.ingress]]) {
+    const listening = await probePort(port);
+    const label = `${name} listener 127.0.0.1:${port}`;
+    if (listening) {
+      write(`${label}: pass`);
+      listenerChecks.push({ ok: true, label });
+    } else {
+      write(`FAIL: ${label} is down`);
+      listenerChecks.push({ ok: false, label, error: 'listener is down' });
+    }
+  }
+
   for (const [label, method, path, expectedStatus, expectedCode] of probes) {
     try {
       const response = await (fetchOption ?? fetchImpl)(new URL(path, origin), {
@@ -107,9 +141,9 @@ export async function runIngressDoctor({
   }
   for (const check of checks) write(`${check.label}: ${check.ok ? 'pass' : `fail - ${check.error}`}`);
   write(`certificate: ${checks.some((check) => check.error === 'certificate check failed') ? 'fail' : 'pass'}`);
-  const pass = checks.every((check) => check.ok) && overlaps.length === 0;
+  const pass = checks.every((check) => check.ok) && listenerChecks.every((check) => check.ok) && overlaps.length === 0;
   write(`ingress doctor: ${pass ? 'pass' : 'fail'}`);
-  return { pass, checks, ports, overlaps };
+  return { pass, checks: [...checks, ...listenerChecks], ports, overlaps };
 }
 
 export async function cmdIngressDoctor(argv, dependencies = {}) {
@@ -126,13 +160,15 @@ export async function cmdIngressDoctor(argv, dependencies = {}) {
     },
   });
   const ports = resolveIngressPorts(args.values);
-  return runIngressDoctor({
+  const result = await runIngressDoctor({
     ...dependencies,
     origin: args.values.origin,
     ports,
     accessClientIdEnv: args.values['access-client-id-env'],
     accessClientSecretEnv: args.values['access-client-secret-env'],
   });
+  if (!result.pass) process.exitCode = 1;
+  return result;
 }
 
 function formatAge(createdAt, now) {

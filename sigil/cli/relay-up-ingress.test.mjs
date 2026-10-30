@@ -10,11 +10,15 @@ import { freeDistinctPorts } from '../scripts/test-free-ports.mjs';
 
 const sigilCli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'sigil.mjs');
 const fakeDatabaseUrl = 'postgres://127.0.0.1:5432/sigil_fixture';
+let initFixture;
 
 function fixtureCwd() {
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-relay-ingress-test-'));
-  execFileSync(process.execPath, [sigilCli, 'init', `test_${crypto.randomUUID().replaceAll('-', '')}`], { cwd, encoding: 'utf8' });
-  return cwd;
+  if (!initFixture) {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-relay-ingress-test-'));
+    execFileSync(process.execPath, [sigilCli, 'init', `test_${crypto.randomUUID().replaceAll('-', '')}`], { cwd, encoding: 'utf8' });
+    initFixture = cwd;
+  }
+  return initFixture;
 }
 
 function run(args, env = {}) {
@@ -89,7 +93,7 @@ test('relay up without ingress origin keeps the would-be ingress port closed', a
     await assert.rejects(() => fetch(`http://127.0.0.1:${port + 5}`, { signal: AbortSignal.timeout(1000) }));
   } finally {
     if (process.platform === 'win32' && child.pid) { try { execSync(`taskkill /F /T /PID ${child.pid}`, { stdio: 'ignore' }); } catch {} } else child.kill('SIGTERM');
-    await new Promise((resolve) => child.once('exit', resolve));
+    if (child.exitCode === null && child.signalCode === null) await new Promise((resolve) => child.once('exit', resolve));
   }
 });
 
@@ -110,6 +114,6 @@ test('relay up binds the ingress on loopback and warns only for the global-token
     assert.doesNotMatch(output, /--ingress-allow-global-token enables/);
   } finally {
     child.kill('SIGTERM');
-    await new Promise((resolve) => child.once('exit', resolve));
+    if (child.exitCode === null && child.signalCode === null) await new Promise((resolve) => child.once('exit', resolve));
   }
 });
