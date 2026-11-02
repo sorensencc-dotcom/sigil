@@ -9,8 +9,13 @@ export async function notifyRoomHumans({ repository, stream, registered, client 
   const humans = [];
   // A failed member read must not fail the request or roll back the commit it follows.
   try {
-    for (const member of await repository.listRoomMembers(roomId, client)) {
-      if (await memberIsHuman(member, repository, client, registered)) humans.push(member.endpoint_id);
+    const members = await repository.listRoomMembers(roomId, client);
+    const checks = await Promise.all(members.map(async (member) => {
+      const isHuman = await memberIsHuman(member, repository, client, registered);
+      return isHuman ? member.endpoint_id : null;
+    }));
+    for (const id of checks) {
+      if (id !== null) humans.push(id);
     }
   } catch (error) {
     logger?.error?.('room.updated member read failed', error);
