@@ -4,7 +4,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 
 const args = process.argv.slice(2);
 const command = args.shift();
