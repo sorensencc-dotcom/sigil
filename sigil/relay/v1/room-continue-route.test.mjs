@@ -5,7 +5,6 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 import { createRelayServer } from './http-server.mjs';
 import { createRoomHumanSigner } from './room-human-signer.mjs';
-import { signedBytes } from './validate-envelope.mjs';
 import { createMemoryRepository } from '../../cli/memory-repository.mjs';
 import { createIdentity } from '../../cli/identity.mjs';
 import { entryFromRegistryRow } from './trusted-endpoint.mjs';
