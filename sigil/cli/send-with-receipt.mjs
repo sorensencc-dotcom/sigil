@@ -1,5 +1,3 @@
-import { WebSocket as DefaultWebSocket } from 'ws';
-
 const TERMINAL_RECEIPT_STATES = ['acknowledged', 'processed', 'processing_failed', 'dead_letter'];
 const FAILED_RECEIPT_STATES = ['processing_failed', 'dead_letter'];
 
@@ -23,7 +21,7 @@ export class ReceiptWaitError extends Error {
 // the envelope. The relay can push the accept-time 'delivered' receipt the
 // instant it accepts the envelope -- if the socket weren't already open and
 // subscribed, that receipt would be lost to the race.
-export async function sendWithOptionalReceiptWait({ relay, envelope, waitForReceipt, streamUrl, token, WebSocketImpl = DefaultWebSocket, timeoutMs = 60_000, print = console.log }) {
+export async function sendWithOptionalReceiptWait({ relay, envelope, waitForReceipt, streamUrl, token, WebSocketImpl = WebSocket, timeoutMs = 60_000, print = console.log }) {
   if (!waitForReceipt) {
     const result = await relay.sendEnvelope(envelope);
     const sentAt = new Date().toISOString();
