@@ -4,7 +4,7 @@ import http from 'node:http';
 import { WebSocketServer } from 'ws';
 import { ConnectorDatabase } from './connector-db-adapter.mjs';
 import { WebSocketConnectionManager } from './connector-ws-manager.mjs';
-import { writeFileSync, unlinkSync } from 'node:fs';
+import { unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
