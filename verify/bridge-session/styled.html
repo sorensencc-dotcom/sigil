@@ -1,0 +1,1167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1400, initial-scale=1.0" />
+  <title>Resume bridge: two mentions in a row (one room) — Statecharts</title>
+  <style>
+    :root {
+      --bg-page: #f6f8fb;
+      --bg-card: #ffffff;
+      --border-card: #e2e8f0;
+      --text-main: #0f172a;
+      --text-secondary: #475569;
+      --text-muted: #64748b;
+
+      /* Turn A - Teal */
+      --teal-bg: rgba(20, 184, 166, 0.065);
+      --teal-border: rgba(13, 148, 136, 0.32);
+      --teal-header: #0f766e;
+      --teal-badge-bg: rgba(20, 184, 166, 0.14);
+      --teal-node-border: #5eead4;
+      --teal-node-top: #14b8a6;
+
+      /* Turn B - Violet */
+      --violet-bg: rgba(139, 92, 246, 0.065);
+      --violet-border: rgba(124, 58, 237, 0.30);
+      --violet-header: #6d28d9;
+      --violet-badge-bg: rgba(139, 92, 246, 0.14);
+      --violet-node-border: #c4b5fd;
+      --violet-node-top: #8b5cf6;
+
+      /* Buggy / Breaks */
+      --bug-fill: #ffecee;
+      --bug-stroke: #e72e3b;
+      --bug-text: #cd2834;
+      --bug-edge: #e11d48;
+      --bug-pill-bg: #fff1f2;
+      --bug-pill-border: #fda4af;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-page);
+      background-image:
+        radial-gradient(at 15% 0%, rgba(20, 184, 166, 0.05) 0px, transparent 45%),
+        radial-gradient(at 85% 15%, rgba(139, 92, 246, 0.05) 0px, transparent 45%);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      padding: 32px 0 56px;
+      min-width: 1400px;
+    }
+
+    .page-shell {
+      width: 1400px;
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 0 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 28px;
+    }
+
+    /* Top Header & Legend Bar */
+    .page-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 24px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-card);
+      border-radius: 16px;
+      padding: 22px 28px;
+      box-shadow: 0 4px 16px -4px rgba(15, 23, 42, 0.05), 0 2px 6px -1px rgba(15, 23, 42, 0.03);
+    }
+
+    .title-block h1 {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text-main);
+      margin-bottom: 6px;
+    }
+
+    .title-block p {
+      font-size: 13.5px;
+      color: var(--text-secondary);
+      line-height: 1.5;
+    }
+
+    /* Legend Box */
+    .legend-card {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      padding: 14px 18px;
+      min-width: 580px;
+    }
+
+    .legend-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .legend-grid {
+      display: grid;
+      grid-template-columns: 1.15fr 1fr;
+      gap: 10px 20px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 12.5px;
+      color: #334155;
+      font-weight: 500;
+    }
+
+    .swatch-node-breaks {
+      width: 28px;
+      height: 18px;
+      border-radius: 6px;
+      background: var(--bug-fill);
+      border: 2px solid var(--bug-stroke);
+      box-shadow: 0 1px 3px rgba(231, 46, 59, 0.15);
+      flex-shrink: 0;
+    }
+
+    .swatch-node-normal {
+      width: 28px;
+      height: 18px;
+      border-radius: 6px;
+      background: #ffffff;
+      border: 1.5px solid #cbd5e1;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+      flex-shrink: 0;
+    }
+
+    .swatch-region-a {
+      width: 28px;
+      height: 18px;
+      border-radius: 6px;
+      background: rgba(20, 184, 166, 0.14);
+      border: 1.5px solid rgba(13, 148, 136, 0.45);
+      flex-shrink: 0;
+    }
+
+    .swatch-region-b {
+      width: 28px;
+      height: 18px;
+      border-radius: 6px;
+      background: rgba(139, 92, 246, 0.14);
+      border: 1.5px solid rgba(124, 58, 237, 0.45);
+      flex-shrink: 0;
+    }
+
+    /* Chart Section Card */
+    .chart-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-card);
+      border-radius: 18px;
+      padding: 22px 24px 26px;
+      box-shadow: 0 10px 28px -6px rgba(15, 23, 42, 0.06), 0 3px 10px -3px rgba(15, 23, 42, 0.04);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .chart-card.fixed-card {
+      border-top: 4px solid #10b981;
+    }
+
+    .chart-card.buggy-card {
+      border-top: 4px solid #e72e3b;
+    }
+
+    .chart-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 4px;
+    }
+
+    .chart-header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11.5px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 4px 11px;
+      border-radius: 999px;
+    }
+
+    .status-pill.fixed {
+      background: #ecfdf5;
+      color: #047857;
+      border: 1px solid #a7f3d0;
+    }
+
+    .status-pill.buggy {
+      background: #fff1f2;
+      color: #be123c;
+      border: 1px solid #fecdd3;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+    }
+
+    .status-pill.fixed .status-dot {
+      background: #10b981;
+    }
+
+    .status-pill.buggy .status-dot {
+      background: #e11d48;
+    }
+
+    .chart-title {
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--text-main);
+      letter-spacing: -0.01em;
+    }
+
+    .chart-subtitle {
+      font-size: 12.5px;
+      color: var(--text-muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      background: #f1f5f9;
+      padding: 3px 9px;
+      border-radius: 6px;
+      border: 1px solid #e2e8f0;
+    }
+
+    .svg-wrapper {
+      width: 100%;
+      overflow: visible;
+    }
+
+    svg.statechart-svg {
+      width: 100%;
+      height: auto;
+      display: block;
+      user-select: none;
+    }
+
+    /* Interactive subtle hover polish */
+    .state-node-group {
+      transition: transform 0.16s ease, filter 0.16s ease;
+      cursor: default;
+    }
+    .state-node-group:hover {
+      filter: brightness(0.985);
+    }
+    .edge-group {
+      transition: opacity 0.16s ease;
+    }
+  </style>
+</head>
+<body>
+  <div class="page-shell">
+    <!-- Top Banner & Legend -->
+    <header class="page-header">
+      <div class="title-block">
+        <h1>Resume bridge: two mentions in a row (one room)</h1>
+        <p>
+          Comparison of concurrent turn statecharts (<code style="font-size:12.5px;background:#f1f5f9;padding:1px 5px;border-radius:4px;">chart-fixed.mmd</code> vs.
+          <code style="font-size:12.5px;background:#f1f5f9;padding:1px 5px;border-radius:4px;">chart-buggy.mmd</code>) showing parallel regions
+          <strong>Turn A (thread A)</strong> and <strong>Turn B (thread B)</strong> executing at the same time.
+        </p>
+      </div>
+
+      <div class="legend-card" aria-label="Legend">
+        <div class="legend-title">
+          <span>Legend</span>
+        </div>
+        <div class="legend-grid">
+          <div class="legend-item">
+            <span class="swatch-node-breaks"></span>
+            <span style="color:#cd2834;font-weight:600;">Breaks EveryTurnResumes or NoThreadForgotten</span>
+          </div>
+          <div class="legend-item">
+            <span class="swatch-region-a"></span>
+            <span style="color:#0f766e;font-weight:600;">Turn A (thread A) parallel region</span>
+          </div>
+          <div class="legend-item">
+            <svg width="28" height="18" viewBox="0 0 28 18" style="flex-shrink:0;">
+              <defs>
+                <marker id="leg-bug-arrow" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
+                  <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#e11d48" />
+                </marker>
+              </defs>
+              <line x1="2" y1="9" x2="23" y2="9" stroke="#e11d48" stroke-width="2.2" stroke-dasharray="4 3" marker-end="url(#leg-bug-arrow)" />
+            </svg>
+            <span style="color:#be123c;font-weight:600;">Path to the EveryTurnResumes or NoThreadForgotten bug</span>
+          </div>
+          <div class="legend-item">
+            <span class="swatch-region-b"></span>
+            <span style="color:#6d28d9;font-weight:600;">Turn B (thread B) parallel region</span>
+          </div>
+          <div class="legend-item">
+            <svg width="28" height="18" viewBox="0 0 28 18" style="flex-shrink:0;">
+              <defs>
+                <marker id="leg-norm-arrow" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
+                  <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#64748b" />
+                </marker>
+              </defs>
+              <circle cx="6" cy="9" r="4.5" fill="#1e293b" />
+              <line x1="11" y1="9" x2="24" y2="9" stroke="#64748b" stroke-width="1.8" marker-end="url(#leg-norm-arrow)" />
+            </svg>
+            <span>Start state <code style="font-size:11px;">[*]</code> &amp; normal transition</span>
+          </div>
+          <div class="legend-item">
+            <span class="swatch-node-normal"></span>
+            <span>Valid state node (session invariants preserved)</span>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Chart 1: Fixed (Top) -->
+    <section class="chart-card fixed-card" id="section-fixed">
+      <div class="chart-header">
+        <div class="chart-header-left">
+          <span class="status-pill fixed"><span class="status-dot"></span>Fixed</span>
+          <h2 class="chart-title">Resume bridge: two mentions in a row (one room)</h2>
+        </div>
+        <span class="chart-subtitle">chart-fixed.mmd</span>
+      </div>
+      <div class="svg-wrapper" id="chart-fixed-container"></div>
+    </section>
+
+    <!-- Chart 2: Buggy (Bottom) -->
+    <section class="chart-card buggy-card" id="section-buggy">
+      <div class="chart-header">
+        <div class="chart-header-left">
+          <span class="status-pill buggy"><span class="status-dot"></span>Buggy</span>
+          <h2 class="chart-title">Resume bridge: two mentions in a row (one room)</h2>
+        </div>
+        <span class="chart-subtitle">chart-buggy.mmd</span>
+      </div>
+      <div class="svg-wrapper" id="chart-buggy-container"></div>
+    </section>
+  </div>
+
+  <script>
+    (function () {
+      const SVG_NS = "http://www.w3.org/2000/svg";
+
+      function el(tag, attrs = {}, children = []) {
+        const node = document.createElementNS(SVG_NS, tag);
+        for (const [k, v] of Object.entries(attrs)) {
+          if (v !== undefined && v !== null) {
+            node.setAttribute(k, String(v));
+          }
+        }
+        for (const child of children) {
+          if (typeof child === "string") {
+            node.appendChild(document.createTextNode(child));
+          } else if (child) {
+            node.appendChild(child);
+          }
+        }
+        return node;
+      }
+
+      /**
+       * Creates shared SVG defs (soft shadows, gradients, arrowheads)
+       */
+      function createDefs(prefix) {
+        return el("defs", {}, [
+          // Soft drop shadow for state nodes
+          el("filter", { id: `${prefix}-node-shadow`, x: "-12%", y: "-12%", width: "124%", height: "134%" }, [
+            el("feDropShadow", { dx: "0", dy: "3", stdDeviation: "4", "flood-color": "#0f172a", "flood-opacity": "0.07" }),
+            el("feDropShadow", { dx: "0", dy: "1", stdDeviation: "1.5", "flood-color": "#0f172a", "flood-opacity": "0.05" })
+          ]),
+          // Soft glow shadow for breaks (red) state nodes
+          el("filter", { id: `${prefix}-breaks-shadow`, x: "-14%", y: "-14%", width: "128%", height: "136%" }, [
+            el("feDropShadow", { dx: "0", dy: "3", stdDeviation: "4.5", "flood-color": "#e11d48", "flood-opacity": "0.15" }),
+            el("feDropShadow", { dx: "0", dy: "1", stdDeviation: "1.5", "flood-color": "#e11d48", "flood-opacity": "0.10" })
+          ]),
+          // Pill shadow
+          el("filter", { id: `${prefix}-pill-shadow`, x: "-10%", y: "-15%", width: "120%", height: "140%" }, [
+            el("feDropShadow", { dx: "0", dy: "1.5", stdDeviation: "2", "flood-color": "#0f172a", "flood-opacity": "0.06" })
+          ]),
+          // Normal arrowhead (teal)
+          el("marker", {
+            id: `${prefix}-arrow-teal`,
+            viewBox: "0 0 10 10",
+            refX: "8.2",
+            refY: "5",
+            markerWidth: "6.5",
+            markerHeight: "6.5",
+            orient: "auto-start-reverse"
+          }, [
+            el("path", { d: "M 1 1.5 L 8.5 5 L 1 8.5 L 2.6 5 z", fill: "#0d9488" })
+          ]),
+          // Normal arrowhead (violet)
+          el("marker", {
+            id: `${prefix}-arrow-violet`,
+            viewBox: "0 0 10 10",
+            refX: "8.2",
+            refY: "5",
+            markerWidth: "6.5",
+            markerHeight: "6.5",
+            orient: "auto-start-reverse"
+          }, [
+            el("path", { d: "M 1 1.5 L 8.5 5 L 1 8.5 L 2.6 5 z", fill: "#7c3aed" })
+          ]),
+          // Bug path arrowhead (red)
+          el("marker", {
+            id: `${prefix}-arrow-bug`,
+            viewBox: "0 0 10 10",
+            refX: "8.2",
+            refY: "5",
+            markerWidth: "6.8",
+            markerHeight: "6.8",
+            orient: "auto-start-reverse"
+          }, [
+            el("path", { d: "M 1 1.2 L 8.8 5 L 1 8.8 L 2.7 5 z", fill: "#e11d48" })
+          ])
+        ]);
+      }
+
+      /**
+       * Renders a single statechart diagram given a declarative specification
+       */
+      function renderStatechart(containerId, spec) {
+        const container = document.getElementById(containerId);
+        const { prefix, width, height, outerState, regions, nodes, startNodes, edges, embeddedLegend } = spec;
+
+        const svg = el("svg", {
+          class: "statechart-svg",
+          viewBox: `0 0 ${width} ${height}`,
+          width: width,
+          height: height,
+          role: "img",
+          "aria-label": spec.ariaLabel
+        });
+
+        svg.appendChild(createDefs(prefix));
+
+        // Optional inline diagram legend state (for chart-buggy.mmd `state "Legend" as legend`)
+        if (embeddedLegend) {
+          const legGroup = el("g", { class: "diagram-legend-state" });
+          legGroup.appendChild(el("rect", {
+            x: embeddedLegend.x,
+            y: embeddedLegend.y,
+            width: embeddedLegend.w,
+            height: embeddedLegend.h,
+            rx: 12,
+            fill: "#f8fafc",
+            stroke: "#cbd5e1",
+            "stroke-width": "1.5"
+          }));
+          // Title pill for "Legend"
+          legGroup.appendChild(el("rect", {
+            x: embeddedLegend.x + 14,
+            y: embeddedLegend.y + 10,
+            width: 64,
+            height: 22,
+            rx: 6,
+            fill: "#e2e8f0"
+          }));
+          legGroup.appendChild(el("text", {
+            x: embeddedLegend.x + 46,
+            y: embeddedLegend.y + 25,
+            "text-anchor": "middle",
+            "font-size": "11.5",
+            "font-weight": "700",
+            fill: "#334155"
+          }, ["Legend"]));
+
+          // lg0: Breaks EveryTurnResumes or NoThreadForgotten
+          const lg0X = embeddedLegend.x + 96;
+          const lg0Y = embeddedLegend.y + 8;
+          legGroup.appendChild(el("rect", {
+            x: lg0X,
+            y: lg0Y,
+            width: 356,
+            height: 26,
+            rx: 8,
+            fill: "#ffecee",
+            stroke: "#e72e3b",
+            "stroke-width": "2"
+          }));
+          legGroup.appendChild(el("text", {
+            x: lg0X + 178,
+            y: lg0Y + 17,
+            "text-anchor": "middle",
+            "font-size": "12",
+            "font-weight": "600",
+            fill: "#cd2834"
+          }, ["lg0: Breaks EveryTurnResumes or NoThreadForgotten"]));
+
+          // lg1: Path to the EveryTurnResumes or NoThreadForgotten bug
+          const lg1X = lg0X + 374;
+          const lg1Y = embeddedLegend.y + 8;
+          legGroup.appendChild(el("rect", {
+            x: lg1X,
+            y: lg1Y,
+            width: 445,
+            height: 26,
+            rx: 8,
+            fill: "#fff1f2",
+            stroke: "#e11d48",
+            "stroke-width": "1.8",
+            "stroke-dasharray": "5 3.5"
+          }));
+          // Mini dashed bug arrow inside lg1
+          legGroup.appendChild(el("line", {
+            x1: lg1X + 14,
+            y1: lg1Y + 13,
+            x2: lg1X + 46,
+            y2: lg1Y + 13,
+            stroke: "#e11d48",
+            "stroke-width": "2.2",
+            "stroke-dasharray": "4 3",
+            "marker-end": `url(#${prefix}-arrow-bug)`
+          }));
+          legGroup.appendChild(el("text", {
+            x: lg1X + 245,
+            y: lg1Y + 17,
+            "text-anchor": "middle",
+            "font-size": "12",
+            "font-weight": "600",
+            fill: "#be123c"
+          }, ["lg1: Path to the EveryTurnResumes or NoThreadForgotten bug"]));
+
+          svg.appendChild(legGroup);
+        }
+
+        // 1. Outer composite state container: "At the same time" (all)
+        const outerGroup = el("g", { class: "outer-composite-state" });
+        outerGroup.appendChild(el("rect", {
+          x: outerState.x,
+          y: outerState.y,
+          width: outerState.w,
+          height: outerState.h,
+          rx: 16,
+          fill: "#f8fafc",
+          stroke: "#cbd5e1",
+          "stroke-width": "1.75"
+        }));
+
+        // Outer state header bar
+        outerGroup.appendChild(el("rect", {
+          x: outerState.x + 16,
+          y: outerState.y + 12,
+          width: 156,
+          height: 26,
+          rx: 8,
+          fill: "#e2e8f0"
+        }));
+        outerGroup.appendChild(el("text", {
+          x: outerState.x + 94,
+          y: outerState.y + 29,
+          "text-anchor": "middle",
+          "font-size": "12.5",
+          "font-weight": "700",
+          fill: "#1e293b",
+          "letter-spacing": "0.01em"
+        }, [outerState.title]));
+        outerGroup.appendChild(el("text", {
+          x: outerState.x + 184,
+          y: outerState.y + 29,
+          "font-size": "12",
+          "font-weight": "500",
+          fill: "#64748b"
+        }, ["parallel regions (Turn A || Turn B)"]));
+
+        svg.appendChild(outerGroup);
+
+        // 2. Parallel Region Containers (Turn A teal, Turn B violet) + parallel divider line
+        regions.forEach((reg, idx) => {
+          const isTeal = reg.theme === "teal";
+          const fill = isTeal ? "rgba(20, 184, 166, 0.06)" : "rgba(139, 92, 246, 0.06)";
+          const stroke = isTeal ? "rgba(13, 148, 136, 0.36)" : "rgba(124, 58, 237, 0.34)";
+          const badgeFill = isTeal ? "rgba(20, 184, 166, 0.16)" : "rgba(139, 92, 246, 0.16)";
+          const titleColor = isTeal ? "#0f766e" : "#6d28d9";
+
+          // Dashed region separator line between Turn A and Turn B (`--` in mermaid)
+          if (idx > 0 && reg.dividerY) {
+            svg.appendChild(el("line", {
+              x1: reg.x + 8,
+              y1: reg.dividerY,
+              x2: reg.x + reg.w - 8,
+              y2: reg.dividerY,
+              stroke: "#94a3b8",
+              "stroke-width": "1.5",
+              "stroke-dasharray": "7 5",
+              opacity: "0.75"
+            }));
+          }
+
+          const regGroup = el("g", { class: `region-group region-${reg.theme}` });
+          regGroup.appendChild(el("rect", {
+            x: reg.x,
+            y: reg.y,
+            width: reg.w,
+            height: reg.h,
+            rx: 14,
+            fill: fill,
+            stroke: stroke,
+            "stroke-width": "1.6"
+          }));
+
+          // Region title pill in top-left corner of the region
+          regGroup.appendChild(el("rect", {
+            x: reg.x + 14,
+            y: reg.y + 12,
+            width: 154,
+            height: 25,
+            rx: 7,
+            fill: badgeFill,
+            stroke: stroke,
+            "stroke-width": "1"
+          }));
+          regGroup.appendChild(el("text", {
+            x: reg.x + 91,
+            y: reg.y + 28.5,
+            "text-anchor": "middle",
+            "font-size": "12.5",
+            "font-weight": "700",
+            fill: titleColor
+          }, [reg.title]));
+
+          svg.appendChild(regGroup);
+        });
+
+        // Build lookup map for nodes and start dots
+        const nodeMap = {};
+        nodes.forEach((n) => { nodeMap[n.id] = n; });
+        startNodes.forEach((s) => { nodeMap[s.id] = s; });
+
+        // 3. Render Edges (Curved Bezier paths + pill-shaped labels)
+        const edgesLayer = el("g", { class: "edges-layer" });
+        const labelsLayer = el("g", { class: "edge-labels-layer" });
+
+        edges.forEach((edge) => {
+          const from = nodeMap[edge.from];
+          const to = nodeMap[edge.to];
+
+          // Compute start and end anchor coordinates
+          const x1 = edge.x1 !== undefined ? edge.x1 : (from.isStart ? from.cx + from.r : from.x + from.w);
+          const y1 = edge.y1 !== undefined ? edge.y1 : (from.isStart ? from.cy : from.y + from.h / 2 + (edge.y1Offset || 0));
+          const x2 = edge.x2 !== undefined ? edge.x2 : (to.x - 3);
+          const y2 = edge.y2 !== undefined ? edge.y2 : (to.y + to.h / 2 + (edge.y2Offset || 0));
+
+          const isBug = Boolean(edge.bugPath);
+          const strokeColor = isBug
+            ? "#e11d48"
+            : (edge.theme === "teal" ? "#0d9488" : "#7c3aed");
+          const markerId = isBug
+            ? `${prefix}-arrow-bug`
+            : (edge.theme === "teal" ? `${prefix}-arrow-teal` : `${prefix}-arrow-violet`);
+
+          // Construct smooth cubic or quadratic Bezier curve
+          let pathD;
+          let midX = (x1 + x2) / 2;
+          let midY = (y1 + y2) / 2;
+
+          if (edge.curve !== undefined) {
+            // Quadratic arc with vertical bow `edge.curve`
+            const ctrlX = (x1 + x2) / 2;
+            const ctrlY = (y1 + y2) / 2 + edge.curve;
+            pathD = `M ${x1} ${y1} Q ${ctrlX} ${ctrlY} ${x2} ${y2}`;
+            // Point on quadratic bezier at t=0.5 is (0.25*x1 + 0.5*ctrlX + 0.25*x2, 0.25*y1 + 0.5*ctrlY + 0.25*y2)
+            midX = 0.25 * x1 + 0.5 * ctrlX + 0.25 * x2;
+            midY = 0.25 * y1 + 0.5 * ctrlY + 0.25 * y2;
+          } else if (Math.abs(y1 - y2) > 8) {
+            // S-curve cubic Bezier for branching transitions (e.g., s4 -> s5 and s4 -> s7)
+            const dx = (x2 - x1) * 0.45;
+            const c1x = x1 + dx;
+            const c1y = y1 + (edge.c1yOffset || 0);
+            const c2x = x2 - dx;
+            const c2y = y2 + (edge.c2yOffset || 0);
+            pathD = `M ${x1} ${y1} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${x2} ${y2}`;
+            midX = 0.125 * x1 + 0.375 * c1x + 0.375 * c2x + 0.125 * x2;
+            midY = 0.125 * y1 + 0.375 * c1y + 0.375 * c2y + 0.125 * y2;
+          } else {
+            pathD = `M ${x1} ${y1} L ${x2} ${y2}`;
+          }
+
+          const edgeGroup = el("g", { class: "edge-group" });
+
+          // Subtle halo behind bug-path edges for visual clarity
+          if (isBug) {
+            edgeGroup.appendChild(el("path", {
+              d: pathD,
+              fill: "none",
+              stroke: "rgba(225, 29, 72, 0.12)",
+              "stroke-width": "6",
+              "stroke-linecap": "round"
+            }));
+          }
+
+          edgeGroup.appendChild(el("path", {
+            d: pathD,
+            fill: "none",
+            stroke: strokeColor,
+            "stroke-width": isBug ? "2.35" : "2",
+            "stroke-dasharray": isBug ? "6 4" : undefined,
+            "stroke-linecap": "round",
+            "marker-end": `url(#${markerId})`
+          }));
+
+          edgesLayer.appendChild(edgeGroup);
+
+          // Render pill-shaped transition label if present
+          if (edge.label) {
+            const lines = Array.isArray(edge.label) ? edge.label : [edge.label];
+            const maxChars = Math.max(...lines.map((l) => l.length));
+            const pillW = edge.pillW || Math.max(92, Math.round(maxChars * 6.35 + 22));
+            const pillH = lines.length === 1 ? 24 : 38;
+            const labelCx = midX + (edge.labelDx || 0);
+            const labelCy = midY + (edge.labelDy || 0);
+
+            const pillFill = isBug ? "#fff1f2" : "#ffffff";
+            const pillStroke = isBug
+              ? "#fda4af"
+              : (edge.theme === "teal" ? "#99f6e4" : "#ddd6fe");
+            const textColor = isBug ? "#be123c" : "#334155";
+
+            const labelGroup = el("g", { class: "edge-label-pill" });
+            labelGroup.appendChild(el("rect", {
+              x: labelCx - pillW / 2,
+              y: labelCy - pillH / 2,
+              width: pillW,
+              height: pillH,
+              rx: pillH / 2,
+              fill: pillFill,
+              stroke: pillStroke,
+              "stroke-width": "1.35",
+              filter: `url(#${prefix}-pill-shadow)`
+            }));
+
+            lines.forEach((lineText, idx) => {
+              const lineY = lines.length === 1
+                ? labelCy + 4
+                : labelCy - 3 + idx * 14;
+              labelGroup.appendChild(el("text", {
+                x: labelCx,
+                y: lineY,
+                "text-anchor": "middle",
+                "font-size": "11.5",
+                "font-weight": isBug ? "600" : "500",
+                fill: textColor
+              }, [lineText]));
+            });
+
+            labelsLayer.appendChild(labelGroup);
+          }
+        });
+
+        svg.appendChild(edgesLayer);
+
+        // 4. Render Start Dots `[*]`
+        startNodes.forEach((s) => {
+          const isBug = Boolean(s.bugPath);
+          const sGroup = el("g", { class: "start-dot-group" });
+          // Outer subtle ring
+          sGroup.appendChild(el("circle", {
+            cx: s.cx,
+            cy: s.cy,
+            r: s.r + 3.5,
+            fill: isBug ? "rgba(225, 29, 72, 0.14)" : "rgba(15, 23, 42, 0.08)"
+          }));
+          // Solid start dot
+          sGroup.appendChild(el("circle", {
+            cx: s.cx,
+            cy: s.cy,
+            r: s.r,
+            fill: isBug ? "#e11d48" : "#0f172a"
+          }));
+          svg.appendChild(sGroup);
+        });
+
+        // 5. Render Rounded State Nodes
+        nodes.forEach((node) => {
+          const isBreaks = Boolean(node.breaks);
+          const isBugPath = Boolean(node.bugPath);
+          const isTeal = node.theme === "teal";
+
+          const fill = isBreaks ? "#ffecee" : "#ffffff";
+          const stroke = isBreaks
+            ? "#e72e3b"
+            : ( isBugPath ? "#fb7185" : (isTeal ? "#2dd4bf" : "#a78bfa") );
+          const strokeWidth = isBreaks ? "2.5" : (isBugPath ? "2" : "1.75");
+          const labelColor = isBreaks ? "#cd2834" : "#0f172a";
+          const badgeFill = isBreaks
+            ? "rgba(231, 46, 59, 0.14)"
+            : (isBugPath ? "rgba(244, 63, 94, 0.12)" : (isTeal ? "rgba(20, 184, 166, 0.13)" : "rgba(139, 92, 246, 0.13)"));
+          const badgeText = isBreaks
+            ? "#b91c1c"
+            : (isBugPath ? "#be123c" : (isTeal ? "#0f766e" : "#6d28d9"));
+
+          const nGroup = el("g", { class: "state-node-group" });
+
+          // Main rounded node box
+          nGroup.appendChild(el("rect", {
+            x: node.x,
+            y: node.y,
+            width: node.w,
+            height: node.h,
+            rx: 12,
+            fill: fill,
+            stroke: stroke,
+            "stroke-width": strokeWidth,
+            filter: `url(#${prefix}-${isBreaks ? "breaks-shadow" : "node-shadow"})`
+          }));
+
+          // State ID chip (`s0`, `s1`, ...) in top-left of card
+          const idChipW = node.id.length > 2 ? 32 : 26;
+          nGroup.appendChild(el("rect", {
+            x: node.x + 8,
+            y: node.y + 7,
+            width: idChipW,
+            height: 16,
+            rx: 5,
+            fill: badgeFill
+          }));
+          nGroup.appendChild(el("text", {
+            x: node.x + 8 + idChipW / 2,
+            y: node.y + 18.5,
+            "text-anchor": "middle",
+            "font-size": "10.5",
+            "font-weight": "700",
+            "font-family": "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+            fill: badgeText
+          }, [node.id]));
+
+          // Optional warning icon badge on `breaks` states
+          if (isBreaks) {
+            nGroup.appendChild(el("circle", {
+              cx: node.x + node.w - 14,
+              cy: node.y + 15,
+              r: 7,
+              fill: "#e72e3b"
+            }));
+            nGroup.appendChild(el("text", {
+              x: node.x + node.w - 14,
+              y: node.y + 18.5,
+              "text-anchor": "middle",
+              "font-size": "10",
+              "font-weight": "800",
+              fill: "#ffffff"
+            }, ["!"]));
+          }
+
+          // State description text (1 or 2 lines)
+          const lines = Array.isArray(node.label) ? node.label : [node.label];
+          lines.forEach((line, i) => {
+            const baseY = lines.length === 1
+              ? node.y + node.h / 2 + 10
+              : node.y + node.h / 2 + 2 + i * 15.5;
+            nGroup.appendChild(el("text", {
+              x: node.x + node.w / 2,
+              y: baseY,
+              "text-anchor": "middle",
+              "font-size": "13",
+              "font-weight": isBreaks ? "700" : "600",
+              fill: labelColor
+            }, [line]));
+          });
+
+          svg.appendChild(nGroup);
+        });
+
+        // 6. Place transition pill labels on top so they are always crisp and unobstructed
+        svg.appendChild(labelsLayer);
+
+        container.appendChild(svg);
+      }
+
+      // ============================================================================
+      // 1. CHART-FIXED.MMD SPECIFICATION
+      // ============================================================================
+      const fixedSpec = {
+        prefix: "fixed",
+        ariaLabel: "Fixed Statechart: Resume bridge: two mentions in a row (one room)",
+        width: 1300,
+        height: 430,
+        outerState: {
+          x: 10,
+          y: 10,
+          w: 1280,
+          h: 410,
+          title: "At the same time"
+        },
+        regions: [
+          {
+            id: "r0",
+            title: "Turn A (thread A)",
+            theme: "teal",
+            x: 28,
+            y: 52,
+            w: 1244,
+            h: 165
+          },
+          {
+            id: "r1",
+            title: "Turn B (thread B)",
+            theme: "violet",
+            dividerY: 229,
+            x: 28,
+            y: 241,
+            w: 1244,
+            h: 165
+          }
+        ],
+        startNodes: [
+          { id: "start_a", isStart: true, cx: 58, cy: 148, r: 7 },
+          { id: "start_b", isStart: true, cx: 58, cy: 337, r: 7 }
+        ],
+        nodes: [
+          // Turn A (thread A)
+          { id: "s0", label: "waiting", theme: "teal", x: 96, y: 116, w: 108, h: 64 },
+          { id: "s1", label: "agent thinking", theme: "teal", x: 408, y: 116, w: 164, h: 64 },
+          { id: "s2", label: "reply visible", theme: "teal", x: 744, y: 116, w: 164, h: 64 },
+          { id: "s3", label: "session saved", theme: "teal", x: 1088, y: 116, w: 164, h: 64 },
+
+          // Turn B (thread B)
+          { id: "s4", label: "waiting", theme: "violet", x: 96, y: 305, w: 108, h: 64 },
+          { id: "s5", label: "agent thinking", theme: "violet", x: 408, y: 305, w: 164, h: 64 },
+          { id: "s6", label: "reply visible", theme: "violet", x: 744, y: 305, w: 164, h: 64 },
+          { id: "s7", label: "session saved", theme: "violet", x: 1088, y: 305, w: 164, h: 64 }
+        ],
+        edges: [
+          // Turn A transitions
+          { from: "start_a", to: "s0", theme: "teal" },
+          { from: "s0", to: "s1", theme: "teal", curve: -24, label: "mention arrives", pillW: 118, labelDy: -6 },
+          { from: "s1", to: "s2", theme: "teal", curve: -24, label: "agent replies, reply posted", pillW: 164, labelDy: -6 },
+          { from: "s2", to: "s3", theme: "teal", curve: -24, label: "session + thread cursor saved", pillW: 172, labelDy: -6 },
+
+          // Turn B transitions
+          { from: "start_b", to: "s4", theme: "violet" },
+          { from: "s4", to: "s5", theme: "violet", curve: -24, label: ["mention arrives", "[when session saved]"], pillW: 152, labelDy: -8 },
+          { from: "s5", to: "s6", theme: "violet", curve: -24, label: "agent replies, reply posted", pillW: 164, labelDy: -6 },
+          { from: "s6", to: "s7", theme: "violet", curve: -24, label: "session + thread cursor saved", pillW: 172, labelDy: -6 }
+        ]
+      };
+
+      // ============================================================================
+      // 2. CHART-BUGGY.MMD SPECIFICATION
+      // ============================================================================
+      const buggySpec = {
+        prefix: "buggy",
+        ariaLabel: "Buggy Statechart: Resume bridge: two mentions in a row (one room)",
+        width: 1300,
+        height: 608,
+        embeddedLegend: {
+          x: 10,
+          y: 6,
+          w: 1280,
+          h: 42
+        },
+        outerState: {
+          x: 10,
+          y: 60,
+          w: 1280,
+          h: 538,
+          title: "At the same time"
+        },
+        regions: [
+          {
+            id: "r0",
+            title: "Turn A (thread A)",
+            theme: "teal",
+            x: 28,
+            y: 102,
+            w: 1244,
+            h: 165
+          },
+          {
+            id: "r1",
+            title: "Turn B (thread B)",
+            theme: "violet",
+            dividerY: 279,
+            x: 28,
+            y: 291,
+            w: 1244,
+            h: 290
+          }
+        ],
+        startNodes: [
+          { id: "start_a", isStart: true, cx: 58, cy: 198, r: 7, bugPath: true },
+          { id: "start_b", isStart: true, cx: 58, cy: 448, r: 7, bugPath: true }
+        ],
+        nodes: [
+          // Turn A (thread A) - s0..s3 have class bugPath in chart-buggy.mmd
+          { id: "s0", label: "waiting", theme: "teal", bugPath: true, x: 96, y: 166, w: 108, h: 64 },
+          { id: "s1", label: "agent thinking", theme: "teal", bugPath: true, x: 408, y: 166, w: 168, h: 64 },
+          { id: "s2", label: "reply visible", theme: "teal", bugPath: true, x: 744, y: 166, w: 168, h: 64 },
+          { id: "s3", label: "session saved", theme: "teal", bugPath: true, x: 1088, y: 166, w: 168, h: 64 },
+
+          // Turn B (thread B)
+          // s4: waiting (bugPath)
+          { id: "s4", label: "waiting", theme: "violet", bugPath: true, x: 96, y: 416, w: 108, h: 64 },
+
+          // Upper branch in Turn B: breaks + bugPath states (s5, s6, s8)
+          {
+            id: "s5",
+            label: ["agent thinking,", "started without session"],
+            theme: "violet",
+            breaks: true,
+            bugPath: true,
+            x: 408,
+            y: 344,
+            w: 168,
+            h: 74
+          },
+          {
+            id: "s6",
+            label: ["reply visible,", "started without session"],
+            theme: "violet",
+            breaks: true,
+            bugPath: true,
+            x: 744,
+            y: 344,
+            w: 168,
+            h: 74
+          },
+          {
+            id: "s8",
+            label: ["session saved,", "started without session"],
+            theme: "violet",
+            breaks: true,
+            bugPath: true,
+            x: 1088,
+            y: 344,
+            w: 168,
+            h: 74
+          },
+
+          // Lower branch in Turn B: normal states when session saved (s7, s9, s10)
+          {
+            id: "s7",
+            label: "agent thinking",
+            theme: "violet",
+            x: 408,
+            y: 486,
+            w: 168,
+            h: 64
+          },
+          {
+            id: "s9",
+            label: "reply visible",
+            theme: "violet",
+            x: 744,
+            y: 486,
+            w: 168,
+            h: 64
+          },
+          {
+            id: "s10",
+            label: "session saved",
+            theme: "violet",
+            x: 1088,
+            y: 486,
+            w: 168,
+            h: 64
+          }
+        ],
+        edges: [
+          // Turn A bug-path transitions
+          { from: "start_a", to: "s0", theme: "teal", bugPath: true },
+          { from: "s0", to: "s1", theme: "teal", bugPath: true, curve: -24, label: "mention arrives", pillW: 118, labelDy: -6 },
+          { from: "s1", to: "s2", theme: "teal", bugPath: true, curve: -24, label: "agent replies, reply posted", pillW: 164, labelDy: -6 },
+          { from: "s2", to: "s3", theme: "teal", bugPath: true, curve: -24, label: "session + thread cursor saved", pillW: 172, labelDy: -6 },
+
+          // Turn B start -> s4
+          { from: "start_b", to: "s4", theme: "violet", bugPath: true },
+
+          // Turn B Upper Branch (Bug path -> breaks states)
+          {
+            from: "s4",
+            to: "s5",
+            theme: "violet",
+            bugPath: true,
+            y1Offset: -12,
+            label: ["next mention starts", "[before A's session is saved]"],
+            pillW: 184,
+            labelDy: -16
+          },
+          {
+            from: "s5",
+            to: "s6",
+            theme: "violet",
+            bugPath: true,
+            curve: -22,
+            label: "agent replies, reply posted",
+            pillW: 164,
+            labelDy: -6
+          },
+          {
+            from: "s6",
+            to: "s8",
+            theme: "violet",
+            bugPath: true,
+            curve: -22,
+            label: "session + thread cursor saved",
+            pillW: 172,
+            labelDy: -6
+          },
+
+          // Turn B Lower Branch (Valid path when session saved)
+          {
+            from: "s4",
+            to: "s7",
+            theme: "violet",
+            y1Offset: 12,
+            label: ["mention arrives", "[when session saved]"],
+            pillW: 152,
+            labelDy: 16
+          },
+          {
+            from: "s7",
+            to: "s9",
+            theme: "violet",
+            curve: 22,
+            label: "agent replies, reply posted",
+            pillW: 164,
+            labelDy: 6
+          },
+          {
+            from: "s9",
+            to: "s10",
+            theme: "violet",
+            curve: 22,
+            label: "session + thread cursor saved",
+            pillW: 172,
+            labelDy: 6
+          }
+        ]
+      };
+
+      renderStatechart("chart-fixed-container", fixedSpec);
+      renderStatechart("chart-buggy-container", buggySpec);
+    })();
+  </script>
+</body>
+</html>
