@@ -4,7 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+
+import { freeDistinctPorts } from '../scripts/test-free-ports.mjs';
 
 const sigilCli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'sigil.mjs');
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-relayfed-test-'));
@@ -91,9 +93,53 @@ test('--federation-mode queue without --database-url names in-memory in error me
   }
 });
 
-// TODO: positive "reaper starts" coverage requires live Postgres + process
-// management (relay up blocks forever) — see CI Postgres startup integration
-// test. The queue-mode path above only asserts the pre-bind guards; that
-// `--federation-mode queue` with a real --database-url calls
-// startFederationReaper and logs "Federation outbox reaper running" is not
-// exercised here.
+test('relay up starts federation reaper when given live Postgres and queue mode', { skip: !process.env.SIGIL_TEST_DATABASE_URL, timeout: 90_000 }, async () => {
+  const dbUrl = process.env.SIGIL_TEST_DATABASE_URL;
+  const cwd = tmp();
+
+  try {
+    execFileSync(process.execPath, [sigilCli, 'init', 'a', '--domain', 'local'], { cwd, encoding: 'utf8' });
+    execFileSync(process.execPath, [sigilCli, 'init', 'endpoint1', '--federation-owner', 'usr_1@local', '--domain', 'local', '--registry', 'registry.json'], { cwd, encoding: 'utf8' });
+
+    const [port, streamPort, publicPort] = await freeDistinctPorts(3);
+
+    const child = spawn(process.execPath, [
+      sigilCli, 'relay', 'up',
+      '--registry', 'registry.json',
+      '--domain', 'local',
+      '--federation-mode', 'queue',
+      '--federation-identity', '.sigil/a.identity.json',
+      '--database-url', dbUrl,
+      '--port', String(port),
+      '--stream-port', String(streamPort),
+      '--public-port', String(publicPort),
+      '--room-bot-key-wrap-key', 'SIGIL_TEST_BOT_WRAP'
+    ], {
+      cwd,
+      env: { ...process.env, SIGIL_TEST_BOT_WRAP: Buffer.alloc(32, 7).toString('base64') }
+    });
+
+    let output = '';
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`relay did not start: ${output}`)), 30_000);
+      child.stdout.on('data', (chunk) => {
+        output += chunk;
+        if (output.includes('Federation outbox reaper running')) {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+      child.stderr.on('data', (chunk) => { output += chunk; });
+      child.once('exit', (code) => reject(new Error(`relay exited ${code}: ${output}`)));
+    });
+
+    assert.match(output, /Federation outbox reaper running/);
+
+    if (child) {
+      child.kill('SIGTERM');
+      if (child.exitCode === null && child.signalCode === null) await new Promise((resolve) => child.once('exit', resolve));
+    }
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
