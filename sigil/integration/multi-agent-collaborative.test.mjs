@@ -11,7 +11,6 @@ import { fileURLToPath } from 'node:url';
 import { createIdentity, identityKeys } from '../cli/identity.mjs';
 import { createMemoryRepository } from '../cli/memory-repository.mjs';
 import { LocalOutbox } from '../connectors/v1/local-outbox.mjs';
-import { LocalInbox } from '../connectors/v1/local-inbox.mjs';
 import { RelayClient } from '../connectors/v1/relay-client.mjs';
 import { ConnectorDatabase } from '../connectors/v1/connector-db-adapter.mjs';
 import { createRelayServer } from '../relay/v1/http-server.mjs';
