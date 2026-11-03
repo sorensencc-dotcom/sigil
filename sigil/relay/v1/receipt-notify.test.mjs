@@ -35,6 +35,25 @@ test('a failing lookup is logged and never thrown', async () => {
   assert.equal(logged.length, 1);
 });
 
+test('looks up the sender and stream sequence together', async () => {
+  let seen = 0;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const wait = async (value) => {
+    seen += 1;
+    if (seen === 2) release();
+    await gate;
+    return value;
+  };
+  const { frames, stream, logger } = setup();
+  const repository = {
+    async lookupMessageSender() { return wait({ endpoint_id: 'ep_sender' }); },
+    async lookupEnvelopeStreamSequence() { return wait(7n); },
+  };
+  assert.equal(await sendReceiptFrame({ stream, repository, logger }, INPUT), true);
+  assert.equal(frames[0].frame.streamSeq, 7n);
+});
+
 test('returns false without a stream or without notifyReceipt', async () => {
   const { repository, logger } = setup();
   assert.equal(await sendReceiptFrame({ stream: null, repository, logger }, INPUT), false);

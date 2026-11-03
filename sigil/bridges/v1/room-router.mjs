@@ -95,13 +95,14 @@ export function createRoomRouter({ identity, relay, ollama, model, timeoutMs = 2
   async function handle({ envelope }) {
     const roomId = envelope.conversation_id;
     if ((envelope.body?.mentions ?? []).length > 0) return { outcome: 'dropped' };
-    const membersResult = await relayCall('the member list', () => relay.listRoomMembers(roomId));
-    if (!membersResult.ok) return { outcome: 'dropped' };
+    const [membersResult, historyResult] = await Promise.all([
+      relayCall('the member list', () => relay.listRoomMembers(roomId)),
+      relayCall('the message history', () => recentMessages(roomId)),
+    ]);
+    if (!membersResult.ok || !historyResult.ok) return { outcome: 'dropped' };
     const members = membersResult.value;
     const joined = members.filter((member) => member.response_mode === 'joins' && member.endpoint_id !== identity.endpoint_id);
     const joinedIds = new Set(joined.map((member) => member.endpoint_id));
-    const historyResult = await relayCall('the message history', () => recentMessages(roomId));
-    if (!historyResult.ok) return { outcome: 'dropped' };
     const history = historyResult.value;
     const lines = history.filter((item) => item.message_id !== envelope.message_id).map((item) => `[seq ${item.room_seq}] ${escapeField(item.envelope?.sender?.endpoint_id)}: ${escapeField(item.envelope?.body?.text)}`);
     const prompt = [

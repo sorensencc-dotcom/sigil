@@ -418,10 +418,10 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
       return { items, duplicate: false, deliveries };
     });
     if (outcome.invalid) return fail(response, requestId, 422, 'INVALID_REQUEST', 'trigger_message_id must name a human room.message without mentions');
-    for (const delivery of outcome.deliveries) {
+    await Promise.all(outcome.deliveries.map((delivery) => {
       stream?.notify?.(delivery.endpoint_id, delivery.delivery_id);
-      await sendReceiptFrame({ stream, repository, logger }, { message_id: delivery.message_id, delivery_id: delivery.delivery_id, recipient_endpoint_id: delivery.endpoint_id, state: repository.initialDeliveryState ?? 'delivered', at: now.toISOString() });
-    }
+      return sendReceiptFrame({ stream, repository, logger }, { message_id: delivery.message_id, delivery_id: delivery.delivery_id, recipient_endpoint_id: delivery.endpoint_id, state: repository.initialDeliveryState ?? 'delivered', at: now.toISOString() });
+    }));
     return send(response, requestId, 200, { code: 'OK', items: outcome.items, duplicate: outcome.duplicate });
   }
 

@@ -137,9 +137,9 @@ export function createStreamServer({ server, authenticate, tokenHashes, ticketSt
     if (sessionId) trackSession(sessionId, socket);
     // The socket joins clients/browserClients only after liveness passes, so
     // no frame reaches a socket whose endpoint, human, or session is not live.
-    const snapshot = await liveSnapshot(endpointId);
+    const [snapshot, session] = await Promise.all([liveSnapshot(endpointId), liveSession(sessionId)]);
     if (!snapshot) return socket.close(1008, 'unauthorized');
-    if (!sessionOk(snapshot, await liveSession(sessionId))) return socket.close(1008, 'unauthorized');
+    if (!sessionOk(snapshot, session)) return socket.close(1008, 'unauthorized');
     if (socket.readyState !== 1) return;
     socketInfo.set(socket, { endpointId, ownerId: snapshot.owner_id ?? principal?.owner_id ?? null, sessionId });
     register(ticketParam !== null ? browserClients : clients, endpointId, socket);
@@ -166,12 +166,23 @@ export function createStreamServer({ server, authenticate, tokenHashes, ticketSt
       if (!byEndpoint.has(info.endpointId)) byEndpoint.set(info.endpointId, []);
       byEndpoint.get(info.endpointId).push(socket);
     }
-    const sessions = new Map();
-    for (const [endpointId, group] of byEndpoint) {
-      const snapshot = await liveSnapshot(endpointId);
+    const sessionIds = new Set();
+    for (const group of byEndpoint.values()) {
       for (const socket of group) {
         const { sessionId } = socketInfo.get(socket);
-        if (snapshot && sessionId && !sessions.has(sessionId)) sessions.set(sessionId, await liveSession(sessionId));
+        if (sessionId) sessionIds.add(sessionId);
+      }
+    }
+    const [snapshotEntries, sessionEntries] = await Promise.all([
+      Promise.all([...byEndpoint.keys()].map(async (endpointId) => [endpointId, await liveSnapshot(endpointId)])),
+      Promise.all([...sessionIds].map(async (sessionId) => [sessionId, await liveSession(sessionId)])),
+    ]);
+    const snapshots = new Map(snapshotEntries);
+    const sessions = new Map(sessionEntries);
+    for (const [endpointId, group] of byEndpoint) {
+      const snapshot = snapshots.get(endpointId);
+      for (const socket of group) {
+        const { sessionId } = socketInfo.get(socket);
         if (snapshot && sessionOk(snapshot, sessionId ? sessions.get(sessionId) : null)) continue;
         socket.close(1008, 'unauthorized');
       }

@@ -84,15 +84,23 @@ export function createOnPersisted(stream, { repository = null, logger = null } =
     if (senderId) {
       for (const target of persisted.fanout ?? []) stream.notifyReceipt(senderId, frame(persisted.message_id, target.delivery_id, target.endpoint_id, persisted.streamSeq));
     }
-    for (const target of persisted.roomDeliveries ?? []) {
+    const roomDeliveries = persisted.roomDeliveries ?? [];
+    const promotedIds = [...new Set(roomDeliveries
+      .map((target) => target.message_id ?? persisted.message_id)
+      .filter((messageId) => messageId !== persisted.message_id))];
+    const promotedSenders = new Map();
+    await Promise.all(promotedIds.map(async (messageId) => {
+      try {
+        promotedSenders.set(messageId, (await repository?.lookupMessageSender?.(messageId))?.endpoint_id ?? null);
+      } catch (error) {
+        logger?.error?.('promoted delivery sender lookup failed', error);
+        promotedSenders.set(messageId, null);
+      }
+    }));
+    for (const target of roomDeliveries) {
       const messageId = target.message_id ?? persisted.message_id;
       const own = messageId === persisted.message_id;
-      let receiptTo = own ? senderId : null;
-      if (!own) {
-        // A promoted agent's delivery belongs to an earlier trigger message,
-        // so its receipt goes to that message's sender.
-        try { receiptTo = (await repository?.lookupMessageSender?.(messageId))?.endpoint_id ?? null; } catch (error) { logger?.error?.('promoted delivery sender lookup failed', error); }
-      }
+      const receiptTo = own ? senderId : promotedSenders.get(messageId);
       if (receiptTo) stream.notifyReceipt(receiptTo, frame(messageId, target.delivery_id, target.endpoint_id, own ? persisted.streamSeq : null));
     }
   };

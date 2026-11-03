@@ -7,11 +7,13 @@ import { mapReceiptState } from './receipt-state.mjs';
 export async function sendReceiptFrame({ stream, repository, logger = null }, { message_id, delivery_id, recipient_endpoint_id, state, at }) {
   if (!stream || typeof stream.notifyReceipt !== 'function' || typeof repository?.lookupMessageSender !== 'function') return false;
   try {
-    const sender = await repository.lookupMessageSender(message_id);
+    const [sender, streamSeq] = await Promise.all([
+      repository.lookupMessageSender(message_id),
+      typeof repository.lookupEnvelopeStreamSequence === 'function'
+        ? repository.lookupEnvelopeStreamSequence(message_id)
+        : null,
+    ]);
     if (!sender) return false;
-    const streamSeq = typeof repository.lookupEnvelopeStreamSequence === 'function'
-      ? await repository.lookupEnvelopeStreamSequence(message_id)
-      : null;
     stream.notifyReceipt(sender.endpoint_id, { message_id, delivery_id, recipient_endpoint_id, state, mapped_state: mapReceiptState(state), at, streamSeq });
     return true;
   } catch (error) {

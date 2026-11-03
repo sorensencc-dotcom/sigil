@@ -83,6 +83,35 @@ test('a promoted delivery whose trigger sender is unknown sends no frame and doe
   assert.equal(errors.length, 0);
 });
 
+test('promoted deliveries for distinct triggers look up senders together', async () => {
+  let seen = 0;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const ids = [];
+  const repository = {
+    async lookupMessageSender(id) {
+      ids.push(id);
+      seen += 1;
+      if (seen === 2) release();
+      await gate;
+      return { endpoint_id: id === 'msg_a' ? 'ep_a' : 'ep_b' };
+    },
+  };
+  const { frames, onPersisted } = setup(repository);
+  await onPersisted({
+    envelope: { sender: { endpoint_id: 'ep_agent_a' }, created_at: ENVELOPE.created_at },
+    persisted: {
+      message_id: 'msg_reply', duplicate: false, streamSeq: 9n, deliveryState: 'queued',
+      roomDeliveries: [
+        { endpoint_id: 'ep_x', delivery_id: 'del_x', message_id: 'msg_a' },
+        { endpoint_id: 'ep_y', delivery_id: 'del_y', message_id: 'msg_b' },
+      ],
+    },
+  });
+  assert.deepEqual(ids.sort(), ['msg_a', 'msg_b']);
+  assert.deepEqual(frames.map((f) => [f.endpointId, f.frame.delivery_id]), [['ep_a', 'del_x'], ['ep_b', 'del_y']]);
+});
+
 test('a failing trigger sender lookup is logged once, sends no frame, and does not reject', async () => {
   const { frames, errors, onPersisted } = setup({ async lookupMessageSender() { throw new Error('lookup failed'); } });
   await onPersisted(PROMOTED);

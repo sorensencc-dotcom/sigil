@@ -125,10 +125,18 @@ export function createRoomBridge({ identity, relay, outbox, cli, sessions, pollI
     const resumeId = session?.session_id ?? null;
     const replay = cli.capabilities?.resume === false;
     const cursors = session?.last_seq_by_thread ?? {};
-    const members = await relay.listRoomMembers(roomId);
+    const firstAfterSeq = replay ? '0' : (cursors[threadRootId] ?? '0');
+    const firstSessionId = replay ? null : resumeId;
+    const contextPromise = threadContext(roomId, threadRootId, firstAfterSeq);
+    let members;
+    try {
+      members = await relay.listRoomMembers(roomId);
+    } catch (error) {
+      await contextPromise.catch(() => {});
+      throw error;
+    }
 
-    const runTurn = async (sessionId, afterSeq) => {
-      const context = await threadContext(roomId, threadRootId, afterSeq);
+    const runTurn = async (sessionId, context) => {
       const prompt = buildPrompt({ roomId, members, messages: context.messages, trigger: envelope });
       const result = await cli.run({ prompt, sessionId, signal: controller.signal });
       return { context, result };
@@ -147,11 +155,11 @@ export function createRoomBridge({ identity, relay, outbox, cli, sessions, pollI
     let turn;
     try {
       try {
-        turn = await runTurn(replay ? null : resumeId, replay ? '0' : (cursors[threadRootId] ?? '0'));
+        turn = await runTurn(firstSessionId, await contextPromise);
       } catch (error) {
         if (controller.signal.aborted || error.code === 'CLI_CANCELLED') return { outcome: 'cancelled' };
         if (!replay && resumeId && error.code === 'CLI_SESSION_LOST') {
-          try { turn = await runTurn(null, '0'); } catch (retryError) { if (controller.signal.aborted || retryError.code === 'CLI_CANCELLED') return { outcome: 'cancelled' }; return fail(roomId, invocation, retryError.code ?? 'CLI_FAILED'); }
+          try { turn = await runTurn(null, await threadContext(roomId, threadRootId, '0')); } catch (retryError) { if (controller.signal.aborted || retryError.code === 'CLI_CANCELLED') return { outcome: 'cancelled' }; return fail(roomId, invocation, retryError.code ?? 'CLI_FAILED'); }
         } else {
           return fail(roomId, invocation, error.code ?? 'CLI_FAILED');
         }
