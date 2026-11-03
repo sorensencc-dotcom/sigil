@@ -1,0 +1,6 @@
+{
+  "MC.cfg": ["NoSurvivingInvocation"],
+  "MC_active.cfg": [],
+  "MC_lock_human.cfg": [],
+  "MC_no_endpoint_lock.cfg": ["NoSurvivingInvocation"]
+}
