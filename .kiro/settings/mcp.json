@@ -1,10 +1,8 @@
 {
   "mcpServers": {
-    "graft": {
-      "command": "npx",
+    "trail": {
+      "command": "trail",
       "args": [
-        "-y",
-        "@nanonets/graft",
         "mcp"
       ]
     }
