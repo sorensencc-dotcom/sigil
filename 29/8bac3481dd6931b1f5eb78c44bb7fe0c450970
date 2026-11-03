@@ -1,0 +1,38 @@
+.claude/skills/verify-suspend-pick/SKILL.md
+  h_5c172e9b435f5a 1-95
+verify/suspend-pick/MC.cfg
+  h_5c172e9b435f5a 1-6
+verify/suspend-pick/MC.tla
+  h_5c172e9b435f5a 1-3
+verify/suspend-pick/MC_active.cfg
+  h_5c172e9b435f5a 1-6
+verify/suspend-pick/MC_lock_human.cfg
+  h_5c172e9b435f5a 1-6
+verify/suspend-pick/MC_no_endpoint_lock.cfg
+  h_5c172e9b435f5a 1-6
+verify/suspend-pick/SuspendPick.tla
+  h_5c172e9b435f5a 1-162
+verify/suspend-pick/check.mjs
+  h_5c172e9b435f5a 1-92
+verify/suspend-pick/covered-files.txt
+  h_5c172e9b435f5a 1-3
+verify/suspend-pick/drift.mjs
+  h_5c172e9b435f5a 1-26
+verify/suspend-pick/expected.json
+  h_5c172e9b435f5a 1-6
+verify/suspend-pick/expected.md
+  h_5c172e9b435f5a 1-14
+verify/suspend-pick/view.mjs
+  h_5c172e9b435f5a 1-58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "298bac3481dd6931b1f5eb78c44bb7fe0c450970",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
