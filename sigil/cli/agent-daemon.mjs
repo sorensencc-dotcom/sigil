@@ -6,7 +6,6 @@ import { WebSocket } from 'ws';
 import { RelayClient } from '../connectors/v1/relay-client.mjs';
 import { LocalOutbox } from '../connectors/v1/local-outbox.mjs';
 import { ConnectorDatabase } from '../connectors/v1/connector-db-adapter.mjs';
-import { WebSocketConnectionManager } from '../connectors/v1/connector-ws-manager.mjs';
 import { agentEnv } from '../bridges/v1/cli-runner.mjs';
 import { identityKeys } from './identity.mjs';
 import { logHop } from '../relay/v1/hop-log.mjs';
