@@ -1,0 +1,30 @@
+.trail/learnings/2026-11-03-members-fetch-failure-stays-a-bridge-chris.md
+  h_5c172e9b435f5a 1-36
+sigil/bridges/v1/room-bridge.mjs
+  h_5c172e9b435f5a 128-137,139,158,162
+sigil/bridges/v1/room-router.mjs
+  h_5c172e9b435f5a 98-102
+sigil/relay/v1/http-server.mjs
+  h_5c172e9b435f5a 87-100,103
+sigil/relay/v1/receipt-accept-frames.test.mjs
+  h_5c172e9b435f5a 86-114
+sigil/relay/v1/receipt-notify.mjs
+  h_5c172e9b435f5a 10-15
+sigil/relay/v1/receipt-notify.test.mjs
+  h_5c172e9b435f5a 38-56
+sigil/relay/v1/room-routes.mjs
+  h_5c172e9b435f5a 421,423-424
+sigil/relay/v1/stream-server.mjs
+  h_5c172e9b435f5a 140,142,169-181,183
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9beda92b2bda82f9ab60e67593eafdc612e1c10b",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
