@@ -67,11 +67,12 @@ test('watchdog restarts a killed daemon, probes its room socket, and redacts cre
   }
 });
 
-test('setup script registers a Chief watchdog at logon without embedding secrets', () => {
-  const source = readFileSync(setup, 'utf8');
+test('setup script plans a logon task that runs the watchdog without embedding secrets', () => {
   assert.match(readFileSync(watchdog, 'utf8'), /\$IntervalSeconds = 60/);
-  assert.match(source, /New-ScheduledTaskTrigger\s+-AtLogOn/);
-  assert.match(source, /chief-watchdog\.ps1/);
-  assert.match(source, /Register-ScheduledTask/);
-  assert.doesNotMatch(source, /TOKEN|SECRET|Bearer/i);
+  const res = runPowerShell(setup, ['-WhatIf']);
+  const out = `${res.stdout}\n${res.stderr}`;
+  assert.equal(res.status, 0, out);
+  assert.match(out, /SigilChiefWatchdog/);
+  assert.match(out, /-File "[^"]*chief-watchdog\.ps1" -RepoRoot "/);
+  assert.doesNotMatch(out, /TOKEN|SECRET|Bearer/i);
 });

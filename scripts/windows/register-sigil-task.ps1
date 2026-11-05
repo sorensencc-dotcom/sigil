@@ -7,6 +7,8 @@
 param(
   [string]$TaskName = 'SigilStack',
   [string]$SecretsFile = (Join-Path $env:USERPROFILE '.sigil-secrets\floor-warden.env'),
+  [string]$Launcher,
+  [string]$LauncherArguments,
   [switch]$Unregister,
   [switch]$StartNow
 )
@@ -22,9 +24,12 @@ if ($Unregister) {
 }
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$launcher = Join-Path $scriptDir 'start-sigil-stack.ps1'
+if (-not $Launcher) {
+  $Launcher = Join-Path $scriptDir 'start-sigil-stack.ps1'
+  $LauncherArguments = "-SecretsFile `"$SecretsFile`""
+}
 $user = "$env:USERDOMAIN\$env:USERNAME"
-$argLine = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$launcher`" -SecretsFile `"$SecretsFile`""
+$argLine = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$Launcher`" $LauncherArguments".TrimEnd()
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $argLine -WorkingDirectory (Split-Path (Split-Path $scriptDir))
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
