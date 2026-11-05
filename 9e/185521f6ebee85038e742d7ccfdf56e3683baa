@@ -1,0 +1,26 @@
+.trail/learnings/2026-11-05-new-windows-logon-tasks-reuse-the-chris.md
+  s_5233cb8f9f7722::t_9957c314175288 1-28
+tests/chief-watchdog.test.mjs
+  s_5233cb8f9f7722::t_f2fdc65dbf454e 70,72-77
+scripts/setup-chief-daemon.ps1
+  s_5233cb8f9f7722::t_f088f419917951 1,3-4,8-9,12,15-18
+scripts/windows/register-sigil-task.ps1
+  s_5233cb8f9f7722::t_05f094f1005085 27-30,32
+  s_5233cb8f9f7722::t_a980c8340609f5 10-11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9e185521f6ebee85038e742d7ccfdf56e3683baa",
+  "prompts": {},
+  "sessions": {
+    "s_5233cb8f9f7722": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2fd6162c-8c74-40dc-ad18-7e93248fe6ca",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
