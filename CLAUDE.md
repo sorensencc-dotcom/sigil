@@ -75,3 +75,17 @@ Runbooks and guides:
 - `docs/observability/session-layer-rollout.md` and `docs/observability/session-resend-dashboard.md`: session layer rollout and monitoring.
 - `scripts/windows/README.md`: Windows supervisor and scheduled task setup.
 - `docs/meta/sigil-host-inbox-wait-convention.md`: host inbox wait convention.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `sorensencc-dotcom/sigil` via `gh`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default Matt Pocock vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `GLOSSARY.md` + `docs/adr/` when present. See `docs/agents/domain.md`.
