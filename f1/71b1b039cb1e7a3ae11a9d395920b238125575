@@ -1,0 +1,53 @@
+tests/chief-watchdog.test.mjs
+  s_1a1e61bfc22ac6::t_75e8532b1cfc34 67
+  s_1a1e61bfc22ac6::t_9b03d03dff2c9b 3,9-10,19,21,29,69
+  s_9052ccf97e02ed::t_756fcb2674489d 2,4-6,8,12-14,18,20,22-28,30-32,34,45-51,57-61,63-66,68,70-71,73-76
+  s_9052ccf97e02ed::t_010a35f23b30d0 62,72
+  s_9052ccf97e02ed::t_9fbc7fbc1b2fd4 56
+  s_9052ccf97e02ed::t_d2a47cc0c4b087 36-41,44
+  s_a9255ab19745f2::t_900c9840c3f064 1,7,11,15-17,77
+  s_9052ccf97e02ed::t_e1f19aa73cf76f 33
+  s_9052ccf97e02ed::t_1bf79ddee2a505 42-43
+  s_9052ccf97e02ed::t_39a5d318bb2b01 52-55
+  s_1a1e61bfc22ac6::t_37aa4d58009ac3 35
+scripts/chief-watchdog.ps1
+  s_9052ccf97e02ed::t_d62514a8ecb408 3-8,12-13,18,21,25,28,30,32-35,39-46,50-52,57-68,70-74,76-81,83,85-88
+  s_a9255ab19745f2::t_a8d40109cd82a0 2,10-11,15-17,22-24,31,36-38,47-49,54-55,69,84,89
+  s_1a1e61bfc22ac6::t_e17f486d180fd6 1,9,14,20,26-27,29,53,56,82
+  s_9052ccf97e02ed::t_e1f19aa73cf76f 19,75
+scripts/setup-chief-daemon.ps1
+  s_1a1e61bfc22ac6::t_e17f486d180fd6 1-2,5-7,9-11,15,26-27,30,32,37-38
+  s_9052ccf97e02ed::t_d62514a8ecb408 3-4,8,12-14,16-25,28-29,31,33-36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f171b1b039cb1e7a3ae11a9d395920b238125575",
+  "prompts": {},
+  "sessions": {
+    "s_1a1e61bfc22ac6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1aa3a-ef29-7f73-b87b-878ec147e8df",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_9052ccf97e02ed": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1aca1-c09b-7c73-a5a8-d41f4f4b225e",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_a9255ab19745f2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1a9fe-2cf1-7a92-a9fa-55e1cb906810",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
