@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { identityKeys, loadIdentity } from './identity.mjs';
 import { runJcsAudit as defaultRunJcsAudit } from '../../jcs-audit-lib.mjs';
 import { runDepAudit as defaultRunDepAudit } from '../../dep-audit-lib.mjs';
+import { loadServiceConfigFile, validateServiceConfig, DEFAULT_SERVICE_CONFIG } from './service-config.mjs';
 
 /**
  * Locates the sigil package's own root from this module's file location --
@@ -98,16 +99,45 @@ export async function checkRelayConnectivity(relayUrl, { timeoutMs = 5000, fetch
 }
 
 /**
+ * Validates a Sigil service configuration file against the service schema,
+ * checking port allocations and referenced files.
+ */
+export function checkServiceConfig(configPath, { basePath = process.cwd(), checkFiles = true } = {}) {
+  try {
+    const config = loadServiceConfigFile(configPath);
+    const result = validateServiceConfig(config, { checkFiles, basePath });
+    if (!result.ok) {
+      return {
+        ok: false,
+        configPath,
+        issues: result.issues,
+        error: result.issues.map((i) => `[${i.code}] ${i.path}: ${i.message}`).join('; '),
+      };
+    }
+    return { ok: true, configPath, issues: [] };
+  } catch (err) {
+    return {
+      ok: false,
+      configPath,
+      error: err.message,
+      issues: [{ code: 'CONFIG_LOAD_FAILED', path: configPath, message: err.message }],
+    };
+  }
+}
+
+/**
  * Orchestrates the full `sigil doctor` report: the two repo-conformance
  * audits always run; the keypair check runs only when identityPath is
- * given, the relay check only when relayUrl is given. All dependencies
- * are injectable so this stays testable without subprocesses or a real
+ * given, the relay check only when relayUrl is given, and the service config
+ * check runs when serviceConfigPath is provided or when .sigil/service.json exists.
+ * All dependencies are injectable so this stays testable without subprocesses or a real
  * network. Overall pass requires every check that ran to have passed.
  */
 export async function runDoctor({
   targetDir = findPackageRoot(),
   identityPath,
   relayUrl,
+  serviceConfigPath,
   timeoutMs,
   auditFns: { runJcsAudit = defaultRunJcsAudit, runDepAudit = defaultRunDepAudit } = {},
   loadIdentityFn = loadIdentity,
@@ -124,6 +154,14 @@ export async function runDoctor({
 
   if (relayUrl) {
     checks.relay = await checkRelayConnectivity(relayUrl, { timeoutMs, fetchImpl });
+  }
+
+  const effectiveConfigPath = serviceConfigPath !== undefined
+    ? serviceConfigPath
+    : (fs.existsSync(path.join(targetDir, DEFAULT_SERVICE_CONFIG)) ? path.join(targetDir, DEFAULT_SERVICE_CONFIG) : null);
+
+  if (effectiveConfigPath) {
+    checks.serviceConfig = checkServiceConfig(effectiveConfigPath, { basePath: targetDir });
   }
 
   const pass = Object.values(checks).every((check) => check.pass !== false && check.ok !== false);

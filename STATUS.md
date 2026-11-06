@@ -1,5 +1,19 @@
 # Status
 
+## Session update: 2026-11-06 service config, doctor, and CLI stubs (issue #132, sub-issue #174)
+
+- Branch `feat/issue-174-service-config` off `main`. Implements sub-issue #174 under parent issue #132.
+- Shipped:
+  - Service configuration schema validator and loader in `sigil/cli/service-config.mjs` (`validateServiceConfig`, `loadServiceConfigFile`, `buildServicePlan`). Enforces port disjointness across relay, stream, ingress, public proxy, and rooms-web ports.
+  - Diagnostics integration in `sigil/cli/doctor.mjs` (`checkServiceConfig`) and CLI flag `--service-config <path>`, wired to `printDoctorReport`. Automatically checks `.sigil/service.json` if present in the repository root.
+  - Multi-subcommand CLI handler in `sigil/cli/service-command.mjs` supporting `install`, `start`, `stop`, `status`, and `uninstall` with `--dry-run` and `--json` format output. Wired through `bin/sigil.mjs` and `sigil/cli/sigil.mjs`.
+  - Service configuration specification and usage documentation in `docs/service-config.md`.
+- Evidence:
+  - Unit and integration tests passed 30/30 across `sigil/cli/service-config.test.mjs` (8/8), `sigil/cli/doctor-service-config.test.mjs` (3/3), `sigil/cli/service-command.test.mjs` (5/5), `sigil/cli/doctor-orchestration.test.mjs` (5/5), and `sigil/cli/windows-launcher-args.test.mjs` (9/9).
+  - JCS audit (`npm run audit:jcs`) and Dependency gap audit (`npm run audit:deps`) passed clean with zero violations.
+  - CLI dry run verified on Windows host for both text and JSON formats against `.sigil/service.example.json`.
+- Next sub-issue: #175 (Credential store integration and secret-free launch).
+
 ## Session update: 2026-10-28 Sigil Rooms Phase 5 Task 15 (issue #100)
 
 - Branch `feat/issue-100-phase5-task15-docs-verify` on `origin/main` after Tasks 10–14 merged (#121–#125). Implements issue #100 Task 15 (docs + gated final verification) plus `.invalid` DNS harden.

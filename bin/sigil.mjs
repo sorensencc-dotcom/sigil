@@ -37,6 +37,8 @@ Usage:
                                          Send a signed task envelope
   sigil inbox [options] [--watch|--wait] Read/wait for incoming envelopes
   sigil agent run [options]              Start autonomous worker daemon
+  sigil service <command>                Manage supervisor services (install|start|stop|status|uninstall)
+  sigil doctor                           Run conformance and configuration diagnostics
   sigil mcp                              Start the MCP stdio bridge
   sigil configure                        Show host configuration instructions
   sigil configure --codex                Register Sigil in Codex MCP configuration
@@ -46,7 +48,7 @@ Usage:
   process.exit(command ? 0 : 1);
 }
 
-if (['relay', 'send', 'inbox', 'agent'].includes(command) || (command === 'init' && process.argv[3] !== 'codex')) {
+if (['relay', 'send', 'inbox', 'agent', 'service', 'doctor', 'peer', 'oidc-issuer', 'human', 'bot', 'ingress', 'room', 'agentmail', 'resend', 'federation', 'route', 'endpoint', 'sign-contract', 'verify-contract'].includes(command) || (command === 'init' && process.argv[3] !== 'codex')) {
   const cli = await import('../sigil/cli/sigil.mjs');
   await cli.main?.();
 } else if (command === 'configure') {

@@ -53,6 +53,7 @@ import { runRoomReport } from './room-report-command.mjs';
 import { cmdIdentityRevoke, cmdInviteCreate, cmdInviteList, cmdInviteRevoke } from './oauth-commands.mjs';
 import { provisionIngressEndpoint } from './agentmail-provision.mjs';
 import { createAgentMailDeployment } from '../ingress/v1/agentmail-bootstrap.mjs';
+import { cmdService } from './service-command.mjs';
 
 const DEFAULT_CLI_CONFIG = path.join('.sigil', 'config.json');
 
@@ -121,8 +122,11 @@ Commands:
                                                             --wait-for-receipt: exits 0 on acknowledged/processed, 7 on processing_failed/dead_letter, 8 on timeout (message was sent; do not resend)
   inbox [--identity path] [--relay-url url] [--watch|--wait] [--loop] [--gaps] [--stream-url url] [--interval ms] [--timeout ms] [--local] [--ledger path]
   resend --identity path --relay-url url --conversation C --from N --to M --sender ep_X
-  doctor [--identity path] [--relay-url url]               Conformance check: JCS/dependency audits, plus a keypair check (if --identity)
-                                                            and a relay connectivity/latency check (if --relay-url)
+  service <install|start|stop|status|uninstall> [--service-config path] [--dry-run] [--json]
+                                                            Manage supervisor service lifecycle (dry-run plan)
+  doctor [--identity path] [--relay-url url] [--service-config path]
+                                                            Conformance check: JCS/dependency audits, keypair check (if --identity),
+                                                            relay connectivity (if --relay-url), and service config validation (if provided or present)
 
 send/inbox resolve --identity/--relay-url/--stream-url from, in order: the flag, then
 SIGIL_IDENTITY/SIGIL_RELAY_URL/SIGIL_STREAM_URL env vars, then .sigil/config.json
@@ -1130,26 +1134,42 @@ function printDoctorReport(result) {
     if (!check) return console.log(`${label}: skipped`);
     const ok = check.pass ?? check.ok;
     console.log(`${label}: ${ok ? 'PASS' : 'FAIL'}`);
-    if (check.issues) for (const issue of check.issues) console.log(`  [${issue.severity}] ${issue.code} (${issue.file}): ${issue.message}`);
+    if (check.issues) {
+      for (const issue of check.issues) {
+        const severity = issue.severity ? `[${issue.severity}] ` : '';
+        const loc = issue.file || issue.path ? ` (${issue.file || issue.path})` : '';
+        console.log(`  ${severity}${issue.code}${loc}: ${issue.message}`);
+      }
+    }
     if (check.keyId) console.log(`  key_id: ${check.keyId}`);
     if (typeof check.latencyMs === 'number') console.log(`  latency: ${check.latencyMs}ms`);
-    if (check.error) console.log(`  error: ${check.error}`);
+    if (check.error && (!check.issues || check.issues.length === 0)) console.log(`  error: ${check.error}`);
   };
   printCheck('JCS conformance', result.checks.jcs);
   printCheck('Dependency audit', result.checks.dep);
   printCheck('Keypair', result.checks.keypair);
   printCheck('Relay connectivity', result.checks.relay);
+  printCheck('Service config', result.checks.serviceConfig);
   console.log(result.pass ? 'sigil doctor: PASS' : 'sigil doctor: FAIL');
 }
 
 async function cmdDoctor(argv) {
-  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, config: { type: 'string' } } });
+  const args = parseArgs({
+    args: argv,
+    options: {
+      identity: { type: 'string' },
+      'relay-url': { type: 'string' },
+      config: { type: 'string' },
+      'service-config': { type: 'string' },
+    },
+  });
   const config = loadConfigFile(opt(args, ['config']) ?? DEFAULT_CLI_CONFIG);
   const resolved = resolveConfig({ flags: { identity: opt(args, ['identity']) }, config });
   const { runDoctor } = await import('./doctor.mjs');
   const result = await runDoctor({
     identityPath: resolved.identityPath ?? undefined,
     relayUrl: opt(args, ['relay-url']),
+    serviceConfigPath: opt(args, ['service-config']),
   });
   printDoctorReport(result);
   if (!result.pass) process.exitCode = 1;
@@ -2108,6 +2128,7 @@ export async function main() {
     else if (command === 'agent' && sub === 'set-invokable') await cmdAgentSetInvokable(rest);
     else if (command === 'agentmail' && sub === 'provision') await cmdAgentmailProvision(rest);
     else if (command === 'doctor') await cmdDoctor(process.argv.slice(3));
+    else if (command === 'service') await cmdService(process.argv.slice(3));
     else if (command === 'send') await cmdSend(process.argv.slice(3));
     else if (command === 'resend') await cmdResend(process.argv.slice(3));
     else if (command === 'inbox') await cmdInbox(process.argv.slice(3));

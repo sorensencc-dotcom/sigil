@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "relay": {
+    "port": 8791,
+    "ingress_port": 8796,
+    "public_port": 8797,
+    "domain": "local",
+    "federation_mode": "queue",
+    "registry": ".sigil/registry.json",
+    "identities": {
+      "federation": ".sigil/grokbot.identity.json",
+      "room_system": ".sigil/relay-system.identity.json",
+      "room_human": ".sigil/antigravity.identity.json"
+    },
+    "reconcile_kinds": {
+      "ep_grokbot": "agent",
+      "ep_chief": "agent",
+      "ep_helix_ci": "agent"
+    },
+    "secrets": {
+      "room_bot_key_wrap_key_env": "SIGIL_ROOM_BOT_KEY_WRAP_KEY",
+      "room_key_wrap_key_env": "SIGIL_ROOM_KEY_WRAP_KEY",
+      "floor_warden_reply_token_env": "SIGIL_FLOOR_WARDEN_REPLY_TOKEN"
+    },
+    "ingress_origin": "https://sigil-ingress.rewritelabs.io",
+    "public_origin": "https://rooms.rewritelabs.io",
+    "browser_origins": [
+      "http://127.0.0.1:5173",
+      "http://localhost:5173"
+    ]
+  },
+  "agents": [
+    {
+      "name": "chief",
+      "identity": ".sigil/chief.identity.json",
+      "room_bridge": "floor-warden",
+      "bridge_config": {
+        "bot_id": "016f0b34-f0da-49b2-a32f-482d6e635825",
+        "reply_url": "https://sigil-ingress.rewritelabs.io",
+        "url_env": "SIGIL_FLOOR_WARDEN_WEBHOOK_URL",
+        "key_env": "SIGIL_FLOOR_WARDEN_WEBHOOK_KEY"
+      }
+    }
+  ],
+  "rooms_web": {
+    "port": 5173,
+    "auth_mode": "cookie",
+    "public_origin": "https://rooms.rewritelabs.io"
+  }
+}
