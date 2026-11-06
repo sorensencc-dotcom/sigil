@@ -1,0 +1,3 @@
+sigil/bridges/v1/room-bridge.mjs
+sigil/bridges/v1/session-store.mjs
+sigil/bridges/v1/room-bridge.test.mjs
