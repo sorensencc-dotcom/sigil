@@ -16,7 +16,7 @@
 - Accept path: after idempotency, `lockRoom` then `assertAgentMayPost` (with `now`). Relay assigns `report_post` when the room plan sender is `report_only` and `message_type` is `room.message`. Window column remains `envelopes.created_at` (Task 9).
 - Refusal codes (stable for Task 11): `REPORT_MENTIONS_FORBIDDEN`, `REPORT_THREAD_FORBIDDEN`, `REPORT_MESSAGE_TYPE_FORBIDDEN`, `REPORT_TEXT_TOO_LONG` (400); `REPORT_RATE_LIMITED` (429). Cap 30 / hour; text max 4000.
 - Receipts for a real report_only sender work (memory + Postgres HTTP). Task 10 step 6 fallback not taken.
-- Verification (Linux, Node via `/home/box/node24`, America/New_York): `room-report-only-post.test.mjs` 7 pass; `room-report-only.pg.test.mjs` 2 pass skipped 0 (includes 36-post concurrency → 30 accepted / 6 rate-limited, membership-change, receipts); `036_report_only_mode.test.mjs` 3 pass; related `accept-envelope.rooms` + `room-routes.report-only` regressions pass. Disposable DB via embedded-postgres on `127.0.0.1:55432` (`SIGIL_TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:55432/sigil_test`). Notes: `docs/superpowers/plans/2026-10-16-phase-5-verification-notes.md`.
+- Verification (Linux, Node via `/home/box/node24`, America/New_York): `room-report-only-post.test.mjs` 7 pass; `room-report-only.pg.test.mjs` 2 pass skipped 0 (includes 36-post concurrency → 30 accepted / 6 rate-limited, membership-change, receipts); `036_report_only_mode.test.mjs` 3 pass; related `accept-envelope.rooms` + `room-routes.report-only` regressions pass. Disposable DB via embedded-postgres on `127.0.0.1:55432` (`SIGIL_TEST_DATABASE_URL=postgres://sigil:sigil_password@127.0.0.1:55432/sigil_test`). Notes: `docs/superpowers/plans/2026-10-16-phase-5-verification-notes.md`.
 - Issue #100 Tasks 11–15 still open (ironbot-report / file-lock / sigil room report; web roster; exit/smoke/docs). Do not claim AgentMail or production readiness.
 
 ## Session update: 2026-10-25 relay job lease renewal
@@ -309,6 +309,10 @@ needs a gossip-topology and revocation-trust design this plan didn't make).
 
 ## Current goal
 Path 3 (Package & Serviceize the Sigil Relay / CLI) — Steps 1 and 2 implemented. Runtime handoff is locally validated; production rollout remains blocked pending security and governance approval.
+
+## Session update: 2026-11-06 room bridge formal verification skill
+- Added `.claude/skills/room-bridge-sessions/SKILL.md` and the `verify/bridge-session` TLC wrapper for the room bridge's per-room turn serialization, session resume, and per-thread cursor persistence.
+- TLC 2.19 passed the serialized model and found the expected `EveryTurnResumes` and `NoThreadForgotten` counterexamples in non-serialized variants. The focused room-bridge suite passed 20/20, drift validation passed, and `git diff --check` passed. A temporary removal of `roomTails` made the real serialization regression fail, then the source was restored.
 
 ## Session update: 2026-09-09 protocol diagrams
 - Added custom-standard standalone HTML+SVG diagrams, rendered PNG assets, Mermaid sources, and editable Excalidraw placeholders for the FIX session resend flow and connector gap recovery.
