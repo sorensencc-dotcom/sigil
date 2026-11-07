@@ -32,7 +32,11 @@ function tempDir() {
   tempDirs.push(dir);
   return dir;
 }
-test.after(() => { for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true }); });
+test.after(() => {
+  for (const dir of tempDirs) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* Windows process exit release */ }
+  }
+});
 
 // The shape `sigil bot add` writes: a relay token, a public key, no private key.
 function receiveOnlyIdentity({ botId = 'bot_test_one' } = {}) {
@@ -376,7 +380,7 @@ test('agent run --room-bridge floor-warden with a URL env that is not http(s) fa
   assertNoValues(out, env);
 });
 
-test('agent run --room-bridge floor-warden accepts https and loopback http reply URLs', async () => {
+test('agent run --room-bridge floor-warden accepts https and loopback http reply URLs', { timeout: 60000 }, async () => {
   for (const replyUrl of ['https://relay.example.test/replies', 'http://127.0.0.1:8796/replies', 'http://localhost:8796/replies', 'http://[::1]:8796/replies']) {
     const dir = tempDir();
     const env = secretEnv();
