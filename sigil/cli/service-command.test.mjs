@@ -173,3 +173,61 @@ test('cmdService executes Windows supervisor operations when dry-run is false', 
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+test('cmdService executes Linux supervisor operations when dry-run is false', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-svc-linux-live-'));
+  try {
+    const configPath = path.join(tempDir, 'service.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+      version: 1,
+      relay: { port: 8791 },
+    }));
+
+    const calls = [];
+    const mockSupervisorExec = (cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === 'systemctl' && args.includes('show')) {
+        return {
+          status: 0,
+          stdout: 'ActiveState=active\nMainPID=7777\n',
+        };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    };
+
+    // Install live on Linux
+    const outInst = await captureOutput(() =>
+      cmdService(['install', '--service-config', configPath], {
+        supervisorExecFn: mockSupervisorExec,
+        platform: 'linux',
+      })
+    );
+    assert.equal(outInst.exitCode, 0);
+    assert.ok(outInst.logs.some((l) => l.includes('executed successfully')));
+
+    // Status live on Linux
+    const outStat = await captureOutput(() =>
+      cmdService(['status', '--service-config', configPath], {
+        supervisorExecFn: mockSupervisorExec,
+        platform: 'linux',
+      })
+    );
+    assert.equal(outStat.exitCode, 0);
+    assert.ok(outStat.logs.some((l) => l.includes('Sigil service status (systemd user units)')));
+    assert.ok(outStat.logs.some((l) => l.includes('Healthy: false') || l.includes('Healthy: true')));
+
+    // Status JSON on Linux
+    const outStatJson = await captureOutput(() =>
+      cmdService(['status', '--service-config', configPath, '--json'], {
+        supervisorExecFn: mockSupervisorExec,
+        platform: 'linux',
+      })
+    );
+    assert.equal(outStatJson.exitCode, 0);
+    const parsed = JSON.parse(outStatJson.logs.join('\n'));
+    assert.equal(parsed.platform, 'linux');
+    assert.equal(parsed.results[0].UnitState, 'active');
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});

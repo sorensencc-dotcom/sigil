@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
   isCredentialRef,
   parseCredentialRef,
@@ -7,6 +10,10 @@ import {
   writeCredential,
   deleteCredential,
   setMemoryCredentialStore,
+  getLinuxKeystorePath,
+  readLinuxFileKeystore,
+  writeLinuxFileKeystore,
+  deleteLinuxFileKeystore,
 } from './credential-store.mjs';
 
 test('isCredentialRef and parseCredentialRef recognize cred: and credential: URIs', () => {
@@ -87,3 +94,66 @@ test('macOS and Linux adapters execute platform utilities with expected argument
   const linuxVal = readCredential('linux-target', { platform: 'linux', execFn: mockExec });
   assert.equal(linuxVal, 'mock-platform-secret');
 });
+
+test('Linux credential adapter falls back to file keystore when secret-tool fails or is missing', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-cred-file-'));
+  const keystorePath = path.join(tempDir, 'credentials.json');
+
+  try {
+    // Mock execFn simulating secret-tool not found or failing
+    const mockFailingExec = () => ({
+      status: 1,
+      stdout: '',
+      stderr: 'secret-tool: Cannot autolaunch D-Bus without X11 $DISPLAY',
+      error: { code: 'ENOENT' },
+    });
+
+    // Write should fall back to file keystore
+    writeCredential('room-bot-key', 'secret-wrap-xyz', {
+      platform: 'linux',
+      execFn: mockFailingExec,
+      keystorePath,
+    });
+
+    // File should exist and contain the secret
+    assert.ok(fs.existsSync(keystorePath));
+    const content = JSON.parse(fs.readFileSync(keystorePath, 'utf8'));
+    assert.equal(content['room-bot-key'], 'secret-wrap-xyz');
+
+    // Read should fall back to file keystore
+    const readVal = readCredential('room-bot-key', {
+      platform: 'linux',
+      execFn: mockFailingExec,
+      keystorePath,
+    });
+    assert.equal(readVal, 'secret-wrap-xyz');
+
+    // Missing key should throw CREDENTIAL_NOT_FOUND
+    assert.throws(
+      () => readCredential('nonexistent-key', {
+        platform: 'linux',
+        execFn: mockFailingExec,
+        keystorePath,
+      }),
+      { code: 'CREDENTIAL_NOT_FOUND' }
+    );
+
+    // Delete should clean up entry from file keystore
+    deleteCredential('room-bot-key', {
+      platform: 'linux',
+      execFn: mockFailingExec,
+      keystorePath,
+    });
+    assert.throws(
+      () => readCredential('room-bot-key', {
+        platform: 'linux',
+        execFn: mockFailingExec,
+        keystorePath,
+      }),
+      { code: 'CREDENTIAL_NOT_FOUND' }
+    );
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+

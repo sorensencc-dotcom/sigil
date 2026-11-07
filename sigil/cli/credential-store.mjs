@@ -1,4 +1,6 @@
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -42,7 +44,57 @@ function findPowerShell() {
   return 'powershell.exe';
 }
 
-export function readCredential(target, { platform = process.platform, execFn = defaultExecFn } = {}) {
+export function getLinuxKeystorePath(customPath) {
+  if (customPath) return customPath;
+  if (process.env.SIGIL_KEYSTORE_PATH) return process.env.SIGIL_KEYSTORE_PATH;
+  const configHome = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+  return path.join(configHome, 'sigil', 'credentials.json');
+}
+
+export function readLinuxFileKeystore(keystorePath) {
+  const filePath = getLinuxKeystorePath(keystorePath);
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+export function writeLinuxFileKeystore(target, secret, keystorePath) {
+  const filePath = getLinuxKeystorePath(keystorePath);
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  let data = {};
+  if (fs.existsSync(filePath)) {
+    try {
+      data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch {
+      data = {};
+    }
+  }
+  data[target] = secret;
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), { mode: 0o600, flag: 'w' });
+  return true;
+}
+
+export function deleteLinuxFileKeystore(target, keystorePath) {
+  const filePath = getLinuxKeystorePath(keystorePath);
+  if (!fs.existsSync(filePath)) return true;
+  try {
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (target in data) {
+      delete data[target];
+      fs.writeFileSync(filePath, JSON.stringify(data, null, 2), { mode: 0o600, flag: 'w' });
+    }
+  } catch {}
+  return true;
+}
+
+export function readCredential(target, { platform = process.platform, execFn = defaultExecFn, keystorePath } = {}) {
   if (memoryStore) {
     if (!memoryStore.has(target)) {
       throw Object.assign(new Error(`Credential "${target}" not found in credential store`), {
@@ -93,13 +145,21 @@ export function readCredential(target, { platform = process.platform, execFn = d
   }
 
   if (platform === 'linux') {
-    const res = execFn('secret-tool', ['lookup', 'sigil', target]);
-    if (res.status !== 0 || !res.stdout) {
-      throw Object.assign(new Error(`Credential "${target}" not found in secret-tool`), {
-        code: 'CREDENTIAL_NOT_FOUND',
-      });
+    try {
+      const res = execFn('secret-tool', ['lookup', 'sigil', target]);
+      if (!res.error && res.status === 0 && res.stdout && res.stdout.trim()) {
+        return res.stdout.trim();
+      }
+    } catch {}
+
+    const fileData = readLinuxFileKeystore(keystorePath);
+    if (fileData && fileData[target]) {
+      return fileData[target];
     }
-    return res.stdout.trim();
+
+    throw Object.assign(new Error(`Credential "${target}" not found in Linux credential store`), {
+      code: 'CREDENTIAL_NOT_FOUND',
+    });
   }
 
   throw Object.assign(new Error(`Unsupported credential platform: ${platform}`), {
@@ -107,7 +167,7 @@ export function readCredential(target, { platform = process.platform, execFn = d
   });
 }
 
-export function writeCredential(target, secret, { platform = process.platform, execFn = defaultExecFn } = {}) {
+export function writeCredential(target, secret, { platform = process.platform, execFn = defaultExecFn, keystorePath } = {}) {
   if (!secret) {
     throw Object.assign(new Error('Cannot store empty secret'), { code: 'SECRET_EMPTY' });
   }
@@ -165,11 +225,29 @@ export function writeCredential(target, secret, { platform = process.platform, e
   }
 
   if (platform === 'linux') {
-    const res = execFn('secret-tool', ['store', '--label', target, 'sigil', target], {
-      input: secret,
-    });
-    if (res.status !== 0) {
-      throw Object.assign(new Error(`Failed to write credential "${target}" to secret-tool`), {
+    let stored = false;
+    try {
+      const res = execFn('secret-tool', ['store', '--label', target, 'sigil', target], {
+        input: secret,
+      });
+      if (!res.error && res.status === 0) {
+        stored = true;
+      }
+    } catch {}
+
+    if (!stored) {
+      try {
+        writeLinuxFileKeystore(target, secret, keystorePath);
+        stored = true;
+      } catch (err) {
+        throw Object.assign(new Error(`Failed to write credential "${target}" to file keystore: ${err.message}`), {
+          code: 'CREDENTIAL_STORE_ERROR',
+        });
+      }
+    }
+
+    if (!stored) {
+      throw Object.assign(new Error(`Failed to write credential "${target}" to Linux credential store`), {
         code: 'CREDENTIAL_STORE_ERROR',
       });
     }
@@ -181,7 +259,7 @@ export function writeCredential(target, secret, { platform = process.platform, e
   });
 }
 
-export function deleteCredential(target, { platform = process.platform, execFn = defaultExecFn } = {}) {
+export function deleteCredential(target, { platform = process.platform, execFn = defaultExecFn, keystorePath } = {}) {
   if (memoryStore) {
     memoryStore.delete(target);
     return true;
@@ -216,7 +294,10 @@ export function deleteCredential(target, { platform = process.platform, execFn =
   }
 
   if (platform === 'linux') {
-    execFn('secret-tool', ['clear', 'sigil', target]);
+    try {
+      execFn('secret-tool', ['clear', 'sigil', target]);
+    } catch {}
+    deleteLinuxFileKeystore(target, keystorePath);
     return true;
   }
 

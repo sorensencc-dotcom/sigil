@@ -1,5 +1,27 @@
 # Status
 
+## Session update: 2026-11-07 Linux systemd user units service installation (issue #132, sub-issue #177)
+
+- Branch `feat/issue-177-linux-service` based on `feat/issue-179-retire-stopgap`. Implements sub-issue #177 under parent issue #132.
+- Shipped:
+  - Linux systemd user units supervisor in `sigil/cli/systemd-supervisor.mjs`:
+    - `generateSystemdUnit`: generates compliant systemd unit definitions with `[Unit]`, `[Service]`, and `[Install]` sections, configured with absolute `ExecStart`, `WorkingDirectory`, `Restart=always`, `RestartSec=5s`, and appended standard output/error logging.
+    - `install`: generates and writes user unit files (defaulting to `~/.config/systemd/user/sigil-<name>.service`), prepares log directories, and executes `systemctl --user enable` and `systemctl --user daemon-reload`.
+    - `start`: triggers user units via `systemctl --user start <unit>` with error capture.
+    - `stop`: halts running units via `systemctl --user stop <unit>`.
+    - `status`: inspects unit state (`ActiveState`, `SubState`, `MainPID`) via `systemctl --user show`, probes listening TCP ports, matches owning PIDs, and reads trailing errors from stderr logs.
+    - `uninstall`: stops and disables units, removes unit files, and invokes `systemctl --user daemon-reload`.
+  - Linux file keystore fallback in `sigil/cli/credential-store.mjs`:
+    - Implemented `readLinuxFileKeystore`, `writeLinuxFileKeystore`, `deleteLinuxFileKeystore`, and `getLinuxKeystorePath` (targeting `~/.config/sigil/credentials.json` with permissions `0600` and directory `0700`).
+    - Enables seamless secret resolution on headless Linux environments where `secret-tool` or D-Bus / Secret Service daemon is unavailable.
+  - Multi-platform dispatch in `sigil/cli/service-command.mjs`:
+    - Dispatches live operations to `executeSystemdSupervisor` on Linux (`plan.platform === 'linux'`) while preserving Windows dispatch (`win32`) and dry-run execution.
+    - Added unit and live-dispatch tests in `sigil/cli/systemd-supervisor.test.mjs` (6/6) and `sigil/cli/service-command.test.mjs` (7/7).
+- Evidence:
+  - Unit and integration tests passed 48/48 across `systemd-supervisor.test.mjs` (6/6), `windows-supervisor.test.mjs` (6/6), `service-command.test.mjs` (7/7), `credential-store.test.mjs` (5/5), `service-config.test.mjs` (8/8), `doctor-service-config.test.mjs` (3/3), `key-wrap-credential.test.mjs` (4/4), `secret-free-launch.test.mjs` (2/2), `windows-launcher-args.test.mjs` (4/4), and `chief-watchdog.test.mjs` (3/3).
+  - Security audit (`npm run secret-scan`), JCS conformance (`npm run audit:jcs`), and dependency gap audit (`npm run audit:deps`) passed clean with 0 violations.
+- Next sub-issue: #178 (macOS launchd agent install path).
+
 ## Session update: 2026-11-06 retire scripts/windows stopgap launcher (issue #132, sub-issue #179)
 
 - Branch `feat/issue-179-retire-stopgap` based on `feat/issue-176-windows-service`. Implements sub-issue #179 under parent issue #132.
