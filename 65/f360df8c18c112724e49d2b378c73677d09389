@@ -1,0 +1,24 @@
+modules/grok-bridge/config.json
+  h_5c172e9b435f5a 4
+sigil/connectors/v1/connector-server.mjs
+  h_5c172e9b435f5a 7,35,37,78-87
+sigil/connectors/v1/connector-server.test.mjs
+  h_5c172e9b435f5a 109-130
+sigil/connectors/v1/mcp-memory-bridge.mjs
+  h_5c172e9b435f5a 1-150
+sigil/connectors/v1/mcp-memory-bridge.test.mjs
+  h_5c172e9b435f5a 1-180
+sigil/scripts/secret-scan.mjs
+  h_5c172e9b435f5a 12-13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "65f360df8c18c112724e49d2b378c73677d09389",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
