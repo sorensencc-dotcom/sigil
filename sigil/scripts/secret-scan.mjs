@@ -9,6 +9,8 @@ const PATTERNS = [
 ];
 
 const ALLOWLIST = [
+  // Disposable test fixture token used across connector unit tests
+  /local-secret/,
   /FIXTURE-ONLY-not-a-real-secret/,
   /not-for-clients/,
   /<local-dev-password>/,

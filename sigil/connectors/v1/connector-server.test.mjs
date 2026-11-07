@@ -106,3 +106,25 @@ test('connector HTTP context route enforces grant, path, and integrity boundarie
   const denied = await request(port, 'local-secret', { method: 'POST', path: '/v1/context', body: { ...base, paths: ['../secret'] }, headers: { 'x-sigil-capability-scope': 'sigil.core/read_shared_context' } }); await app.close();
   assert.equal(allowed.status, 200); assert.equal(denied.status, 400); assert.equal(denied.body.code, 'CONTEXT_PATH_DENIED');
 });
+
+test('connector server exposes /mcp/memory for unified knowledge base access', async () => {
+  const app = createConnectorServer({ connector: {}, token: 'local-secret' });
+  await app.listen();
+  const port = app.address().port;
+
+  const res = await request(port, null, {
+    method: 'POST',
+    path: '/mcp/memory',
+    body: {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: '2024-11-05' }
+    }
+  });
+  await app.close();
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.id, 1);
+  assert.equal(res.body.result.serverInfo.name, 'kb-context-cache');
+});

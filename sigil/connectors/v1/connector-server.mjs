@@ -4,6 +4,7 @@ import { validateConnectorRequest } from './connector-contract.mjs';
 import { verifyPluginManifest } from './plugin-manifest.mjs';
 import { capabilityForOperation } from './capability-policy.mjs';
 import { resolveContext } from './context-resolver.mjs';
+import { createMcpMemoryBridge } from './mcp-memory-bridge.mjs';
 
 const routes = new Map([
   ['POST /v1/tasks', 'sendTask'], ['GET /v1/inbox', 'checkInbox'], ['GET /v1/results', 'getResult'],
@@ -31,7 +32,9 @@ export function createConnectorServer({ connector, token, manifest, publisherKey
   const expectedTokenDigest = crypto.createHash('sha256').update(String(token)).digest();
   let inFlight = 0;
   const callerWindows = new Map();
+  const mcpMemoryBridge = createMcpMemoryBridge();
   const server = http.createServer(async (request, response) => {
+    if (await mcpMemoryBridge.handleRequest(request, response)) return;
     const authorization = request.headers.authorization;
     const suppliedToken = typeof authorization === 'string' && authorization.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : '';
     const suppliedTokenDigest = crypto.createHash('sha256').update(suppliedToken).digest();
@@ -72,7 +75,16 @@ export function createConnectorServer({ connector, token, manifest, publisherKey
     } catch (error) { return reply(response, error.code === 'REQUEST_TOO_LARGE' ? 413 : error.code === 'IDEMPOTENCY_CONFLICT' ? 409 : error.code === 'VERSION_UNSUPPORTED' ? 426 : error.code === 'CALLER_NOT_ALLOWED' || error.code === 'PACKAGE_ID_MISMATCH' || error.code === 'CAPABILITY_DENIED' ? 403 : 400, { code: error.code ?? 'INVALID_ENVELOPE', message: error.message }); }
     finally { inFlight -= 1; }
   });
-  return { server, listen: () => new Promise((resolve) => server.listen(0, '127.0.0.1', resolve)), address: () => server.address(), close: () => new Promise((resolve) => server.close(resolve)) };
+  return {
+    server,
+    mcpMemoryBridge,
+    listen: () => new Promise((resolve) => server.listen(0, '127.0.0.1', resolve)),
+    address: () => server.address(),
+    close: () => {
+      mcpMemoryBridge.close();
+      return new Promise((resolve) => server.close(resolve));
+    }
+  };
 }
 
 export function createConnectorToken() { return crypto.randomBytes(32).toString('base64url'); }
