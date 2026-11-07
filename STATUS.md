@@ -1,5 +1,19 @@
 # Status
 
+## Session update: 2026-11-06 credential store and secret-free launch (issue #132, sub-issue #175)
+
+- Branch `feat/issue-175-credential-store` based on `feat/issue-174-service-config`. Implements sub-issue #175 under parent issue #132.
+- Shipped:
+  - OS credential store adapter in `sigil/cli/credential-store.mjs` and native Windows helper in `sigil/cli/wincred-helper.ps1` (`readCredential`, `writeCredential`, `deleteCredential`, `setMemoryCredentialStore`). Pipes secret values through stdin during write operations to prevent command-line argv leakage.
+  - Wrap key resolver integration in `sigil/relay/v1/key-wrap.mjs` (`loadWrapKey`): supports `cred:<target>` and `credential:<target>` URIs directly from the OS credential store with seamless fallback to environment variables.
+  - Secret management CLI in `sigil/cli/secret-command.mjs` (`sigil secret set|get|delete <target>`) with `--from-env`, `--generate-wrap-key`, and `--show` options. Wired into `bin/sigil.mjs` and `sigil/cli/sigil.mjs`.
+  - Secret-free launch support: processes can resolve wrap keys directly from Windows Credential Manager without secrets on process argv or `.env` files.
+- Evidence:
+  - Unit and integration tests passed 40/40 across `sigil/cli/credential-store.test.mjs` (4/4), `sigil/relay/v1/key-wrap-credential.test.mjs` (4/4), `sigil/cli/secret-free-launch.test.mjs` (2/2), `sigil/relay/v1/key-wrap.test.mjs` (8/8), `sigil/cli/service-config.test.mjs` (8/8), `sigil/cli/doctor-service-config.test.mjs` (3/3), `sigil/cli/service-command.test.mjs` (5/5), and `sigil/cli/doctor-orchestration.test.mjs` (5/5).
+  - Security audit (`npm run secret-scan`), JCS conformance (`npm run audit:jcs`), and dependency gap audit (`npm run audit:deps`) passed clean with 0 violations.
+  - Live Windows Credential Manager `CredWriteW`/`CredReadW`/`CredDeleteW` verified on Windows host.
+- Next sub-issue: #176 (Windows install path via Task Scheduler).
+
 ## Session update: 2026-11-06 service config, doctor, and CLI stubs (issue #132, sub-issue #174)
 
 - Branch `feat/issue-174-service-config` off `main`. Implements sub-issue #174 under parent issue #132.

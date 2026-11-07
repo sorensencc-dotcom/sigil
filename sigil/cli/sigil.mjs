@@ -54,6 +54,7 @@ import { cmdIdentityRevoke, cmdInviteCreate, cmdInviteList, cmdInviteRevoke } fr
 import { provisionIngressEndpoint } from './agentmail-provision.mjs';
 import { createAgentMailDeployment } from '../ingress/v1/agentmail-bootstrap.mjs';
 import { cmdService } from './service-command.mjs';
+import { cmdSecret } from './secret-command.mjs';
 
 const DEFAULT_CLI_CONFIG = path.join('.sigil', 'config.json');
 
@@ -124,6 +125,7 @@ Commands:
   resend --identity path --relay-url url --conversation C --from N --to M --sender ep_X
   service <install|start|stop|status|uninstall> [--service-config path] [--dry-run] [--json]
                                                             Manage supervisor service lifecycle (dry-run plan)
+  secret <set|get|delete> <target> [options]               Manage secrets in OS credential store (Windows Credential Manager)
   doctor [--identity path] [--relay-url url] [--service-config path]
                                                             Conformance check: JCS/dependency audits, keypair check (if --identity),
                                                             relay connectivity (if --relay-url), and service config validation (if provided or present)
@@ -2129,6 +2131,7 @@ export async function main() {
     else if (command === 'agentmail' && sub === 'provision') await cmdAgentmailProvision(rest);
     else if (command === 'doctor') await cmdDoctor(process.argv.slice(3));
     else if (command === 'service') await cmdService(process.argv.slice(3));
+    else if (command === 'secret') await cmdSecret(process.argv.slice(3));
     else if (command === 'send') await cmdSend(process.argv.slice(3));
     else if (command === 'resend') await cmdResend(process.argv.slice(3));
     else if (command === 'inbox') await cmdInbox(process.argv.slice(3));
