@@ -6,7 +6,7 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
   [string]$TaskName = 'SigilStack',
-  [string]$SecretsFile = (Join-Path $env:USERPROFILE '.sigil-secrets\floor-warden.env'),
+  [string]$SecretsFile,
   [string]$Launcher,
   [string]$LauncherArguments,
   [string]$ServiceConfig,
@@ -16,6 +16,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$homeDir = if ($env:USERPROFILE) { $env:USERPROFILE } elseif ($HOME) { $HOME } else { '.' }
+if (-not $SecretsFile) { $SecretsFile = Join-Path $homeDir (Join-Path '.sigil-secrets' 'floor-warden.env') }
 $scriptDir = $PSScriptRoot
 if (-not $scriptDir -and $PSCommandPath) {
   $scriptDir = Split-Path -Parent $PSCommandPath

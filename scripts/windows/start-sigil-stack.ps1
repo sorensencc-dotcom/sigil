@@ -6,15 +6,15 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
   [string]$RepoRoot,
-  [string]$SecretsFile = (Join-Path $env:USERPROFILE '.sigil-secrets\floor-warden.env'),
+  [string]$SecretsFile,
   [string]$FloorWardenBotId = '016f0b34-f0da-49b2-a32f-482d6e635825',
   [string]$ReplyUrl = 'https://sigil-ingress.rewritelabs.io',
   [string]$WrapKeyEnv = 'SIGIL_ROOM_BOT_KEY_WRAP_KEY',
-  [string]$DatabaseUrlFile = (Join-Path $env:USERPROFILE '.sigil-secrets\sigil-database-url.txt'),
+  [string]$DatabaseUrlFile,
   [int]$RelayPort = 8791,
   [int]$IngressPort = 8796,
   [int]$PublicPort = 8797,
-  [string]$GitHubOAuthFile = (Join-Path $env:USERPROFILE '.sigil-secrets\github-oauth.env'),
+  [string]$GitHubOAuthFile,
   [string]$PublicOrigin = 'https://rooms.rewritelabs.io',
   [string]$RoomKeyWrapKeyEnv = 'SIGIL_ROOM_KEY_WRAP_KEY',
   [ValidateSet('relay', 'chief', 'rooms-web')][string[]]$Only = @('relay', 'chief', 'rooms-web'),
@@ -25,6 +25,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$homeDir = if ($env:USERPROFILE) { $env:USERPROFILE } elseif ($HOME) { $HOME } else { '.' }
+if (-not $SecretsFile) { $SecretsFile = Join-Path $homeDir (Join-Path '.sigil-secrets' 'floor-warden.env') }
+if (-not $DatabaseUrlFile) { $DatabaseUrlFile = Join-Path $homeDir (Join-Path '.sigil-secrets' 'sigil-database-url.txt') }
+if (-not $GitHubOAuthFile) { $GitHubOAuthFile = Join-Path $homeDir (Join-Path '.sigil-secrets' 'github-oauth.env') }
 if (-not $RepoRoot) { $RepoRoot = (Resolve-Path (Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) '..\..')).Path }
 if (-not $ServiceConfig) { $ServiceConfig = (Join-Path $RepoRoot '.sigil\service.json') }
 
