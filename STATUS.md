@@ -6,6 +6,7 @@
 - CI and test fixes:
   - Fixed `tests/chief-watchdog.test.mjs` test runner timeout on Linux by terminating respawned daemon child processes (`secondPid`), unref'ing the daemon socket keepalive timer, and destroying the captured `child.stderr` stream handle upon completion.
   - Added `[System.AppDomain]::CurrentDomain.add_ProcessExit` handler to `scripts/chief-watchdog.ps1` to ensure child daemon processes and `.sigil/chief.pid` are torn down when PowerShell Core receives OS termination signals on Linux.
+  - Fixed `sigil/cli/service-command.test.mjs` live Windows supervisor test on Linux runners by explicitly passing `platform: 'win32'` so supervisor mock dispatch remains deterministic regardless of the host OS runner.
 - Shipped:
   - Linux systemd user units supervisor in `sigil/cli/systemd-supervisor.mjs`:
     - `generateSystemdUnit`: generates compliant systemd unit definitions with `[Unit]`, `[Service]`, and `[Install]` sections, configured with absolute `ExecStart`, `WorkingDirectory`, `Restart=always`, `RestartSec=5s`, and appended standard output/error logging.
