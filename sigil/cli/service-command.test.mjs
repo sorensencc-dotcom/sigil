@@ -149,14 +149,20 @@ test('cmdService executes Windows supervisor operations when dry-run is false', 
 
     // Install live
     const outInst = await captureOutput(() =>
-      cmdService(['install', '--service-config', configPath], { supervisorExecFn: mockSupervisorExec })
+      cmdService(['install', '--service-config', configPath], {
+        supervisorExecFn: mockSupervisorExec,
+        platform: 'win32',
+      })
     );
     assert.equal(outInst.exitCode, 0);
     assert.ok(outInst.logs.some((l) => l.includes('executed successfully')));
 
     // Status live
     const outStat = await captureOutput(() =>
-      cmdService(['status', '--service-config', configPath], { supervisorExecFn: mockSupervisorExec })
+      cmdService(['status', '--service-config', configPath], {
+        supervisorExecFn: mockSupervisorExec,
+        platform: 'win32',
+      })
     );
     assert.equal(outStat.exitCode, 0);
     assert.ok(outStat.logs.some((l) => l.includes('Sigil service status')));
@@ -164,7 +170,10 @@ test('cmdService executes Windows supervisor operations when dry-run is false', 
 
     // Status JSON
     const outStatJson = await captureOutput(() =>
-      cmdService(['status', '--service-config', configPath, '--json'], { supervisorExecFn: mockSupervisorExec })
+      cmdService(['status', '--service-config', configPath, '--json'], {
+        supervisorExecFn: mockSupervisorExec,
+        platform: 'win32',
+      })
     );
     assert.equal(outStatJson.exitCode, 0);
     const parsed = JSON.parse(outStatJson.logs.join('\n'));
