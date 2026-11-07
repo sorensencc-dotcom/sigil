@@ -2,10 +2,13 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import test from 'node:test';
 
-const root = dirname(dirname(import.meta.filename));
+const root = import.meta.filename
+  ? dirname(dirname(import.meta.filename))
+  : fileURLToPath(new URL('../', import.meta.url));
 const watchdog = join(root, 'scripts', 'chief-watchdog.ps1');
 const setup = join(root, 'scripts', 'setup-chief-daemon.ps1');
 

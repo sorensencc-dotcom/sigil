@@ -16,7 +16,26 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+$scriptDir = $PSScriptRoot
+if (-not $scriptDir -and $PSCommandPath) {
+  $scriptDir = Split-Path -Parent $PSCommandPath
+}
+if (-not $scriptDir -and $MyInvocation -and $MyInvocation.PSCommandPath) {
+  $scriptDir = Split-Path -Parent $MyInvocation.PSCommandPath
+}
+if (-not $scriptDir -and $MyInvocation -and $MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) {
+  $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+if (-not $scriptDir) {
+  $loc = (Get-Location).Path
+  if (Test-Path (Join-Path $loc (Join-Path 'scripts' (Join-Path 'windows' 'register-sigil-task.ps1')))) {
+    $scriptDir = Join-Path $loc (Join-Path 'scripts' 'windows')
+  } elseif (Test-Path (Join-Path $loc 'register-sigil-task.ps1')) {
+    $scriptDir = $loc
+  } else {
+    $scriptDir = $loc
+  }
+}
 $repoRoot = (Resolve-Path (Join-Path $scriptDir '..\..')).Path
 
 if ($Launcher) {
