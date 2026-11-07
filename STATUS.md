@@ -3,6 +3,9 @@
 ## Session update: 2026-11-07 Linux systemd user units service installation (issue #132, sub-issue #177)
 
 - Branch `feat/issue-177-linux-service` based on `feat/issue-179-retire-stopgap`. Implements sub-issue #177 under parent issue #132.
+- CI and test fixes:
+  - Fixed `tests/chief-watchdog.test.mjs` test runner timeout on Linux by terminating respawned daemon child processes (`secondPid`), unref'ing the daemon socket keepalive timer, and destroying the captured `child.stderr` stream handle upon completion.
+  - Added `[System.AppDomain]::CurrentDomain.add_ProcessExit` handler to `scripts/chief-watchdog.ps1` to ensure child daemon processes and `.sigil/chief.pid` are torn down when PowerShell Core receives OS termination signals on Linux.
 - Shipped:
   - Linux systemd user units supervisor in `sigil/cli/systemd-supervisor.mjs`:
     - `generateSystemdUnit`: generates compliant systemd unit definitions with `[Unit]`, `[Service]`, and `[Install]` sections, configured with absolute `ExecStart`, `WorkingDirectory`, `Restart=always`, `RestartSec=5s`, and appended standard output/error logging.

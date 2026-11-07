@@ -31,6 +31,11 @@ test('watchdog restarts a killed daemon, probes its room socket, and redacts cre
       server.close();
       process.exit(0);
     });
+    const timer = setTimeout(() => {
+      try { server.close(); } catch {}
+      process.exit(0);
+    }, 15000);
+    timer.unref();
   `);
 
   let childStderr = '';
@@ -40,8 +45,9 @@ test('watchdog restarts a killed daemon, probes its room socket, and redacts cre
     '-IntervalSeconds', '0.2', '-StartupGraceSeconds', '0.5', '-MaxBackoffSeconds', '1', '-StopAfterSeconds', '20'],
     { cwd: root, stdio: ['ignore', 'ignore', 'pipe'] });
   child.stderr?.on('data', (chunk) => { childStderr += chunk.toString(); });
+  let firstPid = null;
+  let secondPid = null;
   try {
-    let firstPid = null;
     for (let i = 0; i < 100 && firstPid === null; i++) {
       if (existsSync(pidFile)) {
         const candidate = Number(readFileSync(pidFile, 'utf8').trim());
@@ -51,7 +57,7 @@ test('watchdog restarts a killed daemon, probes its room socket, and redacts cre
     }
     assert.notEqual(firstPid, null, `watchdog should publish a live daemon PID${childStderr ? `: ${childStderr}` : ''}`);
     process.kill(firstPid, 'SIGTERM');
-    let secondPid = firstPid;
+    secondPid = firstPid;
     for (let i = 0; i < 50 && secondPid === firstPid; i++) {
       await new Promise((resolve) => setTimeout(resolve, 100));
       if (existsSync(pidFile)) secondPid = Number(readFileSync(pidFile, 'utf8').trim());
@@ -63,6 +69,10 @@ test('watchdog restarts a killed daemon, probes its room socket, and redacts cre
     }
     child.kill();
     await new Promise((resolve) => child.on('exit', resolve));
+    if (secondPid) {
+      try { process.kill(secondPid, 'SIGTERM'); } catch {}
+    }
+    child.stderr?.destroy();
     const lines = readFileSync(audit, 'utf8').trim().split(/\r?\n/).map((line) => JSON.parse(line));
     assert.ok(lines.some((event) => event.event === 'daemon_started'));
     assert.ok(lines.some((event) => event.event === 'daemon_unhealthy'));
@@ -70,7 +80,22 @@ test('watchdog restarts a killed daemon, probes its room socket, and redacts cre
     assert.ok(lines.some((event) => event.event === 'daemon_healthy' && event.socket_port === port));
     assert.ok(lines.every((event) => !JSON.stringify(event).includes('token')));
   } finally {
-    child.kill();
+    if (secondPid) {
+      try { process.kill(secondPid, 'SIGKILL'); } catch {}
+    }
+    if (firstPid) {
+      try { process.kill(firstPid, 'SIGKILL'); } catch {}
+    }
+    if (existsSync(pidFile)) {
+      try {
+        const remaining = Number(readFileSync(pidFile, 'utf8').trim());
+        if (remaining && !Number.isNaN(remaining)) {
+          try { process.kill(remaining, 'SIGKILL'); } catch {}
+        }
+      } catch {}
+    }
+    try { child.kill('SIGKILL'); } catch {}
+    child.stderr?.destroy();
     rmSync(dir, { recursive: true, force: true });
   }
 });

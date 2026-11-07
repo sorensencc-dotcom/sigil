@@ -85,6 +85,12 @@ function Start-Chief {
 }
 
 $process = $null
+try {
+  [System.AppDomain]::CurrentDomain.add_ProcessExit({
+    if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+    if (Test-Path $PidFile) { Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue }
+  })
+} catch {}
 $nextStart = [datetime]::MinValue
 $backoff = 1
 $startedAt = [datetime]::MinValue
