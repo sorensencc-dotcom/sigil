@@ -1,0 +1,34 @@
+STATUS.md
+  h_5c172e9b435f5a 3-16
+bin/sigil.mjs
+  h_5c172e9b435f5a 41,52
+docs/service-config.md
+  h_5c172e9b435f5a 118-136
+sigil/cli/credential-store.mjs
+  h_5c172e9b435f5a 1-224
+sigil/cli/credential-store.test.mjs
+  h_5c172e9b435f5a 1-89
+sigil/cli/secret-command.mjs
+  h_5c172e9b435f5a 1-82
+sigil/cli/secret-free-launch.test.mjs
+  h_5c172e9b435f5a 1-96
+sigil/cli/sigil.mjs
+  h_5c172e9b435f5a 57,128,2134
+sigil/cli/wincred-helper.ps1
+  h_5c172e9b435f5a 1-116
+sigil/relay/v1/key-wrap-credential.test.mjs
+  h_5c172e9b435f5a 1-61
+sigil/relay/v1/key-wrap.mjs
+  h_5c172e9b435f5a 2,25-44,46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "86bfc83ec8acc406061b00fa9f0f55202f994e4a",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
