@@ -1,5 +1,18 @@
 # Status
 
+## Session update: 2026-11-06 retire scripts/windows stopgap launcher (issue #132, sub-issue #179)
+
+- Branch `feat/issue-179-retire-stopgap` based on `feat/issue-176-windows-service`. Implements sub-issue #179 under parent issue #132.
+- Shipped:
+  - Retired `scripts/windows/start-sigil-stack.ps1` and replaced it with a thin deprecation wrapper delegating execution to `sigil service start`. Emits deprecation warnings with migration instructions pointing to `docs/service-config.md`.
+  - Converted `scripts/windows/register-sigil-task.ps1` into a deprecation wrapper delegating task installation and uninstallation to `sigil service install|uninstall`, while retaining compatibility for legacy callers specifying `-Launcher`.
+  - Updated `scripts/windows/README.md` to document the retirement of the stopgap scripts and guide operators toward `sigil service install|start|stop|status|uninstall`.
+  - Updated `sigil/cli/windows-launcher-args.test.mjs` to verify deprecation notices, parameter compatibility, and `-WhatIf` / `--dry-run` behavior.
+- Evidence:
+  - Unit and integration tests passed across `sigil/cli/windows-launcher-args.test.mjs` (4/4) and `tests/chief-watchdog.test.mjs` (3/3).
+  - Security audit (`npm run secret-scan`), JCS conformance (`npm run audit:jcs`), and dependency gap audit (`npm run audit:deps`) passed clean with 0 violations.
+- Next sub-issue: #177 (Linux systemd user units install path).
+
 ## Session update: 2026-11-06 Windows Task Scheduler service installation (issue #132, sub-issue #176)
 
 - Branch `feat/issue-176-windows-service` based on `feat/issue-175-credential-store`. Implements sub-issue #176 under parent issue #132.
@@ -14,6 +27,7 @@
   - Secret-free service supervision: tasks consume configuration from `.sigil/service.json` and resolve wrap keys via `cred:` references to Windows Credential Manager without secret parameters in command lines or `.env` files.
 - Evidence:
   - Unit and integration tests passed 42/42 across `windows-supervisor.test.mjs` (6/6), `service-command.test.mjs` (6/6), `credential-store.test.mjs` (4/4), `key-wrap-credential.test.mjs` (4/4), `secret-free-launch.test.mjs` (2/2), `service-config.test.mjs` (8/8), `doctor-service-config.test.mjs` (3/3), and `windows-launcher-args.test.mjs` (9/9).
+  - Cross-platform CI fix: resolved Linux Node 22/24 watchdog test failures by replacing invocation path lookups with $PSScriptRoot, portably resolving paths with Join-Path, omitting Windows-only -WindowStyle on non-Windows hosts, and deferring CIM ScheduledTask cmdlets inside WhatIf blocks. Tests pass 3/3 in `chief-watchdog.test.mjs`.
   - Security audit (`npm run secret-scan`), JCS conformance (`npm run audit:jcs`), and dependency gap audit (`npm run audit:deps`) passed clean with 0 violations.
 - Next sub-issue: #177 (Linux systemd user units install path) or #179 (Retire scripts/windows stopgap launcher).
 

@@ -10,9 +10,12 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 $repoRoot = (Resolve-Path (Join-Path $scriptDir '..')).Path
-& (Join-Path $scriptDir 'windows\register-sigil-task.ps1') -TaskName $TaskName `
-  -Launcher (Join-Path $scriptDir 'chief-watchdog.ps1') -LauncherArguments "-RepoRoot `"$repoRoot`"" `
+$registerScript = Join-Path $scriptDir (Join-Path 'windows' 'register-sigil-task.ps1')
+$watchdogScript = Join-Path $scriptDir 'chief-watchdog.ps1'
+
+& $registerScript -TaskName $TaskName `
+  -Launcher $watchdogScript -LauncherArguments "-RepoRoot `"$repoRoot`"" `
   -Unregister:$Unregister -StartNow:$StartNow -WhatIf:$WhatIfPreference
-exit $LASTEXITCODE
+if ($LASTEXITCODE) { exit $LASTEXITCODE }

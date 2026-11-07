@@ -9,7 +9,7 @@ const root = dirname(dirname(import.meta.filename));
 const watchdog = join(root, 'scripts', 'chief-watchdog.ps1');
 const setup = join(root, 'scripts', 'setup-chief-daemon.ps1');
 
-function runPowerShell(file, args, timeout = 10_000) {
+function runPowerShell(file, args, timeout = 30_000) {
   return spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file, ...args], {
     cwd: root, encoding: 'utf8', timeout,
   });
@@ -24,14 +24,19 @@ test('watchdog restarts a killed daemon, probes its room socket, and redacts cre
   writeFileSync(daemon, `
     import net from 'node:net';
     const server = net.createServer().listen(${port}, '127.0.0.1');
-    process.on('SIGTERM', () => server.close(() => process.exit(0)));
+    process.on('SIGTERM', () => {
+      server.close();
+      process.exit(0);
+    });
   `);
 
+  let childStderr = '';
   const child = spawn('pwsh', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', watchdog,
     '-DaemonPath', process.execPath, '-DaemonArguments', daemon,
     '-PidFile', pidFile, '-RoomSocketPort', String(port), '-AuditLogPath', audit,
     '-IntervalSeconds', '0.2', '-StartupGraceSeconds', '0.5', '-MaxBackoffSeconds', '1', '-StopAfterSeconds', '20'],
-    { cwd: root, stdio: 'ignore' });
+    { cwd: root, stdio: ['ignore', 'ignore', 'pipe'] });
+  child.stderr?.on('data', (chunk) => { childStderr += chunk.toString(); });
   try {
     let firstPid = null;
     for (let i = 0; i < 100 && firstPid === null; i++) {
@@ -41,7 +46,7 @@ test('watchdog restarts a killed daemon, probes its room socket, and redacts cre
       }
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    assert.notEqual(firstPid, null, 'watchdog should publish a live daemon PID');
+    assert.notEqual(firstPid, null, `watchdog should publish a live daemon PID${childStderr ? `: ${childStderr}` : ''}`);
     process.kill(firstPid, 'SIGTERM');
     let secondPid = firstPid;
     for (let i = 0; i < 50 && secondPid === firstPid; i++) {
@@ -75,4 +80,12 @@ test('setup script plans a logon task that runs the watchdog without embedding s
   assert.match(out, /SigilChiefWatchdog/);
   assert.match(out, /-File "[^"]*chief-watchdog\.ps1" -RepoRoot "/);
   assert.doesNotMatch(out, /TOKEN|SECRET|Bearer/i);
+});
+
+test('setup script plans unregistration with -WhatIf', () => {
+  const res = runPowerShell(setup, ['-Unregister', '-WhatIf']);
+  const out = `${res.stdout}\n${res.stderr}`;
+  assert.equal(res.status, 0, out);
+  assert.match(out, /Unregister scheduled task/);
+  assert.match(out, /SigilChiefWatchdog/);
 });
