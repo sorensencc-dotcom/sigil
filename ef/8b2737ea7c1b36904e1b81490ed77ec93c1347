@@ -1,0 +1,16 @@
+STATUS.md
+  h_5c172e9b435f5a 9
+sigil/cli/service-command.test.mjs
+  h_5c172e9b435f5a 152-155,162-165,173-176
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ef8b2737ea7c1b36904e1b81490ed77ec93c1347",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
