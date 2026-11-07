@@ -1,5 +1,22 @@
 # Status
 
+## Session update: 2026-11-06 Windows Task Scheduler service installation (issue #132, sub-issue #176)
+
+- Branch `feat/issue-176-windows-service` based on `feat/issue-175-credential-store`. Implements sub-issue #176 under parent issue #132.
+- Shipped:
+  - Windows supervisor driver in `sigil/cli/windows-supervisor.mjs` and native PowerShell handler in `sigil/cli/windows-supervisor.ps1` (`installWindowsService`, `startWindowsService`, `stopWindowsService`, `statusWindowsService`, `uninstallWindowsService`).
+  - End-to-end `sigil service install|start|stop|status|uninstall` implementation:
+    - `install`: idempotently registers per-user logon tasks (`SigilStack_relay`, `SigilStack_agent-<name>`, `SigilStack_rooms-web`) with auto-restart and isolated logging.
+    - `start`: invokes registered tasks via `Start-ScheduledTask`.
+    - `stop`: halts tasks via `Stop-ScheduledTask` and cleans up orphaned listening processes.
+    - `status`: queries task state (`Ready`, `Running`, `Disabled`), probes listening TCP ports, matches owning PIDs, and reads trailing errors from stderr logs.
+    - `uninstall`: halts and deregisters scheduled tasks cleanly.
+  - Secret-free service supervision: tasks consume configuration from `.sigil/service.json` and resolve wrap keys via `cred:` references to Windows Credential Manager without secret parameters in command lines or `.env` files.
+- Evidence:
+  - Unit and integration tests passed 42/42 across `windows-supervisor.test.mjs` (6/6), `service-command.test.mjs` (6/6), `credential-store.test.mjs` (4/4), `key-wrap-credential.test.mjs` (4/4), `secret-free-launch.test.mjs` (2/2), `service-config.test.mjs` (8/8), `doctor-service-config.test.mjs` (3/3), and `windows-launcher-args.test.mjs` (9/9).
+  - Security audit (`npm run secret-scan`), JCS conformance (`npm run audit:jcs`), and dependency gap audit (`npm run audit:deps`) passed clean with 0 violations.
+- Next sub-issue: #177 (Linux systemd user units install path) or #179 (Retire scripts/windows stopgap launcher).
+
 ## Session update: 2026-11-06 credential store and secret-free launch (issue #132, sub-issue #175)
 
 - Branch `feat/issue-175-credential-store` based on `feat/issue-174-service-config`. Implements sub-issue #175 under parent issue #132.

@@ -47,7 +47,7 @@ test('cmdService flags unknown subcommand with exitCode 1', async () => {
 });
 
 test('cmdService fails with exitCode 1 on missing config file', async () => {
-  const out = await captureOutput(() => cmdService(['install', '--service-config', 'nonexistent.json']));
+  const out = await captureOutput(() => cmdService(['install', '--dry-run', '--service-config', 'nonexistent.json']));
   assert.equal(out.exitCode, 1);
   assert.ok(out.errors.some((e) => e.includes('Service configuration file not found')));
 });
@@ -76,7 +76,7 @@ test('cmdService executes dry-run for install, start, stop, status, uninstall wi
 
     const subcommands = ['install', 'start', 'stop', 'status', 'uninstall'];
     for (const sub of subcommands) {
-      const out = await captureOutput(() => cmdService([sub, '--service-config', configPath, '--json']));
+      const out = await captureOutput(() => cmdService([sub, '--dry-run', '--service-config', configPath, '--json']));
       assert.equal(out.exitCode, 0, `subcommand ${sub} should exit 0`);
       assert.equal(out.errors.length, 0);
       const parsed = JSON.parse(out.logs.join('\n'));
@@ -101,12 +101,74 @@ test('cmdService formats text dry-run output cleanly', async () => {
       relay: { port: 8791 },
     }));
 
-    const out = await captureOutput(() => cmdService(['install', '--service-config', configPath]));
+    const out = await captureOutput(() => cmdService(['install', '--dry-run', '--service-config', configPath]));
     assert.equal(out.exitCode, 0);
     const text = out.logs.join('\n');
     assert.ok(text.includes('sigil service install [dry-run]:'));
     assert.ok(text.includes('relay:'));
     assert.ok(text.includes('Command:'));
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('cmdService executes Windows supervisor operations when dry-run is false', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-svc-live-'));
+  try {
+    const configPath = path.join(tempDir, 'service.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+      version: 1,
+      relay: { port: 8791 },
+    }));
+
+    const calls = [];
+    const mockSupervisorExec = (cmd, args) => {
+      calls.push({ cmd, args });
+      const action = args[args.indexOf('-Action') + 1];
+      if (action === 'Status') {
+        return {
+          status: 0,
+          stdout: JSON.stringify([
+            {
+              Component: 'relay',
+              TaskName: 'SigilService_relay',
+              TaskState: 'Running',
+              Healthy: true,
+              ListeningPorts: [8791, 8792],
+              Pids: [9999],
+              LastError: null,
+            },
+          ]),
+        };
+      }
+      return {
+        status: 0,
+        stdout: JSON.stringify([{ Component: 'relay', TaskName: 'SigilService_relay', Status: 'Success' }]),
+      };
+    };
+
+    // Install live
+    const outInst = await captureOutput(() =>
+      cmdService(['install', '--service-config', configPath], { supervisorExecFn: mockSupervisorExec })
+    );
+    assert.equal(outInst.exitCode, 0);
+    assert.ok(outInst.logs.some((l) => l.includes('executed successfully')));
+
+    // Status live
+    const outStat = await captureOutput(() =>
+      cmdService(['status', '--service-config', configPath], { supervisorExecFn: mockSupervisorExec })
+    );
+    assert.equal(outStat.exitCode, 0);
+    assert.ok(outStat.logs.some((l) => l.includes('Sigil service status')));
+    assert.ok(outStat.logs.some((l) => l.includes('Healthy: true')));
+
+    // Status JSON
+    const outStatJson = await captureOutput(() =>
+      cmdService(['status', '--service-config', configPath, '--json'], { supervisorExecFn: mockSupervisorExec })
+    );
+    assert.equal(outStatJson.exitCode, 0);
+    const parsed = JSON.parse(outStatJson.logs.join('\n'));
+    assert.equal(parsed.results[0].TaskState, 'Running');
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
