@@ -1,5 +1,72 @@
 # Status
 
+## Session update: 2026-11-07 Linux systemd user units service installation (issue #132, sub-issue #177)
+
+- Branch `feat/issue-177-linux-service` based on `feat/issue-179-retire-stopgap`. Implements sub-issue #177 under parent issue #132.
+- Shipped:
+  - Linux systemd user units supervisor in `sigil/cli/systemd-supervisor.mjs`:
+    - `generateSystemdUnit`: generates compliant systemd unit definitions with `[Unit]`, `[Service]`, and `[Install]` sections, configured with absolute `ExecStart`, `WorkingDirectory`, `Restart=always`, `RestartSec=5s`, and appended standard output/error logging.
+    - `install`: generates and writes user unit files (defaulting to `~/.config/systemd/user/sigil-<name>.service`), prepares log directories, and executes `systemctl --user enable` and `systemctl --user daemon-reload`.
+    - `start`: triggers user units via `systemctl --user start <unit>` with error capture.
+    - `stop`: halts running units via `systemctl --user stop <unit>`.
+    - `status`: inspects unit state (`ActiveState`, `SubState`, `MainPID`) via `systemctl --user show`, probes listening TCP ports, matches owning PIDs, and reads trailing errors from stderr logs.
+    - `uninstall`: stops and disables units, removes unit files, and invokes `systemctl --user daemon-reload`.
+  - Linux file keystore fallback in `sigil/cli/credential-store.mjs`:
+    - Implemented `readLinuxFileKeystore`, `writeLinuxFileKeystore`, `deleteLinuxFileKeystore`, and `getLinuxKeystorePath` (targeting `~/.config/sigil/credentials.json` with permissions `0600` and directory `0700`).
+    - Enables seamless secret resolution on headless Linux environments where `secret-tool` or D-Bus / Secret Service daemon is unavailable.
+  - Multi-platform dispatch in `sigil/cli/service-command.mjs`:
+    - Dispatches live operations to `executeSystemdSupervisor` on Linux (`plan.platform === 'linux'`) while preserving Windows dispatch (`win32`) and dry-run execution.
+    - Added unit and live-dispatch tests in `sigil/cli/systemd-supervisor.test.mjs` (6/6) and `sigil/cli/service-command.test.mjs` (7/7).
+- Evidence:
+  - Unit and integration tests passed 48/48 across `systemd-supervisor.test.mjs` (6/6), `windows-supervisor.test.mjs` (6/6), `service-command.test.mjs` (7/7), `credential-store.test.mjs` (5/5), `service-config.test.mjs` (8/8), `doctor-service-config.test.mjs` (3/3), `key-wrap-credential.test.mjs` (4/4), `secret-free-launch.test.mjs` (2/2), `windows-launcher-args.test.mjs` (4/4), and `chief-watchdog.test.mjs` (3/3).
+  - Security audit (`npm run secret-scan`), JCS conformance (`npm run audit:jcs`), and dependency gap audit (`npm run audit:deps`) passed clean with 0 violations.
+- Next sub-issue: #178 (macOS launchd agent install path).
+
+## Session update: 2026-11-06 retire scripts/windows stopgap launcher (issue #132, sub-issue #179)
+
+- Branch `feat/issue-179-retire-stopgap` based on `feat/issue-176-windows-service`. Implements sub-issue #179 under parent issue #132.
+- Shipped:
+  - Retired `scripts/windows/start-sigil-stack.ps1` and replaced it with a thin deprecation wrapper delegating execution to `sigil service start`. Emits deprecation warnings with migration instructions pointing to `docs/service-config.md`.
+  - Converted `scripts/windows/register-sigil-task.ps1` into a deprecation wrapper delegating task installation and uninstallation to `sigil service install|uninstall`, while retaining compatibility for legacy callers specifying `-Launcher`.
+  - Updated `scripts/windows/README.md` to document the retirement of the stopgap scripts and guide operators toward `sigil service install|start|stop|status|uninstall`.
+  - Updated `sigil/cli/windows-launcher-args.test.mjs` to verify deprecation notices, parameter compatibility, and `-WhatIf` / `--dry-run` behavior.
+- Evidence:
+  - Unit and integration tests passed across `sigil/cli/windows-launcher-args.test.mjs` (4/4) and `tests/chief-watchdog.test.mjs` (3/3).
+  - Security audit (`npm run secret-scan`), JCS conformance (`npm run audit:jcs`), and dependency gap audit (`npm run audit:deps`) passed clean with 0 violations.
+- Next sub-issue: #177 (Linux systemd user units install path).
+
+## Session update: 2026-11-06 Windows Task Scheduler service installation (issue #132, sub-issue #176)
+
+- Branch `feat/issue-176-windows-service` based on `feat/issue-175-credential-store`. Implements sub-issue #176 under parent issue #132.
+- Shipped:
+  - Windows supervisor driver in `sigil/cli/windows-supervisor.mjs` and native PowerShell handler in `sigil/cli/windows-supervisor.ps1` (`installWindowsService`, `startWindowsService`, `stopWindowsService`, `statusWindowsService`, `uninstallWindowsService`).
+  - End-to-end `sigil service install|start|stop|status|uninstall` implementation:
+    - `install`: idempotently registers per-user logon tasks (`SigilStack_relay`, `SigilStack_agent-<name>`, `SigilStack_rooms-web`) with auto-restart and isolated logging.
+    - `start`: invokes registered tasks via `Start-ScheduledTask`.
+    - `stop`: halts tasks via `Stop-ScheduledTask` and cleans up orphaned listening processes.
+    - `status`: queries task state (`Ready`, `Running`, `Disabled`), probes listening TCP ports, matches owning PIDs, and reads trailing errors from stderr logs.
+    - `uninstall`: halts and deregisters scheduled tasks cleanly.
+  - Secret-free service supervision: tasks consume configuration from `.sigil/service.json` and resolve wrap keys via `cred:` references to Windows Credential Manager without secret parameters in command lines or `.env` files.
+- Evidence:
+  - Unit and integration tests passed 42/42 across `windows-supervisor.test.mjs` (6/6), `service-command.test.mjs` (6/6), `credential-store.test.mjs` (4/4), `key-wrap-credential.test.mjs` (4/4), `secret-free-launch.test.mjs` (2/2), `service-config.test.mjs` (8/8), `doctor-service-config.test.mjs` (3/3), and `windows-launcher-args.test.mjs` (9/9).
+  - Cross-platform CI fix: resolved Linux Node 22/24 watchdog test failures by replacing invocation path lookups with $PSScriptRoot, portably resolving paths with Join-Path, omitting Windows-only -WindowStyle on non-Windows hosts, and deferring CIM ScheduledTask cmdlets inside WhatIf blocks. Tests pass 3/3 in `chief-watchdog.test.mjs`.
+  - Security audit (`npm run secret-scan`), JCS conformance (`npm run audit:jcs`), and dependency gap audit (`npm run audit:deps`) passed clean with 0 violations.
+- Next sub-issue: #177 (Linux systemd user units install path) or #179 (Retire scripts/windows stopgap launcher).
+
+## Session update: 2026-11-06 credential store and secret-free launch (issue #132, sub-issue #175)
+
+- Branch `feat/issue-175-credential-store` based on `feat/issue-174-service-config`. Implements sub-issue #175 under parent issue #132.
+- Shipped:
+  - OS credential store adapter in `sigil/cli/credential-store.mjs` and native Windows helper in `sigil/cli/wincred-helper.ps1` (`readCredential`, `writeCredential`, `deleteCredential`, `setMemoryCredentialStore`). Pipes secret values through stdin during write operations to prevent command-line argv leakage.
+  - Wrap key resolver integration in `sigil/relay/v1/key-wrap.mjs` (`loadWrapKey`): supports `cred:<target>` and `credential:<target>` URIs directly from the OS credential store with seamless fallback to environment variables.
+  - Secret management CLI in `sigil/cli/secret-command.mjs` (`sigil secret set|get|delete <target>`) with `--from-env`, `--generate-wrap-key`, and `--show` options. Wired into `bin/sigil.mjs` and `sigil/cli/sigil.mjs`.
+  - Secret-free launch support: processes can resolve wrap keys directly from Windows Credential Manager without secrets on process argv or `.env` files.
+- Evidence:
+  - Unit and integration tests passed 40/40 across `sigil/cli/credential-store.test.mjs` (4/4), `sigil/relay/v1/key-wrap-credential.test.mjs` (4/4), `sigil/cli/secret-free-launch.test.mjs` (2/2), `sigil/relay/v1/key-wrap.test.mjs` (8/8), `sigil/cli/service-config.test.mjs` (8/8), `sigil/cli/doctor-service-config.test.mjs` (3/3), `sigil/cli/service-command.test.mjs` (5/5), and `sigil/cli/doctor-orchestration.test.mjs` (5/5).
+  - Security audit (`npm run secret-scan`), JCS conformance (`npm run audit:jcs`), and dependency gap audit (`npm run audit:deps`) passed clean with 0 violations.
+  - Live Windows Credential Manager `CredWriteW`/`CredReadW`/`CredDeleteW` verified on Windows host.
+- Next sub-issue: #176 (Windows install path via Task Scheduler).
+
 ## Session update: 2026-11-06 service config, doctor, and CLI stubs (issue #132, sub-issue #174)
 
 - Branch `feat/issue-174-service-config` off `main`. Implements sub-issue #174 under parent issue #132.

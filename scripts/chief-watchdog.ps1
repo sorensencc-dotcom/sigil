@@ -22,9 +22,31 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-if (-not $RepoRoot) { $RepoRoot = (Resolve-Path (Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) '..')).Path }
-if (-not $PidFile) { $PidFile = Join-Path $RepoRoot '.sigil\chief.pid' }
-if (-not $AuditLogPath) { $AuditLogPath = Join-Path $RepoRoot '.sigil\logs\audit.log' }
+if (-not $RepoRoot) {
+  $scriptDir = $PSScriptRoot
+  if (-not $scriptDir -and $PSCommandPath) {
+    $scriptDir = Split-Path -Parent $PSCommandPath
+  }
+  if (-not $scriptDir -and $MyInvocation -and $MyInvocation.PSCommandPath) {
+    $scriptDir = Split-Path -Parent $MyInvocation.PSCommandPath
+  }
+  if (-not $scriptDir -and $MyInvocation -and $MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) {
+    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+  }
+  if (-not $scriptDir) {
+    $loc = (Get-Location).Path
+    if (Test-Path (Join-Path $loc (Join-Path 'scripts' 'chief-watchdog.ps1'))) {
+      $scriptDir = Join-Path $loc 'scripts'
+    } elseif (Test-Path (Join-Path $loc 'chief-watchdog.ps1')) {
+      $scriptDir = $loc
+    } else {
+      $scriptDir = $loc
+    }
+  }
+  $RepoRoot = (Resolve-Path (Join-Path $scriptDir '..')).Path
+}
+if (-not $PidFile) { $PidFile = Join-Path $RepoRoot (Join-Path '.sigil' 'chief.pid') }
+if (-not $AuditLogPath) { $AuditLogPath = Join-Path $RepoRoot (Join-Path '.sigil' (Join-Path 'logs' 'audit.log')) }
 if ($IntervalSeconds -le 0) { throw 'IntervalSeconds must be greater than zero' }
 Set-Location $RepoRoot
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $PidFile), (Split-Path -Parent $AuditLogPath) | Out-Null
@@ -47,7 +69,16 @@ function Test-RoomSocket {
 }
 
 function Start-Chief {
-  $process = Start-Process -FilePath $DaemonPath -ArgumentList $DaemonArguments -WorkingDirectory $RepoRoot -WindowStyle Hidden -PassThru
+  $startParams = @{
+    FilePath = $DaemonPath
+    ArgumentList = $DaemonArguments
+    WorkingDirectory = $RepoRoot
+    PassThru = $true
+  }
+  if ($IsWindows) {
+    $startParams['WindowStyle'] = 'Hidden'
+  }
+  $process = Start-Process @startParams
   Set-Content -Path $PidFile -Value $process.Id -NoNewline
   Write-Audit 'daemon_started' @{ pid = $process.Id; socket_port = $RoomSocketPort }
   return $process

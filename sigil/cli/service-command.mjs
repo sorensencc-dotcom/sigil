@@ -7,6 +7,8 @@ import {
   buildServicePlan,
   findProjectRoot,
 } from './service-config.mjs';
+import { executeWindowsSupervisor } from './windows-supervisor.mjs';
+import { executeSystemdSupervisor } from './systemd-supervisor.mjs';
 
 const SERVICE_SUBCOMMANDS = ['install', 'start', 'stop', 'status', 'uninstall'];
 
@@ -27,7 +29,7 @@ Options:
   --help                    Show this help message`);
 }
 
-export async function cmdService(argv) {
+export async function cmdService(argv, { supervisorExecFn, platform } = {}) {
   const [subcommand, ...rest] = argv;
 
   if (!subcommand || subcommand === '--help' || subcommand === '-h') {
@@ -43,7 +45,7 @@ export async function cmdService(argv) {
 
   const options = {
     'service-config': { type: 'string' },
-    'dry-run': { type: 'boolean', default: true },
+    'dry-run': { type: 'boolean', default: false },
     json: { type: 'boolean', default: false },
     help: { type: 'boolean', default: false },
   };
@@ -56,7 +58,7 @@ export async function cmdService(argv) {
 
   const configPath = parsed.values['service-config'] ?? DEFAULT_SERVICE_CONFIG;
   const isJson = Boolean(parsed.values.json);
-  const isDryRun = parsed.values['dry-run'] !== false;
+  const isDryRun = Boolean(parsed.values['dry-run']);
 
   let config;
   try {
@@ -85,7 +87,86 @@ export async function cmdService(argv) {
 
   const plan = buildServicePlan(config, {
     basePath: projectRoot,
+    platform,
   });
+
+  if (!isDryRun && plan.platform === 'win32') {
+    const actionName = subcommand.charAt(0).toUpperCase() + subcommand.slice(1);
+    let results;
+    try {
+      results = executeWindowsSupervisor(actionName, plan, { dryRun: false, execFn: supervisorExecFn });
+    } catch (err) {
+      console.error(`sigil service ${subcommand} failed: ${err.message}`);
+      process.exitCode = 1;
+      return;
+    }
+
+    if (isJson) {
+      console.log(JSON.stringify({ action: subcommand, platform: 'win32', results }, null, 2));
+      return;
+    }
+
+    if (subcommand === 'status') {
+      console.log('Sigil service status (Windows Task Scheduler):');
+      for (const item of results) {
+        console.log(`  - ${item.Component}:`);
+        console.log(`      Task state: ${item.TaskState}`);
+        console.log(`      Healthy: ${item.Healthy}`);
+        console.log(`      Listening ports: ${item.ListeningPorts && item.ListeningPorts.length ? item.ListeningPorts.join(', ') : 'none'}`);
+        console.log(`      PIDs: ${item.Pids && item.Pids.length ? item.Pids.join(', ') : 'none'}`);
+        if (item.LastError) {
+          console.log(`      Last error: ${item.LastError}`);
+        }
+      }
+      return;
+    }
+
+    console.log(`sigil service ${subcommand}: executed successfully.`);
+    for (const item of results) {
+      const errSuffix = item.Error ? ` (error: ${item.Error})` : '';
+      console.log(`  - ${item.Component} (${item.TaskName}): ${item.Status}${errSuffix}`);
+    }
+    return;
+  }
+
+  if (!isDryRun && plan.platform === 'linux') {
+    const actionName = subcommand.charAt(0).toUpperCase() + subcommand.slice(1);
+    let results;
+    try {
+      results = executeSystemdSupervisor(actionName, plan, { dryRun: false, execFn: supervisorExecFn });
+    } catch (err) {
+      console.error(`sigil service ${subcommand} failed: ${err.message}`);
+      process.exitCode = 1;
+      return;
+    }
+
+    if (isJson) {
+      console.log(JSON.stringify({ action: subcommand, platform: 'linux', results }, null, 2));
+      return;
+    }
+
+    if (subcommand === 'status') {
+      console.log('Sigil service status (systemd user units):');
+      for (const item of results) {
+        console.log(`  - ${item.Component}:`);
+        console.log(`      Unit state: ${item.UnitState}`);
+        console.log(`      Healthy: ${item.Healthy}`);
+        console.log(`      Listening ports: ${item.ListeningPorts && item.ListeningPorts.length ? item.ListeningPorts.join(', ') : 'none'}`);
+        console.log(`      PIDs: ${item.Pids && item.Pids.length ? item.Pids.join(', ') : 'none'}`);
+        if (item.LastError) {
+          console.log(`      Last error: ${item.LastError}`);
+        }
+      }
+      return;
+    }
+
+    console.log(`sigil service ${subcommand}: executed successfully.`);
+    for (const item of results) {
+      const errSuffix = item.Error ? ` (error: ${item.Error})` : '';
+      console.log(`  - ${item.Component} (${item.UnitName}): ${item.Status}${errSuffix}`);
+    }
+    return;
+  }
 
   const payload = {
     action: subcommand,

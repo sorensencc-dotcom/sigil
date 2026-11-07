@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { isCredentialRef, parseCredentialRef, readCredential as defaultReadCredential } from '../../cli/credential-store.mjs';
 
 const aad = (endpointId, keyId) => Buffer.from(`${endpointId}\0${keyId}`, 'utf8');
 
@@ -21,12 +22,28 @@ export function unwrapPrivateKey({ wrapKey, endpointId, keyId, wrapped }) {
   return crypto.createPrivateKey({ key: der, format: 'der', type: 'pkcs8' });
 }
 
-// ref names an environment variable holding 32 random bytes, base64. Doppler
-// injects it into the environment; the value never appears in argv.
-export function loadWrapKey(ref, env = process.env) {
-  const raw = ref ? env[ref] : undefined;
+// ref names an environment variable or credential reference (cred:<target> or credential:<target>)
+// holding 32 random bytes, base64. Values never appear in argv.
+export function loadWrapKey(ref, env = process.env, { readCredentialFn = defaultReadCredential } = {}) {
+  let raw;
+  if (isCredentialRef(ref)) {
+    const target = parseCredentialRef(ref);
+    try {
+      raw = readCredentialFn(target);
+    } catch (err) {
+      if (err.code === 'CREDENTIAL_NOT_FOUND') {
+        throw Object.assign(new Error(`wrap key credential "${ref}" is not found in store`), {
+          code: 'WRAP_KEY_UNAVAILABLE',
+        });
+      }
+      throw err;
+    }
+  } else {
+    raw = ref ? env[ref] : undefined;
+  }
+
   if (!raw) throw Object.assign(new Error(`wrap key "${ref}" is not set`), { code: 'WRAP_KEY_UNAVAILABLE' });
-  const key = Buffer.from(raw, 'base64');
+  const key = Buffer.from(raw.trim(), 'base64');
   if (key.length !== 32) throw Object.assign(new Error('wrap key must be 32 bytes, base64-encoded'), { code: 'WRAP_KEY_INVALID' });
   return key;
 }

@@ -115,3 +115,22 @@ Flags:
 - `--service-config <path>`: Points to a specific service configuration file.
 - `--dry-run`: Runs in simulation mode without altering system supervisor state. Default is `true`.
 - `--json`: Formats output as structured JSON.
+
+## Credential store management
+
+Sigil processes can resolve secrets directly from the OS credential store (Windows Credential Manager, macOS Keychain, and Linux secret-tool) instead of environment variables or `.env` files.
+
+### URI syntax
+
+Specify `cred:<target>` or `credential:<target>` anywhere a wrap key reference is expected:
+```bash
+sigil relay up --room-bot-key-wrap-key cred:sigil/room-bot-wrap-key
+```
+
+### CLI secret subcommands
+
+To manage secrets stored in the OS credential store:
+1. `sigil secret set <target> [--from-env <name> | --generate-wrap-key | --value <val>]`: Writes a secret into the OS store.
+2. `sigil secret get <target> [--show]`: Verifies existence (or prints if `--show` is passed).
+3. `sigil secret delete <target>`: Deletes a stored secret.
+
