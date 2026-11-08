@@ -620,21 +620,17 @@ test('recover arms a running invocation that was never forwarded; a later handle
   assert.equal(s.posts.length, 1);
 });
 
-test('bug: handle after close still POSTs and records a forward with no watch', async (t) => {
+test('handle after close does not POST', async (t) => {
   const s = setup(t);
   const bridge = s.make();
   bridge.close();
-  assert.deepEqual(await bridge.handle({ envelope: envelopeFor(s.relay, 'msg_t') }), { outcome: 'forwarded' });
-  assert.equal(s.posts.length, 1);
-  assert.ok(s.sessions.get('room_1').floor_warden.forwards.inv_1);
-  const before = s.relay.calls.length;
-  t.mock.timers.tick(TIMEOUT * 2);
-  await flush();
-  assert.equal(s.relay.calls.length, before, 'no watch armed');
+  assert.deepEqual(await bridge.handle({ envelope: envelopeFor(s.relay, 'msg_t') }), { outcome: 'skipped' });
+  assert.equal(s.posts.length, 0);
+  assert.equal(s.sessions.get('room_1')?.floor_warden?.forwards?.inv_1, undefined);
   assert.equal(s.relay.failed.length, 0);
 });
 
-test('bug: a second handle while an unconfirmed fail is watching POSTs the bot again', async (t) => {
+test('a second handle while an unconfirmed fail is watching does not POST again', async (t) => {
   const s = setup(t, { respond: () => ({ status: 400 }) });
   const original = s.relay.failRoomInvocation.bind(s.relay);
   let calls = 0;
@@ -647,30 +643,34 @@ test('bug: a second handle while an unconfirmed fail is watching POSTs the bot a
   const envelope = envelopeFor(s.relay, 'msg_t');
   assert.deepEqual(await bridge.handle({ envelope }), { outcome: 'failed', reason: 'FLOOR_WARDEN_REJECTED' });
   assert.equal(s.posts.length, 1);
-  await bridge.handle({ envelope });
-  assert.equal(s.posts.length, 2, 'accidental second POST while fail-watch is armed');
+  assert.deepEqual(await bridge.handle({ envelope }), { outcome: 'skipped' });
+  assert.equal(s.posts.length, 1);
 });
 
-test('bug: recover that fails to confirm a timeout leaves the forward with no watch', async (t) => {
+test('recover that fails to confirm a timeout re-arms a watch', async (t) => {
   const s = setup(t, { invocations: [inv('inv_1', 'room_1', 'msg_t', { startedAt: T0 - 20 * MIN })] });
   s.sessions.set('room_1', { session_id: null, last_seq_by_thread: {}, floor_warden: { attempts: {}, halts: {}, forwards: { inv_1: { thread_root_id: 'msg_root', trigger_message_id: 'msg_t', trigger_room_seq: 4, forwarded_at: new Date(T0 - 20 * MIN).toISOString() } } } });
-  s.relay.failRoomInvocation = async () => { throw Object.assign(new Error('blip'), { code: 'DELIVERY_UNAVAILABLE' }); };
+  let failCalls = 0;
+  s.relay.failRoomInvocation = async () => {
+    failCalls += 1;
+    throw Object.assign(new Error('blip'), { code: 'DELIVERY_UNAVAILABLE' });
+  };
   await s.make().recover();
   await flush();
   assert.ok(s.sessions.get('room_1').floor_warden.forwards.inv_1);
-  const before = s.relay.calls.length;
-  t.mock.timers.tick(TIMEOUT * 2);
+  assert.equal(failCalls, 1);
+  t.mock.timers.tick(0);
   await flush();
-  assert.equal(s.relay.calls.length, before, 'no watch to retry the fail');
+  assert.ok(failCalls >= 2, 'watch retried the fail');
 });
 
-test('bug: recover after close still fails a stale running invocation', async (t) => {
+test('recover after close does not fail a stale running invocation', async (t) => {
   const s = setup(t, { invocations: [inv('inv_1', 'room_1', 'msg_t', { startedAt: T0 - 20 * MIN })] });
   const bridge = s.make();
   bridge.close();
   await bridge.recover();
   await flush();
-  assert.deepEqual(s.relay.failed, [['room_1', 'REPLY_TIMEOUT', 'inv_1']]);
+  assert.deepEqual(s.relay.failed, []);
 });
 
 test('bug: recover does not clear attempts-only rows', async (t) => {
@@ -718,9 +718,9 @@ test('bug: exhausting a fail-watch with no forward leaves a running invocation u
   assert.equal(s.relay.invocations[0].status, 'running');
 });
 
-test('bug: a halt record does not stop handle from POSTing if the invocation is still running', async (t) => {
+test('a halt record stops handle from POSTing if the invocation is still running', async (t) => {
   const s = setup(t);
   s.sessions.set('room_1', { session_id: null, last_seq_by_thread: {}, floor_warden: { attempts: {}, forwards: {}, halts: { inv_1: new Date(T0).toISOString() } } });
-  assert.deepEqual(await s.make().handle({ envelope: envelopeFor(s.relay, 'msg_t') }), { outcome: 'forwarded' });
-  assert.equal(s.posts.length, 1);
+  assert.deepEqual(await s.make().handle({ envelope: envelopeFor(s.relay, 'msg_t') }), { outcome: 'skipped' });
+  assert.equal(s.posts.length, 0);
 });

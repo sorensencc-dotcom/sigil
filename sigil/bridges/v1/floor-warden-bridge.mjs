@@ -38,7 +38,7 @@
 //     floor_warden: { attempts: { [inv]: n }, forwards: { [inv]: { thread_root_id,
 //       trigger_message_id, trigger_room_seq, forwarded_at, bot } }, halts: { [inv]: iso } } }
 import { buildForwardPayload, buildHaltPayload, PAYLOAD_MAX_BYTES } from './floor-warden-payload.mjs';
-import { applyWatchEvent } from './floor-warden-watch-state.mjs';
+import { applyWatchEvent, canWatchEvent, deriveWatchState } from './floor-warden-watch-state.mjs';
 import { logHop } from '../../relay/v1/hop-log.mjs';
 
 const DEFAULT_MAX_TURNS = 6;
@@ -131,6 +131,7 @@ export function createFloorWardenBridge({
         errors: watch.errors,
         deadlineErrors: watch.deadlineErrors,
         busy: watch.busy,
+        source: watch.source ?? 'recover',
       } : null,
     };
   }
@@ -184,6 +185,7 @@ export function createFloorWardenBridge({
       haltAttempts: logical.haltAttempts,
       errors: logical.errors,
       deadlineErrors: logical.deadlineErrors,
+      source: logical.source ?? 'recover',
       deadline: null,
       poll: null,
     };
@@ -196,7 +198,7 @@ export function createFloorWardenBridge({
       disarm(invocationId);
       return;
     }
-    const restart = event === 'handle.forwarded' || event === 'handle.fail.retry' || event === 'recover.arm';
+    const restart = event === 'handle.forwarded' || event === 'handle.fail.retry' || event === 'recover.arm' || event === 'recover.fail.retry';
     if (restart || !watches.has(invocationId)) {
       startWatch(roomId, invocationId, snap.watch);
       return;
@@ -208,6 +210,7 @@ export function createFloorWardenBridge({
     watch.errors = snap.watch.errors;
     watch.deadlineErrors = snap.watch.deadlineErrors;
     watch.busy = snap.watch.busy;
+    watch.source = snap.watch.source;
     if (event === 'deadline.fail.retry') {
       clearTimeout(watch.deadline);
       watch.deadline = setTimeout(() => onDeadline(invocationId), pollIntervalMs);
@@ -358,9 +361,11 @@ export function createFloorWardenBridge({
     const roomId = envelope.conversation_id;
     const invocation = await runningFor(roomId);
     if (!invocation || invocation.trigger_message_id !== envelope.message_id) return { outcome: 'skipped' };
+    const snap = snapshotOf(roomId, invocation.invocation_id);
     // Already forwarded (a redelivery, or a poll racing a stream trigger): the
     // reply watch owns it now, and a second POST would run the bot twice.
-    if (snapshotOf(roomId, invocation.invocation_id).forward) return { outcome: 'skipped' };
+    if (snap.forward) return { outcome: 'skipped' };
+    if (!canWatchEvent(deriveWatchState(snap), 'handle.forwarded')) return { outcome: 'skipped' };
     logHop('bridge.invocation_seen', { invocation_id: invocation.invocation_id, room_id: roomId, trigger_message_id: envelope.message_id }, logger);
     try {
       return await forward(envelope, roomId, invocation);
@@ -423,6 +428,9 @@ export function createFloorWardenBridge({
     let attempt = Math.max(attemptCounts.get(invocationId) ?? 0, Number.isFinite(stored) ? stored : 0);
     let result;
     for (let retry = 0; ; retry += 1) {
+      if (closed) {
+        throw Object.assign(new Error(`Floor Warden bridge closed; attempt ${attempt} of ${maxAttempts}`), { code: RETRY });
+      }
       result = await post(payload);
       if (result.kind !== 'retry') break;
       attempt += 1;
@@ -496,6 +504,7 @@ export function createFloorWardenBridge({
   // forward, else started_at), re-arms the younger ones, and sends any halt
   // frame a restart lost between the cancel and the poll.
   async function recover() {
+    if (closed) return;
     let listed = [];
     try { listed = (await listRooms()).map((room) => room.conversation_id); } catch (error) { warn(`floor warden: recover room list: ${error.message}`); }
     // Rooms the bot left still hold forward records; the store lists them.
@@ -514,7 +523,7 @@ export function createFloorWardenBridge({
           if (Date.now() >= deadlineAt) {
             await failConfirmed(roomId, invocationId, 'REPLY_TIMEOUT', 'recover.fail.ok').catch((error) => {
               warn(`floor warden: recover failRoomInvocation for ${invocationId}: ${error.message}`);
-              applyAndCommit(roomId, invocationId, 'recover.fail.retry');
+              applyAndCommit(roomId, invocationId, 'recover.fail.retry', { reason: 'REPLY_TIMEOUT', deadlineAt: Date.now() });
             });
           } else arm(roomId, invocationId, deadlineAt);
         }
