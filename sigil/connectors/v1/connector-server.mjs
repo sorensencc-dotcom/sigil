@@ -23,7 +23,7 @@ function reply(response, status, body) {
   response.writeHead(status, { 'content-type': 'application/json' }); response.end(JSON.stringify(body));
 }
 
-export function createConnectorServer({ connector, token, manifest, publisherKeys, revokedPublisherKeys = new Set(), allowedCallers = [], maxInFlight = 32, maxRequestsPerWindow = 120, rateWindowMs = 60_000, contextRoot, contextGrants = [], resolveCaller } = {}) {
+export function createConnectorServer({ connector, token, manifest, publisherKeys, revokedPublisherKeys = new Set(), allowedCallers = [], maxInFlight = 32, maxRequestsPerWindow = 120, rateWindowMs = 60_000, contextRoot, contextGrants = [], resolveCaller, kbServerPath, kbModule } = {}) {
   if (!connector || !token) throw new Error('connector and token are required');
   if (!Number.isInteger(maxInFlight) || maxInFlight < 1 || !Number.isInteger(maxRequestsPerWindow) || maxRequestsPerWindow < 1 || !Number.isInteger(rateWindowMs) || rateWindowMs < 1) throw new Error('invalid connector abuse limits');
   const verifiedManifest = manifest ? verifyPluginManifest(manifest, { publisherKeys, revokedPublisherKeys }) : null;
@@ -32,7 +32,7 @@ export function createConnectorServer({ connector, token, manifest, publisherKey
   const expectedTokenDigest = crypto.createHash('sha256').update(String(token)).digest();
   let inFlight = 0;
   const callerWindows = new Map();
-  const mcpMemoryBridge = createMcpMemoryBridge();
+  const mcpMemoryBridge = createMcpMemoryBridge({ kbServerPath, kbModule });
   const server = http.createServer(async (request, response) => {
     if (await mcpMemoryBridge.handleRequest(request, response)) return;
     const authorization = request.headers.authorization;

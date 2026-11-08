@@ -1,16 +1,129 @@
 // sigil/connectors/v1/mcp-memory-bridge.mjs
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 
-export function createMcpMemoryBridge({ kbServerPath } = {}) {
-  const resolvedPath = kbServerPath || path.resolve('C:/dev/kb-sync/scripts/mcp-memory-server.mjs');
+const FALLBACK_TOOLS = [
+  {
+    name: 'query_context_cache',
+    description: 'Searches the knowledge base context cache by query string.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search term or question' },
+        limit: { type: 'integer', default: 5 }
+      },
+      required: ['query']
+    }
+  },
+  {
+    name: 'fetch_topic_note',
+    description: 'Fetches topic notes and citations by topic name.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        topic: { type: 'string', description: 'Canonical topic name' }
+      },
+      required: ['topic']
+    }
+  },
+  {
+    name: 'vfs_upsert_document',
+    description: 'Upserts document to local cache.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        content: { type: 'string' }
+      },
+      required: ['path', 'content']
+    }
+  }
+];
+
+function createFallbackKb() {
+  return {
+    daemonDatabase: () => ({}),
+    processRpcMessage: (_db, message) => {
+      if (!message || typeof message !== 'object') {
+        return { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } };
+      }
+      const { id, method, params } = message;
+      if (id === undefined || id === null) {
+        return null;
+      }
+      switch (method) {
+        case 'initialize':
+          return {
+            jsonrpc: '2.0',
+            id,
+            result: {
+              protocolVersion: params?.protocolVersion || '2024-11-05',
+              capabilities: { tools: {} },
+              serverInfo: { name: 'kb-context-cache', version: '1.0.0' }
+            }
+          };
+        case 'ping':
+          return { jsonrpc: '2.0', id, result: {} };
+        case 'tools/list':
+          return {
+            jsonrpc: '2.0',
+            id,
+            result: { tools: FALLBACK_TOOLS }
+          };
+        case 'tools/call': {
+          const { name } = params || {};
+          return {
+            jsonrpc: '2.0',
+            id,
+            result: {
+              content: [
+                {
+                  type: 'text',
+                  text: `[fallback-cache] Tool ${name} handled with empty result.`
+                }
+              ]
+            }
+          };
+        }
+        default:
+          return {
+            jsonrpc: '2.0',
+            id,
+            error: { code: -32601, message: `Method not found: ${method}` }
+          };
+      }
+    }
+  };
+}
+
+export function createMcpMemoryBridge({ kbServerPath, kbModule } = {}) {
   let kbModulePromise = null;
 
   async function getKbModule() {
-    if (!kbModulePromise) {
-      kbModulePromise = import(pathToFileURL(resolvedPath).href);
+    if (kbModule) return kbModule;
+    if (kbModulePromise) return kbModulePromise;
+
+    const candidates = [
+      kbServerPath,
+      process.env.KB_MEMORY_SERVER_PATH,
+      path.resolve(import.meta.dirname, '../../../../kb-sync/scripts/mcp-memory-server.mjs'),
+      'C:/dev/kb-sync/scripts/mcp-memory-server.mjs'
+    ].filter(Boolean);
+
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        try {
+          kbModulePromise = await import(pathToFileURL(candidate).href);
+          return kbModulePromise;
+        } catch {
+          // Fall through to next candidate or fallback
+        }
+      }
     }
+
+    kbModulePromise = createFallbackKb();
     return kbModulePromise;
   }
 

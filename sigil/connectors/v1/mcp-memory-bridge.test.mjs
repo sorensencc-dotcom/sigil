@@ -178,3 +178,54 @@ test('mcp memory bridge: returns false for non-mcp routes', async () => {
   handled = await bridge.handleRequest(req, res);
   assert.equal(handled, false);
 });
+
+test('mcp memory bridge: cleanly falls back to built-in cache provider when external server is missing', async () => {
+  const bridge = createMcpMemoryBridge({ kbServerPath: '/non/existent/path/mcp-memory-server.mjs' });
+  const server = http.createServer(async (req, res) => {
+    const handled = await bridge.handleRequest(req, res);
+    if (!handled) {
+      res.writeHead(404);
+      res.end('Not Found');
+    }
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    const initRes = await fetch(`${baseUrl}/mcp/memory`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 100,
+        method: 'initialize',
+        params: { protocolVersion: '2024-11-05' }
+      })
+    });
+    assert.equal(initRes.status, 200);
+    const initData = await initRes.json();
+    assert.equal(initData.id, 100);
+    assert.equal(initData.result.serverInfo.name, 'kb-context-cache');
+
+    const toolsRes = await fetch(`${baseUrl}/mcp/memory`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 101,
+        method: 'tools/list',
+        params: {}
+      })
+    });
+    assert.equal(toolsRes.status, 200);
+    const toolsData = await toolsRes.json();
+    assert.equal(toolsData.id, 101);
+    const toolNames = toolsData.result.tools.map((t) => t.name);
+    assert.ok(toolNames.includes('query_context_cache'));
+  } finally {
+    bridge.close();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
