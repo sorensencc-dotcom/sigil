@@ -1,0 +1,22 @@
+.trail/learnings/2026-11-08-floor-warden-watch-rejects-the-former-chris.md
+  h_5c172e9b435f5a 1-34
+sigil/bridges/v1/floor-warden-bridge.mjs
+  h_5c172e9b435f5a 41,134,188,201,213,364,367-368,431-433,507,526
+sigil/bridges/v1/floor-warden-bridge.test.mjs
+  h_5c172e9b435f5a 623,627-629,633,646-647,650,653-657,661-662,664,667,673,721,724-725
+sigil/bridges/v1/floor-warden-watch-state.mjs
+  h_5c172e9b435f5a 4-6,9,12,23,29-30,40-41,48,62,75,105-109,118,125,156,158,186,190
+sigil/bridges/v1/floor-warden-watch-state.test.mjs
+  h_5c172e9b435f5a 11,28-33,55,60,62,66-86,91,95-99,101-111,128,130,132,138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e8cd0d802fe115eb51b66daecaff80b23a07bd08",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
