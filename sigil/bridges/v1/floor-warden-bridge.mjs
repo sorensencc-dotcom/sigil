@@ -38,6 +38,7 @@
 //     floor_warden: { attempts: { [inv]: n }, forwards: { [inv]: { thread_root_id,
 //       trigger_message_id, trigger_room_seq, forwarded_at, bot } }, halts: { [inv]: iso } } }
 import { buildForwardPayload, buildHaltPayload, PAYLOAD_MAX_BYTES } from './floor-warden-payload.mjs';
+import { applyWatchEvent } from './floor-warden-watch-state.mjs';
 import { logHop } from '../../relay/v1/hop-log.mjs';
 
 const DEFAULT_MAX_TURNS = 6;
@@ -115,11 +116,53 @@ export function createFloorWardenBridge({
     change(value);
     sessions.set(roomId, value);
   }
-  function forget(roomId, invocationId) {
-    attemptCounts.delete(invocationId);
+  function snapshotOf(roomId, invocationId) {
     const fw = roomValue(roomId).floor_warden;
-    if (!(invocationId in fw.forwards) && !(invocationId in fw.attempts)) return;
-    update(roomId, (value) => { delete value.floor_warden.forwards[invocationId]; delete value.floor_warden.attempts[invocationId]; });
+    const watch = watches.get(invocationId);
+    return {
+      closed,
+      forward: fw.forwards[invocationId] ?? null,
+      attempts: Number(fw.attempts[invocationId] ?? 0) || 0,
+      halt: fw.halts[invocationId] ?? null,
+      watch: watch ? {
+        reason: watch.reason,
+        deadlineAt: watch.deadlineAt,
+        haltAttempts: watch.haltAttempts,
+        errors: watch.errors,
+        deadlineErrors: watch.deadlineErrors,
+        busy: watch.busy,
+      } : null,
+    };
+  }
+  function writeSnap(value, invocationId, snap) {
+    const fw = value.floor_warden;
+    if (snap.forward) fw.forwards[invocationId] = snap.forward;
+    else delete fw.forwards[invocationId];
+    if (snap.attempts > 0) fw.attempts[invocationId] = snap.attempts;
+    else delete fw.attempts[invocationId];
+    if (snap.halt) fw.halts[invocationId] = snap.halt;
+    else delete fw.halts[invocationId];
+  }
+  function sessionChanged(before, after) {
+    return before.attempts !== after.attempts || before.halt !== after.halt || JSON.stringify(before.forward) !== JSON.stringify(after.forward);
+  }
+  function applyAndCommit(roomId, invocationId, event, extra = {}) {
+    const before = snapshotOf(roomId, invocationId);
+    const result = applyWatchEvent(before, event, extra);
+    if (result.rejected) return result;
+    closed = result.snapshot.closed;
+    if (sessionChanged(before, result.snapshot) || extra.patch) {
+      update(roomId, (value) => {
+        writeSnap(value, invocationId, result.snapshot);
+        extra.patch?.(value);
+      });
+    }
+    if (!result.snapshot.forward && result.snapshot.attempts === 0) attemptCounts.delete(invocationId);
+    syncWatch(roomId, invocationId, event, result.snapshot);
+    return result;
+  }
+  function forget(roomId, invocationId) {
+    applyAndCommit(roomId, invocationId, 'recover.forget');
   }
 
   // ---- timers -----------------------------------------------------------
@@ -130,17 +173,51 @@ export function createFloorWardenBridge({
     clearInterval(watch.poll);
     watches.delete(invocationId);
   }
-  function finish(roomId, invocationId) {
-    disarm(invocationId);
-    forget(roomId, invocationId);
-  }
-  function arm(roomId, invocationId, deadlineAt, reason = 'REPLY_TIMEOUT') {
+  function startWatch(roomId, invocationId, logical) {
     disarm(invocationId);
     if (closed) return;
-    const watch = { roomId, reason, busy: false, haltAttempts: 0, errors: 0, deadlineErrors: 0, deadline: null, poll: null };
-    watch.deadline = setTimeout(() => onDeadline(invocationId), Math.max(0, deadlineAt - Date.now()));
+    const watch = {
+      roomId,
+      reason: logical.reason,
+      deadlineAt: logical.deadlineAt,
+      busy: logical.busy,
+      haltAttempts: logical.haltAttempts,
+      errors: logical.errors,
+      deadlineErrors: logical.deadlineErrors,
+      deadline: null,
+      poll: null,
+    };
+    watch.deadline = setTimeout(() => onDeadline(invocationId), Math.max(0, logical.deadlineAt - Date.now()));
     watch.poll = setInterval(() => onPoll(invocationId), pollIntervalMs);
     watches.set(invocationId, watch);
+  }
+  function syncWatch(roomId, invocationId, event, snap) {
+    if (!snap.watch) {
+      disarm(invocationId);
+      return;
+    }
+    const restart = event === 'handle.forwarded' || event === 'handle.fail.retry' || event === 'recover.arm';
+    if (restart || !watches.has(invocationId)) {
+      startWatch(roomId, invocationId, snap.watch);
+      return;
+    }
+    const watch = watches.get(invocationId);
+    watch.reason = snap.watch.reason;
+    watch.deadlineAt = snap.watch.deadlineAt;
+    watch.haltAttempts = snap.watch.haltAttempts;
+    watch.errors = snap.watch.errors;
+    watch.deadlineErrors = snap.watch.deadlineErrors;
+    watch.busy = snap.watch.busy;
+    if (event === 'deadline.fail.retry') {
+      clearTimeout(watch.deadline);
+      watch.deadline = setTimeout(() => onDeadline(invocationId), pollIntervalMs);
+    }
+  }
+  function finish(roomId, invocationId) {
+    applyAndCommit(roomId, invocationId, 'finish');
+  }
+  function arm(roomId, invocationId, deadlineAt, reason = 'REPLY_TIMEOUT') {
+    applyAndCommit(roomId, invocationId, 'recover.arm', { reason, deadlineAt });
   }
 
   async function isRunning(roomId, invocationId) {
@@ -153,12 +230,11 @@ export function createFloorWardenBridge({
   // failRoomInvocation, which the poll never resets. At maxAttempts on either
   // counter the watch stops (one warning) but the forward record stays in the
   // session store, so recover() retries it after a restart. Returns true when stopped.
-  function watchError(invocationId, watch, what, error, counter = 'errors') {
-    watch[counter] += 1;
+  function watchError(invocationId, watch, what, error, event) {
+    const result = applyAndCommit(watch.roomId, invocationId, event, { maxAttempts });
     warn(`floor warden: ${what} for ${invocationId}: ${error?.message ?? String(error)}`);
-    if (watch[counter] < maxAttempts) return false;
+    if (result.snapshot.watch) return false;
     warn(`floor warden: stopped watching ${invocationId} after ${maxAttempts} consecutive relay errors; recover() retries it`);
-    disarm(invocationId);
     return true;
   }
 
@@ -169,13 +245,12 @@ export function createFloorWardenBridge({
       if (await isRunning(watch.roomId, invocationId)) {
         if (closed || watches.get(invocationId) !== watch) return;
         // Rethrows: the record and timers stay until the relay confirms.
-        await failConfirmed(watch.roomId, invocationId, watch.reason);
+        await failConfirmed(watch.roomId, invocationId, watch.reason, 'deadline.fail.ok');
       }
       // Not running: the poll decides between nothing and a halt frame.
     } catch (error) {
       if (closed || watches.get(invocationId) !== watch) return;
-      if (watchError(invocationId, watch, 'deadline check', error, 'deadlineErrors')) return;
-      watch.deadline = setTimeout(() => onDeadline(invocationId), pollIntervalMs);
+      watchError(invocationId, watch, 'deadline check', error, 'deadline.fail.retry');
     }
   }
 
@@ -192,16 +267,15 @@ export function createFloorWardenBridge({
       const row = all.find((item) => item.invocation_id === invocationId);
       if (row?.status === 'cancelled') {
         if (!(await sendHalt(watch.roomId, invocationId))) {
-          watch.haltAttempts += 1;
-          if (watch.haltAttempts < maxAttempts) return;
+          const after = applyAndCommit(watch.roomId, invocationId, 'poll.halt.retry', { maxAttempts });
+          if (after.snapshot.watch) return;
           warn(`floor warden: halt frame for ${invocationId} not delivered after ${maxAttempts} attempts; recover() retries it`);
-          disarm(invocationId);
           return;
         }
       }
       finish(watch.roomId, invocationId);
     } catch (error) {
-      if (!closed && watches.get(invocationId) === watch) watchError(invocationId, watch, 'invocation poll', error);
+      if (!closed && watches.get(invocationId) === watch) watchError(invocationId, watch, 'invocation poll', error, 'poll.error');
     } finally {
       watch.busy = false;
     }
@@ -238,9 +312,9 @@ export function createFloorWardenBridge({
     }
   }
 
-  async function failConfirmed(roomId, invocationId, reason) {
+  async function failConfirmed(roomId, invocationId, reason, event = 'finish') {
     await relay.failRoomInvocation(roomId, reason, invocationId);
-    finish(roomId, invocationId);
+    applyAndCommit(roomId, invocationId, event);
   }
 
   async function fail(roomId, invocationId, reason) {
@@ -250,10 +324,10 @@ export function createFloorWardenBridge({
       warn(`floor warden: failRoomInvocation: ${error.message}`);
       // Unconfirmed: keep the record and hand the retries to a watch whose
       // deadline is already due, so the invocation is not left running.
-      arm(roomId, invocationId, Date.now(), reason);
+      applyAndCommit(roomId, invocationId, 'handle.fail.retry', { reason, deadlineAt: Date.now() });
       return { outcome: 'failed', reason };
     }
-    finish(roomId, invocationId);
+    applyAndCommit(roomId, invocationId, 'handle.fail.ok');
     return { outcome: 'failed', reason };
   }
 
@@ -286,7 +360,7 @@ export function createFloorWardenBridge({
     if (!invocation || invocation.trigger_message_id !== envelope.message_id) return { outcome: 'skipped' };
     // Already forwarded (a redelivery, or a poll racing a stream trigger): the
     // reply watch owns it now, and a second POST would run the bot twice.
-    if (roomValue(roomId).floor_warden.forwards[invocation.invocation_id]) return { outcome: 'skipped' };
+    if (snapshotOf(roomId, invocation.invocation_id).forward) return { outcome: 'skipped' };
     logHop('bridge.invocation_seen', { invocation_id: invocation.invocation_id, room_id: roomId, trigger_message_id: envelope.message_id }, logger);
     try {
       return await forward(envelope, roomId, invocation);
@@ -355,7 +429,7 @@ export function createFloorWardenBridge({
       warn(`floor warden: webhook ${origin} unavailable for ${invocationId} (${result.detail}), attempt ${attempt} of ${maxAttempts}`);
       if (attempt >= maxAttempts) return fail(roomId, invocationId, 'FLOOR_WARDEN_UNREACHABLE');
       attemptCounts.set(invocationId, attempt);
-      update(roomId, (next) => { next.floor_warden.attempts[invocationId] = attempt; });
+      applyAndCommit(roomId, invocationId, 'handle.attempts', { attempts: attempt });
       if (closed || retry >= retryBackoffMs.length) {
         throw Object.assign(new Error(`Floor Warden webhook unavailable (${result.detail}); attempt ${attempt} of ${maxAttempts}`), { code: RETRY });
       }
@@ -368,15 +442,16 @@ export function createFloorWardenBridge({
 
     const forwardedAt = Date.now();
     attemptCounts.delete(invocationId);
-    update(roomId, (next) => {
-      const previous = toSeq(next.last_seq_by_thread[threadRootId]);
-      next.last_seq_by_thread[threadRootId] = String(previous === null ? triggerSeq : Math.max(previous, triggerSeq));
-      delete next.floor_warden.attempts[invocationId];
-      next.floor_warden.forwards[invocationId] = { thread_root_id: threadRootId, trigger_message_id: envelope.message_id, trigger_room_seq: triggerSeq, forwarded_at: new Date(forwardedAt).toISOString(), bot: target };
+    applyAndCommit(roomId, invocationId, 'handle.forwarded', {
+      forward: { thread_root_id: threadRootId, trigger_message_id: envelope.message_id, trigger_room_seq: triggerSeq, forwarded_at: new Date(forwardedAt).toISOString(), bot: target },
+      deadlineAt: forwardedAt + replyTimeoutMs,
+      patch: (next) => {
+        const previous = toSeq(next.last_seq_by_thread[threadRootId]);
+        next.last_seq_by_thread[threadRootId] = String(previous === null ? triggerSeq : Math.max(previous, triggerSeq));
+      },
     });
     logger.info?.(`floor warden: forwarded ${invocationId} to ${origin}`);
     logHop('bridge.forwarded', { invocation_id: invocationId, room_id: roomId, trigger_message_id: envelope.message_id, attempts: attempt + 1, forward_ms: forwardedAt - startedAt }, logger);
-    arm(roomId, invocationId, forwardedAt + replyTimeoutMs);
     return { outcome: 'forwarded' };
   }
 
@@ -437,7 +512,10 @@ export function createFloorWardenBridge({
           const startedAt = Date.parse(fw.forwards[invocationId]?.forwarded_at ?? invocation.started_at ?? invocation.created_at ?? '');
           const deadlineAt = Number.isFinite(startedAt) ? startedAt + replyTimeoutMs : Date.now() + replyTimeoutMs;
           if (Date.now() >= deadlineAt) {
-            await failConfirmed(roomId, invocationId, 'REPLY_TIMEOUT').catch((error) => warn(`floor warden: recover failRoomInvocation for ${invocationId}: ${error.message}`));
+            await failConfirmed(roomId, invocationId, 'REPLY_TIMEOUT', 'recover.fail.ok').catch((error) => {
+              warn(`floor warden: recover failRoomInvocation for ${invocationId}: ${error.message}`);
+              applyAndCommit(roomId, invocationId, 'recover.fail.retry');
+            });
           } else arm(roomId, invocationId, deadlineAt);
         }
         const pending = Object.keys(fw.forwards).filter((id) => !runningIds.has(id) && !fw.halts[id]);
