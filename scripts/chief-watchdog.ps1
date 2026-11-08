@@ -77,19 +77,63 @@ function Start-Chief {
   }
   if ($IsWindows) {
     $startParams['WindowStyle'] = 'Hidden'
+  } else {
+    # On Linux, Start-Process children inherit pwsh stdio. A piped stderr in
+    # `node --test` then keeps the file from exiting after pwsh is killed.
+    $logDir = Split-Path -Parent $PidFile
+    $outLog = Join-Path $logDir 'chief.watchdog.out.log'
+    $errLog = Join-Path $logDir 'chief.watchdog.err.log'
+    foreach ($log in @($outLog, $errLog)) {
+      if (Test-Path -LiteralPath $log) { Remove-Item -LiteralPath $log -Force }
+    }
+    $startParams['RedirectStandardOutput'] = $outLog
+    $startParams['RedirectStandardError'] = $errLog
   }
-  $process = Start-Process @startParams
-  Set-Content -Path $PidFile -Value $process.Id -NoNewline
-  Write-Audit 'daemon_started' @{ pid = $process.Id; socket_port = $RoomSocketPort }
-  return $process
+  $started = Start-Process @startParams
+  Set-Content -Path $PidFile -Value $started.Id -NoNewline
+  Write-Audit 'daemon_started' @{ pid = $started.Id; socket_port = $RoomSocketPort }
+  return $started
 }
 
-$process = $null
+function Stop-ChiefFromPidFile {
+  # ProcessExit / POSIX callbacks close over $process at $null; the PID file is
+  # the source of truth for the Start-Process grandchild.
+  $file = $script:pidFilePath
+  if ($file -and (Test-Path -LiteralPath $file)) {
+    $daemonPid = 0
+    [void][int]::TryParse("$(Get-Content -LiteralPath $file -ErrorAction SilentlyContinue)", [ref]$daemonPid)
+    if ($daemonPid -gt 0) { Stop-Process -Id $daemonPid -Force -ErrorAction SilentlyContinue }
+    Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+  }
+  if ($script:process -and -not $script:process.HasExited) {
+    Stop-Process -Id $script:process.Id -Force -ErrorAction SilentlyContinue
+  }
+}
+
+$script:process = $null
+$script:stopping = $false
+$script:pidFilePath = $PidFile
 try {
-  [System.AppDomain]::CurrentDomain.add_ProcessExit({
-    if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
-    if (Test-Path $PidFile) { Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue }
-  })
+  [System.AppDomain]::CurrentDomain.add_ProcessExit({ Stop-ChiefFromPidFile })
+} catch {}
+try {
+  if (-not $IsWindows) {
+    $onPosixStop = {
+      param($ctx)
+      $ctx.Cancel = $true
+      $script:stopping = $true
+      Stop-ChiefFromPidFile
+      [Environment]::Exit(0)
+    }
+    foreach ($sigName in @('SIGTERM', 'SIGINT', 'SIGHUP')) {
+      try {
+        $null = [System.Runtime.InteropServices.PosixSignalRegistration]::Create(
+          [System.Runtime.InteropServices.PosixSignal]$sigName,
+          $onPosixStop
+        )
+      } catch {}
+    }
+  }
 } catch {}
 $nextStart = [datetime]::MinValue
 $backoff = 1
@@ -97,30 +141,35 @@ $startedAt = [datetime]::MinValue
 $deadline = if ($StopAfterSeconds -gt 0) { (Get-Date).AddSeconds($StopAfterSeconds) } else { [datetime]::MaxValue }
 
 try {
-  while ((Get-Date) -lt $deadline) {
-    if ($process -and $process.HasExited) {
-      Write-Audit 'daemon_unhealthy' @{ reason = 'process_exited'; exit_code = $process.ExitCode }
-      $process = $null
+  while (-not $script:stopping -and (Get-Date) -lt $deadline) {
+    if ($script:process -and $script:process.HasExited) {
+      Write-Audit 'daemon_unhealthy' @{ reason = 'process_exited'; exit_code = $script:process.ExitCode }
+      $script:process = $null
       $nextStart = (Get-Date).AddSeconds($backoff)
       $backoff = [Math]::Min($backoff * 2, $MaxBackoffSeconds)
     }
-    if (-not $process -and (Get-Date) -ge $nextStart) {
-      $process = Start-Chief
+    if (-not $script:process -and (Get-Date) -ge $nextStart) {
+      $script:process = Start-Chief
       $startedAt = Get-Date
-      Write-Audit 'daemon_restarted' @{ pid = $process.Id; backoff_seconds = $backoff }
-    } elseif ($process -and -not $process.HasExited) {
+      Write-Audit 'daemon_restarted' @{ pid = $script:process.Id; backoff_seconds = $backoff }
+    } elseif ($script:process -and -not $script:process.HasExited) {
       if (((Get-Date) - $startedAt).TotalSeconds -ge $StartupGraceSeconds -and -not (Test-RoomSocket)) {
-        Write-Audit 'daemon_unhealthy' @{ pid = $process.Id; reason = 'room_socket_unreachable'; socket_port = $RoomSocketPort }
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        Write-Audit 'daemon_unhealthy' @{ pid = $script:process.Id; reason = 'room_socket_unreachable'; socket_port = $RoomSocketPort }
+        Stop-Process -Id $script:process.Id -Force -ErrorAction SilentlyContinue
       } else {
-        Write-Audit 'daemon_healthy' @{ pid = $process.Id; socket_port = $RoomSocketPort }
+        Write-Audit 'daemon_healthy' @{ pid = $script:process.Id; socket_port = $RoomSocketPort }
         $backoff = 1
       }
     }
-    Start-Sleep -Milliseconds ([int]($IntervalSeconds * 1000))
+    $sliceMs = [Math]::Min(200, [int]($IntervalSeconds * 1000))
+    $slept = 0
+    $totalSleep = [int]($IntervalSeconds * 1000)
+    while (-not $script:stopping -and $slept -lt $totalSleep -and (Get-Date) -lt $deadline) {
+      Start-Sleep -Milliseconds $sliceMs
+      $slept += $sliceMs
+    }
   }
 } finally {
-  if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
-  if (Test-Path $PidFile) { Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue }
+  Stop-ChiefFromPidFile
   Write-Audit 'watchdog_stopped'
 }

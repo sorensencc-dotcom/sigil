@@ -90,6 +90,19 @@ export function createAgentDaemon({
   let missedHeartbeats = 0;
   let reconnectDelay = 250;
   let reconnectTimer = null;
+  const workers = new Set();
+
+  function destroyChildStdio(child) {
+    for (const stream of [child?.stdin, child?.stdout, child?.stderr]) {
+      try { stream?.destroy(); } catch { /* already closed */ }
+    }
+  }
+
+  function killWorker(child) {
+    if (!child) return;
+    try { if (!child.killed) child.kill('SIGKILL'); } catch { /* already gone */ }
+    destroyChildStdio(child);
+  }
 
   async function executeWorker(taskPayload) {
     return new Promise((resolve, reject) => {
@@ -100,12 +113,19 @@ export function createAgentDaemon({
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true
       });
+      workers.add(child);
+      const release = () => {
+        workers.delete(child);
+        destroyChildStdio(child);
+      };
+      child.stdin.on('error', () => {});
       child.stdin.setEncoding('utf8');
       child.stdin.end(JSON.stringify(taskPayload));
       child.stdout.on('data', (chunk) => { stdout += chunk; });
       child.stderr.on('data', (chunk) => { stderr += chunk; });
-      child.on('error', reject);
+      child.on('error', (err) => { release(); reject(err); });
       child.on('close', (code) => {
+        release();
         if (code !== 0) {
           const err = new Error(`Worker exited with code ${code}: ${stderr.trim() || stdout.trim() || 'unknown error'}`);
           err.code = 'WORKER_FAILED';
@@ -403,6 +423,8 @@ export function createAgentDaemon({
       wsManager.close();
       wsManager = null;
     }
+    for (const child of [...workers]) killWorker(child);
+    workers.clear();
   }
 
   return {

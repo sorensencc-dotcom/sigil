@@ -626,3 +626,16 @@ test('agent daemon never hands the same delivery to the bridge twice while it is
     globalThis.fetch = originalFetch;
   }
 });
+
+test('agent daemon stop kills in-flight workers and closes their stdio', async () => {
+  const daemon = createAgentDaemon({
+    identity: createIdentity({ ownerId: 'usr_soren', endpointId: 'ep_claude', kind: 'agent' }),
+    relayUrl: 'http://127.0.0.1:8791',
+    workerCommand: process.execPath,
+    workerArgs: ['-e', 'setInterval(() => {}, 1000)'],
+    logger: { error: () => {}, warn: () => {}, info: () => {}, log: () => {} },
+  });
+  const pending = daemon.executeWorker({});
+  daemon.stop();
+  await assert.rejects(pending, (err) => err.code === 'WORKER_FAILED');
+});

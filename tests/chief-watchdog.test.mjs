@@ -18,6 +18,36 @@ function runPowerShell(file, args, timeout = 30_000) {
   });
 }
 
+function destroyStdio(child) {
+  for (const stream of [child.stdin, child.stdout, child.stderr]) {
+    try { stream?.destroy(); } catch { /* already closed */ }
+  }
+}
+
+function killPid(pid, signal = 'SIGKILL') {
+  if (!pid || Number.isNaN(pid)) return;
+  try { process.kill(pid, signal); } catch { /* already gone */ }
+}
+
+async function waitForExit(child, ms = 500) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await Promise.race([
+    new Promise((resolve) => child.once('exit', resolve)),
+    new Promise((resolve) => setTimeout(resolve, ms)),
+  ]);
+}
+
+async function teardownWatchdog(child, pids, pidFile) {
+  for (const pid of pids) killPid(pid, 'SIGKILL');
+  if (existsSync(pidFile)) {
+    try { killPid(Number(readFileSync(pidFile, 'utf8').trim()), 'SIGKILL'); } catch { /* gone */ }
+  }
+  destroyStdio(child);
+  try { child.kill('SIGKILL'); } catch { /* gone */ }
+  await waitForExit(child);
+  destroyStdio(child);
+}
+
 test('watchdog restarts a killed daemon, probes its room socket, and redacts credentials in audit events', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'sigil-chief-watchdog-'));
   const daemon = join(dir, 'fake-daemon.mjs');
@@ -67,12 +97,6 @@ test('watchdog restarts a killed daemon, probes its room socket, and redacts cre
       if (existsSync(audit) && readFileSync(audit, 'utf8').includes('"event":"daemon_healthy"')) break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    child.kill();
-    await new Promise((resolve) => child.on('exit', resolve));
-    if (secondPid) {
-      try { process.kill(secondPid, 'SIGTERM'); } catch {}
-    }
-    child.stderr?.destroy();
     const lines = readFileSync(audit, 'utf8').trim().split(/\r?\n/).map((line) => JSON.parse(line));
     assert.ok(lines.some((event) => event.event === 'daemon_started'));
     assert.ok(lines.some((event) => event.event === 'daemon_unhealthy'));
@@ -80,22 +104,7 @@ test('watchdog restarts a killed daemon, probes its room socket, and redacts cre
     assert.ok(lines.some((event) => event.event === 'daemon_healthy' && event.socket_port === port));
     assert.ok(lines.every((event) => !JSON.stringify(event).includes('token')));
   } finally {
-    if (secondPid) {
-      try { process.kill(secondPid, 'SIGKILL'); } catch {}
-    }
-    if (firstPid) {
-      try { process.kill(firstPid, 'SIGKILL'); } catch {}
-    }
-    if (existsSync(pidFile)) {
-      try {
-        const remaining = Number(readFileSync(pidFile, 'utf8').trim());
-        if (remaining && !Number.isNaN(remaining)) {
-          try { process.kill(remaining, 'SIGKILL'); } catch {}
-        }
-      } catch {}
-    }
-    try { child.kill('SIGKILL'); } catch {}
-    child.stderr?.destroy();
+    await teardownWatchdog(child, [firstPid, secondPid], pidFile);
     rmSync(dir, { recursive: true, force: true });
   }
 });
