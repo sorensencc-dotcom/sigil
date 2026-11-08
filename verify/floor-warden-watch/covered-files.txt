@@ -1,0 +1,2 @@
+sigil/bridges/v1/floor-warden-watch-state.mjs
+sigil/bridges/v1/floor-warden-bridge.mjs

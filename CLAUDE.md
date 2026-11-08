@@ -20,7 +20,7 @@ Sigil (`@sorensencc/sigil`) is a governed, cryptographically signed task relay a
 - `packages/sigil-rooms-web/`: browser client for rooms, with its own `package.json`.
 - `packages/relay-jobs-verification/`: relay-jobs verification package.
 - `modules/grok-bridge/`: Grok bridge module.
-- `verify/`: TLA+ models (`verify/bridge-session`, `verify/room-delivery`, `verify/suspend-pick`).
+- `verify/`: TLA+ models (`verify/bridge-session`, `verify/room-delivery`, `verify/suspend-pick`) and the Floor Warden watch enumerator (`verify/floor-warden-watch`).
 - `tests/`: stray top-level tests (`tests/dlq-reaper.test.mjs`). Most tests sit next to their source as `*.test.mjs`. Some are root-level (`index.test.mjs`, `cli-wrappers.test.mjs`).
 - `sigil-dep-audit.mjs`, `sigil-jcs-audit.mjs`: dependency and JCS audits that run before tests.
 - `scripts/windows/`: Windows stack start and scheduled-task registration (see `scripts/windows/README.md`).
@@ -67,6 +67,7 @@ Project skills live in `.claude/skills/`:
 - `.claude/skills/verify-relay-job-leases/SKILL.md`: use when a change touches the relay_jobs claim/lease/finalize protocol or the federation reaper.
 - `.claude/skills/verify-room-delivery/SKILL.md`: use when a change touches room message delivery to a Floor Warden bot. It model-checks `verify/room-delivery` with TLC.
 - `.claude/skills/verify-suspend-pick/SKILL.md`: use when a change touches router pick vs human suspension lock order. It checks `verify/suspend-pick`.
+- `.claude/skills/verify-floor-warden-watch/SKILL.md`: use when a change touches Floor Warden invocation-watch. It exhaustively walks `applyWatchEvent` in `verify/floor-warden-watch`.
 
 Runbooks and guides:
 
