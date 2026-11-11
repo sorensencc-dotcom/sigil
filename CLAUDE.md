@@ -36,6 +36,7 @@ There is no build step for the main package. All scripts below exist in `package
 - `npm run test:bounded`: runs `npm test` with a 60s overall timeout.
 - `npm run audit:deps` / `npm run audit:jcs`: run each audit alone.
 - `npm run test:live`: live database tests (`sigil/scripts/live-db-tests.mjs`).
+- `npm run test:live:local`: starts a throwaway local PostgreSQL, runs the live gate (the suites that skip without SIGIL_TEST_DATABASE_URL and otherwise only run in Linux CI), and removes it; run it before pushing changes that touch CLI output, the relay, or anything a *.pg / live suite covers.
 - `npm run test:web`: install, typecheck, test and build `packages/sigil-rooms-web`.
 - `npm run db:migrate`: apply SQL migrations.
 - `npm run secret-scan`: secret scan.
