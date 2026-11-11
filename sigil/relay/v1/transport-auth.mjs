@@ -18,14 +18,17 @@ function digest(token) {
 // With `repository` (Postgres mode), the registry is not consulted: owner,
 // kind, and liveness come from repository.livenessSnapshot, cached per
 // endpoint for `ttlMs`. clear()/clearAll() are driven by sigil_admin NOTIFY.
-export function createBearerAuthenticator(tokenHashes, registry, { repository = null, ttlMs = 5000, now = Date.now } = {}) {
+export function createBearerAuthenticator(tokenHashes, registry, { repository = null, ttlMs = 5000, now = Date.now, isAvailable = () => true } = {}) {
   const hashes = tokenHashes instanceof Map ? tokenHashes : new Map(Object.entries(tokenHashes ?? {}));
-  const endpointFor = (request) => {
+  const tokenFrom = (request) => {
     const authorization = request.headers?.authorization;
     const protocols = request.headers?.['sec-websocket-protocol'];
-    const token = typeof authorization === 'string' && authorization.startsWith('Bearer ')
+    return typeof authorization === 'string' && authorization.startsWith('Bearer ')
       ? authorization.slice(7)
       : typeof protocols === 'string' && protocols.split(',').map((item) => item.trim()).find((item) => item.startsWith('sigil-bearer.'))?.slice('sigil-bearer.'.length);
+  };
+  const endpointFor = (request) => {
+    const token = tokenFrom(request);
     if (!token) return null;
     return hashes.get(digest(token)) ?? null;
   };
@@ -39,6 +42,7 @@ export function createBearerAuthenticator(tokenHashes, registry, { repository = 
 
   if (!repository) {
     const authenticate = async (request) => {
+      if (!isAvailable()) return null;
       const endpointId = endpointFor(request);
       if (!endpointId) return null;
       const endpoint = registry?.get(endpointId);
@@ -56,7 +60,11 @@ export function createBearerAuthenticator(tokenHashes, registry, { repository = 
   let generation = 0;
   const MAX_ATTEMPTS = 3;
   const authenticate = async (request) => {
-    const endpointId = endpointFor(request);
+    if (!isAvailable()) return null;
+    const token = tokenFrom(request);
+    if (!token) return null;
+    const tokenDigest = digest(token);
+    const endpointId = hashes.get(tokenDigest) ?? null;
     if (!endpointId) return null;
     const hit = cache.get(endpointId);
     if (hit && hit.expiresAt > now()) return hit.principal;
@@ -64,6 +72,7 @@ export function createBearerAuthenticator(tokenHashes, registry, { repository = 
       const started = generation;
       let snapshot;
       try { snapshot = await repository.livenessSnapshot({ endpointId }); } catch { return null; }
+      if (hashes.get(tokenDigest) !== endpointId) return null;
       if (started !== generation) continue;
       const principal = isSocketLive(snapshot) ? principalFor(endpointId, snapshot.owner_id, snapshot.kind) : null;
       cache.set(endpointId, { principal, ownerId: snapshot?.owner_id ?? null, expiresAt: now() + ttlMs });

@@ -164,3 +164,44 @@ test('a read in flight when clear runs is not served or cached', async () => {
   assert.equal(await pending, null);
   assert.equal(await auth(bearer('w')), null);
 });
+
+test('isAvailable false denies bearer auth', async () => {
+  let available = false;
+  const registry = new Map([['ep_web', { owner_id: 'usr_chris', kind: 'human' }]]);
+  const hashes = new Map([[hashBearerToken('w'), 'ep_web']]);
+  const memoryAuth = createBearerAuthenticator(hashes, registry, { isAvailable: () => available });
+  assert.equal(await memoryAuth(bearer('w')), null);
+  available = true;
+  assert.deepEqual(await memoryAuth(bearer('w')), { endpoint_id: 'ep_web', owner_id: 'usr_chris', human_id: 'usr_chris' });
+  available = false;
+  assert.equal(await memoryAuth(bearer('w')), null);
+
+  const repository = fakeRepository(new Map([['ep_web', activeRow('hum_a', 'human')]]));
+  available = true;
+  const repoAuth = createBearerAuthenticator(hashes, registry, { repository, isAvailable: () => available });
+  assert.deepEqual(await repoAuth(bearer('w')), { endpoint_id: 'ep_web', owner_id: 'hum_a', human_id: 'hum_a' });
+  available = false;
+  assert.equal(await repoAuth(bearer('w')), null);
+  assert.equal(repository.reads.get('ep_web'), 1);
+});
+
+test('token removed during an in-flight repository read is not served', async () => {
+  const hashes = new Map([[hashBearerToken('w'), 'ep_web']]);
+  let removeOnRead = true;
+  const repository = {
+    reads: 0,
+    async livenessSnapshot() {
+      repository.reads += 1;
+      if (removeOnRead) hashes.delete(hashBearerToken('w'));
+      return activeRow('hum_a', 'human');
+    },
+  };
+  const auth = createBearerAuthenticator(hashes, new Map(), { repository });
+  assert.equal(await auth(bearer('w')), null);
+  assert.equal(repository.reads, 1);
+
+  removeOnRead = false;
+  hashes.set(hashBearerToken('w'), 'ep_web');
+  assert.deepEqual(await auth(bearer('w')), { endpoint_id: 'ep_web', owner_id: 'hum_a', human_id: 'hum_a' });
+  assert.equal(repository.reads, 2);
+});

@@ -136,7 +136,7 @@ export async function cmdBotAdd(argv) {
   console.log(`endpoint_id: ${endpointId}`);
   console.log(`identity: ${outPath}`);
   console.log(`registry: ${registryPath}`);
-  console.log('restart relay after `bot add` so it loads the new token');
+  console.log('a running relay picks up this bot automatically within a few seconds; no restart needed');
 }
 
 // `sigil bot disable`: idempotent; the reply route then answers BOT_NOT_ON_ROSTER.

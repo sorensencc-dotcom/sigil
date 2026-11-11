@@ -19,6 +19,7 @@ import { WebSocket } from 'ws';
 
 import { createIdentity, loadIdentity, saveIdentity, identityKeys } from './identity.mjs';
 import { loadRegistryFile, addEndpointToRegistry, toRegistryMap, toTokenHashes } from './registry-store.mjs';
+import { startRegistryRefresh } from './registry-refresh.mjs';
 import { createMemoryRepository } from './memory-repository.mjs';
 import { sendWithOptionalReceiptWait } from './send-with-receipt.mjs';
 import { createRelayServer, createOnPersisted } from '../relay/v1/http-server.mjs';
@@ -415,7 +416,11 @@ async function cmdRelayUp(argv) {
   }
   // Postgres mode: owner, kind, and liveness come from Postgres through a 5 s
   // cache that sigil_admin notifications clear. Memory mode reads the registry.
-  const bearerAuth = createBearerAuthenticator(tokenHashes, registry, { repository: pool ? repository : null });
+  let registryRefresh = null;
+  const bearerAuth = createBearerAuthenticator(tokenHashes, registry, {
+    repository: pool ? repository : null,
+    isAvailable: () => (registryRefresh ? registryRefresh.isAvailable() : true),
+  });
   // The public (cookie-only) listener must exist before the stream server so
   // /v1/stream shares its http.Server; the stack reaches `stream` lazily.
   let publicStack = null;
@@ -443,6 +448,20 @@ async function cmdRelayUp(argv) {
     throw new Error('sigil relay up: --enable-mock-oauth requires --public-origin');
   }
   const stream = createStreamServer({ server: streamHttpServer, authenticate: bearerAuth, ticketStore, allowedOrigins, logger: relayLogger, repository, publicServer, publicOrigin: publicOrigin ?? null });
+  registryRefresh = startRegistryRefresh({
+    registryPath,
+    registry,
+    tokenHashes,
+    logger: relayLogger,
+    onInvalidate: (ids) => {
+      for (const id of ids) {
+        bearerAuth.clear?.({ endpointId: id });
+        stream?.closeRevoked?.({ endpointId: id, endpointRemoved: !registry.has(id), isTokenCurrent: (digest) => tokenHashes.get(digest) === id });
+        stream?.revalidate?.({ endpointId: id });
+      }
+    },
+  });
+  await registryRefresh.refreshNow();
   let adminListener = null;
   if (pool) {
     const { startAdminListener, createAdminMessageHandler } = await import('../relay/v1/admin-notify.mjs');
@@ -470,6 +489,7 @@ async function cmdRelayUp(argv) {
     }
   };
   const closeStartupResources = async () => {
+    registryRefresh?.close();
     await closeStartupListeners();
     agentmailDeployment?.close();
     await adminListener?.close();
@@ -649,9 +669,10 @@ async function cmdRelayUp(argv) {
     if (enableMockOAuth) console.log('WARNING: mock OAuth is enabled (--enable-mock-oauth). This is for CI only -- never expose this relay to untrusted networks.');
   }
   console.log(`Registered endpoints: ${[...registry.keys()].join(', ')}`);
-  console.log(databaseUrl ? `Persisting to PostgreSQL database (${databaseUrl.replace(/:[^:@]+@/, ':***@')}). Ctrl+C to stop.` : 'In-memory only -- state is lost when this process exits. Ctrl+C to stop.');
+  console.log(databaseUrl ? 'Connecting to PostgreSQL... Ctrl+C to stop.' : 'In-memory only -- state is lost when this process exits. Ctrl+C to stop.');
   await new Promise((resolve) => {
     const shutdown = async () => {
+      registryRefresh.close();
       eventLoopMonitor.stop();
       agentmailDeployment?.close();
       await adminListener?.close();

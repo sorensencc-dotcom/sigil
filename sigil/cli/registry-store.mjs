@@ -49,3 +49,61 @@ export function toTokenHashes(data) {
   for (const e of data.endpoints) map.set(hashBearerToken(e.relay_token), e.endpoint_id);
   return map;
 }
+
+export const PREFLIGHT_REQUIRED_FIELDS = Object.freeze(['owner_id', 'key_id', 'kind']);
+
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function freezeGap(index, endpointId, missing) {
+  return Object.freeze({
+    index,
+    endpoint_id: endpointId,
+    missing: Object.freeze([...missing]),
+  });
+}
+
+export function preflightRegistry(data) {
+  if (!data || typeof data !== 'object' || !Array.isArray(data.endpoints)) {
+    return Object.freeze({
+      ok: false,
+      gaps: Object.freeze([freezeGap(null, null, ['endpoints'])]),
+    });
+  }
+  const gaps = [];
+  for (let i = 0; i < data.endpoints.length; i += 1) {
+    const entry = data.endpoints[i];
+    const endpointId = isNonEmptyString(entry?.endpoint_id) ? entry.endpoint_id : null;
+    const missing = PREFLIGHT_REQUIRED_FIELDS.filter((field) => !isNonEmptyString(entry?.[field]));
+    if (missing.length > 0) {
+      gaps.push(freezeGap(i, endpointId, missing));
+    }
+  }
+  return Object.freeze({
+    ok: gaps.length === 0,
+    gaps: Object.freeze(gaps),
+  });
+}
+
+export function preflightRegistryFile(filePath) {
+  let raw;
+  try {
+    raw = fs.readFileSync(filePath, 'utf8');
+  } catch {
+    return Object.freeze({
+      ok: false,
+      gaps: Object.freeze([freezeGap(null, null, ['file'])]),
+    });
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return Object.freeze({
+      ok: false,
+      gaps: Object.freeze([freezeGap(null, null, ['json'])]),
+    });
+  }
+  return preflightRegistry(parsed);
+}

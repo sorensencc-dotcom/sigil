@@ -94,6 +94,22 @@ export function planSetup(snapshot, { apply = false } = {}) {
   if (snapshot.inspection !== 'verified') blockers.push('inspection-unverified');
   if (!snapshot.schemaReady) blockers.push('schema-not-ready');
   if (snapshot.registryRefresh !== 'verified') blockers.push(`registry-refresh-${snapshot.registryRefresh ?? 'unverified'}`);
+  const preflight = snapshot.registryPreflight;
+  const preflightGaps = Array.isArray(preflight?.gaps) ? preflight.gaps : [];
+  const preflightOk = Boolean(preflight && typeof preflight === 'object' && preflight.ok === true);
+  if (!preflight || typeof preflight !== 'object') {
+    blockers.push('registry-preflight-unverified');
+  } else if (preflight.ok !== true) {
+    for (const gap of preflightGaps) {
+      const target = typeof gap?.endpoint_id === 'string' && gap.endpoint_id.length > 0
+        ? gap.endpoint_id
+        : typeof gap?.index === 'number'
+          ? `#${gap.index}`
+          : `#${gap?.missing?.[0] ?? 'file'}`;
+      blockers.push(`registry-preflight-gap:${target}`);
+    }
+  }
+  const relayReady = snapshot.registryRefresh === 'verified' && preflightOk;
   const globalOk = blockers.length === 0;
   const create = [];
   const skip = [];
@@ -122,17 +138,21 @@ export function planSetup(snapshot, { apply = false } = {}) {
     blockers: Object.freeze(blockers),
     fourInputsReady,
     registryRefresh: snapshot.registryRefresh ?? 'unverified',
+    registryPreflight: Object.freeze({ ok: preflightOk, gapCount: preflightGaps.length }),
+    relayReady,
     smokeRun: false,
   });
 }
 
-const SAFE = /^[A-Za-z0-9_.@:\-]+$/;
+const SAFE = /^[A-Za-z0-9_.@:#\-]+$/;
 const safe = (value) => (typeof value === 'string' && SAFE.test(value) ? value : '[redacted]');
 
 export function renderSummary(plan) {
   const lines = [`Mode: ${plan.mode}; Phase 7 paused; active track: one-link enrollment`];
   for (const input of plan.inputs) lines.push(`${safe(input.name)}: ${safe(input.state)}`);
   lines.push(`registry_refresh: ${safe(plan.registryRefresh)}`);
+  lines.push(`registry_preflight: ${plan.registryPreflight?.ok ? 'ok' : `${Number(plan.registryPreflight?.gapCount ?? 0)} gap(s)`}`);
+  lines.push(`relay_ready: ${plan.relayReady ? 'yes' : 'no'}`);
   lines.push(`create: ${plan.create.map((b) => safe(b.endpointId)).join(', ') || 'none'}`);
   lines.push(`skip: ${plan.skip.map((b) => safe(b.endpointId)).join(', ') || 'none'}`);
   lines.push(`blockers: ${plan.blockers.map(safe).join(', ') || 'none'}`);
