@@ -11,7 +11,7 @@ export async function applyMigrations(connectionString = process.env.SIGIL_DATAB
   if (!connectionString) {
     throw new Error('SIGIL_DATABASE_URL is not set. Copy .env.example to .env and fill in your local Postgres connection string.');
   }
-  console.log(`Connecting to PostgreSQL at ${connectionString.replace(/:[^:@]+@/, ':***@')}...`);
+  console.log('Connecting to PostgreSQL...');
   const pool = new pg.Pool({ connectionString });
 
   try {
