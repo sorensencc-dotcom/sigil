@@ -33,13 +33,13 @@ Tags: VERIFIED = read today in a source; INFERRED = my reading of verified facts
 
 ### 3. Ranked 30/60/90 plan
 
-Respects the Nov 10–11 decisions: one-link is the active track and Phase 7 is paused; Chief and Helix CI are gone; the first group is Grok Bot · Elon, First Mate · Orchestrator and Floor Warden on `rewritelabs.io` (endpoint names PROPOSED); bootstrap secrets live in a locked-down local file; the relay must pick up new bots without restarts (Task 3A). Nothing below touches the real database or creates a bot without Chris's go-ahead.
+Respects the Nov 10–11 decisions: one-link is the active track and Phase 7 is paused; Chief and Helix CI are gone; the first group is Grok Bot · Elon, First Mate · Orchestrator and Floor Warden on `rewritelabs.io` (~~endpoint names PROPOSED~~; Nov 11 update: names `ep_grok_bot`, `ep_first_mate` and `ep_floor_warden` and Floor Warden's `dispatcher` role CONFIRMED by Chris at 4:08 PM ET, per Chris's PR #192 review, Nov 11); bootstrap secrets live in a locked-down local file; the relay must pick up new bots without restarts (Task 3A). Nothing below touches the real database or creates a bot without Chris's go-ahead.
 
 **Days 1–30 (to Dec 11)**
 
 1. ~~Setup script Task 2: replace the migration connection log with fixed text. On main it still prints the database target with only the password masked. Gate for any wrapper run.~~ (Done Nov 11: merged as PR #191, `43e7120`, 4:48 PM ET.)
 2. Finish the setup script on fixtures and a disposable database only: Task 3 (read-only inspection; open as PR #193 since Nov 11), Task 3A (automatic registry refresh, no restarts), then Tasks 4–7, with the Windows ACL proof in Task 4. Task 1 (the pure setup policy) is merged as PR #190.
-3. Chris confirms the three endpoint names and Floor Warden's role (`dispatcher`, ordinary reply bot, or identity only). In parallel, engineers read metadata only: operator identity, WIN database label, configured relay domain, registry path and ACL, and whether the Floor Warden routine sends Bearer or HMAC.
+3. ~~Chris confirms the three endpoint names and Floor Warden's role (`dispatcher`, ordinary reply bot, or identity only).~~ (Done Nov 11, 4:08 PM ET: names confirmed, Floor Warden is the dispatcher, per Chris's PR #192 review, Nov 11.) Still open: engineers read metadata only: operator identity, WIN database label, configured relay domain, registry path and ACL, and whether the Floor Warden routine sends Bearer or HMAC.
 4. With Chris's go-ahead: run the setup for the first group on the real database and land one real Grok reply in a room. This closes A1–A5 and starts the 7-day clock.
 5. One-link for Chris's own bots: one credential per bot in its secret card, the connector preflight with `SCHEMA_STALE`, and atomic invite storage (Durable Object or SQLite, since the KV prototype is not atomic). Rerun the rejection tests on that path.
 6. Fix doc lag: the STATUS.md lease entry, the restart line in `bot add` (Task 3A replaces it), and the PLAN line that says no task has begun.
@@ -77,8 +77,8 @@ Repo read at origin/main `d4c5000` (2026-11-10) and re-checked at `301300c` (202
 | Lease-renewal fix merged as PR #114 on 2026-10-25, so STATUS.md "local only" is stale | VERIFIED | git log `1caa958` |
 | `relay_jobs` states are pending, processing, done, rejected, dead\_letter | VERIFIED | `sigil/migrations/021_relay_jobs.sql` |
 | Checker `check.mjs` exists; `known-findings.json` is empty; commit `4ae8010` is on main | VERIFIED | `packages/relay-jobs-verification/` |
-| 848 schedules, 0 failing properties on 2026-11-10 | UNVERIFIED (no file Chris sent mentions it; not re-run) | Chris's brief |
-| Nov 11: Chief and Helix CI removed; first group is Grok Bot · Elon, First Mate · Orchestrator and Floor Warden, endpoints `ep_<name>@rewritelabs.io`. Names PROPOSED; Floor Warden's `dispatcher` role PROPOSED and its creation blocked until Chris confirms | VERIFIED (decisions) | OPEN-QUESTIONS, PLAN, SPEC headers |
+| 848 schedules, 0 failing properties on 2026-11-10 (one-job 92, one-job-last-attempt 66, two-jobs 309, crash 72, directory-two-jobs 309) | ~~UNVERIFIED (no file Chris sent mentions it; not re-run)~~ VERIFIED per Chris (Nov 11 update: run log 2026-11-10 10:38 PM ET, local run, not yet on CI; the log itself was not read by this review) | Chris's brief; Chris's PR #192 review, Nov 11 |
+| Nov 11: Chief and Helix CI removed; first group is Grok Bot · Elon, First Mate · Orchestrator and Floor Warden, endpoints `ep_<name>@rewritelabs.io`. ~~Names PROPOSED; Floor Warden's `dispatcher` role PROPOSED and its creation blocked until Chris confirms~~ (Nov 11 update: both CONFIRMED by Chris at 4:08 PM ET; per-endpoint creation still waits on the engineering checks before `--apply`) | VERIFIED (decisions) | OPEN-QUESTIONS, PLAN, SPEC headers; Chris's PR #192 review, Nov 11 |
 | Domain `rewritelabs.io`, Q1/Q2/Q4 recommendations and Task 3A approved Nov 11, 3:49 PM ET; bootstrap secrets in a locked-down local file, broker not required first | VERIFIED (decisions) | OPEN-QUESTIONS Q1–Q4 |
 | Whether the running relay uses that domain; operator identity; WIN database label; registry path and ACL; routine auth (Bearer vs HMAC); deployed auto-refresh | UNVERIFIED (the files say so; required before any `--apply`) | OPEN-QUESTIONS |
 | Setup script Task 1 (pure default-deny policy, `sigil/cli/phase7-setup-policy.mjs`) merged to main as PR #190 (`301300c`) on 2026-11-11. PLAN reports 12/12 tests and 87/87 neighbour suites on Linux; Windows UNVERIFIED. ~~Task 2 not started~~ (Nov 11 update: Task 2 merged as PR #191, `43e7120`; Task 3 open as PR #193) | VERIFIED (merge); test counts VERIFIED in PLAN only | git log `301300c`; PLAN Task 1 gate |
@@ -145,7 +145,7 @@ Chris's own bots come first; invited people and other owners' bots second. Ranke
 
 ## Open questions
 
-- Confirm the three endpoint names, and whether Floor Warden gets a `dispatcher` endpoint, an ordinary reply endpoint, or an identity with no roster row. This is the one decision that blocks the first group.
+- ~~Confirm the three endpoint names, and whether Floor Warden gets a `dispatcher` endpoint, an ordinary reply endpoint, or an identity with no roster row. This is the one decision that blocks the first group.~~ (Answered Nov 11, 4:08 PM ET: names confirmed; Floor Warden is the dispatcher, per Chris's PR #192 review, Nov 11. What still blocks the first group is the engineering checks, then Chris's go-ahead for the real-database run.)
 - Is the target user for the next 90 days Chris's own fleet only, or must a guest owner be live by day 90? The plan assumes a small pilot at day 61–90.
 - Should guest signing keys stay relay-custodial for the pilot, or must guests hold their own keys first?
 - Does the one-link remote MCP endpoint sit behind the same Cloudflare tunnel as the reply ingress, or a separate hostname? The files don't say.
