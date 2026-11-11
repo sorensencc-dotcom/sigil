@@ -135,13 +135,13 @@ test('config rejects unknown fields secret values and repo paths', () => {
   assert.throws(() => validateSetupConfig(config({ bots: [dup, { ...dup }] }), ctx), badConfig);
 });
 
-test('approved first group has three PROPOSED-name bots on rewritelabs.io', () => {
-  assert.deepEqual(APPROVED_FIRST_GROUP.map((b) => [b.botId, b.endpointId, b.role, b.namingStatus]), [
-    ['3028d8e4-f65c-4039-9bc0-862d1b003d5c', 'ep_grok_bot@rewritelabs.io', 'reply', 'proposed'],
-    ['1be4aab7-c288-41aa-8d55-ae358fb6f797', 'ep_first_mate@rewritelabs.io', 'reply', 'proposed'],
-    ['8e21de41-8954-4a7c-a3fc-192cfbb210e2', 'ep_floor_warden@rewritelabs.io', 'dispatcher', 'proposed'],
+test('approved first group has three confirmed bots on rewritelabs.io', () => {
+  assert.deepEqual(APPROVED_FIRST_GROUP.map((b) => [b.botId, b.endpointId, b.role, b.roleConfirmed]), [
+    ['3028d8e4-f65c-4039-9bc0-862d1b003d5c', 'ep_grok_bot@rewritelabs.io', 'reply', true],
+    ['1be4aab7-c288-41aa-8d55-ae358fb6f797', 'ep_first_mate@rewritelabs.io', 'reply', true],
+    ['8e21de41-8954-4a7c-a3fc-192cfbb210e2', 'ep_floor_warden@rewritelabs.io', 'dispatcher', true],
   ]);
-  assert.equal(APPROVED_FIRST_GROUP.find((b) => b.role === 'dispatcher').roleConfirmed, false);
   assert.ok(Object.isFrozen(APPROVED_FIRST_GROUP));
+  assert.ok(APPROVED_FIRST_GROUP.every((b) => Object.isFrozen(b) && !('namingStatus' in b)));
   assert.equal(APPROVED_FIRST_GROUP.some((b) => /chief|helix/i.test(b.endpointId)), false);
 });

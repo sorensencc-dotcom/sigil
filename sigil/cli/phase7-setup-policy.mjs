@@ -3,12 +3,12 @@
 import path from 'node:path';
 import { parseFederatedId } from '../relay/v1/federated-id.mjs';
 
-// First group approved by Chris 2026-11-11. Endpoint names are PROPOSED pending
-// his naming confirmation; Floor Warden's dispatcher role is not yet confirmed.
+// First group approved by Chris 2026-11-11; endpoint names and Floor Warden's
+// dispatcher role confirmed by him at 4:08 PM ET the same day.
 export const APPROVED_FIRST_GROUP = Object.freeze([
-  { botId: '3028d8e4-f65c-4039-9bc0-862d1b003d5c', endpointId: 'ep_grok_bot@rewritelabs.io', displayName: 'Grok Bot · Elon', role: 'reply', roleConfirmed: true, namingStatus: 'proposed' },
-  { botId: '1be4aab7-c288-41aa-8d55-ae358fb6f797', endpointId: 'ep_first_mate@rewritelabs.io', displayName: 'First Mate · Orchestrator', role: 'reply', roleConfirmed: true, namingStatus: 'proposed' },
-  { botId: '8e21de41-8954-4a7c-a3fc-192cfbb210e2', endpointId: 'ep_floor_warden@rewritelabs.io', displayName: 'Floor Warden', role: 'dispatcher', roleConfirmed: false, namingStatus: 'proposed' },
+  { botId: '3028d8e4-f65c-4039-9bc0-862d1b003d5c', endpointId: 'ep_grok_bot@rewritelabs.io', displayName: 'Grok Bot · Elon', role: 'reply', roleConfirmed: true },
+  { botId: '1be4aab7-c288-41aa-8d55-ae358fb6f797', endpointId: 'ep_first_mate@rewritelabs.io', displayName: 'First Mate · Orchestrator', role: 'reply', roleConfirmed: true },
+  { botId: '8e21de41-8954-4a7c-a3fc-192cfbb210e2', endpointId: 'ep_floor_warden@rewritelabs.io', displayName: 'Floor Warden', role: 'dispatcher', roleConfirmed: true },
 ].map((bot) => Object.freeze(bot)));
 
 const ROLES = new Set(['reply', 'dispatcher']);
