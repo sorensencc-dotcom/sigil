@@ -46,3 +46,7 @@ re-read whole files.
 After big code changes, refresh the graph with `trail build` (deterministic,
 no API key, $0).
 <!-- trail:end -->
+
+## Testing before you push
+
+- `npm run test:live:local`: starts a throwaway local PostgreSQL, runs the live gate (the suites that skip without SIGIL_TEST_DATABASE_URL and otherwise only run in Linux CI), and removes it; run it before pushing changes that touch CLI output, the relay, or anything a *.pg / live suite covers.

@@ -74,7 +74,8 @@ test('bot add creates endpoint, key, wrapped signing key, roster row, and a keyl
   assert.match(out, /bot_test_one/);
   assert.match(out, /ep_test_bot/);
   assert.ok(out.includes(file));
-  assert.ok(out.includes('restart relay after `bot add` so it loads the new token'));
+  assert.ok(out.includes('no restart needed'));
+  assert.doesNotMatch(out, /restart relay/i);
   assert.ok(!out.includes(identity.relay_token), 'token never printed');
   const registry = loadRegistryFile(path.join(ctx.dir, 'registry.json'));
   assert.equal(toTokenHashes(registry).get(hashBearerToken(identity.relay_token)), 'ep_test_bot');

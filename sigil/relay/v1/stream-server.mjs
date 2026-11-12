@@ -1,8 +1,21 @@
 import { WebSocketServer } from 'ws';
 import { logHop } from './hop-log.mjs';
-import { createBearerAuthenticator } from './transport-auth.mjs';
+import { createBearerAuthenticator, hashBearerToken } from './transport-auth.mjs';
 import { isAllowedOrigin } from './browser-cors.mjs';
 import { isSocketLive } from './liveness.mjs';
+
+function bearerTokenDigest(request) {
+  const authorization = request?.headers?.authorization;
+  if (typeof authorization === 'string' && authorization.startsWith('Bearer ')) {
+    return hashBearerToken(authorization.slice(7));
+  }
+  const protocols = request?.headers?.['sec-websocket-protocol'];
+  if (typeof protocols === 'string') {
+    const match = protocols.split(',').map((item) => item.trim()).find((item) => item.startsWith('sigil-bearer.'));
+    if (match) return hashBearerToken(match.slice('sigil-bearer.'.length));
+  }
+  return null;
+}
 
 function streamSequenceValue(value) {
   return value == null ? null : String(value);
@@ -49,6 +62,10 @@ export function createStreamServer({ server, authenticate, tokenHashes, ticketSt
   const socketInfo = new WeakMap();
   // session_id -> Set<socket>, so closeSession (logout, revoke) reaches them.
   const sessionSockets = new Map();
+  // endpoint_id -> Set<socket> (including sockets still upgrading) and per-socket
+  // auth metadata so closeRevoked can drop rotated/removed sockets immediately.
+  const endpointSockets = new Map();
+  const socketAuth = new WeakMap();
   const checksLiveness = typeof repository?.livenessSnapshot === 'function';
   // Resolves the snapshot when live, null otherwise. A failed read fails closed.
   const liveSnapshot = async (endpointId) => {
@@ -84,6 +101,17 @@ export function createStreamServer({ server, authenticate, tokenHashes, ticketSt
       if (!sockets) return;
       sockets.delete(socket);
       if (!sockets.size) sessionSockets.delete(sessionId);
+    });
+  };
+  const trackEndpoint = (endpointId, socket, { isTicket, tokenDigest }) => {
+    socketAuth.set(socket, { endpointId, isTicket, tokenDigest });
+    if (!endpointSockets.has(endpointId)) endpointSockets.set(endpointId, new Set());
+    endpointSockets.get(endpointId).add(socket);
+    socket.on('close', () => {
+      const sockets = endpointSockets.get(endpointId);
+      if (!sockets) return;
+      sockets.delete(socket);
+      if (!sockets.size) endpointSockets.delete(endpointId);
     });
   };
   const register = (map, endpointId, socket) => {
@@ -131,13 +159,17 @@ export function createStreamServer({ server, authenticate, tokenHashes, ticketSt
     }
     const endpointId = typeof principal === 'string' ? principal : principal?.endpoint_id;
     if (!endpointId) return socket.close(1008, 'unauthorized');
-    const sessionId = ticketParam !== null ? (principal?.session_id ?? null) : null;
-    // Tracked before the async checks, so a closeSession that lands while this
-    // upgrade is still being checked closes it too.
+    const isTicket = ticketParam !== null;
+    const tokenDigest = isTicket ? null : bearerTokenDigest(request);
+    const sessionId = isTicket ? (principal?.session_id ?? null) : null;
+    // Tracked before the async checks, so a closeSession/closeRevoked that lands
+    // while this upgrade is still being checked closes it too.
+    trackEndpoint(endpointId, socket, { isTicket, tokenDigest });
     if (sessionId) trackSession(sessionId, socket);
     // The socket joins clients/browserClients only after liveness passes, so
     // no frame reaches a socket whose endpoint, human, or session is not live.
     const [snapshot, session] = await Promise.all([liveSnapshot(endpointId), liveSession(sessionId)]);
+    if (socket.readyState === 2 || socket.readyState === 3) return;
     if (!snapshot) return socket.close(1008, 'unauthorized');
     if (!sessionOk(snapshot, session)) return socket.close(1008, 'unauthorized');
     if (socket.readyState !== 1) return;
@@ -226,6 +258,27 @@ export function createStreamServer({ server, authenticate, tokenHashes, ticketSt
       if (!sessionId) return 0;
       const sockets = [...(sessionSockets.get(sessionId) ?? [])].filter((socket) => socket.readyState === 0 || socket.readyState === 1);
       for (const socket of sockets) socket.close(code, 'unauthorized');
+      return sockets.length;
+    },
+    closeRevoked({ endpointId, isTokenCurrent, endpointRemoved = false, code = 1008, reason = 'revoked' } = {}) {
+      if (!endpointId) return 0;
+      const tracked = endpointSockets.get(endpointId);
+      if (!tracked) return 0;
+      const sockets = [...tracked].filter((socket) => {
+        if (socket.readyState !== 0 && socket.readyState !== 1) return false;
+        if (endpointRemoved) return true;
+        const auth = socketAuth.get(socket);
+        if (!auth || auth.isTicket) return false;
+        return !isTokenCurrent?.(auth.tokenDigest);
+      });
+      for (const socket of sockets) {
+        tracked.delete(socket);
+        socket.close(code, reason);
+      }
+      if (!tracked.size) endpointSockets.delete(endpointId);
+      if (sockets.length > 0) {
+        logger?.info?.({ event: 'stream.revoked', endpoint_id: endpointId, closed: sockets.length });
+      }
       return sockets.length;
     },
     async revalidate({ humanId, endpointId } = {}) {

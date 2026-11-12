@@ -19,6 +19,7 @@ const snapshot = (over = {}) => ({
   schemaReady: true,
   inspection: 'verified',
   registryRefresh: 'verified',
+  registryPreflight: { ok: true, gaps: [] },
   blockers: [],
   ...over,
 });
@@ -144,4 +145,43 @@ test('approved first group has three confirmed bots on rewritelabs.io', () => {
   assert.ok(Object.isFrozen(APPROVED_FIRST_GROUP));
   assert.ok(APPROVED_FIRST_GROUP.every((b) => Object.isFrozen(b) && !('namingStatus' in b)));
   assert.equal(APPROVED_FIRST_GROUP.some((b) => /chief|helix/i.test(b.endpointId)), false);
+});
+
+test('preflight gaps block relay ready and creation', () => {
+  const plan = planSetup(snapshot({
+    routine: { urlState: 'present', keyState: 'present' },
+    registryPreflight: {
+      ok: false,
+      gaps: [
+        { index: 0, endpoint_id: 'ep_test_gap@fixture.example', missing: ['owner_id'] },
+        { index: 2, endpoint_id: null, missing: ['key_id', 'kind'] },
+      ],
+    },
+  }));
+  assert.equal(plan.blockers.includes('registry-preflight-gap:ep_test_gap@fixture.example'), true);
+  assert.equal(plan.blockers.includes('registry-preflight-gap:#2'), true);
+  assert.equal(plan.relayReady, false);
+  assert.deepEqual(plan.registryPreflight, { ok: false, gapCount: 2 });
+  assert.equal(plan.create.length, 0);
+  assert.equal(plan.fourInputsReady, false);
+  const summary = renderSummary(plan);
+  assert.equal(summary.includes('registry_preflight: 2 gap(s)'), true);
+  assert.equal(summary.includes('relay_ready: no'), true);
+});
+
+test('missing preflight is unverified and blocks relay ready', () => {
+  const plan = planSetup(snapshot({ registryPreflight: undefined }));
+  assert.equal(plan.blockers.includes('registry-preflight-unverified'), true);
+  assert.equal(plan.relayReady, false);
+  assert.equal(plan.create.length, 0);
+  assert.equal(plan.fourInputsReady, false);
+});
+
+test('clean preflight and verified refresh make relay ready', () => {
+  const plan = planSetup(snapshot());
+  assert.equal(plan.relayReady, true);
+  assert.deepEqual(plan.registryPreflight, { ok: true, gapCount: 0 });
+  const summary = renderSummary(plan);
+  assert.equal(summary.includes('registry_preflight: ok'), true);
+  assert.equal(summary.includes('relay_ready: yes'), true);
 });
