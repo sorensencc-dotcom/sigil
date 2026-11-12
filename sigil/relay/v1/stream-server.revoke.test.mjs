@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { WebSocket } from 'ws';
-import { createStreamServer } from './stream-server.mjs';
+import { createStreamServer, REVOKED_CLOSE_CODE } from './stream-server.mjs';
 import { createBearerAuthenticator, hashBearerToken } from './transport-auth.mjs';
 
 function createRevokeRig() {
@@ -96,7 +96,7 @@ function createRevokeRig() {
   return { start };
 }
 
-test("closeRevoked closes a removed endpoint's sockets with 1008 revoked and leaves other endpoints open", async (t) => {
+test("closeRevoked closes a removed endpoint's sockets with the revoked close code and leaves other endpoints open", async (t) => {
   const rig = await createRevokeRig().start();
   t.after(() => rig.cleanup());
 
@@ -117,8 +117,8 @@ test("closeRevoked closes a removed endpoint's sockets with 1008 revoked and lea
   });
 
   assert.equal(closedCount, 2);
-  assert.deepEqual(await closeA1, { code: 1008, reason: 'revoked' });
-  assert.deepEqual(await closeA2, { code: 1008, reason: 'revoked' });
+  assert.deepEqual(await closeA1, { code: REVOKED_CLOSE_CODE, reason: 'revoked' });
+  assert.deepEqual(await closeA2, { code: REVOKED_CLOSE_CODE, reason: 'revoked' });
 
   assert.equal(socketB.readyState, 1);
   const roomFramePromise = rig.waitMessage(socketB);
@@ -151,7 +151,7 @@ test('closeRevoked after rotation closes only sockets using the old token', asyn
   });
 
   assert.equal(closedCount, 1);
-  assert.deepEqual(await oldClosed, { code: 1008, reason: 'revoked' });
+  assert.deepEqual(await oldClosed, { code: REVOKED_CLOSE_CODE, reason: 'revoked' });
   assert.equal(newSocket.readyState, 1);
 
   const deliveredPromise = rig.waitMessage(newSocket);
@@ -219,4 +219,9 @@ test('closeRevoked with nothing to close returns 0 and logs nothing', async (t) 
   assert.equal(rig.warnings.length, 0);
   assert.equal(rig.errors.length, 0);
   assert.equal(socketA.readyState, 1);
+});
+
+test('revocation uses its own application close code, not 1008', () => {
+  assert.equal(REVOKED_CLOSE_CODE, 4401);
+  assert.notEqual(REVOKED_CLOSE_CODE, 1008);
 });

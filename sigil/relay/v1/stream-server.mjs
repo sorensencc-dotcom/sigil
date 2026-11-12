@@ -26,6 +26,11 @@ function sequenceFrame(type, payload = {}) {
   return { type, ...frame, stream_seq: streamSequenceValue(streamSeq ?? stream_seq) };
 }
 
+// Application-range WebSocket close code for a revoked/rotated credential,
+// distinct from 1008 'unauthorized' so clients can tell revocation from a
+// failed upgrade and stop reconnecting with the old token.
+export const REVOKED_CLOSE_CODE = 4401;
+
 export function createStreamServer({ server, authenticate, tokenHashes, ticketStore = null, allowedOrigins = [], logger = null, repository = null, livenessIntervalMs = 60_000, publicServer = null, publicOrigin = null } = {}) {
   const authenticateRequest = authenticate ?? (tokenHashes ? createBearerAuthenticator(tokenHashes) : () => null);
   const wss = new WebSocketServer({ server, path: '/v1/stream' });
@@ -260,7 +265,7 @@ export function createStreamServer({ server, authenticate, tokenHashes, ticketSt
       for (const socket of sockets) socket.close(code, 'unauthorized');
       return sockets.length;
     },
-    closeRevoked({ endpointId, isTokenCurrent, endpointRemoved = false, code = 1008, reason = 'revoked' } = {}) {
+    closeRevoked({ endpointId, isTokenCurrent, endpointRemoved = false, code = REVOKED_CLOSE_CODE, reason = 'revoked' } = {}) {
       if (!endpointId) return 0;
       const tracked = endpointSockets.get(endpointId);
       if (!tracked) return 0;
