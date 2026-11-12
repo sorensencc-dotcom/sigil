@@ -192,6 +192,10 @@ test('refuses an existing loose directory and does not tighten it', { skip }, as
   try {
     const root = path.join(base, 'loose');
     await fs.mkdir(root);
+    // Inheritance off (inherited entries copied), so the only problem left is
+    // the broad entry and the helper must report it as broad-sid.
+    const unlink = spawnSync('icacls.exe', [root, '/inheritance:d'], { encoding: 'utf8', windowsHide: true });
+    assert.equal(unlink.status, 0, 'test setup turns inheritance off');
     const grant = spawnSync('icacls.exe', [root, '/grant', '*S-1-1-0:(OI)(CI)R'], { encoding: 'utf8', windowsHide: true });
     assert.equal(grant.status, 0, 'test setup grants Everyone read');
     await fs.writeFile(path.join(root, 'operator.identity.json'), '{}');
