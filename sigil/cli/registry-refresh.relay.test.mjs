@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
+import { REVOKED_CLOSE_CODE } from '../relay/v1/stream-server.mjs';
 import { createIdentity } from './identity.mjs';
 import { addEndpointToRegistry, saveRegistryFile } from './registry-store.mjs';
 
@@ -284,7 +285,7 @@ test('running relay closes live streams on removal and rotation and leaves other
   });
 
   const closedB = await closeBPromise;
-  assert.equal(closedB.code, 1008);
+  assert.equal(closedB.code, REVOKED_CLOSE_CODE);
   assert.equal(closedB.reason, 'revoked');
   assert.equal(wsA.readyState, 1);
   assert.equal(wsC.readyState, 1);
@@ -293,7 +294,7 @@ test('running relay closes live streams on removal and rotation and leaves other
   addEndpointToRegistry(registryPath, { ...botC, relay_token: newTokenC });
 
   const closedC = await closeCPromise;
-  assert.equal(closedC.code, 1008);
+  assert.equal(closedC.code, REVOKED_CLOSE_CODE);
   assert.equal(closedC.reason, 'revoked');
   assert.equal(wsA.readyState, 1);
 

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { inspectSetup, INSPECTION_SQL } from './phase7-setup-inspect.mjs';
+import { planSetup, APPROVED_FIRST_GROUP } from './phase7-setup-policy.mjs';
 
 const SQL = Object.freeze({
   begin: 'BEGIN READ ONLY',
@@ -244,4 +245,22 @@ test('snapshot feeds Task 1 planSetup', async () => {
   assert.deepEqual(snap.routine, { urlState: 'unverified', keyState: 'unverified' });
   const validStates = new Set(['missing', 'healthy', 'partial', 'conflict', 'disabled']);
   for (const bot of snap.bots) assert.ok(validStates.has(bot.state));
+  // The real Task 1 policy consumes the snapshot: unverified refresh and no
+  // preflight keep the relay not-ready and block creation.
+  const plan = planSetup(snap);
+  assert.ok(plan.blockers.includes('registry-refresh-unverified'));
+  assert.ok(plan.blockers.includes('registry-preflight-unverified'));
+  assert.equal(plan.relayReady, false);
+  assert.deepEqual(plan.create, []);
+  assert.deepEqual(plan.inputs.slice(2).map((i) => i.name), snap.bots.map((b) => b.botId));
+});
+
+test('approved first group flows through inspection into planSetup', async () => {
+  const bots = APPROVED_FIRST_GROUP.map((b) => ({ ...b, identityPath: `/fixture/${b.botId}.json` }));
+  const snap = await inspectSetup(baseConfig(bots), healthyDeps({ identity: null, registry: { endpoints: [] } }));
+  assert.deepEqual(snap.bots.map((b) => b.endpointId), APPROVED_FIRST_GROUP.map((b) => b.endpointId));
+  assert.deepEqual(snap.bots.map((b) => b.role), ['reply', 'reply', 'dispatcher']);
+  const plan = planSetup({ ...snap, registryRefresh: 'verified', registryPreflight: { ok: true, gaps: [] } });
+  assert.equal(plan.blockers.some((b) => b.startsWith('role-unconfirmed:')), false);
+  assert.equal(plan.blockers.some((b) => /chief|helix/i.test(b)), false);
 });
