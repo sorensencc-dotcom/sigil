@@ -40,10 +40,12 @@ function readAcl(target) {
     '$rules = $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | ForEach-Object { @{ sid = $_.IdentityReference.Value; allow = ($_.AccessControlType -eq "Allow"); inherited = $_.IsInherited } }',
     '@{ owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value; protected = $acl.AreAccessRulesProtected; me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; rules = @($rules) } | ConvertTo-Json -Depth 4 -Compress',
   ].join('; ');
-  const res = spawnSync(WINDOWS_PS, ['-NoProfile', '-NonInteractive', '-Command', script], {
+  // -EncodedCommand avoids Windows PowerShell's quoting of -Command strings.
+  const encoded = Buffer.from(script, 'utf16le').toString('base64');
+  const res = spawnSync(WINDOWS_PS, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
     encoding: 'utf8', windowsHide: true, env: { ...process.env, SIGIL_TEST_TARGET: target },
   });
-  assert.equal(res.status, 0, 'independent ACL read');
+  assert.equal(res.status, 0, `independent ACL read: ${res.stderr}`);
   return JSON.parse(res.stdout);
 }
 
@@ -224,19 +226,29 @@ test('rejects a junction anywhere on the path', { skip }, async () => {
   }
 });
 
-test('real helper frames a piped value and returns nothing on EOF', { skip }, async () => {
+// Calls the helper directly so a failure names the helper's result code.
+// Read-Host does not read a piped stdin under Windows PowerShell, so the prompt
+// itself is not exercised here; it needs a real console and a hand check.
+test('helper protects and verifies a fresh directory', { skip }, async () => {
   for (const shell of isWindows ? shells() : []) {
-    const run = (input) => spawnSync(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', HELPER, '-Action', 'Prompt'], {
-      input, encoding: 'utf8', windowsHide: true, timeout: 60_000,
-    });
-    const fed = run(`${FAKE_KEY}\n`);
-    const frames = fed.stdout.split(/\r?\n/).filter((l) => l.startsWith('SIGIL-HELPER:'));
-    assert.deepEqual(frames, [`SIGIL-HELPER:SECRET:${Buffer.from(FAKE_KEY).toString('base64')}`], `${path.basename(shell)} frames the value`);
-    assert.equal(fed.stdout.includes(FAKE_KEY), false, 'the plain value never appears on stdout');
-    assert.equal(fed.stderr.includes(FAKE_KEY), false);
-
-    const eof = run('');
-    assert.equal(eof.stdout.includes('SIGIL-HELPER:SECRET:'), false, `${path.basename(shell)} returns no value on EOF`);
-    assert.notEqual(eof.status, 0);
+    const { base } = setup();
+    await fs.mkdir(base);
+    try {
+      const dir = path.join(base, 'direct');
+      await fs.mkdir(dir);
+      const run = (...args) => {
+        const res = spawnSync(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', HELPER, ...args], {
+          encoding: 'utf8', windowsHide: true, timeout: 60_000,
+        });
+        return { frames: (res.stdout ?? '').split(/\r?\n/).filter((l) => l.startsWith('SIGIL-HELPER:')), status: res.status, stderr: res.stderr };
+      };
+      const protect = run('-Action', 'ProtectDir', '-Path', dir);
+      assert.deepEqual(protect.frames, ['SIGIL-HELPER:OK'], `${path.basename(shell)} ProtectDir: ${protect.stderr}`);
+      const verify = run('-Action', 'VerifyAcl', '-Path', dir, '-Kind', 'Directory');
+      assert.deepEqual(verify.frames, ['SIGIL-HELPER:OK'], `${path.basename(shell)} VerifyAcl: ${verify.stderr}`);
+      assertTight(readAcl(dir), { dir: true });
+    } finally {
+      await fs.rm(base, { recursive: true, force: true });
+    }
   }
 });
