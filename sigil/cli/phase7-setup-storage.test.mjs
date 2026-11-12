@@ -14,6 +14,7 @@ import {
   LOCK_FILE,
   CHECKPOINT_FILE,
   CHILD_ENV_ALLOWLIST,
+  HELPER_REASONS,
 } from './phase7-setup-storage.mjs';
 
 const W = path.win32;
@@ -190,10 +191,11 @@ function harness({ fsOpts = {}, spawnOpts = {}, mode = 'apply', platform = 'win3
 
 const existingRoot = () => ({ dirs: [ROOT], files: { [OPERATOR]: '{}', [REGISTRY]: '{"endpoints":[]}' } });
 
-async function rejectsCode(promise, code) {
+async function rejectsCode(promise, code, reason) {
   await assert.rejects(promise, (e) => {
     assert.ok(e instanceof SetupStorageError, `expected SetupStorageError, got ${e?.name}`);
     assert.equal(e.code, code);
+    if (reason !== undefined) assert.equal(e.reason, reason);
     return true;
   });
 }
@@ -221,7 +223,10 @@ test('hidden prompt secrets travel over private stdin stdout pipes not argv', as
   const { fs, sp, ui, storage } = harness({
     fsOpts: existingRoot(),
     spawnOpts: { prompts: [SENTINEL_URL, SENTINEL_KEY_LONG] },
-    env: { [ 'SIGIL_TEST_DATABASE_URL' ]: SENTINEL_DB, OTHER_TOKEN_VAR: SENTINEL_BEARER },
+    env: {
+      [ 'SIGIL_TEST_DATABASE_URL' ]: SENTINEL_DB, OTHER_TOKEN_VAR: SENTINEL_BEARER,
+      PSModulePath: 'C:\\Program Files\\PowerShell\\7\\Modules',
+    },
   });
   await storage.prepare(config());
   await storage.lock();
@@ -248,6 +253,7 @@ test('hidden prompt secrets travel over private stdin stdout pipes not argv', as
     // Only the console's keystrokes reach the prompt helper; every other helper gets a pipe.
     assert.equal(call.options.stdio[0], isPrompt ? 'inherit' : 'pipe');
     for (const name of Object.keys(call.options.env)) assert.ok(CHILD_ENV_ALLOWLIST.includes(name), name);
+    assert.equal('PSModulePath' in call.options.env, false, 'PowerShell 7 module path is not passed to Windows PowerShell');
   }
   const spawned = JSON.stringify(sp.calls);
   for (const value of [SENTINEL_URL, SENTINEL_KEY_LONG, SENTINEL_DB, SENTINEL_BEARER, 'FAKE_QUERY',
@@ -303,7 +309,7 @@ test('ACL failure precedes every secret and DB write', async () => {
       fsOpts: existingRoot(),
       spawnOpts: { prompts: [SENTINEL_URL, SENTINEL_KEY_LONG], verify: () => 'BROAD_SID' },
     });
-    await rejectsCode(storage.prepare(config()), 'STORAGE_ACL_FAILED');
+    await rejectsCode(storage.prepare(config()), 'STORAGE_ACL_FAILED', 'broad-sid');
     assert.equal(sp.calls.some((c) => c.args.includes('ProtectDir')), false);
     await rejectsCode(storage.lock(), 'STORAGE_NOT_READY');
     await rejectsCode(storage.collectMissing(config()), 'STORAGE_NOT_READY');
@@ -317,7 +323,7 @@ test('ACL failure precedes every secret and DB write', async () => {
   // New directory whose ACL does not verify after being set.
   {
     const { fs, storage } = harness({ fsOpts: { files: {} }, spawnOpts: { verify: () => 'INHERITANCE_ENABLED' } });
-    await rejectsCode(storage.prepare(config()), 'STORAGE_ACL_FAILED');
+    await rejectsCode(storage.prepare(config()), 'STORAGE_ACL_FAILED', 'inheritance-enabled');
     assert.equal(storage.events.includes('write-secret'), false);
     assert.equal(fs.ops.some(([op]) => op === 'open'), false);
   }
@@ -458,8 +464,9 @@ test('short encoded and exception secrets never enter logs', async () => {
       assert.ok(e instanceof SetupStorageError);
       assert.ok(allowedMessages.has(e.message), 'fixed message only');
       assert.equal(e.cause, undefined);
-      for (const own of Object.keys(e)) assert.ok(['code', 'detail'].includes(own), own);
+      for (const own of Object.keys(e)) assert.ok(['code', 'detail', 'reason'].includes(own), own);
       if (e.detail !== undefined) assert.match(e.detail, /^[a-z0-9-]{1,40}$/);
+      if (e.reason !== undefined) assert.ok(HELPER_REASONS.includes(e.reason), 'fixed helper reason only');
       surfaces.push(['error', e.message, e.stack, String(e), JSON.stringify(e), inspect(e, { depth: 5, showHidden: true })]);
     }
   };

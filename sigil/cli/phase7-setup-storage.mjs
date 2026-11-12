@@ -29,9 +29,12 @@ export const LOCK_FILE = 'phase7-setup.lock';
 export const CHECKPOINT_FILE = 'phase7-setup-checkpoint.json';
 
 // Child processes get only what Windows and PowerShell need to start.
+// PSModulePath is left out on purpose. Started from PowerShell 7, it points
+// Windows PowerShell 5.1 at PowerShell 7's built-in modules, which 5.1 cannot
+// load. Without it, powershell.exe builds its own default module path.
 export const CHILD_ENV_ALLOWLIST = Object.freeze([
   'SystemRoot', 'windir', 'SystemDrive', 'ComSpec', 'PATHEXT', 'PATH', 'TEMP', 'TMP',
-  'USERPROFILE', 'USERNAME', 'USERDOMAIN', 'LOCALAPPDATA', 'APPDATA', 'PSModulePath',
+  'USERPROFILE', 'USERNAME', 'USERDOMAIN', 'LOCALAPPDATA', 'APPDATA',
   'PROCESSOR_ARCHITECTURE', 'NUMBER_OF_PROCESSORS', 'OS',
 ]);
 
@@ -56,16 +59,30 @@ export const STORAGE_MESSAGES = Object.freeze({
   INVALID_CHECKPOINT: 'checkpoint metadata is not allowlisted',
 });
 
+// Why the Windows helper refused, as a fixed word. It names a rule, never a
+// path, a SID or a value, so the owner can see which check failed.
+export const HELPER_REASONS = Object.freeze([
+  'reparse-point', 'owner', 'inheritance-enabled', 'broad-sid', 'owner-access',
+  'wrong-kind', 'not-a-directory', 'path-required', 'acl-api-missing', 'helper-exception',
+  'unknown', 'no-frame', 'timeout', 'spawn-failed',
+]);
+
+const helperReason = (result) => {
+  const word = (result?.kind === 'error' ? String(result.reason) : String(result?.kind)).toLowerCase().replaceAll('_', '-');
+  return HELPER_REASONS.includes(word) ? word : 'unknown';
+};
+
 export class SetupStorageError extends Error {
-  constructor(code, detail) {
+  constructor(code, detail, reason) {
     super(STORAGE_MESSAGES[code] ?? STORAGE_MESSAGES.STORAGE_HELPER_FAILED);
     this.code = STORAGE_MESSAGES[code] ? code : 'STORAGE_HELPER_FAILED';
     if (typeof detail === 'string' && /^[a-z0-9-]{1,40}$/.test(detail)) this.detail = detail;
+    if (HELPER_REASONS.includes(reason)) this.reason = reason;
   }
 }
 SetupStorageError.prototype.name = 'SetupStorageError';
 
-const fail = (code, detail) => { throw new SetupStorageError(code, detail); };
+const fail = (code, detail, reason) => { throw new SetupStorageError(code, detail, reason); };
 
 // --- value validation (format only; authenticity is never probed) ---------
 
@@ -231,7 +248,7 @@ export function createSetupStorage({
   async function verifyAcl(target, kind, detail) {
     events.push('acl-verify');
     const result = await runHelper('VerifyAcl', ['-Path', target, '-Kind', kind]);
-    if (result.kind !== 'ok') fail('STORAGE_ACL_FAILED', detail);
+    if (result.kind !== 'ok') fail('STORAGE_ACL_FAILED', detail, helperReason(result));
   }
 
   async function lstatOrNull(target) {
@@ -355,7 +372,7 @@ export function createSetupStorage({
       if (!made || made.isSymbolicLink() || !made.isDirectory()) fail('STORAGE_PATH_REJECTED', 'reparse-point');
       events.push('acl-set');
       const set = await runHelper('ProtectDir', ['-Path', root.path]);
-      if (set.kind !== 'ok') fail('STORAGE_ACL_FAILED', 'secret-root');
+      if (set.kind !== 'ok') fail('STORAGE_ACL_FAILED', 'secret-root', helperReason(set));
     } else if (!root.stat.isDirectory()) {
       fail('STORAGE_PATH_REJECTED', 'not-a-directory');
     }

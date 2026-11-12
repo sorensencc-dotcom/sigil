@@ -24,6 +24,15 @@ const BROAD_SIDS = ['S-1-1-0', 'S-1-5-32-545', 'S-1-5-11'];
 const FAKE_URL = 'https://fixture.invalid/private-route?key=FAKE_QUERY';
 const FAKE_KEY = 'FAKE_KEY_FOR_WINDOWS_ACL_TEST_ONLY';
 
+// The runner's shell is PowerShell 7, whose PSModulePath breaks module loading
+// in Windows PowerShell 5.1. Children get the environment without it, as the
+// setup module does.
+function childEnv(extra = {}) {
+  const env = { ...process.env, ...extra };
+  for (const key of Object.keys(env)) if (key.toLowerCase() === 'psmodulepath') delete env[key];
+  return env;
+}
+
 function shells() {
   const found = [WINDOWS_PS];
   const where = spawnSync('where.exe', ['pwsh.exe'], { encoding: 'utf8', windowsHide: true });
@@ -36,14 +45,15 @@ function shells() {
 function readAcl(target) {
   const script = [
     '$p = $env:SIGIL_TEST_TARGET',
-    '$acl = Get-Acl -LiteralPath $p',
+    '$i = if ([System.IO.Directory]::Exists($p)) { [System.IO.DirectoryInfo]::new($p) } else { [System.IO.FileInfo]::new($p) }',
+    '$acl = $i.GetAccessControl()',
     '$rules = $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | ForEach-Object { @{ sid = $_.IdentityReference.Value; allow = ($_.AccessControlType -eq "Allow"); inherited = $_.IsInherited } }',
     '@{ owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value; protected = $acl.AreAccessRulesProtected; me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; rules = @($rules) } | ConvertTo-Json -Depth 4 -Compress',
   ].join('; ');
   // -EncodedCommand avoids Windows PowerShell's quoting of -Command strings.
   const encoded = Buffer.from(script, 'utf16le').toString('base64');
   const res = spawnSync(WINDOWS_PS, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
-    encoding: 'utf8', windowsHide: true, env: { ...process.env, SIGIL_TEST_TARGET: target },
+    encoding: 'utf8', windowsHide: true, env: childEnv({ SIGIL_TEST_TARGET: target }),
   });
   assert.equal(res.status, 0, `independent ACL read: ${res.stderr}`);
   return JSON.parse(res.stdout);
@@ -104,8 +114,13 @@ function config(root) {
   };
 }
 
-async function rejectsCode(promise, code) {
-  await assert.rejects(promise, (e) => e instanceof SetupStorageError && e.code === code);
+async function rejectsCode(promise, code, reason) {
+  await assert.rejects(promise, (e) => {
+    assert.ok(e instanceof SetupStorageError, `expected SetupStorageError, got ${e?.name}`);
+    assert.equal(e.code, code, `got ${e.code} (${e.detail ?? '-'}, ${e.reason ?? '-'})`);
+    if (reason !== undefined) assert.equal(e.reason, reason);
+    return true;
+  });
 }
 
 test('protects a new root with spaces and Unicode for owner SYSTEM and Administrators only', { skip }, async () => {
@@ -183,7 +198,7 @@ test('refuses an existing loose directory and does not tighten it', { skip }, as
     await fs.writeFile(path.join(root, 'registry.json'), '{}');
     const stub = promptStub([FAKE_URL, FAKE_KEY]);
     const storage = makeStorage({ home, spawnFn: stub.spawn });
-    await rejectsCode(storage.prepare(config(root)), 'STORAGE_ACL_FAILED');
+    await rejectsCode(storage.prepare(config(root)), 'STORAGE_ACL_FAILED', 'broad-sid');
     await rejectsCode(storage.collectMissing(config(root)), 'STORAGE_NOT_READY');
     assert.equal(stub.prompts.length, 0);
     assert.ok(readAcl(root).rules.some((r) => r.sid === 'S-1-1-0'), 'the loose ACL was left as it was');
@@ -238,7 +253,7 @@ test('helper protects and verifies a fresh directory', { skip }, async () => {
       await fs.mkdir(dir);
       const run = (...args) => {
         const res = spawnSync(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', HELPER, ...args], {
-          encoding: 'utf8', windowsHide: true, timeout: 60_000,
+          encoding: 'utf8', windowsHide: true, timeout: 60_000, env: childEnv(),
         });
         return { frames: (res.stdout ?? '').split(/\r?\n/).filter((l) => l.startsWith('SIGIL-HELPER:')), status: res.status, stderr: res.stderr };
       };

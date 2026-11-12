@@ -31,16 +31,47 @@ function Exit-Error([string]$Code) {
   exit 1
 }
 
-$SystemSid = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-18')
-$AdminsSid = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')
+$SystemSid = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+$AdminsSid = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
 $CurrentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 # Approved Nov 11: owner, SYSTEM and Administrators only, until the relay
 # service account is verified. No Users, Authenticated Users or Everyone.
 $AllowedSids = @($CurrentSid.Value, $SystemSid.Value, $AdminsSid.Value)
 
-function Test-ReparsePoint([string]$Target) {
-  $item = Get-Item -LiteralPath $Target -Force
-  return [bool]($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
+# File system and ACL work goes through .NET, not cmdlets, so it never depends
+# on which module path the process inherited.
+function Get-Entry([string]$Target, [string]$EntryKind) {
+  if ($EntryKind -eq 'Directory') { $entry = [System.IO.DirectoryInfo]::new($Target) }
+  else { $entry = [System.IO.FileInfo]::new($Target) }
+  if (-not $entry.Exists) { return $null }
+  return $entry
+}
+
+function Test-ReparsePoint($Entry) {
+  return [bool]($Entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
+}
+
+# Windows PowerShell (.NET Framework) has the instance methods; PowerShell 7
+# (.NET) has them as System.IO.FileSystemAclExtensions, whose assembly may not
+# be loaded yet.
+function Get-AclExtensions {
+  $ext = 'System.IO.FileSystemAclExtensions' -as [type]
+  if ($null -eq $ext) {
+    [void][System.Reflection.Assembly]::Load('System.IO.FileSystem.AccessControl')
+    $ext = 'System.IO.FileSystemAclExtensions' -as [type]
+  }
+  if ($null -eq $ext) { Exit-Error 'ACL_API_MISSING' }
+  return $ext
+}
+
+function Get-EntryAcl($Entry) {
+  if ($null -ne $Entry.GetType().GetMethod('GetAccessControl', [Type[]]@())) { return $Entry.GetAccessControl() }
+  return (Get-AclExtensions)::GetAccessControl($Entry)
+}
+
+function Set-EntryAcl($Entry, $Security) {
+  if ($null -ne $Entry.GetType().GetMethod('SetAccessControl', [Type[]]@($Security.GetType()))) { $Entry.SetAccessControl($Security); return }
+  (Get-AclExtensions)::SetAccessControl($Entry, $Security)
 }
 
 try {
@@ -67,9 +98,10 @@ try {
 
     'ProtectDir' {
       if (-not $Path) { Exit-Error 'PATH_REQUIRED' }
-      if (-not (Test-Path -LiteralPath $Path -PathType Container)) { Exit-Error 'NOT_A_DIRECTORY' }
-      if (Test-ReparsePoint $Path) { Exit-Error 'REPARSE_POINT' }
-      $acl = New-Object System.Security.AccessControl.DirectorySecurity
+      $entry = Get-Entry $Path 'Directory'
+      if ($null -eq $entry) { Exit-Error 'NOT_A_DIRECTORY' }
+      if (Test-ReparsePoint $entry) { Exit-Error 'REPARSE_POINT' }
+      $acl = [System.Security.AccessControl.DirectorySecurity]::new()
       $acl.SetAccessRuleProtection($true, $false)
       $acl.SetOwner($CurrentSid)
       $inherit = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
@@ -77,20 +109,20 @@ try {
       $full = [System.Security.AccessControl.FileSystemRights]::FullControl
       $allow = [System.Security.AccessControl.AccessControlType]::Allow
       foreach ($sid in @($CurrentSid, $SystemSid, $AdminsSid)) {
-        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, $full, $inherit, $propagate, $allow)
+        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, $full, $inherit, $propagate, $allow)
         $acl.AddAccessRule($rule)
       }
-      Set-Acl -LiteralPath $Path -AclObject $acl
+      Set-EntryAcl $entry $acl
       Send-Frame 'OK'
       exit 0
     }
 
     'VerifyAcl' {
       if (-not $Path) { Exit-Error 'PATH_REQUIRED' }
-      $type = if ($Kind -eq 'Directory') { 'Container' } else { 'Leaf' }
-      if (-not (Test-Path -LiteralPath $Path -PathType $type)) { Exit-Error 'WRONG_KIND' }
-      if (Test-ReparsePoint $Path) { Exit-Error 'REPARSE_POINT' }
-      $acl = Get-Acl -LiteralPath $Path
+      $entry = Get-Entry $Path $Kind
+      if ($null -eq $entry) { Exit-Error 'WRONG_KIND' }
+      if (Test-ReparsePoint $entry) { Exit-Error 'REPARSE_POINT' }
+      $acl = Get-EntryAcl $entry
       $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier])
       if ($owner.Value -ne $CurrentSid.Value -and $owner.Value -ne $AdminsSid.Value) { Exit-Error 'OWNER' }
       if ($Kind -eq 'Directory' -and -not $acl.AreAccessRulesProtected) { Exit-Error 'INHERITANCE_ENABLED' }
