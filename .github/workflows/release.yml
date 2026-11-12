@@ -11,11 +11,13 @@ concurrency:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
-  publish:
-    name: Build, Verify, and Publish
+  # Installs dependencies, runs the gates, and packs the tarball. It has no
+  # id-token permission, so code run here (including dependency lifecycle
+  # scripts) cannot mint the OIDC token that npm trusted publishing accepts.
+  build:
+    name: Build, Verify, and Pack
     runs-on: ubuntu-latest
 
     services:
@@ -44,10 +46,6 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
 
-      # Trusted publishing (OIDC) needs npm CLI 11.5.1 or later; Node 22 ships npm 10.
-      - name: Upgrade npm for trusted publishing
-        run: npm install -g npm@^11.5.1
-
       - name: Install dependencies
         run: npm ci
 
@@ -67,8 +65,49 @@ jobs:
       - name: Verify package bundle
         run: npm run pack:check
 
-      # Authenticates through npm trusted publishing (OIDC, via id-token: write above).
-      # No NPM_TOKEN secret is read. Requires this repo and release.yml to be registered
-      # as a trusted publisher for @sorensencc/sigil on npmjs.com.
+      - name: Pack release tarball
+        run: |
+          mkdir -p dist
+          npm pack --pack-destination dist
+
+      - name: Upload release tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-package
+          path: dist/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  # Publishes the tarball built above. It checks out no code and installs no
+  # dependencies, and publishing a tarball runs no package lifecycle scripts,
+  # so only npm itself runs while the OIDC token is available.
+  publish:
+    name: Publish to npm
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing (OIDC) needs npm CLI 11.5.1 or later; Node 22 ships npm 10.
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@^11.5.1
+
+      - name: Download release tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: npm-package
+          path: dist
+
+      # Authenticates through npm trusted publishing. No NPM_TOKEN secret is read.
+      # Requires this repo and release.yml to be registered as a trusted publisher
+      # for @sorensencc/sigil on npmjs.com.
       - name: Publish scoped package to npm
-        run: npm publish --provenance --access public
+        run: npm publish dist/*.tgz --provenance --access public

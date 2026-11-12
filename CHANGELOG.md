@@ -15,7 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `sigil relay up --reconcile-kind <endpoint_id>=<kind>` repairs a Postgres endpoint `kind` that differs from the registry file after a `REGISTRY_CONFLICT`.
 
 ### Changed
-- **npm releases use trusted publishing.** `.github/workflows/release.yml` now publishes through npm trusted publishing (OIDC) and no longer reads the `NPM_TOKEN` secret, so there is no publish token to rotate. The workflow upgrades npm to 11.5.1 or later before publishing.
+- **npm releases use trusted publishing.** `.github/workflows/release.yml` now publishes through npm trusted publishing (OIDC) and no longer reads the `NPM_TOKEN` secret, so there is no publish token to rotate. Install, tests and packing now run in a build job without `id-token: write`; a separate publish job, which checks out no code and installs no dependencies, publishes the packed tarball with npm 11.5.1 or later.
 - `sigil agent run --room-bridge floor-warden` now refuses an `http` `--floor-warden-reply-url` unless the host is loopback (`127.0.0.1`, `localhost` or `[::1]`). Use an `https` URL for any other host.
 - Browser WebSocket tickets issued through the cookie listener now carry the session id, so logout closes the stream. The cookie listener passes a `Date`, not a function, as `now` to room routes.
 - Rows in `endpoint_keys` for local endpoints now decide who may sign; the registry file only seeds them at startup. Endpoints carry multiple keys (`active`, `retiring`, `retired`) selected by `key_id`, and a federated sender's new key retires its previous shadow key.
