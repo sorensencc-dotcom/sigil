@@ -44,6 +44,10 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
 
+      # Trusted publishing (OIDC) needs npm CLI 11.5.1 or later; Node 22 ships npm 10.
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@^11.5.1
+
       - name: Install dependencies
         run: npm ci
 
@@ -63,7 +67,8 @@ jobs:
       - name: Verify package bundle
         run: npm run pack:check
 
+      # Authenticates through npm trusted publishing (OIDC, via id-token: write above).
+      # No NPM_TOKEN secret is read. Requires this repo and release.yml to be registered
+      # as a trusted publisher for @sorensencc/sigil on npmjs.com.
       - name: Publish scoped package to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --provenance --access public
