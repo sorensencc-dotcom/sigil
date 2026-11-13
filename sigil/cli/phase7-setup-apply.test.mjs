@@ -61,10 +61,16 @@ function harness({ answers = [], inspections = [], exits = [], ready = true } = 
     child.stdout = new EventEmitter(); child.stdout.resume = () => {};
     child.stderr = new EventEmitter(); child.stderr.resume = () => {};
     child.killed = false;
-    child.kill = () => { child.killed = true; };
+    child.signals = [];
+    // 'hang' closes once killed; 'stubborn' ignores the first kill and closes only on SIGKILL.
+    child.kill = (signal = 'SIGTERM') => {
+      child.signals.push(signal);
+      child.killed = true;
+      if (exit === 'hang' || (exit === 'stubborn' && signal === 'SIGKILL')) setImmediate(() => child.emit('close', null));
+    };
     spawns.push({ command, args, options, child });
     log.push('spawn');
-    if (exit !== 'hang') setImmediate(() => child.emit('close', exit));
+    if (exit !== 'hang' && exit !== 'stubborn') setImmediate(() => child.emit('close', exit));
     return child;
   };
   return { log, prompts, spawns, storage, inspect, confirm, spawn };
@@ -86,6 +92,7 @@ test('no --apply, no TTY or a declined phrase has zero effects', async () => {
     const h = harness({ answers: [applyPhrase(DB_LABEL)] });
     const result = await run(h, over);
     assert.ok(['dry-run', 'not-a-tty'].includes(result.status));
+    assert.equal(result.mode, result.status === 'dry-run' ? 'dry-run' : 'apply');
     assert.deepEqual(h.log, [], 'nothing was prompted, inspected, checkpointed or spawned');
   }
   for (const answer of ['', 'yes', `APPLY PHASE7 other`, `apply phase7 ${DB_LABEL}`, `${applyPhrase(DB_LABEL)} `]) {
@@ -200,10 +207,19 @@ test('only bot add runs, with piped stdio, path and ID arguments and an allowlis
   assert.equal(cps[1].registryRefresh, 'verified');
 });
 
-test('a credential-store wrap key is passed by reference and adds nothing to the env', () => {
-  const out = botAddEnv(config(undefined, { wrapKeyRef: 'cred:sigil/fixture-wrap' }), env());
-  assert.deepEqual(Object.keys(out.env).sort(), ['PATH', 'SIGIL_DATABASE_URL']);
+test('a credential-store wrap key is passed by reference with only the store settings', () => {
+  const storeEnv = env({ XDG_CONFIG_HOME: '/fixture/config', SIGIL_KEYSTORE_PATH: '/fixture/keystore.json' });
+  const out = botAddEnv(config(undefined, { wrapKeyRef: 'cred:sigil/fixture-wrap' }), storeEnv);
+  assert.deepEqual(Object.keys(out.env).sort(), ['PATH', 'SIGIL_DATABASE_URL', 'SIGIL_KEYSTORE_PATH', 'XDG_CONFIG_HOME']);
   assert.ok(botAddArgs(config(undefined, { wrapKeyRef: 'cred:sigil/fixture-wrap' }), BOT).includes('--room-bot-key-wrap-key=cred:sigil/fixture-wrap'));
+  // A plain-env wrap key does not carry the credential store's settings.
+  assert.ok(!('XDG_CONFIG_HOME' in botAddEnv(config(), storeEnv).env));
+});
+
+test('a wrap key env name that would replace the database URL or a runtime setting is refused', () => {
+  for (const name of ['SIGIL_DATABASE_URL', 'PATH', 'Path', 'HOME']) {
+    assert.deepEqual(botAddEnv(config(undefined, { wrapKeyRef: name }), env({ [name]: 'x' })), { blocker: 'wrap-key-ref-reserved' }, name);
+  }
 });
 
 test('missing database or wrap key env, or a missing display name, blocks before any prompt', async () => {
@@ -212,6 +228,8 @@ test('missing database or wrap key env, or a missing display name, blocks before
     [{ env: env({ FIXTURE_WRAP_KEY_ENV: '' }) }, 'wrap-key-env-missing'],
     [{ config: config([{ ...BOT, displayName: ' ' }, OTHER]) }, `display-name-missing:${BOT.botId}`],
     [{ config: config([OTHER]) }, `config-mismatch:${BOT.botId}`],
+    [{ config: config([BOT, OTHER, { ...OTHER, botId: 'bot test/other' }]) }, 'bot-id-unsafe'],
+    [{ config: config(Array.from({ length: 65 }, (_, i) => ({ ...OTHER, botId: `bot_test_${i}` })).concat([BOT, OTHER])) }, 'too-many-bots'],
   ]) {
     const h = harness({ answers: [applyPhrase(DB_LABEL)] });
     const result = await run(h, over);
@@ -243,15 +261,49 @@ test('a failed bot add stops the rest and is reported per bot', async () => {
   assert.deepEqual(last.failed, [BOT.botId]);
 });
 
-test('a hung bot add is killed and reported as a timeout', async () => {
+test('a hung bot add is killed and reported as a timeout only once it has closed', async () => {
+  let h = harness({
+    answers: [applyPhrase(DB_LABEL), botPhrase(BOT.endpointId)],
+    inspections: [snapshot(['missing']), snapshot(['missing'])],
+    exits: ['hang'],
+  });
+  let result = await run(h, { config: config([BOT]), plan: applyPlan(['missing']), timeoutMs: 20 });
+  assert.equal(result.bots[0].reason, 'bot-add-timeout');
+  assert.deepEqual(h.spawns[0].child.signals, ['SIGTERM']);
+
+  // A child that ignores the first kill is force-killed, and setup waits for it.
+  h = harness({
+    answers: [applyPhrase(DB_LABEL), botPhrase(BOT.endpointId)],
+    inspections: [snapshot(['missing']), snapshot(['missing'])],
+    exits: ['stubborn'],
+  });
+  result = await run(h, { config: config([BOT]), plan: applyPlan(['missing']), timeoutMs: 20, graceMs: 30 });
+  assert.deepEqual(h.spawns[0].child.signals, ['SIGTERM', 'SIGKILL']);
+  assert.equal(result.bots[0].result, 'failed');
+  assert.equal(result.status, 'failed');
+});
+
+test('a failed child whose bot the next inspection shows healthy is reported as created', async () => {
   const h = harness({
     answers: [applyPhrase(DB_LABEL), botPhrase(BOT.endpointId)],
-    inspections: [snapshot(['missing'])],
+    inspections: [snapshot(['missing']), snapshot(['healthy'])],
     exits: ['hang'],
   });
   const result = await run(h, { config: config([BOT]), plan: applyPlan(['missing']), timeoutMs: 20 });
-  assert.equal(result.bots[0].reason, 'bot-add-timeout');
-  assert.equal(h.spawns[0].child.killed, true);
+  assert.deepEqual([result.bots[0].result, result.bots[0].reason, result.bots[0].verified], ['created', 'bot-add-timeout-but-committed', true]);
+  assert.equal(result.status, 'completed');
+  assert.deepEqual(checkpoints(h).at(-1).created, [BOT.botId]);
+});
+
+test('a created bot is unverified when the relay refresh is no longer verified', async () => {
+  const h = harness({
+    answers: [applyPhrase(DB_LABEL), botPhrase(BOT.endpointId)],
+    inspections: [snapshot(['missing']), snapshot(['healthy'], { registryRefresh: 'unverified' })],
+  });
+  const result = await run(h, { config: config([BOT]), plan: applyPlan(['missing']) });
+  assert.equal(result.status, 'partial');
+  assert.equal(result.registryRefresh, 'unverified');
+  assert.equal(result.bots[0].verified, false);
 });
 
 test('a created bot that the next inspection does not show healthy is reported unverified', async () => {

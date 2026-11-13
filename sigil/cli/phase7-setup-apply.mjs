@@ -27,6 +27,12 @@ const SIGIL_CLI = fileURLToPath(new URL('./sigil.mjs', import.meta.url));
 const SAFE = /^[A-Za-z0-9_.@:#-]{1,128}$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const POSIX_ENV = Object.freeze(['HOME', 'LANG']);
+// What `bot add` needs to read a `cred:` wrap key from the credential store
+// (Linux keyring or file store, macOS Keychain).
+const CREDENTIAL_ENV = Object.freeze(['USER', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'SIGIL_KEYSTORE_PATH']);
+// Storage checkpoints hold at most 64 IDs per list.
+export const MAX_SETUP_BOTS = 64;
+const TIMEOUT_GRACE_MS = 5_000;
 
 export const APPLY_STATUSES = Object.freeze([
   'dry-run', 'not-a-tty', 'nothing-to-create', 'declined', 'blocked', 'completed', 'partial', 'failed',
@@ -39,9 +45,9 @@ export const botPhrase = (endpointId) => `CREATE ${endpointId}`;
 const safe = (value) => (typeof value === 'string' && SAFE.test(value) ? value : '[redacted]');
 const ids = (list) => list.map((b) => b.botId);
 
-function freezeResult({ status, registryRefresh = 'unverified', blockers = [], bots = [] }) {
+function freezeResult({ mode = 'apply', status, registryRefresh = 'unverified', blockers = [], bots = [] }) {
   return Object.freeze({
-    mode: 'apply',
+    mode,
     status,
     registryRefresh,
     blockers: Object.freeze(blockers.map(safe)),
@@ -65,19 +71,25 @@ export function botAddArgs(config, bot, cliPath = SIGIL_CLI) {
   ];
 }
 
-// Returns { env } or { blocker }. Only the allowlist, the database URL and a
-// plain-env wrap key reach the child. A credential-store wrap key is read by
-// `bot add` itself, so nothing extra is passed for it.
+// Returns { env } or { blocker }. Only the allowlist, the database URL and the
+// wrap key's source reach the child: the named env var for a plain-env wrap
+// key, or the credential store's own settings for a `cred:` reference.
 export function botAddEnv(config, env) {
   const out = {};
-  for (const key of [...CHILD_ENV_ALLOWLIST, ...POSIX_ENV]) if (typeof env?.[key] === 'string') out[key] = env[key];
+  const credential = isCredentialRef(config.wrapKeyRef);
+  const keys = [...CHILD_ENV_ALLOWLIST, ...POSIX_ENV, ...(credential ? CREDENTIAL_ENV : [])];
+  for (const key of keys) if (typeof env?.[key] === 'string') out[key] = env[key];
   if (typeof config.databaseEnv !== 'string' || !ENV_NAME.test(config.databaseEnv)) return { blocker: 'database-env-invalid' };
   const databaseUrl = env?.[config.databaseEnv];
   if (typeof databaseUrl !== 'string' || databaseUrl.length === 0) return { blocker: 'database-env-missing' };
   out.SIGIL_DATABASE_URL = databaseUrl;
   if (typeof config.wrapKeyRef !== 'string' || config.wrapKeyRef.length === 0) return { blocker: 'wrap-key-ref-missing' };
-  if (!isCredentialRef(config.wrapKeyRef)) {
+  if (!credential) {
     if (!ENV_NAME.test(config.wrapKeyRef)) return { blocker: 'wrap-key-ref-invalid' };
+    // The wrap key must not take the place of the database URL or a runtime setting.
+    if (config.wrapKeyRef.toUpperCase() === 'SIGIL_DATABASE_URL' || keys.some((k) => k.toUpperCase() === config.wrapKeyRef.toUpperCase())) {
+      return { blocker: 'wrap-key-ref-reserved' };
+    }
     const wrapKey = env?.[config.wrapKeyRef];
     if (typeof wrapKey !== 'string' || wrapKey.length === 0) return { blocker: 'wrap-key-env-missing' };
     out[config.wrapKeyRef] = wrapKey;
@@ -86,15 +98,21 @@ export function botAddEnv(config, env) {
 }
 
 // Runs one child with piped stdio. Output is drained and dropped, never kept.
-function runChild(spawn, command, args, options, timeoutMs) {
+// A timed-out child is killed, then force-killed after a grace period, and the
+// outcome is reported only once it has closed, so nothing keeps running after
+// setup reports and releases its lock.
+function runChild(spawn, command, args, options, timeoutMs, graceMs = TIMEOUT_GRACE_MS) {
   return new Promise((resolve) => {
     let settled = false;
+    let timedOut = false;
     let timer = null;
+    let forceTimer = null;
     const done = (outcome) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      resolve(outcome);
+      if (forceTimer) clearTimeout(forceTimer);
+      resolve(timedOut ? { kind: 'timeout' } : outcome);
     };
     let child;
     try {
@@ -108,8 +126,9 @@ function runChild(spawn, command, args, options, timeoutMs) {
     child.on('error', () => done({ kind: 'spawn-failed' }));
     child.on('close', (code) => done(code === 0 ? { kind: 'ok' } : { kind: 'exit', code }));
     timer = setTimeout(() => {
+      timedOut = true;
       try { child.kill(); } catch { /* already gone */ }
-      done({ kind: 'timeout' });
+      forceTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* already gone */ } }, graceMs);
     }, timeoutMs);
   });
 }
@@ -128,10 +147,11 @@ export async function applySetup({
   execPath = process.execPath,
   cliPath = SIGIL_CLI,
   timeoutMs = 120_000,
+  graceMs = TIMEOUT_GRACE_MS,
 } = {}) {
   const registryRefresh = plan?.registryRefresh ?? 'unverified';
   // 1. Gates that need no prompt and cause no effect.
-  if (plan?.mode !== 'apply') return freezeResult({ status: 'dry-run', registryRefresh });
+  if (plan?.mode !== 'apply') return freezeResult({ mode: 'dry-run', status: 'dry-run', registryRefresh });
   if (isTTY !== true) return freezeResult({ status: 'not-a-tty', registryRefresh });
   if (plan.blockers?.length) return freezeResult({ status: 'blocked', registryRefresh, blockers: [...plan.blockers] });
   const skipped = plan.skip.map((b) => ({ botId: b.botId, endpointId: b.endpointId, result: 'skipped', reason: 'healthy' }));
@@ -139,6 +159,8 @@ export async function applySetup({
 
   const byId = new Map((config?.bots ?? []).map((b) => [b.botId, b]));
   const pre = [];
+  if ((config?.bots ?? []).length > MAX_SETUP_BOTS) pre.push('too-many-bots');
+  for (const b of config?.bots ?? []) if (!SAFE.test(b?.botId ?? '')) pre.push('bot-id-unsafe');
   for (const ref of plan.create) {
     const bot = byId.get(ref.botId);
     if (!bot || bot.endpointId !== ref.endpointId) pre.push(`config-mismatch:${ref.botId}`);
@@ -194,22 +216,29 @@ export async function applySetup({
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: false,
       windowsHide: true,
-    }, timeoutMs);
+    }, timeoutMs, graceMs);
     if (outcome.kind === 'ok') results.push({ ...base, result: 'created' });
     else { results.push({ ...base, result: 'failed', reason: failReason(outcome) }); stopped = true; }
   }
 
-  // 6. Check what was created against a new inspection, still under the lock.
+  // 6. Check every attempted bot against a new inspection, still under the lock.
+  // A bot counts as verified only when it is healthy and the relay's automatic
+  // refresh is still verified. A failed child whose bot turns out healthy did
+  // commit, so it is reported as created.
   let finalRefresh = freshRefresh;
-  const created = results.filter((r) => r.result === 'created');
-  if (created.length) {
+  const attempted = results.filter((r) => r.result === 'created' || r.result === 'failed');
+  if (attempted.length) {
     let after = null;
     try { after = await inspect(); } catch { after = null; }
     finalRefresh = after?.registryRefresh ?? 'unverified';
     const healthy = new Set((after?.inspection === 'verified' ? after.bots : []).filter((b) => b.state === 'healthy').map((b) => b.botId));
-    for (const r of created) r.verified = healthy.has(r.botId);
+    for (const r of attempted) {
+      if (r.result === 'failed' && healthy.has(r.botId)) { r.result = 'created'; r.reason = `${r.reason}-but-committed`; }
+      if (r.result === 'created') r.verified = healthy.has(r.botId) && finalRefresh === 'verified';
+    }
   }
 
+  const created = results.filter((r) => r.result === 'created');
   const failed = results.filter((r) => r.result === 'failed');
   const unverified = created.filter((r) => !r.verified);
   const declined = results.filter((r) => r.reason === 'declined' || r.reason === 'stopped-after-failure');
@@ -226,7 +255,7 @@ export async function applySetup({
 }
 
 export function renderApplyResult(result) {
-  const lines = [`Mode: apply; status: ${safe(result.status)}`, `registry_refresh: ${safe(result.registryRefresh)}`];
+  const lines = [`Mode: ${safe(result.mode)}; status: ${safe(result.status)}`, `registry_refresh: ${safe(result.registryRefresh)}`];
   for (const bot of result.bots) {
     const extra = bot.result === 'created' ? (bot.verified ? 'verified' : 'not verified') : bot.reason ? safe(bot.reason) : '';
     lines.push(`${safe(bot.endpointId)}: ${safe(bot.result)}${extra ? ` (${extra})` : ''}`);
