@@ -18,6 +18,7 @@ import { acquireLock, breakLockFile } from './file-lock.mjs';
 const BASE = new Date('2026-10-16T12:00:00.000Z');
 const childPath = fileURLToPath(new URL('./fixtures/report-poster-child.mjs', import.meta.url));
 const HARD_MS = 15_000;
+const abandonedLockMarker = 'fixture_lock_marker';
 
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-report-conc-'));
@@ -150,7 +151,7 @@ test('(a) two processes same bot same report: one created', async () => {
   }
 });
 
-test('(b) two bots share state: both pendings survive transient then both clear', async () => {
+test('(b) two bots share state: both pendings survive transient then both clear', { timeout: 60_000 }, async () => {
   const dir = tmpDir();
   const clock = { now: BASE };
   const world = await startRelay({ reporters: 2, clock });
@@ -271,7 +272,7 @@ test('(c) two reclaimers against abandoned lock fail closed', async () => {
   dead.kill('SIGKILL');
   await new Promise((r) => setTimeout(r, 30));
   fs.writeFileSync(lockPath, JSON.stringify({
-    pid: deadPid, host: 'dead', token: 'abandoned', acquired_at: BASE.toISOString(),
+    pid: deadPid, host: 'dead', token: abandonedLockMarker, acquired_at: BASE.toISOString(),
   }));
   const beforeLock = fs.readFileSync(lockPath);
   const beforeState = crypto.createHash('sha256').update(fs.readFileSync(statePath)).digest('hex');

@@ -1,5 +1,14 @@
 # Status
 
+## Session update: 2026-11-14 Sigil 0.2.3 release gate repair
+
+- **Goal:** Repair the release workflow failure before the 0.2.3 npm publish.
+- **Completed:** Changed the PostgreSQL service database and live-test URL to `sigil_test`; added an exact-name regression test for both workflow values. Set `npm test` and package `prepack` tests to one test file at a time, and updated the test command in `CLAUDE.md`.
+- **Tests:** The workflow regression failed against the prior `sigil` configuration and passed after the fix (1/1). Affected tests passed serially (39 passed, 1 skipped); the concurrency suite passed 6/6. `git diff --check` passed.
+- **CI:** All four required checks passed on PR head `5738701`. The review fixes still need CI on their new commit.
+- **Blockers:** The existing `v0.2.3` tag points to the failed workflow run; it must not be moved. No npm publish occurred.
+- **Next action:** Push the review fixes and verify their PR checks. Select a safe release trigger after the fix merges.
+
 ## Session update: 2026-11-13 npm 0.2.3 release
 
 - **Goal:** Prepare the 0.2.3 npm release PR from `origin/main`.
