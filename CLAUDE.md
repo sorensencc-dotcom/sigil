@@ -32,7 +32,7 @@ Sigil (`@sorensencc/sigil`) is a governed, cryptographically signed task relay a
 
 There is no build step for the main package. All scripts below exist in `package.json`:
 
-- `npm test`: runs `sigil-dep-audit.mjs`, `sigil-jcs-audit.mjs`, then `node --test --test-timeout=30000`.
+- `npm test`: runs `sigil-dep-audit.mjs`, `sigil-jcs-audit.mjs`, then `node --test --test-concurrency=1 --test-timeout=30000`.
 - `npm run test:bounded`: runs `npm test` with a 60s overall timeout.
 - `npm run audit:deps` / `npm run audit:jcs`: run each audit alone.
 - `npm run test:live`: live database tests (`sigil/scripts/live-db-tests.mjs`).
