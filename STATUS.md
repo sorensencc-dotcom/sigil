@@ -5,8 +5,8 @@
 - **Goal:** Repair the release workflow failure before the 0.2.3 npm publish.
 - **Completed:** Changed the PostgreSQL service database and live-test URL to `sigil_test`; added a regression test for both workflow values. Raised the long concurrency-test limit to 60 seconds and set the `npm test` runner to one test file at a time after parallel runs cancelled tests under load.
 - **Tests:** The workflow regression failed against the prior `sigil` configuration and passed after the fix (1/1). Affected tests passed serially (39 passed, 1 skipped); the concurrency suite passed 6/6. `git diff --check` passed.
-- **Blockers:** The serial pre-push full suite still needs to pass; no branch or PR has been pushed/opened. The existing `v0.2.3` tag points to the failed workflow run; it must not be moved. No npm publish occurred.
-- **Next action:** Push this branch, open a PR, and verify CI. Select a safe release trigger after the fix merges.
+- **Blockers:** PR #208 is open and CI checks are pending. The existing `v0.2.3` tag points to the failed workflow run; it must not be moved. No npm publish occurred.
+- **Next action:** Review PR #208 checks, then select a safe release trigger after the fix merges.
 
 ## Session update: 2026-11-13 npm 0.2.3 release
 
