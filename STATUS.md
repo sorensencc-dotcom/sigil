@@ -1,5 +1,14 @@
 # Status
 
+## Session update: 2026-11-13 npm 0.2.3 release
+
+- **Goal:** Prepare the 0.2.3 npm release PR from `origin/main`.
+- **Completed:** Updated `package.json` and `package-lock.json` to 0.2.3. Promoted the existing unreleased changelog entries into 0.2.3 and recorded the first trusted-publishing release.
+- **Decision:** Created `chore/release-0.2.3` from fetched `origin/main` at `bcdbe49`. Kept unrelated changes in the canonical checkout untouched.
+- **Tests:** `npm test -- --test-concurrency=1` passed with 2,289 passed, 0 failed, and 369 skipped. The live PostgreSQL gate passed with 403 passed, 0 failed, and 1 skipped across 85 files. The web typecheck passed, all 227 web tests passed, and the web build passed.
+- **Blockers:** Local checks passed. Remote PR checks are pending.
+- **Next action:** Review the PR checks. Do not create a tag or GitHub release, and do not run `npm publish`.
+
 ## Session update: 2026-11-07 Linux systemd user units service installation (issue #132, sub-issue #177)
 
 - Branch `feat/issue-177-linux-service` based on `feat/issue-179-retire-stopgap`. Implements sub-issue #177 under parent issue #132.

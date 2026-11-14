@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-11-13
+
 ### Added
 - **Reply-token canaries.** `sigil bot token create --bot-id <id> --canary` plants an `fwr_` token with status `canary`. A canary never authorizes a reply: the ingress answers `401 UNAUTHENTICATED` with the same body as an unknown or revoked token, writes `ingress.canary_used` with `token_id` and `bot_id` only, and does not run the accept path. Migration `040_reply_token_canary.sql`. Closes #80.
 - **Reply ingress for Floor Warden bots (phase 7, the tunnel).** `sigil relay up --ingress-origin <https bare origin>` starts a loopback listener (`--ingress-port`, default `--port` plus 5) that serves only `POST /v1/rooms/{room_id}/replies`, so a tunnel provider can publish one route to Grok's cloud. Limits fail closed: `--ingress-rate-per-minute` (default 120) for all callers and 30 per minute for each bot. The global reply token works on the ingress only with `--ingress-allow-global-token`. New commands: `sigil bot token create|rotate|revoke|list` for per-bot reply tokens (stored as SHA-256 hashes, printed once) and `sigil ingress status|doctor`. Migration `039_reply_ingress.sql`. Operator guide: README "Reply ingress" and `docs/reply-ingress-runbook.md`. The phase 7 PRs are #89, #91, #92, #93, #94, #95 and #96.
@@ -15,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `sigil relay up --reconcile-kind <endpoint_id>=<kind>` repairs a Postgres endpoint `kind` that differs from the registry file after a `REGISTRY_CONFLICT`.
 
 ### Changed
+- This is the first Sigil release using npm trusted publishing (OIDC).
 - **npm releases use trusted publishing.** `.github/workflows/release.yml` now publishes through npm trusted publishing (OIDC) and no longer reads the `NPM_TOKEN` secret, so there is no publish token to rotate. Install, tests and packing now run in a build job without `id-token: write`; a separate publish job, which checks out no code and installs no dependencies, publishes the packed tarball with npm 11.5.1 or later.
 - `sigil agent run --room-bridge floor-warden` now refuses an `http` `--floor-warden-reply-url` unless the host is loopback (`127.0.0.1`, `localhost` or `[::1]`). Use an `https` URL for any other host.
 - Browser WebSocket tickets issued through the cookie listener now carry the session id, so logout closes the stream. The cookie listener passes a `Date`, not a function, as `now` to room routes.
