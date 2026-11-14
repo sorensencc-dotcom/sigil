@@ -1,0 +1,23 @@
+STATUS.md
+  s_78141c3b938eae::t_62c593861d735d 3-10
+tests/release-workflow.test.mjs
+  s_78141c3b938eae::t_cb7d15e57a6d9c 1-10
+.github/workflows/release.yml
+  s_78141c3b938eae::t_306ecbafe11f00 29,62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e3c82f222420cc37995992b8c490b39e99a227b7",
+  "prompts": {},
+  "sessions": {
+    "s_78141c3b938eae": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1d81c-e22f-7e70-a731-a0502de0d514",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
