@@ -21,7 +21,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseSetupArgs, validateSetupConfig, planSetup, renderSummary, authorized } from '../cli/phase7-setup-policy.mjs';
 import { STORAGE_MESSAGES } from '../cli/phase7-setup-storage.mjs';
-import { applySetup, applyPhrase, renderApplyResult } from '../cli/phase7-setup-apply.mjs';
+import { applySetup, applyPhrase, applyPrechecks, renderApplyResult } from '../cli/phase7-setup-apply.mjs';
 
 export const EXIT = Object.freeze({ OK: 0, INCOMPLETE: 2, DECLINED: 3, FAILED: 4 });
 export const REPO_ROOT = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
@@ -69,6 +69,11 @@ class Interrupted extends Error {
   constructor() { super('interrupted'); this.code = 'INTERRUPTED'; }
 }
 
+// A planned stop with a fixed line for the owner, not an error.
+class Stopped extends Error {
+  constructor(line) { super('stopped'); this.line = line; }
+}
+
 export function defaultConfigPath(home, platform = process.platform) {
   const p = platform === 'win32' ? path.win32 : path.posix;
   return p.join(home, '.sigil-secrets', 'phase7', 'setup.json');
@@ -114,10 +119,10 @@ function describeWrites(config, plan) {
   const fields = missingRoutine(plan);
   if (fields.length) lines.push(`- prompt for ${fields.join(', ')} (hidden) and store them in the protected secret root`);
   if (plan.create.length) {
-    lines.push(`- create ${plan.create.map((b) => b.endpointId).join(', ')} with sigil bot add, one typed CREATE phrase each`);
+    lines.push(`- create ${plan.create.map((b) => safeText(b.endpointId)).join(', ')} with sigil bot add, one typed CREATE phrase each`);
     lines.push('- sigil bot add also applies any pending migrations; setup has checked none are pending');
   }
-  lines.push(`- database: ${config.dbLabel}`);
+  lines.push(`- database: ${safeText(config.dbLabel)}`);
   return lines.join('\n');
 }
 
@@ -210,6 +215,13 @@ export async function main(argv, deps) {
     out('apply: nothing to store or create; nothing was changed');
     return plan.fourInputsReady ? EXIT.OK : EXIT.INCOMPLETE;
   }
+  // What bot creation needs is checked before anything is written, so a run
+  // that could not create its bots does not store routine inputs either.
+  const pre = plan.create.length ? applyPrechecks(config, plan, deps.env) : [];
+  if (pre.length) {
+    out(`apply: refused until these are fixed: ${pre.map(safeText).join(', ')}; nothing was changed`);
+    return EXIT.INCOMPLETE;
+  }
   out(describeWrites(config, plan));
   const entered = await deps.confirm(`Type ${applyPhrase(config.dbLabel)} to continue: `);
   if (!authorized({ apply: true, isTTY: deps.isTTY, entered, dbLabel: config.dbLabel })) {
@@ -219,9 +231,12 @@ export async function main(argv, deps) {
 
   // From here on there are effects, so the lock is always released.
   const state = { interrupted: false };
+  // A signal also ends any confirmation that is waiting, so the run reaches
+  // its cleanup instead of waiting on input that will not come.
   const onSignal = () => {
     if (!state.interrupted) out('apply: stopping after the current step and releasing the setup lock');
     state.interrupted = true;
+    deps.cancelPrompts?.();
   };
   const signals = deps.signals;
   signals?.on('SIGINT', onSignal);
@@ -241,8 +256,12 @@ export async function main(argv, deps) {
       lines.push(`apply: stopped; fresh inspection found blockers: ${fresh.blockers.map(safeText).join(', ')}`);
       code = EXIT.INCOMPLETE;
     } else {
-      const freshFields = missingRoutine(fresh).filter((name) => fields.includes(name));
-      if (freshFields.length) {
+      // Only the inputs the owner approved are collected. One that went
+      // missing since the plan was shown stops the run for a new look.
+      const freshMissing = missingRoutine(fresh);
+      const unapproved = freshMissing.filter((name) => !fields.includes(name));
+      if (unapproved.length) throw new Stopped(`apply: stopped; ${unapproved.join(', ')} went missing after the plan was shown; run setup again`);
+      if (freshMissing.length) {
         const handle = await storage.collectMissing(config);
         stopIfInterrupted();
         const written = await storage.persistRoutine(handle);
@@ -268,8 +287,9 @@ export async function main(argv, deps) {
       }
     }
   } catch (error) {
-    lines.push(errorLine(error));
-    code = error instanceof Interrupted ? EXIT.DECLINED : (STORAGE_EXIT[error?.code] ?? EXIT.FAILED);
+    lines.push(error instanceof Stopped ? error.line : errorLine(error));
+    code = error instanceof Stopped ? EXIT.INCOMPLETE
+      : error instanceof Interrupted ? EXIT.DECLINED : (STORAGE_EXIT[error?.code] ?? EXIT.FAILED);
   } finally {
     try { await storage.close(); } catch { lines.push('Error STORAGE_CLOSE_FAILED: the setup lock may need removing by hand'); code = EXIT.FAILED; }
     signals?.removeListener('SIGINT', onSignal);
@@ -298,14 +318,26 @@ export async function realDeps() {
     try { return await readJson(file); } catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
   };
 
+  // Readline takes Ctrl-C itself while it reads, so it is passed on as the
+  // process's SIGINT: the run then stops, rather than reading it as one
+  // declined phrase and asking about the next bot.
+  const active = new Set();
   const confirm = (question) => new Promise((resolve) => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stderr, terminal: true });
     let done = false;
-    const finish = (answer) => { if (done) return; done = true; rl.close(); resolve(typeof answer === 'string' ? answer : null); };
-    rl.on('SIGINT', () => { process.stderr.write('\n'); finish(null); });
+    const finish = (answer) => {
+      if (done) return;
+      done = true;
+      active.delete(finish);
+      rl.close();
+      resolve(typeof answer === 'string' ? answer : null);
+    };
+    active.add(finish);
+    rl.on('SIGINT', () => { process.stderr.write('\n'); finish(null); process.emit('SIGINT', 'SIGINT'); });
     rl.on('close', () => finish(null));
     rl.question(question, finish);
   });
+  const cancelPrompts = () => { for (const finish of [...active]) finish(null); };
 
   return {
     out: (text) => process.stdout.write(`${text}\n`),
@@ -318,6 +350,7 @@ export async function realDeps() {
     spawn,
     signals: process,
     confirm,
+    cancelPrompts,
     readConfig: readJson,
     createStorage: ({ mode }) => createSetupStorage({
       fs: fsp,

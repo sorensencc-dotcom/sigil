@@ -123,7 +123,10 @@ function runChild(spawn, command, args, options, timeoutMs, graceMs = TIMEOUT_GR
     }
     child.stdout?.resume?.();
     child.stderr?.resume?.();
-    child.on('error', () => done({ kind: 'spawn-failed' }));
+    // Before the child starts (no pid) an error means it never ran. After it
+    // starts, an error (for example a failed kill) does not mean it stopped,
+    // so setup keeps waiting for 'close' and never releases its lock early.
+    child.on('error', () => { if (child.pid === undefined) done({ kind: 'spawn-failed' }); });
     child.on('close', (code) => done(code === 0 ? { kind: 'ok' } : { kind: 'exit', code }));
     timer = setTimeout(() => {
       timedOut = true;
@@ -134,6 +137,23 @@ function runChild(spawn, command, args, options, timeoutMs, graceMs = TIMEOUT_GR
 }
 
 const failReason = (outcome) => (outcome.kind === 'exit' ? 'bot-add-failed' : `bot-add-${outcome.kind}`);
+
+// What `bot add` needs before any bot can be created. Exported so the entry
+// point can check it before it writes anything, routine inputs included.
+export function applyPrechecks(config, plan, env) {
+  const byId = new Map((config?.bots ?? []).map((b) => [b.botId, b]));
+  const pre = [];
+  if ((config?.bots ?? []).length > MAX_SETUP_BOTS) pre.push('too-many-bots');
+  for (const b of config?.bots ?? []) if (!SAFE.test(b?.botId ?? '')) pre.push('bot-id-unsafe');
+  for (const ref of plan?.create ?? []) {
+    const bot = byId.get(ref.botId);
+    if (!bot || bot.endpointId !== ref.endpointId) pre.push(`config-mismatch:${ref.botId}`);
+    else if (typeof bot.displayName !== 'string' || bot.displayName.trim() === '') pre.push(`display-name-missing:${ref.botId}`);
+  }
+  const childEnv = botAddEnv(config ?? {}, env);
+  if (childEnv.blocker) pre.push(childEnv.blocker);
+  return pre;
+}
 
 export async function applySetup({
   config,
@@ -158,17 +178,9 @@ export async function applySetup({
   if (plan.create.length === 0) return freezeResult({ status: 'nothing-to-create', registryRefresh, bots: skipped });
 
   const byId = new Map((config?.bots ?? []).map((b) => [b.botId, b]));
-  const pre = [];
-  if ((config?.bots ?? []).length > MAX_SETUP_BOTS) pre.push('too-many-bots');
-  for (const b of config?.bots ?? []) if (!SAFE.test(b?.botId ?? '')) pre.push('bot-id-unsafe');
-  for (const ref of plan.create) {
-    const bot = byId.get(ref.botId);
-    if (!bot || bot.endpointId !== ref.endpointId) pre.push(`config-mismatch:${ref.botId}`);
-    else if (typeof bot.displayName !== 'string' || bot.displayName.trim() === '') pre.push(`display-name-missing:${ref.botId}`);
-  }
-  const childEnv = botAddEnv(config ?? {}, env);
-  if (childEnv.blocker) pre.push(childEnv.blocker);
+  const pre = applyPrechecks(config, plan, env);
   if (pre.length) return freezeResult({ status: 'blocked', registryRefresh, blockers: pre });
+  const childEnv = botAddEnv(config ?? {}, env);
 
   // 2. The whole-run phrase. A wrong or empty answer ends the run with no effect.
   const entered = await confirm(`Type ${applyPhrase(config.dbLabel)} to provision ${plan.create.length} bot(s): `);

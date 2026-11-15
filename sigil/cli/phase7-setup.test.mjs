@@ -643,3 +643,63 @@ test('entry script: a dry run and a piped --apply with a fake config change noth
     fsSync.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('config: dbLabel, env names and local paths are required', () => {
+  for (const over of [
+    { dbLabel: undefined }, { dbLabel: '' }, { dbLabel: 'bad label' }, { dbLabel: 'x\u001b[2J' },
+    { databaseEnv: '' }, { wrapKeyRef: undefined },
+    { secretRoot: '\\\\fixture-server\\share\\phase7' }, { registryPath: '//fixture-server/share/registry.json' },
+    { operatorIdentityPath: '\\\\?\\C:\\Users\\fixture\\operator.identity.json' },
+    { bots: [{ ...config().bots[0], identityPath: '\\\\fixture-server\\share\\bot.json' }] },
+  ]) {
+    assert.throws(() => validateSetupConfig(config(over), ctx), badConfig, JSON.stringify(over));
+  }
+  assert.ok(validateSetupConfig(config(), ctx));
+});
+
+test('entry: a run whose bots cannot be created stores nothing', async () => {
+  const w = world({ routine: { urlState: 'missing', keyState: 'present' }, answers: [applyPhrase(E2E_LABEL)] });
+  delete w.deps.env.FIXTURE_WRAP_KEY_ENV;
+  assert.equal(await main(['--apply'], w.deps), EXIT.INCOMPLETE);
+  assert.match(w.text(), /refused until these are fixed: wrap-key-env-missing/);
+  assert.deepEqual(w.prompts, []);
+  assert.deepEqual(w.effects(), []);
+});
+
+test('entry: an input that went missing after the plan was shown stops the run', async () => {
+  const w = world({ routine: { urlState: 'missing', keyState: 'present' }, answers: [applyPhrase(E2E_LABEL)] });
+  const original = w.deps.createStorage;
+  w.deps.createStorage = (opts) => {
+    const s = original(opts);
+    if (opts.mode === 'apply') {
+      const inspect = s.inspectSources;
+      s.inspectSources = async (c) => ({ ...(await inspect(c)), routine: { urlState: 'missing', keyState: 'missing', keyHeader: 'valid' } });
+    }
+    return s;
+  };
+  assert.equal(await main(['--apply'], w.deps), EXIT.INCOMPLETE);
+  assert.match(w.text(), /sender_key went missing after the plan was shown/);
+  assert.ok(!w.log.includes('collect') && !w.log.includes('spawn'));
+  assert.ok(allClosed(w));
+});
+
+test('entry: a signal ends a waiting confirmation so the lock is released', async () => {
+  let pending = null;
+  let calls = 0;
+  const w = world({
+    onConfirm: async () => {
+      calls += 1;
+      if (calls === 1) return applyPhrase(E2E_LABEL);
+      return new Promise((resolve) => {
+        pending = resolve;
+        setImmediate(() => w.signals.emit('SIGTERM'));
+      });
+    },
+  });
+  w.deps.cancelPrompts = () => { pending?.(null); pending = null; };
+  assert.equal(await main(['--apply'], w.deps), EXIT.FAILED);
+  assert.equal(calls, 2);
+  assert.ok(!w.log.includes('spawn'));
+  assert.equal(w.log.at(-1), 'unlock');
+  assert.ok(allClosed(w));
+});

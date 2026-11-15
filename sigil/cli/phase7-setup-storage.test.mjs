@@ -536,3 +536,30 @@ test('short encoded and exception secrets never enter logs', async () => {
   const text = JSON.stringify(surfaces);
   for (const value of forbidden) assert.equal(text.includes(value), false, `leaked ${value.slice(0, 12)}`);
 });
+
+test('a lock that fails to write is removed, and a lock that cannot be released is reported', async () => {
+  {
+    const fail = { writeFile: (p) => (p.endsWith(LOCK_FILE) ? Object.assign(new Error('disk full'), { code: 'ENOSPC' }) : undefined) };
+    const { fs, storage } = harness({ fsOpts: { ...existingRoot(), fail } });
+    await storage.prepare(config());
+    await rejectsCode(storage.lock(), 'STORAGE_WRITE_FAILED');
+    assert.equal(fs.exists(`${ROOT}\\${LOCK_FILE}`), false, 'the half-written lock is gone');
+    await storage.close();
+  }
+  {
+    const { fs, storage } = harness({ fsOpts: existingRoot() });
+    await storage.prepare(config());
+    await storage.lock();
+    const unlink = fs.unlink;
+    fs.unlink = async (p) => { if (p.endsWith(LOCK_FILE)) throw Object.assign(new Error('denied'), { code: 'EPERM' }); return unlink(p); };
+    await rejectsCode(storage.close(), 'STORAGE_WRITE_FAILED');
+    await storage.close();
+  }
+  {
+    const { fs, storage } = harness({ fsOpts: existingRoot() });
+    await storage.prepare(config());
+    await storage.lock();
+    await fs.unlink(`${ROOT}\\${LOCK_FILE}`);
+    await storage.close();
+  }
+});

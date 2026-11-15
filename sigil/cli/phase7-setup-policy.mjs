@@ -57,12 +57,23 @@ function validateEndpoint(endpointId, relayDomain) {
   if (parsed.domain.toLowerCase() !== relayDomain.toLowerCase()) throw configError('endpointId domain must match relayDomain');
 }
 
+// A UNC or device path (\\server\share, //server/share, \\?\...) would make
+// Windows contact another machine as soon as setup reads it, so only local
+// paths are accepted, before anything is read.
+const isRemoteOrUnsafePath = (p) => /^[\\/]{2}/.test(p) || /[\u0000-\u001f]/.test(p);
+const DB_LABEL = /^[A-Za-z0-9_.-]{1,40}$/;
+
 export function validateSetupConfig(raw, { repoRoot }) {
   if (!raw || typeof raw !== 'object') throw configError('config must be an object');
   unknownFields(raw, CONFIG_FIELDS, '');
   if (typeof raw.relayDomain !== 'string' || !raw.relayDomain) throw configError('relayDomain is required');
+  if (typeof raw.dbLabel !== 'string' || !DB_LABEL.test(raw.dbLabel)) throw configError('dbLabel is required: letters, digits, _ . - (at most 40)');
+  for (const field of ['databaseEnv', 'wrapKeyRef']) {
+    if (typeof raw[field] !== 'string' || !raw[field]) throw configError(`${field} is required`);
+  }
   for (const field of PATH_FIELDS) {
     if (typeof raw[field] !== 'string' || !raw[field]) throw configError(`${field} is required`);
+    if (isRemoteOrUnsafePath(raw[field])) throw configError(`${field} must be a local path`);
     if (repoRoot && isInside(raw[field], repoRoot)) throw configError(`${field} must be outside the repository`);
   }
   if (!raw.routine || typeof raw.routine !== 'object') throw configError('routine is required');
@@ -76,7 +87,8 @@ export function validateSetupConfig(raw, { repoRoot }) {
     if (bot.botId === bot.endpointId) throw configError(`bots[${index}] botId must differ from endpointId`);
     if (!ROLES.has(bot.role)) throw configError(`bots[${index}].role must be reply or dispatcher`);
     if (typeof bot.roleConfirmed !== 'boolean') throw configError(`bots[${index}].roleConfirmed must be boolean`);
-    if (typeof bot.identityPath !== 'string' || (repoRoot && isInside(bot.identityPath, repoRoot))) throw configError(`bots[${index}].identityPath must be outside the repository`);
+    if (typeof bot.identityPath !== 'string' || !bot.identityPath || isRemoteOrUnsafePath(bot.identityPath)) throw configError(`bots[${index}].identityPath must be a local path`);
+    if (repoRoot && isInside(bot.identityPath, repoRoot)) throw configError(`bots[${index}].identityPath must be outside the repository`);
     for (const id of [bot.botId, bot.endpointId.toLowerCase()]) {
       if (seen.has(id)) throw configError(`bots[${index}] duplicates another bot`);
       seen.add(id);
