@@ -317,16 +317,39 @@ test('a created bot that the next inspection does not show healthy is reported u
   assert.deepEqual(checkpoints(h).at(-1).blockers, [`unverified-after-create:${BOT.botId}`]);
 });
 
+// The last inspection after creation, with each bot's reply-token reading.
+const afterCreate = (states, tokens) => {
+  const snap = snapshot(states);
+  return { ...snap, bots: snap.bots.map((b, i) => ({ ...b, replyTokenActive: tokens[i] })) };
+};
+
 test('rendered result is allowlisted and never mentions a restart', async () => {
-  const h = harness({ answers: [applyPhrase(DB_LABEL), botPhrase(BOT.endpointId), 'no'], inspections: [snapshot(['missing', 'missing']), snapshot(['healthy', 'missing'])] });
+  const h = harness({ answers: [applyPhrase(DB_LABEL), botPhrase(BOT.endpointId), 'no'], inspections: [snapshot(['missing', 'missing']), afterCreate(['healthy', 'missing'], [false, false])] });
   const text = renderApplyResult(await run(h));
   assert.match(text, /status: partial/);
   assert.match(text, new RegExp(`${BOT.endpointId}: created \\(verified\\)`));
   assert.match(text, new RegExp(`${OTHER.endpointId}: skipped \\(declined\\)`));
   assert.doesNotMatch(text, /restart|SENTINEL|fixture\.invalid|FAKE_WRAP/i);
-  // Only the bot made in this run gets the reply-token hint.
-  assert.match(text, new RegExp(`reply_token next: sigil bot token create --bot-id ${BOT.botId}\\n`));
-  assert.doesNotMatch(text, new RegExp(`--bot-id ${OTHER.botId}`));
+  // Only the bot made in this run gets a token line and the hint.
+  assert.match(text, new RegExp(`reply_token ${BOT.endpointId}: none\\n`));
+  assert.match(text, new RegExp(`reply_token next: sigil bot token create --bot-id=${BOT.botId}\\n`));
+  assert.doesNotMatch(text, new RegExp(`--bot-id=${OTHER.botId}`));
+  // The fixture database env is not the one the token command reads.
+  assert.match(text, /reply_token note: that command reads SIGIL_DATABASE_URL; set it from FIXTURE_DATABASE_ENV first/);
+});
+
+test('a created bot that already has a reply token by the last inspection gets no hint', async () => {
+  const h = harness({ answers: [applyPhrase(DB_LABEL), botPhrase(BOT.endpointId)], inspections: [snapshot(['missing']), afterCreate(['healthy'], [true])] });
+  const text = renderApplyResult(await run(h, { config: config([BOT]), plan: applyPlan(['missing']) }));
+  assert.match(text, new RegExp(`reply_token ${BOT.endpointId}: active`));
+  assert.doesNotMatch(text, /reply_token (next|note)/);
+});
+
+test('a created bot whose token state the last inspection could not read is unverified, with no hint', async () => {
+  const h = harness({ answers: [applyPhrase(DB_LABEL), botPhrase(BOT.endpointId)], inspections: [snapshot(['missing']), snapshot(['healthy'])] });
+  const text = renderApplyResult(await run(h, { config: config([BOT]), plan: applyPlan(['missing']) }));
+  assert.match(text, new RegExp(`reply_token ${BOT.endpointId}: unverified`));
+  assert.doesNotMatch(text, /reply_token next/);
 });
 
 test('a real child gets the arguments and env as sent', async (t) => {

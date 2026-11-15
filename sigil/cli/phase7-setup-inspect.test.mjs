@@ -12,7 +12,7 @@ const SQL = Object.freeze({
   roster: 'SELECT bot_id, endpoint_id, status FROM floor_warden_bots WHERE bot_id = $1 OR endpoint_id = $2',
   endpoint: 'SELECT endpoint_id, owner_id, kind, status FROM endpoints WHERE endpoint_id = $1',
   activeKey: "SELECT EXISTS (SELECT 1 FROM endpoint_keys k JOIN bot_signing_keys b ON b.key_id = k.key_id WHERE k.endpoint_id = $1 AND k.status = 'active') AS has_active_key",
-  replyTokens: "SELECT count(*)::int AS active FROM floor_warden_reply_tokens WHERE bot_id = $1 AND status = 'active'",
+  replyTokens: "SELECT count(*)::int AS active FROM floor_warden_reply_tokens WHERE bot_id = $1 AND (status = 'active' OR (status = 'retired' AND (expires_at IS NULL OR expires_at > now())))",
   rollback: 'ROLLBACK',
 });
 

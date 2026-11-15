@@ -19,7 +19,7 @@
 // - The result holds allowlisted IDs and states. Child output is discarded.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { planSetup, authorized, TOKEN_HINT } from './phase7-setup-policy.mjs';
+import { planSetup, authorized, replyTokenState, tokenHint, tokenEnvNote } from './phase7-setup-policy.mjs';
 import { CHILD_ENV_ALLOWLIST } from './phase7-setup-storage.mjs';
 import { isCredentialRef } from './credential-store.mjs';
 
@@ -45,11 +45,12 @@ export const botPhrase = (endpointId) => `CREATE ${endpointId}`;
 const safe = (value) => (typeof value === 'string' && SAFE.test(value) ? value : '[redacted]');
 const ids = (list) => list.map((b) => b.botId);
 
-function freezeResult({ mode = 'apply', status, registryRefresh = 'unverified', blockers = [], bots = [] }) {
+function freezeResult({ mode = 'apply', status, registryRefresh = 'unverified', blockers = [], bots = [], tokenDatabaseEnv = null }) {
   return Object.freeze({
     mode,
     status,
     registryRefresh,
+    tokenDatabaseEnv,
     blockers: Object.freeze(blockers.map(safe)),
     bots: Object.freeze(bots.map((b) => Object.freeze({ ...b }))),
   });
@@ -243,10 +244,15 @@ export async function applySetup({
     let after = null;
     try { after = await inspect(); } catch { after = null; }
     finalRefresh = after?.registryRefresh ?? 'unverified';
-    const healthy = new Set((after?.inspection === 'verified' ? after.bots : []).filter((b) => b.state === 'healthy').map((b) => b.botId));
+    const seen = after?.inspection === 'verified' && Array.isArray(after.bots) ? after.bots : [];
+    const healthy = new Set(seen.filter((b) => b.state === 'healthy').map((b) => b.botId));
     for (const r of attempted) {
       if (r.result === 'failed' && healthy.has(r.botId)) { r.result = 'created'; r.reason = `${r.reason}-but-committed`; }
-      if (r.result === 'created') r.verified = healthy.has(r.botId) && finalRefresh === 'verified';
+      if (r.result === 'created') {
+        r.verified = healthy.has(r.botId) && finalRefresh === 'verified';
+        // Read from this last inspection, so a token someone made meanwhile counts.
+        r.replyToken = replyTokenState(seen.find((b) => b.botId === r.botId));
+      }
     }
   }
 
@@ -263,7 +269,7 @@ export async function applySetup({
     failed: ids(failed),
     blockers: unverified.map((r) => `unverified-after-create:${r.botId}`),
   });
-  return freezeResult({ status, registryRefresh: finalRefresh, bots: results });
+  return freezeResult({ status, registryRefresh: finalRefresh, bots: results, tokenDatabaseEnv: config.databaseEnv ?? null });
 }
 
 export function renderApplyResult(result) {
@@ -272,10 +278,14 @@ export function renderApplyResult(result) {
     const extra = bot.result === 'created' ? (bot.verified ? 'verified' : 'not verified') : bot.reason ? safe(bot.reason) : '';
     lines.push(`${safe(bot.endpointId)}: ${safe(bot.result)}${extra ? ` (${extra})` : ''}`);
   }
-  // A bot made just now has no reply token yet; say how to make one.
-  for (const bot of result.bots.filter((b) => b.result === 'created')) {
-    lines.push(`reply_token next: ${TOKEN_HINT} ${safe(bot.botId)}`);
-  }
+  // A bot made just now normally has no reply token yet; the last inspection
+  // says, and only a bot it shows without one gets the command to make one.
+  const created = result.bots.filter((b) => b.result === 'created');
+  for (const bot of created) lines.push(`reply_token ${safe(bot.endpointId)}: ${safe(bot.replyToken ?? 'unverified')}`);
+  const missing = created.filter((b) => b.replyToken === 'none');
+  for (const bot of missing) lines.push(tokenHint(bot.botId));
+  const note = missing.length ? tokenEnvNote(result.tokenDatabaseEnv) : null;
+  if (note) lines.push(note);
   lines.push(`blockers: ${result.blockers.map(safe).join(', ') || 'none'}`);
   return lines.join('\n');
 }
