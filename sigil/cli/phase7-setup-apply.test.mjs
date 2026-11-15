@@ -354,3 +354,26 @@ test('a real child gets the arguments and env as sent', async (t) => {
   assert.ok(!record.env.includes('SENTINEL_UNRELATED'));
   assert.ok(record.env.includes('SIGIL_DATABASE_URL'));
 });
+
+test('an error after the child started waits for it to close', async () => {
+  const h = harness({ answers: [applyPhrase(DB_LABEL), botPhrase(BOT.endpointId)], inspections: [snapshot(['missing']), snapshot(['missing'])] });
+  const order = [];
+  const spawn = () => {
+    const child = new EventEmitter();
+    child.pid = 4242;
+    child.stdout = new EventEmitter(); child.stdout.resume = () => {};
+    child.stderr = new EventEmitter(); child.stderr.resume = () => {};
+    child.kill = () => {};
+    setImmediate(() => {
+      child.emit('error', Object.assign(new Error('kill failed'), { code: 'EPERM' }));
+      order.push('error');
+      setImmediate(() => { order.push('close'); child.emit('close', 1); });
+    });
+    return child;
+  };
+  const result = await run(h, { config: config([BOT]), plan: applyPlan(['missing']), spawn });
+  order.push('resolved');
+  assert.deepEqual(order, ['error', 'close', 'resolved']);
+  assert.equal(result.bots[0].result, 'failed');
+  assert.equal(result.bots[0].reason, 'bot-add-failed');
+});

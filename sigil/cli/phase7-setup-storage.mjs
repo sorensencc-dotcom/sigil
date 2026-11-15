@@ -394,13 +394,18 @@ export function createSetupStorage({
     return Object.freeze({ secretRoot: 'protected' });
   }
 
+  // The file is ours once the exclusive open succeeds, so a failed write or
+  // sync removes it again: no half-written lock or temp file is left behind.
   async function createExclusive(target, content) {
     const handle = await fs.open(target, 'wx', 0o600);
+    let written = false;
     try {
       await handle.writeFile(content, 'utf8');
       await handle.sync();
+      written = true;
     } finally {
       await handle.close();
+      if (!written) { try { await fs.unlink(target); } catch { /* already gone */ } }
     }
   }
 
@@ -523,14 +528,20 @@ export function createSetupStorage({
     requireReady();
   }
 
+  // A lock that cannot be removed is reported, so the caller can tell the
+  // owner; a lock that is already gone is not an error.
   async function close() {
     if (state.closed) return;
+    state.closed = true;
     if (state.locked) {
       events.push('unlock');
-      await removeQuietly(W.join(state.root, LOCK_FILE));
       state.locked = false;
+      try {
+        await fs.unlink(W.join(state.root, LOCK_FILE));
+      } catch (e) {
+        if (e?.code !== 'ENOENT') fail('STORAGE_WRITE_FAILED', 'lock-release');
+      }
     }
-    state.closed = true;
   }
 
   return Object.freeze({
