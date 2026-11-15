@@ -19,7 +19,7 @@
 // - The result holds allowlisted IDs and states. Child output is discarded.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { planSetup, authorized } from './phase7-setup-policy.mjs';
+import { planSetup, authorized, TOKEN_HINT } from './phase7-setup-policy.mjs';
 import { CHILD_ENV_ALLOWLIST } from './phase7-setup-storage.mjs';
 import { isCredentialRef } from './credential-store.mjs';
 
@@ -271,6 +271,10 @@ export function renderApplyResult(result) {
   for (const bot of result.bots) {
     const extra = bot.result === 'created' ? (bot.verified ? 'verified' : 'not verified') : bot.reason ? safe(bot.reason) : '';
     lines.push(`${safe(bot.endpointId)}: ${safe(bot.result)}${extra ? ` (${extra})` : ''}`);
+  }
+  // A bot made just now has no reply token yet; say how to make one.
+  for (const bot of result.bots.filter((b) => b.result === 'created')) {
+    lines.push(`reply_token next: ${TOKEN_HINT} ${safe(bot.botId)}`);
   }
   lines.push(`blockers: ${result.blockers.map(safe).join(', ') || 'none'}`);
   return lines.join('\n');

@@ -186,6 +186,38 @@ test('clean preflight and verified refresh make relay ready', () => {
   assert.equal(summary.includes('relay_ready: yes'), true);
 });
 
+test('reply tokens are reported per bot without blocking or changing readiness', () => {
+  const bots = [
+    bot({ state: 'healthy', replyTokenActive: true }),
+    bot({ botId: 'bot_test_other', endpointId: `ep_test_other@${DOMAIN}`, state: 'healthy', replyTokenActive: false }),
+  ];
+  const plan = planSetup(snapshot({ bots, routine: { urlState: 'present', keyState: 'present' } }));
+  assert.deepEqual(plan.replyTokens.map((t) => [t.botId, t.state]), [['bot_test', 'active'], ['bot_test_other', 'none']]);
+  assert.deepEqual(plan.blockers, []);
+  assert.equal(plan.fourInputsReady, true);
+  assert.ok(Object.isFrozen(plan.replyTokens) && Object.isFrozen(plan.replyTokens[0]));
+  const summary = renderSummary(plan);
+  assert.equal(summary.includes(`reply_token ep_test_bot@${DOMAIN}: active`), true);
+  assert.equal(summary.includes(`reply_token ep_test_other@${DOMAIN}: none`), true);
+  assert.equal(summary.includes('reply_token next: sigil bot token create --bot-id bot_test_other'), true);
+  assert.equal(summary.includes('--bot-id bot_test\n'), false);
+});
+
+test('reply token state is unverified when inspection could not tell', () => {
+  const plan = planSetup(snapshot({ bots: [bot({ state: 'healthy' })] }));
+  assert.equal(plan.replyTokens[0].state, 'unverified');
+  const summary = renderSummary(plan);
+  assert.equal(summary.includes(`reply_token ep_test_bot@${DOMAIN}: unverified`), true);
+  assert.doesNotMatch(summary, /reply_token next/);
+});
+
+test('a bot id that is not safe text is redacted in the token hint', () => {
+  const plan = planSetup(snapshot({ bots: [bot({ botId: 'bot\u001b[2Jx', state: 'healthy', replyTokenActive: false })] }));
+  const summary = renderSummary(plan);
+  assert.equal(summary.includes('reply_token next: sigil bot token create --bot-id [redacted]'), true);
+  assert.doesNotMatch(summary, /\u001b/);
+});
+
 // ---------------------------------------------------------------------------
 // Task 6: the entry point, end to end with fakes. No DB, network, real file,
 // real credential or real prompt. Fixture IDs only.

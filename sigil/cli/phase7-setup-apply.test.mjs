@@ -324,6 +324,9 @@ test('rendered result is allowlisted and never mentions a restart', async () => 
   assert.match(text, new RegExp(`${BOT.endpointId}: created \\(verified\\)`));
   assert.match(text, new RegExp(`${OTHER.endpointId}: skipped \\(declined\\)`));
   assert.doesNotMatch(text, /restart|SENTINEL|fixture\.invalid|FAKE_WRAP/i);
+  // Only the bot made in this run gets the reply-token hint.
+  assert.match(text, new RegExp(`reply_token next: sigil bot token create --bot-id ${BOT.botId}\\n`));
+  assert.doesNotMatch(text, new RegExp(`--bot-id ${OTHER.botId}`));
 });
 
 test('a real child gets the arguments and env as sent', async (t) => {

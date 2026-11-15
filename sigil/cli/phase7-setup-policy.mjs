@@ -98,6 +98,16 @@ export function validateSetupConfig(raw, { repoRoot }) {
   return Object.freeze({ ...raw, routine: Object.freeze({ ...raw.routine }), bots: Object.freeze(bots) });
 }
 
+// active: at least one active reply token; none: inspection saw none;
+// unverified: inspection could not tell.
+function replyTokenState(bot) {
+  if (bot.replyTokenActive === true) return 'active';
+  if (bot.replyTokenActive === false) return 'none';
+  return 'unverified';
+}
+
+export const TOKEN_HINT = 'sigil bot token create --bot-id';
+
 // Literal state machine: unverified -> blocked; partial/conflict/disabled -> blocked;
 // unconfirmed dispatcher -> blocked; healthy -> skip; missing -> create (only when
 // inspection, schema and automatic registry refresh are all verified).
@@ -142,6 +152,14 @@ export function planSetup(snapshot, { apply = false } = {}) {
     ...botInputs,
   ];
   const fourInputsReady = blockers.length === 0 && inputs.every((i) => i.state === 'present' || i.state === 'healthy');
+  // Reply tokens are reported, never planned: `sigil bot add` makes none, and
+  // `sigil bot token create` prints one once, which setup must never handle.
+  // So a bot without one neither blocks setup nor changes the exit code.
+  const replyTokens = snapshot.bots.map((bot) => Object.freeze({
+    botId: bot.botId,
+    endpointId: bot.endpointId,
+    state: replyTokenState(bot),
+  }));
   return Object.freeze({
     mode: apply ? 'apply' : 'dry-run',
     inputs: Object.freeze(inputs),
@@ -149,6 +167,7 @@ export function planSetup(snapshot, { apply = false } = {}) {
     skip: Object.freeze(skip),
     blockers: Object.freeze(blockers),
     fourInputsReady,
+    replyTokens: Object.freeze(replyTokens),
     registryRefresh: snapshot.registryRefresh ?? 'unverified',
     registryPreflight: Object.freeze({ ok: preflightOk, gapCount: preflightGaps.length }),
     relayReady,
@@ -167,6 +186,9 @@ export function renderSummary(plan) {
   lines.push(`relay_ready: ${plan.relayReady ? 'yes' : 'no'}`);
   lines.push(`create: ${plan.create.map((b) => safe(b.endpointId)).join(', ') || 'none'}`);
   lines.push(`skip: ${plan.skip.map((b) => safe(b.endpointId)).join(', ') || 'none'}`);
+  const tokens = plan.replyTokens ?? [];
+  for (const t of tokens) lines.push(`reply_token ${safe(t.endpointId)}: ${safe(t.state)}`);
+  for (const t of tokens.filter((x) => x.state === 'none')) lines.push(`reply_token next: ${TOKEN_HINT} ${safe(t.botId)}`);
   lines.push(`blockers: ${plan.blockers.map(safe).join(', ') || 'none'}`);
   lines.push(`Result: ${plan.fourInputsReady ? 'inputs structurally ready' : 'setup incomplete'}; live Grok smoke NOT RUN`);
   return lines.join('\n');
