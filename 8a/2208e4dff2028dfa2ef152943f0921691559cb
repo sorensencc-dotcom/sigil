@@ -1,0 +1,29 @@
+sigil/cli/phase7-setup-inspect.test.mjs
+  s_fb958deaa181e9::t_890f769b43ad25 15
+sigil/cli/phase7-setup-inspect.mjs
+  s_fb958deaa181e9::t_6ca052c8b8d608 11-13
+sigil/relay/v1/reply-token.test.mjs
+  s_fb958deaa181e9::t_b9549f1682367b 19-22
+  s_fb958deaa181e9::t_a6540a510b1e84 64,66
+  s_fb958deaa181e9::t_ad3b92134bc27c 80
+sigil/cli/phase7-setup-inspect.pg.test.mjs
+  s_fb958deaa181e9::t_31239b0480fbf3 52
+sigil/relay/v1/reply-token.mjs
+  s_fb958deaa181e9::t_8ca41f183843b8 27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8a2208e4dff2028dfa2ef152943f0921691559cb",
+  "prompts": {},
+  "sessions": {
+    "s_fb958deaa181e9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "87d4d2aa-9a13-46d4-be6a-1ebfaa3cbe41",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
