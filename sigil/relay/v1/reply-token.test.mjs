@@ -16,6 +16,10 @@ test('evaluates active, retired, expired, revoked, canary, and unknown rows', ()
   const now = new Date('2026-01-01T00:00:00Z');
   assert.deepEqual(evaluateReplyToken(null, now), { ok: false, reason: 'unknown' });
   assert.deepEqual(evaluateReplyToken({ status: 'active' }, now), { ok: true });
+  assert.deepEqual(evaluateReplyToken({ status: 'active', expires_at: null }, now), { ok: true });
+  assert.deepEqual(evaluateReplyToken({ status: 'active', expires_at: '2026-01-01T00:01:00Z' }, now), { ok: true });
+  assert.deepEqual(evaluateReplyToken({ status: 'active', expires_at: '2025-12-31T23:59:00Z' }, now), { ok: false, reason: 'expired' });
+  assert.deepEqual(evaluateReplyToken({ status: 'active', expires_at: '2026-01-01T00:00:00Z' }, now), { ok: false, reason: 'expired' });
   assert.deepEqual(evaluateReplyToken({ status: 'retired', expires_at: '2026-01-01T00:01:00Z' }, now), { ok: true });
   assert.deepEqual(evaluateReplyToken({ status: 'retired', expires_at: '2025-12-31T23:59:00Z' }, now), { ok: false, reason: 'expired' });
   assert.deepEqual(evaluateReplyToken({ status: 'revoked' }, now), { ok: false, reason: 'revoked' });
@@ -57,7 +61,9 @@ test('matcher returns a canary verdict and null for revoked or unknown hashes', 
   const revoked = generateReplyToken();
   const active = generateReplyToken();
   const unknown = generateReplyToken();
+  const expired = generateReplyToken();
   const rows = new Map([
+    [expired.sha256.toString('hex'), { token_id: 'frt_expired', bot_id: 'bot_expired', status: 'active', expires_at: '2000-01-01T00:00:00Z' }],
     [canary.sha256.toString('hex'), { token_id: 'frt_canary', bot_id: 'bot_canary', status: 'canary' }],
     [revoked.sha256.toString('hex'), { token_id: 'frt_revoked', bot_id: 'bot_revoked', status: 'revoked' }],
     [active.sha256.toString('hex'), { token_id: 'frt_active', bot_id: 'bot_active', status: 'active' }],
@@ -71,6 +77,7 @@ test('matcher returns a canary verdict and null for revoked or unknown hashes', 
   assert.deepEqual(await matcher(canary.token), { kind: 'canary', botId: 'bot_canary', tokenId: 'frt_canary' });
   assert.equal(await matcher(revoked.token), null);
   assert.equal(await matcher(unknown.token), null);
+  assert.equal(await matcher(expired.token), null);
   assert.deepEqual(await matcher(active.token), { kind: 'bot', botId: 'bot_active', tokenId: 'frt_active' });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(touches.length, 1);
