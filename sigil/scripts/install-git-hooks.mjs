@@ -25,7 +25,16 @@ exec ${shellQuote(nodePath)} ${shellQuote(scanPath)}
 `;
 
 fs.writeFileSync(hookPath, hookBody, { mode: 0o755 });
+const docsOnlyScript = 'sigil/scripts/prepush-is-docs-only.mjs';
 const prePushBody = `#!/bin/sh
+# If every file in the pushed range is under docs/ or ends in .md, skip the
+# test suite. If this script is missing (older branch), fall through and run tests.
+if [ -f ${docsOnlyScript} ]; then
+  if ${shellQuote(nodePath)} ${docsOnlyScript}; then
+    echo "pre-push: docs-only push; skipping the test suite."
+    exit 0
+  fi
+fi
 unset SIGIL_TEST_DATABASE_URL
 ${shellQuote(nodePath)} sigil/scripts/prepush-preflight.mjs || exit 1
 npm run audit:jcs || exit 1
