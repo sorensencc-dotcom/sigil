@@ -11,3 +11,11 @@ test('release live database uses the disposable test database name', () => {
   assert.equal(serviceDatabase, 'sigil_test');
   assert.equal(liveTestDatabase, serviceDatabase);
 });
+
+test('release workflow builds the web client before the live database gate', () => {
+  const buildStep = workflow.indexOf('npm --prefix packages/sigil-rooms-web run build');
+  const liveGate = workflow.indexOf('npm run test:live');
+
+  assert.notEqual(buildStep, -1, 'release.yml must build packages/sigil-rooms-web');
+  assert.ok(buildStep < liveGate, 'the web build must run before the live database gate');
+});

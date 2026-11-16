@@ -57,6 +57,10 @@ jobs:
       - name: Run unit & contract tests
         run: npm test
 
+      # sigil/integration/oauth-login.e2e.test.mjs serves the built web client; without dist/ it times out.
+      - name: Build web client for the live gate
+        run: npm --prefix packages/sigil-rooms-web ci && npm --prefix packages/sigil-rooms-web run build
+
       - name: Run live PostgreSQL gate
         env:
           SIGIL_TEST_DATABASE_URL: postgres://sigil:sigil_password@localhost:55432/sigil_test
