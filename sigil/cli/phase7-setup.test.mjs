@@ -186,6 +186,66 @@ test('clean preflight and verified refresh make relay ready', () => {
   assert.equal(summary.includes('relay_ready: yes'), true);
 });
 
+test('reply tokens are reported per bot without blocking or changing readiness', () => {
+  const bots = [
+    bot({ state: 'healthy', replyTokenActive: true }),
+    bot({ botId: 'bot_test_other', endpointId: `ep_test_other@${DOMAIN}`, state: 'healthy', replyTokenActive: false }),
+  ];
+  const plan = planSetup(snapshot({ bots, routine: { urlState: 'present', keyState: 'present' } }));
+  assert.deepEqual(plan.replyTokens.map((t) => [t.botId, t.state]), [['bot_test', 'active'], ['bot_test_other', 'none']]);
+  assert.deepEqual(plan.blockers, []);
+  assert.equal(plan.fourInputsReady, true);
+  assert.ok(Object.isFrozen(plan.replyTokens) && Object.isFrozen(plan.replyTokens[0]));
+  const summary = renderSummary(plan);
+  assert.equal(summary.includes(`reply_token ep_test_bot@${DOMAIN}: active`), true);
+  assert.equal(summary.includes(`reply_token ep_test_other@${DOMAIN}: none`), true);
+  assert.equal(summary.includes('reply_token next: sigil bot token create --bot-id=bot_test_other'), true);
+  assert.equal(summary.includes('--bot-id=bot_test\n'), false);
+  // No database env given: no note about where the command reads it from.
+  assert.doesNotMatch(summary, /reply_token note/);
+});
+
+test('the token hint names the env to copy from when setup uses another one', () => {
+  const bots = [bot({ state: 'healthy', replyTokenActive: false })];
+  const custom = renderSummary(planSetup(snapshot({ bots }), { databaseEnv: 'FIXTURE_DATABASE_ENV' }));
+  assert.match(custom, /reply_token note: that command reads SIGIL_DATABASE_URL; set it from FIXTURE_DATABASE_ENV first/);
+  const same = renderSummary(planSetup(snapshot({ bots }), { databaseEnv: 'SIGIL_DATABASE_URL' }));
+  assert.doesNotMatch(same, /reply_token note/);
+  const active = renderSummary(planSetup(snapshot({ bots: [bot({ state: 'healthy', replyTokenActive: true })] }), { databaseEnv: 'FIXTURE_DATABASE_ENV' }));
+  assert.doesNotMatch(active, /reply_token (next|note)/);
+});
+
+test('configured bots are listed as unverified when inspection found none', () => {
+  const configBots = [{ botId: 'bot_test', endpointId: `ep_test_bot@${DOMAIN}` }, { botId: 'bot_test_other', endpointId: `ep_test_other@${DOMAIN}` }];
+  const plan = planSetup(snapshot({ inspection: 'unverified', bots: [] }), { configBots });
+  assert.deepEqual(plan.replyTokens.map((t) => [t.botId, t.state]), [['bot_test', 'unverified'], ['bot_test_other', 'unverified']]);
+  const summary = renderSummary(plan);
+  assert.equal(summary.includes(`reply_token ep_test_other@${DOMAIN}: unverified`), true);
+  assert.doesNotMatch(summary, /reply_token next/);
+});
+
+test('a bot id that starts like a flag or a comment stays one argument in the hint', () => {
+  for (const botId of ['--bot_test', '#bot_test']) {
+    const summary = renderSummary(planSetup(snapshot({ bots: [bot({ botId, state: 'healthy', replyTokenActive: false })] })));
+    assert.equal(summary.includes(`sigil bot token create --bot-id=${botId}`), true, botId);
+  }
+});
+
+test('reply token state is unverified when inspection could not tell', () => {
+  const plan = planSetup(snapshot({ bots: [bot({ state: 'healthy' })] }));
+  assert.equal(plan.replyTokens[0].state, 'unverified');
+  const summary = renderSummary(plan);
+  assert.equal(summary.includes(`reply_token ep_test_bot@${DOMAIN}: unverified`), true);
+  assert.doesNotMatch(summary, /reply_token next/);
+});
+
+test('a bot id that is not safe text is redacted in the token hint', () => {
+  const plan = planSetup(snapshot({ bots: [bot({ botId: 'bot\u001b[2Jx', state: 'healthy', replyTokenActive: false })] }));
+  const summary = renderSummary(plan);
+  assert.equal(summary.includes('reply_token next: sigil bot token create --bot-id=[redacted]'), true);
+  assert.doesNotMatch(summary, /\u001b/);
+});
+
 // ---------------------------------------------------------------------------
 // Task 6: the entry point, end to end with fakes. No DB, network, real file,
 // real credential or real prompt. Fixture IDs only.

@@ -191,7 +191,7 @@ export async function main(argv, deps) {
   const readStorage = deps.createStorage({ mode: 'dry-run' });
   let plan;
   try {
-    plan = planSetup(await takeSnapshot(config, readStorage, deps), { apply: args.apply });
+    plan = planSetup(await takeSnapshot(config, readStorage, deps), { apply: args.apply, configBots: config.bots, databaseEnv: config.databaseEnv });
   } catch (error) {
     out(`${errorLine(error)}\nResult: setup incomplete; ${NO_SMOKE}`);
     return EXIT.INCOMPLETE;

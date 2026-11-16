@@ -98,10 +98,30 @@ export function validateSetupConfig(raw, { repoRoot }) {
   return Object.freeze({ ...raw, routine: Object.freeze({ ...raw.routine }), bots: Object.freeze(bots) });
 }
 
+// active: at least one token reply ingress accepts now; none: inspection saw
+// none; unverified: inspection could not tell.
+export function replyTokenState(bot) {
+  if (bot?.replyTokenActive === true) return 'active';
+  if (bot?.replyTokenActive === false) return 'none';
+  return 'unverified';
+}
+
+// `--bot-id=<id>` keeps an ID that starts with -- or # from being read as
+// another flag or a comment. The IDs printed here already pass the allowlist.
+const TOKEN_ENV = 'SIGIL_DATABASE_URL';
+export const tokenHint = (botId) => `reply_token next: sigil bot token create --bot-id=${safe(botId)}`;
+
+// `sigil bot token create` reads only SIGIL_DATABASE_URL (a URL in argv would
+// leak it), so name the env to copy from when setup uses another one.
+export function tokenEnvNote(databaseEnv) {
+  if (typeof databaseEnv !== 'string' || databaseEnv === TOKEN_ENV) return null;
+  return `reply_token note: that command reads ${TOKEN_ENV}; set it from ${safe(databaseEnv)} first`;
+}
+
 // Literal state machine: unverified -> blocked; partial/conflict/disabled -> blocked;
 // unconfirmed dispatcher -> blocked; healthy -> skip; missing -> create (only when
 // inspection, schema and automatic registry refresh are all verified).
-export function planSetup(snapshot, { apply = false } = {}) {
+export function planSetup(snapshot, { apply = false, configBots, databaseEnv } = {}) {
   const blockers = [...(snapshot.blockers ?? [])];
   if (snapshot.inspection !== 'verified') blockers.push('inspection-unverified');
   if (!snapshot.schemaReady) blockers.push('schema-not-ready');
@@ -142,6 +162,17 @@ export function planSetup(snapshot, { apply = false } = {}) {
     ...botInputs,
   ];
   const fourInputsReady = blockers.length === 0 && inputs.every((i) => i.state === 'present' || i.state === 'healthy');
+  // Reply tokens are reported, never planned: `sigil bot add` makes none, and
+  // `sigil bot token create` prints one once, which setup must never handle.
+  // So a bot without one neither blocks setup nor changes the exit code.
+  // When inspection found no bots, every configured bot is still listed, as
+  // unverified, so the owner can see which ones are unknown.
+  const tokenBots = snapshot.bots.length ? snapshot.bots : (Array.isArray(configBots) ? configBots : []);
+  const replyTokens = tokenBots.map((bot) => Object.freeze({
+    botId: bot.botId,
+    endpointId: bot.endpointId,
+    state: snapshot.bots.length ? replyTokenState(bot) : 'unverified',
+  }));
   return Object.freeze({
     mode: apply ? 'apply' : 'dry-run',
     inputs: Object.freeze(inputs),
@@ -149,6 +180,8 @@ export function planSetup(snapshot, { apply = false } = {}) {
     skip: Object.freeze(skip),
     blockers: Object.freeze(blockers),
     fourInputsReady,
+    replyTokens: Object.freeze(replyTokens),
+    tokenDatabaseEnv: typeof databaseEnv === 'string' ? databaseEnv : null,
     registryRefresh: snapshot.registryRefresh ?? 'unverified',
     registryPreflight: Object.freeze({ ok: preflightOk, gapCount: preflightGaps.length }),
     relayReady,
@@ -167,6 +200,12 @@ export function renderSummary(plan) {
   lines.push(`relay_ready: ${plan.relayReady ? 'yes' : 'no'}`);
   lines.push(`create: ${plan.create.map((b) => safe(b.endpointId)).join(', ') || 'none'}`);
   lines.push(`skip: ${plan.skip.map((b) => safe(b.endpointId)).join(', ') || 'none'}`);
+  const tokens = plan.replyTokens ?? [];
+  for (const t of tokens) lines.push(`reply_token ${safe(t.endpointId)}: ${safe(t.state)}`);
+  const missing = tokens.filter((x) => x.state === 'none');
+  for (const t of missing) lines.push(tokenHint(t.botId));
+  const note = missing.length ? tokenEnvNote(plan.tokenDatabaseEnv) : null;
+  if (note) lines.push(note);
   lines.push(`blockers: ${plan.blockers.map(safe).join(', ') || 'none'}`);
   lines.push(`Result: ${plan.fourInputsReady ? 'inputs structurally ready' : 'setup incomplete'}; live Grok smoke NOT RUN`);
   return lines.join('\n');
