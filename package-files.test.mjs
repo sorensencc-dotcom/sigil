@@ -54,7 +54,11 @@ test('every relative import in the published package resolves to a published fil
 test('every public export and the bin load from the packed tarball', (t) => {
   const workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-pack-'));
   t.after(() => fs.rmSync(workdir, { recursive: true, force: true }));
-  const pack = spawnSync(`npm pack --ignore-scripts --json --pack-destination "${workdir}"`, { encoding: 'utf8', shell: true, timeout: 120_000 });
+  // `npm pack --dry-run` (e.g. `npm run pack:check`) runs `prepack` with
+  // `npm_config_dry_run=true`, which would suppress writing the tarball here.
+  const packEnv = { ...process.env };
+  delete packEnv.npm_config_dry_run;
+  const pack = spawnSync(`npm pack --ignore-scripts --json --pack-destination "${workdir}"`, { encoding: 'utf8', env: packEnv, shell: true, timeout: 120_000 });
   assert.equal(pack.status, 0, `npm pack failed: ${pack.stderr}`);
   // Relative filename + cwd: GNU tar (Git for Windows) parses "C:\..." as host:path.
   const untar = spawnSync('tar', ['-xzf', parsePackReport(pack.stdout)[0].filename], { cwd: workdir, encoding: 'utf8' });
