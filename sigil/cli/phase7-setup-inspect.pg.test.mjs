@@ -49,6 +49,7 @@ test('setup counts exactly the reply tokens that reply ingress accepts', { skip:
   const cases = [
     ['active', 'active', null],
     ['activepast', 'active', past],
+    ['activefuture', 'active', future],
     ['gracefuture', 'retired', future],
     ['gracenull', 'retired', null],
     ['gracepast', 'retired', past],

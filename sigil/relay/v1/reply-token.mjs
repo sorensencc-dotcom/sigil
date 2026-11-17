@@ -23,10 +23,8 @@ export function evaluateReplyToken(row, now = new Date()) {
   if (!row) return { ok: false, reason: 'unknown' };
   if (row.status === 'revoked') return { ok: false, reason: 'revoked' };
   if (row.status === 'canary') return { ok: false, reason: 'canary' };
-  if (row.status === 'retired' && row.expires_at != null && new Date(row.expires_at) <= new Date(now)) {
-    return { ok: false, reason: 'expired' };
-  }
   if (row.status !== 'active' && row.status !== 'retired') return { ok: false, reason: 'unknown' };
+  if (row.expires_at != null && new Date(row.expires_at) <= new Date(now)) return { ok: false, reason: 'expired' };
   return { ok: true };
 }
 
