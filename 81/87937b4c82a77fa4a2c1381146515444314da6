@@ -1,0 +1,24 @@
+sigil/cli/phase7-setup-policy.mjs
+  h_5c172e9b435f5a 15,70-72
+sigil/cli/phase7-setup.test.mjs
+  h_5c172e9b435f5a 258,766-806
+sigil/cli/sigil.mjs
+  h_5c172e9b435f5a 639
+sigil/relay/v1/http-server.mjs
+  h_5c172e9b435f5a 109,247-248,250
+sigil/relay/v1/http-server.test.mjs
+  h_5c172e9b435f5a 54-63
+sigil/scripts/phase7-setup.mjs
+  h_5c172e9b435f5a 303-316,384
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8187937b4c82a77fa4a2c1381146515444314da6",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
