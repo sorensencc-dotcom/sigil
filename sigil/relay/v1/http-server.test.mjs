@@ -51,6 +51,16 @@ test('GET /v1/health returns 200 with status ok and requires no authentication',
   assert.deepEqual(result.body, { status: 'ok' });
 });
 
+test('GET /v1/health reports registry_refresh when registryRefreshAvailable is provided', async () => {
+  const server = createRelayServer({ registry: new Map(), tokenHashes: new Map([['nonexistent', 'ep_someone']]), registryRefreshAvailable: () => true });
+  await new Promise((resolve) => server.listen(0, resolve));
+  const { port } = server.address();
+  const result = await request(port, { method: 'GET', path: '/v1/health' });
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body, { status: 'ok', registry_refresh: true });
+});
+
 test('HTTP relay accepts signed envelope and returns request ID', async () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const envelope = JSON.parse(fs.readFileSync(new URL('../../contracts/v1/envelope.example.json', import.meta.url)));

@@ -12,7 +12,7 @@ export const APPROVED_FIRST_GROUP = Object.freeze([
 ].map((bot) => Object.freeze(bot)));
 
 const ROLES = new Set(['reply', 'dispatcher']);
-const CONFIG_FIELDS = new Set(['secretRoot', 'operatorIdentityPath', 'registryPath', 'dbLabel', 'databaseEnv', 'wrapKeyRef', 'relayDomain', 'routine', 'bots', 'replyOrigin', 'ports']);
+const CONFIG_FIELDS = new Set(['secretRoot', 'operatorIdentityPath', 'registryPath', 'dbLabel', 'databaseEnv', 'wrapKeyRef', 'relayDomain', 'routine', 'bots', 'replyOrigin', 'ports', 'registryRefreshConfirmed']);
 const ROUTINE_FIELDS = new Set(['urlEnv', 'keyEnv', 'urlRef', 'keyRef', 'keyHeader']);
 const BOT_FIELDS = new Set(['botId', 'endpointId', 'displayName', 'role', 'roleConfirmed', 'identityPath']);
 const PATH_FIELDS = ['secretRoot', 'operatorIdentityPath', 'registryPath'];
@@ -67,6 +67,9 @@ export function validateSetupConfig(raw, { repoRoot }) {
   if (!raw || typeof raw !== 'object') throw configError('config must be an object');
   unknownFields(raw, CONFIG_FIELDS, '');
   if (typeof raw.relayDomain !== 'string' || !raw.relayDomain) throw configError('relayDomain is required');
+  if (raw.registryRefreshConfirmed !== undefined && typeof raw.registryRefreshConfirmed !== 'boolean') {
+    throw configError('registryRefreshConfirmed must be boolean');
+  }
   if (typeof raw.dbLabel !== 'string' || !DB_LABEL.test(raw.dbLabel)) throw configError('dbLabel is required: letters, digits, _ . - (at most 40)');
   for (const field of ['databaseEnv', 'wrapKeyRef']) {
     if (typeof raw[field] !== 'string' || !raw[field]) throw configError(`${field} is required`);

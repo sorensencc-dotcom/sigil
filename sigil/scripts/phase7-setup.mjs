@@ -300,6 +300,20 @@ export async function main(argv, deps) {
   return code;
 }
 
+export async function probeRegistryRefreshStatus(config, { fetch = globalThis.fetch } = {}) {
+  if (config?.registryRefreshConfirmed === true) return 'verified';
+  const relayPort = config?.ports?.relay;
+  if (!Number.isInteger(relayPort) || relayPort <= 0 || typeof fetch !== 'function') return 'unverified';
+  try {
+    const res = await fetch(`http://127.0.0.1:${relayPort}/v1/health`, { signal: AbortSignal.timeout(2000) });
+    if (!res?.ok) return 'unverified';
+    const body = await res.json();
+    return body?.registry_refresh === true ? 'verified' : 'unverified';
+  } catch {
+    return 'unverified';
+  }
+}
+
 // Real capabilities, wired only when the script is run directly. Each one is
 // created lazily, so --help loads no database driver and reads no file.
 export async function realDeps() {
@@ -367,10 +381,7 @@ export async function realDeps() {
       const { preflightRegistryFile } = await import('../cli/registry-store.mjs');
       return preflightRegistryFile(config.registryPath);
     },
-    // No check can prove yet that the running relay picks up new bots by
-    // itself (#201). Until one exists this stays unverified, which blocks
-    // creation in planSetup.
-    probeRegistryRefresh: async () => 'unverified',
+    probeRegistryRefresh: (config) => probeRegistryRefreshStatus(config),
     async inspectDatabase(config) {
       const { inspectSetup } = await import('../cli/phase7-setup-inspect.mjs');
       const unverified = (reason) => ({ inspection: 'unverified', schemaReady: false, bots: [], blockers: [reason] });
