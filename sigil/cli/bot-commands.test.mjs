@@ -114,7 +114,7 @@ function setupBotAddFixture(t) {
 }
 
 test('bot add checks active owner inside the transaction and refuses inactive or missing owner without writing files', async (t) => {
-  for (const [ownerStatus, expected] of [['disabled', /not active/], [null, /not a provisioned human/]]) {
+  for (const [ownerStatus, expected] of [['suspended', /not active/], [null, /not a provisioned human/]]) {
     const fx = setupBotAddFixture(t);
     const outPath = path.join(fx.dir, 'ep_test_bot.json');
     const repository = createFakeBotAddRepo({ ownerStatus });

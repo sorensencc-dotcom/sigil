@@ -162,7 +162,7 @@ test('bot add removes a partial identity file when post-commit write fails', { s
 
 test('bot add refuses an inactive owner inside the transaction', { skip: !connectionString }, async (t) => {
   const ctx = await setup(t);
-  await ctx.pool.query(`UPDATE humans SET status = 'disabled' WHERE human_id = $1`, [OWNER]);
+  await ctx.pool.query(`UPDATE humans SET status = 'suspended' WHERE human_id = $1`, [OWNER]);
   await assert.rejects(
     run(process.execPath, addArgs(ctx), { env }),
     (error) => /not active/.test(error.stderr),
