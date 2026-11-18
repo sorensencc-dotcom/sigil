@@ -139,7 +139,7 @@ test('bot disable sets status disabled and is idempotent', { skip: !connectionSt
   );
 });
 
-test('bot add removes a partial identity file and rolls back when the write fails', { skip: !connectionString }, async (t) => {
+test('bot add removes a partial identity file when post-commit write fails', { skip: !connectionString }, async (t) => {
   const ctx = await setup(t);
   const outPath = path.join(ctx.dir, 'ep_test_bot.json');
   const registryPath = path.join(ctx.dir, 'registry.json');
@@ -158,8 +158,17 @@ test('bot add removes a partial identity file and rolls back when the write fail
   await assert.rejects(cmdBotAdd(addArgs(ctx).slice(3)), /disk full/);
   assert.ok(!fs.existsSync(outPath), 'partial identity file removed');
   assert.ok(!fs.existsSync(registryPath), 'no registry written');
+});
+
+test('bot add refuses an inactive owner inside the transaction', { skip: !connectionString }, async (t) => {
+  const ctx = await setup(t);
+  await ctx.pool.query(`UPDATE humans SET status = 'suspended' WHERE human_id = $1`, [OWNER]);
+  await assert.rejects(
+    run(process.execPath, addArgs(ctx), { env }),
+    (error) => /not active/.test(error.stderr),
+  );
   assert.equal((await ctx.pool.query(`SELECT count(*)::int AS n FROM endpoints WHERE endpoint_id = 'ep_test_bot'`)).rows[0].n, 0);
-  assert.equal((await ctx.pool.query('SELECT count(*)::int AS n FROM floor_warden_bots')).rows[0].n, 0);
+  assert.ok(!fs.existsSync(path.join(ctx.dir, 'ep_test_bot.json')));
 });
 
 test('bot add never deletes an identity file that already exists at --out', { skip: !connectionString }, async (t) => {

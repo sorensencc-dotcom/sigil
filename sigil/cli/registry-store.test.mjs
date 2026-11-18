@@ -4,14 +4,21 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { pathToFileURL } from 'node:url';
 import { saveIdentity } from './identity.mjs';
 import {
+  addEndpointToRegistry,
+  loadRegistryFile,
   PREFLIGHT_REQUIRED_FIELDS,
   preflightRegistry,
   preflightRegistryFile,
   saveRegistryFile,
   toRegistryMap,
 } from './registry-store.mjs';
+
+const run = promisify(execFile);
 
 const pem = crypto.generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' });
 
@@ -208,4 +215,31 @@ test('preflightRegistryFile is read-only and handles missing and invalid files',
   };
   saveRegistryFile(validPath, validData);
   assert.deepEqual(preflightRegistryFile(validPath), preflightRegistry(validData));
+});
+
+test('addEndpointToRegistry serializes concurrent processes without losing entries', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-reg-race-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const registryPath = path.join(dir, 'registry.json');
+  const storeUrl = pathToFileURL(path.resolve('sigil/cli/registry-store.mjs')).href;
+  const script = `
+    import { addEndpointToRegistry } from ${JSON.stringify(storeUrl)};
+    const [registryPath, endpointId, keyId, pem] = process.argv.slice(1);
+    addEndpointToRegistry(registryPath, {
+      owner_id: 'hum_test_owner',
+      endpoint_id: endpointId,
+      key_id: keyId,
+      kind: 'agent',
+      public_key_pem: pem,
+      relay_token: 'tok_' + endpointId,
+    });
+  `;
+  await Promise.all([
+    run(process.execPath, ['--input-type=module', '-e', script, registryPath, 'ep_test_bot', 'key_test_1', pem], { windowsHide: true }),
+    run(process.execPath, ['--input-type=module', '-e', script, registryPath, 'ep_test_other', 'key_test_2', pem], { windowsHide: true }),
+  ]);
+  const loaded = loadRegistryFile(registryPath);
+  const ids = loaded.endpoints.map((e) => e.endpoint_id).sort();
+  assert.deepEqual(ids, ['ep_test_bot', 'ep_test_other']);
+  assert.equal(fs.existsSync(`${registryPath}.lock`), false);
 });
