@@ -114,4 +114,4 @@ jobs:
       # Requires this repo and release.yml to be registered as a trusted publisher
       # for @sorensencc/sigil on npmjs.com.
       - name: Publish scoped package to npm
-        run: npm publish dist/*.tgz --provenance --access public
+        run: npm publish ./dist/*.tgz --provenance --access public
