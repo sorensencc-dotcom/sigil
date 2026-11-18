@@ -94,11 +94,12 @@ jobs:
       id-token: write
 
     steps:
+      # Omit registry-url so setup-node does not write _authToken=${NODE_AUTH_TOKEN}
+      # into .npmrc and override npm's OIDC trusted-publishing token exchange.
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22.x
-          registry-url: 'https://registry.npmjs.org'
 
       # Trusted publishing (OIDC) needs npm CLI 11.5.1 or later; Node 22 ships npm 10.
       - name: Upgrade npm for trusted publishing
