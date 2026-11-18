@@ -1,0 +1,16 @@
+docs/phase7-setup-runbook.md
+  h_5c172e9b435f5a 1-91
+sigil/cli/phase7-setup-runbook.test.mjs
+  h_5c172e9b435f5a 1-22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e719882046bf0e0fa8935af47719e2380ad1dbae",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
