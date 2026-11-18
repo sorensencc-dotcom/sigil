@@ -106,7 +106,7 @@ export function createOnPersisted(stream, { repository = null, logger = null } =
   };
 }
 
-export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain, federationMode, federationIdentity, fetchImpl, relayRequestFreshnessMs, stream_seq, resendMetrics, logger, agentmailIngress, agentmailControl, roomSystemIdentity, buildAcceptOptions: injectedBuildAcceptOptions, allowedOrigins = [], ticketStore = null, humanSigner = null, floorWardenReplies = null } = {}) {
+export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain, federationMode, federationIdentity, fetchImpl, relayRequestFreshnessMs, stream_seq, resendMetrics, logger, agentmailIngress, agentmailControl, roomSystemIdentity, buildAcceptOptions: injectedBuildAcceptOptions, allowedOrigins = [], ticketStore = null, humanSigner = null, floorWardenReplies = null, registryRefreshAvailable } = {}) {
   // B3: one clamped relay-request freshness window for this server. It bounds
   // how long a captured signed peer request stays replayable and doubles as the
   // nonce row's expiry horizon (expiresAt = signed_at + freshnessMs).
@@ -244,8 +244,10 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     }
 
     if (request.method === 'GET' && parsedUrl.pathname === '/v1/health') {
+      const health = { status: 'ok' };
+      if (typeof registryRefreshAvailable === 'function') health.registry_refresh = Boolean(registryRefreshAvailable());
       response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
-      return response.end(JSON.stringify({ status: 'ok' }));
+      return response.end(JSON.stringify(health));
     }
 
     // AgentMail is an explicitly opted-in provider boundary. It authenticates

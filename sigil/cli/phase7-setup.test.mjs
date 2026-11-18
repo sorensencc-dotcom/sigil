@@ -255,7 +255,7 @@ import fsSync from 'node:fs';
 import os from 'node:os';
 import pathMod from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { main, EXIT, USAGE, REPO_ROOT, REQUIRED_CONFIG_FIELDS, defaultConfigPath } from '../scripts/phase7-setup.mjs';
+import { main, EXIT, USAGE, REPO_ROOT, REQUIRED_CONFIG_FIELDS, defaultConfigPath, probeRegistryRefreshStatus } from '../scripts/phase7-setup.mjs';
 import { applyPhrase, botPhrase } from './phase7-setup-apply.mjs';
 
 const E2E_LABEL = 'fixture';
@@ -762,4 +762,45 @@ test('entry: a signal ends a waiting confirmation so the lock is released', asyn
   assert.ok(!w.log.includes('spawn'));
   assert.equal(w.log.at(-1), 'unlock');
   assert.ok(allClosed(w));
+});
+
+test('validateSetupConfig accepts boolean registryRefreshConfirmed and rejects non-boolean', () => {
+  const ctx = { repoRoot: '/fixture/repo' };
+  const base = {
+    secretRoot: '/fixture/secrets',
+    operatorIdentityPath: '/fixture/secrets/op.json',
+    registryPath: '/fixture/secrets/registry.json',
+    dbLabel: 'fixture_db',
+    databaseEnv: 'FIXTURE_DB',
+    wrapKeyRef: 'FIXTURE_WRAP',
+    relayDomain: DOMAIN,
+    routine: { urlEnv: 'FIXTURE_URL', keyEnv: 'FIXTURE_KEY' },
+    bots: [{ botId: 'bot_test', endpointId: `ep_test_bot@${DOMAIN}`, role: 'reply', roleConfirmed: true, identityPath: '/fixture/secrets/bot.json' }],
+  };
+  assert.equal(validateSetupConfig({ ...base, registryRefreshConfirmed: true }, ctx).registryRefreshConfirmed, true);
+  assert.equal(validateSetupConfig({ ...base, registryRefreshConfirmed: false }, ctx).registryRefreshConfirmed, false);
+  assert.throws(() => validateSetupConfig({ ...base, registryRefreshConfirmed: 'yes' }, ctx), { code: 'INVALID_SETUP_CONFIG' });
+});
+
+test('probeRegistryRefreshStatus verifies live /v1/health pickup or explicit confirmation, and returns unverified otherwise', async () => {
+  assert.equal(await probeRegistryRefreshStatus({ registryRefreshConfirmed: true }), 'verified');
+  assert.equal(await probeRegistryRefreshStatus({ ports: { relay: 8791 } }, {
+    fetch: async (url) => {
+      assert.equal(url, 'http://127.0.0.1:8791/v1/health');
+      return { ok: true, json: async () => ({ status: 'ok', registry_refresh: true }) };
+    },
+  }), 'verified');
+  assert.equal(await probeRegistryRefreshStatus({ ports: { relay: 8791 } }, {
+    fetch: async () => ({ ok: true, json: async () => ({ status: 'ok', registry_refresh: false }) }),
+  }), 'unverified');
+  assert.equal(await probeRegistryRefreshStatus({ ports: { relay: 8791 } }, {
+    fetch: async () => ({ ok: true, json: async () => ({ status: 'ok' }) }),
+  }), 'unverified');
+  assert.equal(await probeRegistryRefreshStatus({ ports: { relay: 8791 } }, {
+    fetch: async () => ({ ok: false, json: async () => ({}) }),
+  }), 'unverified');
+  assert.equal(await probeRegistryRefreshStatus({ ports: { relay: 8791 } }, {
+    fetch: async () => { throw new Error('ECONNREFUSED'); },
+  }), 'unverified');
+  assert.equal(await probeRegistryRefreshStatus({}), 'unverified');
 });
