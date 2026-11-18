@@ -1,0 +1,14 @@
+.github/workflows/release.yml
+  h_5c172e9b435f5a 117
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ab4f7ae3c4af1cd2f6d7d7fa72f5aac217244a18",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
