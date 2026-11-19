@@ -182,3 +182,20 @@ test('loadServiceConfigFile loads valid json and throws on missing file or synta
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+test('docs/service-config.md example runs the relay on the Phase 7 domain', () => {
+  // Phase 7 setup requires every endpoint's domain to match relayDomain
+  // (phase7-setup-policy.mjs), and the approved bots are @rewritelabs.io
+  // (issue #219). The documented example is what operators copy to
+  // .sigil/service.json, so it must start the relay on that domain.
+  const docPath = new URL('../../docs/service-config.md', import.meta.url);
+  const doc = fs.readFileSync(docPath, 'utf8');
+  const match = doc.match(/### Example `\.sigil\/service\.json`\s*```json\r?\n([\s\S]*?)```/);
+  assert.ok(match, 'service-config.md is missing its example .sigil/service.json block');
+  const config = JSON.parse(match[1]);
+  const plan = buildServicePlan(config, { platform: 'win32', basePath: os.tmpdir() });
+  const relay = plan.components.find((c) => c.name === 'relay');
+  const i = relay.command.indexOf('--domain');
+  assert.notEqual(i, -1, 'relay command has no --domain');
+  assert.equal(relay.command[i + 1], 'rewritelabs.io');
+});

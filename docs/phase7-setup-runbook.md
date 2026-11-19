@@ -40,7 +40,7 @@ foreach ($name in @(
 icacls (Join-Path $dest 'registry.json')
 ```
 
-3. Point `scripts/windows/start-sigil-stack.ps1` at `%USERPROFILE%\.sigil-secrets\` for `--registry`, `--federation-identity`, `--room-system-identity`, `--room-human-identity`, and `chief`'s `--identity`, and set `--domain rewritelabs.io` to match `phase7-setup-policy.mjs`.
+3. In `.sigil/service.json` (see `docs/service-config.md`), point `relay.registry`, `relay.identities.federation`, `relay.identities.room_system`, `relay.identities.room_human`, and the `chief` agent's `identity` at `%USERPROFILE%\.sigil-secrets\`, and set `relay.domain` to `rewritelabs.io` so `sigil service start` runs the relay with `--domain rewritelabs.io`, matching `phase7-setup-policy.mjs`. `scripts/windows/start-sigil-stack.ps1` is deprecated and only forwards to `sigil service start`.
 4. Restart `SigilStack` from an **Administrator PowerShell** session (stopping the task alone leaves elevated `node.exe` processes bound to ports `8791` and `5173`, which `Test-Running` adopts as `"external"`):
 
 ```powershell

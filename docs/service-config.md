@@ -19,7 +19,7 @@ Store configuration at `.sigil/service.json` by default. Override the path by pa
     "port": 8791,
     "ingress_port": 8796,
     "public_port": 8797,
-    "domain": "local",
+    "domain": "rewritelabs.io",
     "federation_mode": "queue",
     "registry": ".sigil/registry.json",
     "identities": {
@@ -72,7 +72,7 @@ Store configuration at `.sigil/service.json` by default. Override the path by pa
    - `stream_port` (integer, 1-65535, optional): WebSocket stream port. Defaults to `port + 1`.
    - `ingress_port` (integer, 1-65535, optional): Reply ingress port.
    - `public_port` (integer, 1-65535, optional): Public OAuth proxy port.
-   - `domain` (string, optional): Federation domain.
+   - `domain` (string, optional): Federation domain. Phase 7 setup requires every endpoint's domain to match it (`sigil/cli/phase7-setup-policy.mjs`), so a stack running the `@rewritelabs.io` bots sets `rewritelabs.io`.
    - `federation_mode` (string, optional): Mode (`sync` or `queue`).
    - `registry` (string, optional): Path to the endpoint registry file.
    - `identities` (object, optional): Paths to identities (`federation`, `room_system`, `room_human`).
