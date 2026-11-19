@@ -15,3 +15,15 @@ test('Linux CI job builds the web client before the live PostgreSQL gate', () =>
   assert.ok(build > -1, 'test-linux never builds packages/sigil-rooms-web');
   assert.ok(build < live, 'web client build must come before npm run test:live');
 });
+
+// #202: the 848-schedule relay-jobs checker must run in CI, with its dependencies
+// installed in its own package, and its per-scenario counts kept in the job output.
+test('CI runs the relay-jobs schedule checker and records its counts', () => {
+  const workflow = fs.readFileSync(new URL('.github/workflows/ci.yml', import.meta.url), 'utf8');
+  const job = workflow.split(/^ {2}relay-jobs-verification:/m)[1];
+  assert.ok(job, 'ci.yml has no relay-jobs-verification job');
+  assert.match(job, /npm ci --prefix packages\/relay-jobs-verification/);
+  assert.match(job, /node packages\/relay-jobs-verification\/check\.mjs \| tee /);
+  assert.match(job, /shell: bash/, 'piping to tee needs bash with pipefail so a failing checker fails the job');
+  assert.match(job, /GITHUB_STEP_SUMMARY/);
+});
