@@ -142,3 +142,45 @@ jobs:
 
       - name: End-to-end test
         run: npm run test:e2e
+
+  # Reproduces the relay-jobs schedule exploration (#202) so someone other than the
+  # original runner can see the per-scenario counts. check.mjs exits 1 on a new
+  # failure and 2 when a known finding stops failing.
+  relay-jobs-verification:
+    name: Relay jobs schedule checker
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 24.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: 'npm'
+
+      - name: Install core dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Install checker dependencies
+        run: npm ci --prefix packages/relay-jobs-verification
+
+      - name: Explore schedules
+        shell: bash
+        run: |
+          node packages/relay-jobs-verification/check.mjs | tee relay-jobs-check.txt
+          {
+            echo '### Relay jobs schedule checker'
+            echo '```'
+            cat relay-jobs-check.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload checker output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay-jobs-check
+          path: relay-jobs-check.txt
+          if-no-files-found: ignore
