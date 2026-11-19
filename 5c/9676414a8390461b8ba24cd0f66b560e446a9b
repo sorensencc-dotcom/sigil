@@ -1,0 +1,19 @@
+.trail/learnings/2026-11-19-the-relay-domain-now-comes-from-chris.md
+  s_6590f8c787ee67::t_157724c77d7d93 1-35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5c9676414a8390461b8ba24cd0f66b560e446a9b",
+  "prompts": {},
+  "sessions": {
+    "s_6590f8c787ee67": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "244ea1a1-be6f-419c-8889-f008fafa5cd0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
