@@ -1,0 +1,21 @@
+.trail/learnings/2026-11-19-removing-a-member-from-a-room-chris.md
+  s_a330b12fce3a16::t_7d5f5597d0d97b 1-26
+.trail/learnings/2026-11-19-floor-warden-bot-replies-only-land-chris.md
+  s_a330b12fce3a16::t_0a9994e759d6d4 1-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9f7e623bfa5d5ebb0f520af0c2c1f7c23849ede9",
+  "prompts": {},
+  "sessions": {
+    "s_a330b12fce3a16": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d5f02fe4-5887-4c91-a89c-ec8ac095dc16",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
