@@ -1,5 +1,24 @@
 # Status
 
+## Session update: 2026-11-19 Phase 7 room bots live, Chief and Helix CI retired
+
+- **Goal:** Replace Chief and Helix CI with the Phase 7 room bots (Grok Bot · Elon, First Mate · Orchestrator, Floor Warden), and prove that each one answers in room `room_056dd222-ec61-4426-87a4-9b0f9d143781`.
+- **Completed:** Ran three `agent run --room-bridge floor-warden` daemons (configured in `.sigil/service.json`, which is gitignored). Created per-bot reply tokens. The external Floor Warden routine now answers as the bot that was mentioned, using that bot's token. Ran `sigil bot disable` on Chief (`016f0b34-f0da-49b2-a32f-482d6e635825`) and Helix CI (`28782df8-9cf6-48a8-ad0c-97c510c66e38`). Removed `ep_chief@rewritelabs.io` from the room by setting `conversation_members.removed_at`.
+- **Verified:** Every bot reply reached the room: Floor Warden at seq 70, Grok Bot at seq 79 and 81, and First Mate at seq 80 and 82, about 1.5 to 2 minutes after each post. `/v1/health` ok.
+- **Decision:** Room member removal has no route or CLI command, so it is a soft delete in Postgres, the same UPDATE as `PostgresRepository.removeRoomMember`. To undo it, set `removed_at` back to NULL.
+- **Not committed:** The working-tree `scripts/windows/start-sigil-stack.ps1` is the old full supervisor. `main` already replaced it with a deprecated wrapper around `sigil service start`, so the working copy is held back so that it does not undo that change.
+- **Next action:** Restart the 5 `mcp-stdio-server` connectors. Decide whether the stack should move to `sigil service start` from `.sigil/service.json`. Close #219.
+
+## Session update: 2026-11-19 Issue 219 endpoint id cutover to @rewritelabs.io
+
+- **Goal:** Make the live relay (`--domain rewritelabs.io`) accept envelopes. Every registry endpoint id was bare, so every send was rejected.
+- **Completed:** Re-keyed the 7 registry endpoints (`ep_claude`, `ep_codex`, `ep_antigravity`, `ep_ollama`, `ep_grokbot`, `ep_chief`, `ep_helix_ci`) to `<id>@rewritelabs.io` in Postgres (318 FK rows plus 55 `quota_usage` rows, FK orphan check clean), in the registry, in the 7 identity files, in `.sigil/service.json`, and in the launcher `--reconcile-kind` args. Untouched: `ep_relay_system`, `ep_alice@local`, signed envelope bodies, and the audit trail. Restarted SigilStack.
+- **Decision:** Chose the full cutover over a code alias after a TLA+ statechart of the cutover showed that every half-migrated state breaks room delivery to chief. Rehearsed on a restored copy first; the forward and reverse runs left all 53 tables identical to live.
+- **Verified:** `/v1/health` ok; no "belongs to domain" warning; no seed conflict; chief daemon runs as `ep_chief@rewritelabs.io` with its stream connected and an empty err log. A send to `ep_codex@rewritelabs.io` was accepted and read from the codex inbox. A bare `ep_codex` send still returns MALFORMED_FEDERATED_ID.
+- **Rollback:** DB copy `sigil_pre219` (template) and `C:\Users\soren\.sigil-secrets\backup-219-db\sigil-pre219.dump`; file backups in `C:\Users\soren\.sigil-secrets\backup-219-20261119-132138\`. The scripts take `-v reverse=1` / `-Reverse`.
+- **Not verified:** A room message reaching chief (that would call the external Floor Warden webhook). The 16 old deliveries queued to antigravity (Oct 29 to Nov 11) still carry bare ids in their signed bodies.
+- **Next action:** Restart the 5 `mcp-stdio-server` connectors. Send one room message to chief. Commit the launcher change and the trail learnings. Close #219.
+
 ## Session update: 2026-11-14 Sigil 0.2.3 release gate repair
 
 - **Goal:** Repair the release workflow failure before the 0.2.3 npm publish.
