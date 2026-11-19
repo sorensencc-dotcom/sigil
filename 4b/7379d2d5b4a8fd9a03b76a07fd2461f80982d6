@@ -1,0 +1,23 @@
+sigil/cli/service-config.test.mjs
+  s_6590f8c787ee67::t_14a9e15ca070a3 185-201
+docs/phase7-setup-runbook.md
+  s_6590f8c787ee67::t_7d3c4cbcda13af 43
+docs/service-config.md
+  s_6590f8c787ee67::t_6a29e66c4aa1da 22,75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4b7379d2d5b4a8fd9a03b76a07fd2461f80982d6",
+  "prompts": {},
+  "sessions": {
+    "s_6590f8c787ee67": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "244ea1a1-be6f-419c-8889-f008fafa5cd0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
