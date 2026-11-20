@@ -1,0 +1,50 @@
+sigil/cli/service-config.mjs
+  s_d0945fcbb14892::t_e2491cbed8384e 3
+  s_d0945fcbb14892::t_bc22249604629c 212-217
+  s_d0945fcbb14892::t_9eb3c137f47035 357-370,374-377
+  s_d0945fcbb14892::t_3c91f99f3ab268 166-202,209-210
+  s_d0945fcbb14892::t_6f48e0cb8a0af7 211
+sigil/cli/service-runner.test.mjs
+  s_d0945fcbb14892::t_37c2512ae67467 1-146
+sigil/cli/service-command.mjs
+  s_d0945fcbb14892::t_ff13cf371fb925 78-79,112-113,117-134
+  s_d0945fcbb14892::t_63e4fa4096b3a3 2,4
+  s_d0945fcbb14892::t_9f7cada93a186e 15,19,27-28,32,37-49
+  s_d0945fcbb14892::t_29ab3d2a4199ba 70,75-77
+  s_d0945fcbb14892::t_f99e83f7e908a2 135
+sigil/cli/windows-supervisor.mjs
+  s_d0945fcbb14892::t_04818e65abba65 59,61-63
+  s_d0945fcbb14892::t_555d8cbe2f64d2 30-32,41-42
+sigil/cli/service-config.test.mjs
+  s_d0945fcbb14892::t_006768e75ab70f 202-250
+sigil/cli/windows-supervisor.test.mjs
+  s_d0945fcbb14892::t_555d8cbe2f64d2 52-54
+  s_d0945fcbb14892::t_12ae98c812d88d 139-178
+sigil/cli/windows-supervisor.ps1
+  s_d0945fcbb14892::t_2a26fe56cd1ff5 32-43,45-46,49,58-62,64,75-77,80,87,97,104,107-109,111-114,127,135,140,153-154,167,174,181
+  s_d0945fcbb14892::t_555d8cbe2f64d2 8,13
+sigil/cli/service-runner.mjs
+  s_d0945fcbb14892::t_1ae2a0f659badd 1-174
+docs/service-config.md
+  s_d0945fcbb14892::t_9c8839f5418c1d 92-106,109,111-116,132-140,144
+  s_d0945fcbb14892::t_d9f4fb2303f360 107-108
+  s_d0945fcbb14892::t_157a313d6a774b 110
+sigil/cli/service-command.test.mjs
+  s_d0945fcbb14892::t_12ae98c812d88d 243-298
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f5c96673e3ad8b6f361b86e261d8d77789052396",
+  "prompts": {},
+  "sessions": {
+    "s_d0945fcbb14892": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "22e7dc45-28e5-4291-b916-dd568d92d4d3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
