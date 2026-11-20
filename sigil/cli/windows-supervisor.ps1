@@ -5,12 +5,12 @@ param(
   [string]$Action,
 
   [Parameter(Mandatory = $true)]
-  [string]$PlanJson
+  [string]$PlanBase64
 )
 
 $ErrorActionPreference = 'Stop'
 
-$plan = $PlanJson | ConvertFrom-Json
+$plan = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($PlanBase64)) | ConvertFrom-Json
 $user = "$env:USERDOMAIN\$env:USERNAME"
 
 function Get-ListeningPorts {
@@ -29,12 +29,25 @@ function Get-ProcessPidByPort([int]$port) {
   return $null
 }
 
+# Runner processes are `node ... service run <component> ...`. Match on that
+# token so stop/status work for components that listen on no port (agents).
+function Get-RunnerPids([string]$component) {
+  try {
+    return @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine -like "* service run $component *" } |
+        Select-Object -ExpandProperty ProcessId)
+  } catch {
+    return @()
+  }
+}
+
 if ($Action -eq 'Install') {
+  $logonType = if ($plan.supervisor -and $plan.supervisor.logon_type -eq 's4u') { 'S4U' } else { 'Interactive' }
+  $runLevel = if ($plan.supervisor -and $plan.supervisor.run_level -eq 'highest') { 'Highest' } else { 'Limited' }
   $results = @()
   foreach ($comp in $plan.components) {
-    $taskName = $comp.supervisor.task_name
+    $taskName = $comp.supervisor_target.task_name
     $outLog = $comp.log_files.out
-    $errLog = $comp.log_files.err
 
     # Ensure log directory exists
     $logDir = Split-Path -Parent $outLog
@@ -42,13 +55,13 @@ if ($Action -eq 'Install') {
       New-Item -ItemType Directory -Force -Path $logDir | Out-Null
     }
 
-    $cmd = $comp.command -join ' '
-    $runnerScript = "& $cmd *>> `"$outLog`" 2>> `"$errLog`""
-    $argLine = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"$runnerScript`""
-
-    $taskAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $argLine
+    # The task runs `sigil service run <component>` directly (no shell wrapper):
+    # that runner loads secrets, waits for dependencies, writes the logs and
+    # restarts the child. Relative paths in the child command resolve against
+    # the working directory, so it must be the project root.
+    $taskAction = New-ScheduledTaskAction -Execute $comp.task.execute -Argument $comp.task.arguments -WorkingDirectory $comp.task.working_directory
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
-    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType $logonType -RunLevel $runLevel
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
       -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
 
@@ -59,16 +72,19 @@ if ($Action -eq 'Install') {
       Component = $comp.name
       TaskName = $taskName
       Status = 'Installed'
+      WorkingDirectory = $taskAction.WorkingDirectory
+      LogonType = $principal.LogonType.ToString()
+      RunLevel = $principal.RunLevel.ToString()
     }
   }
-  $results | ConvertTo-Json -Depth 4
+  ConvertTo-Json -InputObject @($results) -Depth 4
   exit 0
 }
 
 if ($Action -eq 'Start') {
   $results = @()
   foreach ($comp in $plan.components) {
-    $taskName = $comp.supervisor.task_name
+    $taskName = $comp.supervisor_target.task_name
     if ($PSCmdlet.ShouldProcess($taskName, "Start scheduled task")) {
       try {
         Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
@@ -78,18 +94,24 @@ if ($Action -eq 'Start') {
       }
     }
   }
-  $results | ConvertTo-Json -Depth 4
+  ConvertTo-Json -InputObject @($results) -Depth 4
   exit 0
 }
 
 if ($Action -eq 'Stop') {
   $results = @()
   foreach ($comp in $plan.components) {
-    $taskName = $comp.supervisor.task_name
+    $taskName = $comp.supervisor_target.task_name
     if ($PSCmdlet.ShouldProcess($taskName, "Stop scheduled task")) {
       try {
+        # Find the runner before stopping the task: Stop-ScheduledTask ends the
+        # runner but leaves its node child running, so kill the whole tree.
+        $runnerPids = Get-RunnerPids $comp.name
         Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-        # If port is still bound, terminate process
+        foreach ($runnerPid in $runnerPids) {
+          & taskkill.exe /PID $runnerPid /T /F 2>&1 | Out-Null
+        }
+        # If a port is still bound (process started outside the task), terminate it
         foreach ($p in $comp.ports) {
           $pidToKill = Get-ProcessPidByPort $p
           if ($pidToKill) {
@@ -102,7 +124,7 @@ if ($Action -eq 'Stop') {
       }
     }
   }
-  $results | ConvertTo-Json -Depth 4
+  ConvertTo-Json -InputObject @($results) -Depth 4
   exit 0
 }
 
@@ -110,12 +132,12 @@ if ($Action -eq 'Status') {
   $listeningPorts = Get-ListeningPorts
   $results = @()
   foreach ($comp in $plan.components) {
-    $taskName = $comp.supervisor.task_name
+    $taskName = $comp.supervisor_target.task_name
     $taskInfo = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     $taskState = if ($taskInfo) { $taskInfo.State.ToString() } else { 'NotInstalled' }
 
     $boundPorts = @($comp.ports | Where-Object { $listeningPorts -contains $_ })
-    $pids = @()
+    $pids = @(Get-RunnerPids $comp.name)
     foreach ($p in $boundPorts) {
       $foundPid = Get-ProcessPidByPort $p
       if ($foundPid -and $pids -notcontains $foundPid) { $pids += $foundPid }
@@ -128,11 +150,8 @@ if ($Action -eq 'Status') {
       if ($errLines) { $lastError = ($errLines -join "`n").Trim() }
     }
 
-    $isHealthy = if ($comp.ports.Count -gt 0) {
-      ($boundPorts.Count -eq $comp.ports.Count) -and ($taskState -eq 'Running' -or $taskState -eq 'Ready')
-    } else {
-      ($taskState -eq 'Running' -or $taskState -eq 'Ready')
-    }
+    # A task in state Ready is installed but not running: never healthy.
+    $isHealthy = ($taskState -eq 'Running') -and ($boundPorts.Count -eq @($comp.ports).Count)
 
     $results += [pscustomobject]@{
       Component = $comp.name
@@ -145,20 +164,20 @@ if ($Action -eq 'Status') {
       LastError = $lastError
     }
   }
-  $results | ConvertTo-Json -Depth 4
+  ConvertTo-Json -InputObject @($results) -Depth 4
   exit 0
 }
 
 if ($Action -eq 'Uninstall') {
   $results = @()
   foreach ($comp in $plan.components) {
-    $taskName = $comp.supervisor.task_name
+    $taskName = $comp.supervisor_target.task_name
     if ($PSCmdlet.ShouldProcess($taskName, "Unregister scheduled task")) {
       Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
       Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
       $results += [pscustomobject]@{ Component = $comp.name; TaskName = $taskName; Status = 'Uninstalled' }
     }
   }
-  $results | ConvertTo-Json -Depth 4
+  ConvertTo-Json -InputObject @($results) -Depth 4
   exit 0
 }

@@ -49,7 +49,9 @@ test('installWindowsService calls powershell with Install action and returns ins
 
   const installCall = calls[0];
   assert.ok(installCall.args.includes('Install'));
-  assert.ok(installCall.args.includes('-PlanJson'));
+  assert.ok(installCall.args.includes('-PlanBase64'));
+  const encoded = installCall.args[installCall.args.indexOf('-PlanBase64') + 1];
+  assert.deepEqual(JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')), mockPlan);
 });
 
 test('startWindowsService and stopWindowsService invoke expected actions', () => {
@@ -133,4 +135,44 @@ test('executeWindowsSupervisor handles dry-run by appending -WhatIf', () => {
 test('executeWindowsSupervisor throws on non-zero exit', () => {
   const mockExec = () => ({ status: 1, stderr: 'Access denied' });
   assert.throws(() => executeWindowsSupervisor('Install', mockPlan, { execFn: mockExec }), /Access denied/);
+});
+
+const realPs1 = process.platform === 'win32' ? test : test.skip;
+
+function realPlan() {
+  return {
+    platform: 'win32',
+    log_dir: 'C:\\test\\logs',
+    supervisor: { logon_type: 'interactive', run_level: 'limited' },
+    components: [
+      {
+        name: 'agent-x',
+        command: ['node', 'sigil/cli/sigil.mjs', 'agent', 'run'],
+        ports: [],
+        depends_on_ports: [8791],
+        log_files: { out: 'C:\\test\\logs\\agent-x.out.log', err: 'C:\\test\\logs\\agent-x.err.log' },
+        supervisor_target: { type: 'windows_task_scheduler', task_name: 'SigilStackTest_doesnotexist_agent-x' },
+        task: {
+          execute: 'C:\\Program Files\\nodejs\\node.exe',
+          arguments: '"C:\\repo dir\\sigil\\cli\\sigil.mjs" service run agent-x --service-config "C:\\repo dir\\.sigil\\service.json"',
+          working_directory: 'C:\\repo dir',
+        },
+      },
+    ],
+  };
+}
+
+realPs1('windows-supervisor.ps1 Install -WhatIf builds the task with working directory and principal', () => {
+  const results = executeWindowsSupervisor('Install', realPlan(), { dryRun: true });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].Status, 'Installed');
+  assert.equal(results[0].WorkingDirectory, 'C:\\repo dir');
+  assert.equal(results[0].LogonType, 'Interactive');
+  assert.equal(results[0].RunLevel, 'Limited');
+});
+
+realPs1('windows-supervisor.ps1 Status reports a not-installed portless component as unhealthy', () => {
+  const results = executeWindowsSupervisor('Status', realPlan());
+  assert.equal(results[0].TaskState, 'NotInstalled');
+  assert.equal(results[0].Healthy, false);
 });

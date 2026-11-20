@@ -1,5 +1,7 @@
 import { parseArgs } from 'node:util';
+import fs from 'node:fs';
 import path from 'node:path';
+import { loadServiceSecrets, runSupervisedComponent } from './service-runner.mjs';
 import {
   DEFAULT_SERVICE_CONFIG,
   loadServiceConfigFile,
@@ -10,10 +12,11 @@ import {
 import { executeWindowsSupervisor } from './windows-supervisor.mjs';
 import { executeSystemdSupervisor } from './systemd-supervisor.mjs';
 
-const SERVICE_SUBCOMMANDS = ['install', 'start', 'stop', 'status', 'uninstall'];
+const SERVICE_SUBCOMMANDS = ['install', 'start', 'stop', 'status', 'uninstall', 'run'];
 
 function printServiceUsage() {
   console.log(`usage: sigil service <install|start|stop|status|uninstall> [options]
+       sigil service run <component> [--service-config <path>]
 
 Subcommands:
   install     Register supervisor units and prepare log directories
@@ -21,15 +24,29 @@ Subcommands:
   stop        Stop supervisor services
   status      Report health status of running services
   uninstall   Unregister supervisor units
+  run         Load secrets, wait for dependencies, and supervise one component
+              (what each installed unit executes; not usually run by hand)
 
 Options:
   --service-config <path>   Path to service config file (default: .sigil/service.json)
-  --dry-run                 Run without touching host OS supervisor (default: true)
+  --dry-run                 Print the plan without touching the host OS supervisor (default: false)
   --json                    Output plan as structured JSON
   --help                    Show this help message`);
 }
 
-export async function cmdService(argv, { supervisorExecFn, platform } = {}) {
+async function defaultRunComponent({ component, cwd }) {
+  fs.mkdirSync(path.dirname(component.log_files.out), { recursive: true });
+  const out = fs.createWriteStream(component.log_files.out, { flags: 'a' });
+  const err = fs.createWriteStream(component.log_files.err, { flags: 'a' });
+  const log = (line) => out.write(`${new Date().toISOString()} [sigil service] ${line}\n`);
+  const controller = new AbortController();
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGBREAK']) {
+    process.once(sig, () => controller.abort());
+  }
+  await runSupervisedComponent({ component, cwd, log, logStreams: { out, err }, signal: controller.signal });
+}
+
+export async function cmdService(argv, { supervisorExecFn, platform, runComponentFn = defaultRunComponent } = {}) {
   const [subcommand, ...rest] = argv;
 
   if (!subcommand || subcommand === '--help' || subcommand === '-h') {
@@ -50,9 +67,14 @@ export async function cmdService(argv, { supervisorExecFn, platform } = {}) {
     help: { type: 'boolean', default: false },
   };
 
-  const parsed = parseArgs({ args: rest, options, allowPositionals: false });
+  const parsed = parseArgs({ args: rest, options, allowPositionals: subcommand === 'run' });
   if (parsed.values.help) {
     printServiceUsage();
+    return;
+  }
+  if (subcommand === 'run' && parsed.positionals.length !== 1) {
+    console.error('sigil service run: expected exactly one component name');
+    process.exitCode = 1;
     return;
   }
 
@@ -87,8 +109,29 @@ export async function cmdService(argv, { supervisorExecFn, platform } = {}) {
 
   const plan = buildServicePlan(config, {
     basePath: projectRoot,
+    configPath: path.resolve(configPath),
+    nodePath: process.execPath,
     platform,
   });
+
+  if (subcommand === 'run') {
+    const name = parsed.positionals[0];
+    const component = plan.components.find((c) => c.name === name);
+    if (!component) {
+      console.error(`sigil service run: unknown component "${name}". Known: ${plan.components.map((c) => c.name).join(', ')}`);
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      loadServiceSecrets(config.secrets);
+    } catch (err) {
+      console.error(`sigil service run ${name}: ${err.message}`);
+      process.exitCode = 1;
+      return;
+    }
+    await runComponentFn({ component, cwd: projectRoot });
+    return;
+  }
 
   if (!isDryRun && plan.platform === 'win32') {
     const actionName = subcommand.charAt(0).toUpperCase() + subcommand.slice(1);

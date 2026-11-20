@@ -199,3 +199,52 @@ test('docs/service-config.md example runs the relay on the Phase 7 domain', () =
   assert.notEqual(i, -1, 'relay command has no --domain');
   assert.equal(relay.command[i + 1], 'rewritelabs.io');
 });
+
+test('validateServiceConfig accepts secrets and supervisor blocks and flags bad values', () => {
+  const ok = validateServiceConfig({
+    relay: { port: 8791 },
+    secrets: { env_files: ['a.env'], file_env: { DB: 'db.txt' }, user_env: ['WRAP'], required: ['DB'] },
+    supervisor: { logon_type: 's4u', run_level: 'highest' },
+  });
+  assert.equal(ok.ok, true, JSON.stringify(ok.issues));
+
+  const bad = validateServiceConfig({
+    relay: { port: 8791 },
+    secrets: { env_files: 'a.env', file_env: ['x'], required: [1] },
+    supervisor: { logon_type: 'password', run_level: 'admin' },
+  });
+  assert.equal(bad.ok, false);
+  for (const code of ['SECRETS_ENV_FILES_INVALID', 'SECRETS_FILE_ENV_INVALID', 'SECRETS_REQUIRED_INVALID', 'SUPERVISOR_LOGON_TYPE_INVALID', 'SUPERVISOR_RUN_LEVEL_INVALID']) {
+    assert.ok(bad.issues.some((i) => i.code === code), `expected ${code}`);
+  }
+});
+
+test('buildServicePlan gives every component a task that runs the service runner from the project root', () => {
+  const basePath = path.join(os.tmpdir(), 'sigil proj');
+  const configPath = path.join(basePath, '.sigil', 'service.json');
+  const plan = buildServicePlan({
+    relay: { port: 8791 },
+    agents: [{ name: 'bot', identity: 'C:\ids\bot.identity.json', room_bridge: 'floor-warden' }],
+    rooms_web: { port: 5173 },
+    supervisor: { logon_type: 's4u', run_level: 'highest' },
+  }, { platform: 'win32', basePath, configPath, nodePath: 'C:\Program Files\nodejs\node.exe' });
+
+  assert.deepEqual(plan.supervisor, { logon_type: 's4u', run_level: 'highest' });
+  for (const comp of plan.components) {
+    assert.equal(comp.task.execute, 'C:\Program Files\nodejs\node.exe');
+    assert.equal(comp.task.working_directory, basePath);
+    assert.ok(comp.task.arguments.includes(`service run ${comp.name}`), comp.task.arguments);
+    assert.ok(comp.task.arguments.includes(`"${configPath}"`), 'config path with a space is quoted');
+    assert.ok(comp.task.arguments.includes(`"${path.join(basePath, 'sigil', 'cli', 'sigil.mjs')}"`), 'absolute sigil.mjs, quoted');
+  }
+
+  const bot = plan.components.find((c) => c.name === 'agent-bot');
+  assert.deepEqual(bot.depends_on_ports, [8791, 8792]);
+  assert.deepEqual(plan.components.find((c) => c.name === 'relay').depends_on_ports, []);
+  assert.deepEqual(plan.components.find((c) => c.name === 'rooms-web').depends_on_ports, [8791]);
+});
+
+test('buildServicePlan defaults the supervisor to an interactive, limited task', () => {
+  const plan = buildServicePlan({ relay: { port: 8791 } }, { platform: 'win32', basePath: os.tmpdir() });
+  assert.deepEqual(plan.supervisor, { logon_type: 'interactive', run_level: 'limited' });
+});
