@@ -27,7 +27,9 @@ function findPowerShell() {
 
 export function executeWindowsSupervisor(action, plan, { dryRun = false, execFn = defaultExecFn } = {}) {
   const ps = findPowerShell();
-  const planJson = JSON.stringify(plan);
+  // Base64 so the plan survives Windows command-line quoting: raw JSON passed
+  // to `powershell.exe -File` loses its double quotes and fails to bind.
+  const planBase64 = Buffer.from(JSON.stringify(plan), 'utf8').toString('base64');
   const args = [
     '-NoProfile',
     '-ExecutionPolicy',
@@ -36,8 +38,8 @@ export function executeWindowsSupervisor(action, plan, { dryRun = false, execFn 
     WIN_SUPERVISOR_SCRIPT,
     '-Action',
     action,
-    '-PlanJson',
-    planJson,
+    '-PlanBase64',
+    planBase64,
   ];
 
   if (dryRun) {
@@ -54,8 +56,11 @@ export function executeWindowsSupervisor(action, plan, { dryRun = false, execFn 
     throw new Error(`Windows supervisor (${action}) failed: ${err}`);
   }
 
-  const stdout = res.stdout?.trim();
+  let stdout = res.stdout?.trim();
   if (!stdout) return [];
+  // -WhatIf prints "What if: ..." lines to the host ahead of the JSON result.
+  const jsonStart = stdout.search(/^[[{]/m);
+  if (jsonStart > 0) stdout = stdout.slice(jsonStart);
   try {
     const parsed = JSON.parse(stdout);
     return Array.isArray(parsed) ? parsed : [parsed];

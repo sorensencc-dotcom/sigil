@@ -240,3 +240,59 @@ test('cmdService executes Linux supervisor operations when dry-run is false', as
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+test('cmdService run loads secrets and hands the named component to the runner', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-svc-run-'));
+  try {
+    const envFile = path.join(tempDir, 'a.env');
+    fs.writeFileSync(envFile, 'SVC_RUN_TEST_SECRET=shh\n');
+    const configPath = path.join(tempDir, 'service.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+      relay: { port: 8791 },
+      agents: [{ name: 'bot', identity: 'bot.identity.json', room_bridge: 'floor-warden' }],
+      secrets: { env_files: [envFile], required: ['SVC_RUN_TEST_SECRET'] },
+    }));
+
+    let received;
+    const out = await captureOutput(() =>
+      cmdService(['run', 'agent-bot', '--service-config', configPath], {
+        runComponentFn: async (opts) => { received = { ...opts, secret: process.env.SVC_RUN_TEST_SECRET }; },
+      })
+    );
+    assert.equal(out.exitCode, 0, out.errors.join('\n'));
+    assert.equal(received.component.name, 'agent-bot');
+    assert.deepEqual(received.component.depends_on_ports, [8791, 8792]);
+    assert.equal(received.secret, 'shh');
+    assert.ok(!out.logs.join('\n').includes('shh'), 'secret value never printed');
+  } finally {
+    delete process.env.SVC_RUN_TEST_SECRET;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('cmdService run rejects an unknown component and a missing required secret', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-svc-run-bad-'));
+  try {
+    const configPath = path.join(tempDir, 'service.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+      relay: { port: 8791 },
+      secrets: { required: ['SVC_RUN_DEFINITELY_UNSET'] },
+    }));
+    const runComponentFn = async () => { throw new Error('should not run'); };
+
+    const unknown = await captureOutput(() => cmdService(['run', 'nope', '--service-config', configPath], { runComponentFn }));
+    assert.equal(unknown.exitCode, 1);
+    assert.ok(unknown.errors.some((e) => e.includes('unknown component "nope"')));
+
+    const missing = await captureOutput(() => cmdService(['run', 'relay', '--service-config', configPath], { runComponentFn }));
+    assert.equal(missing.exitCode, 1);
+    assert.ok(missing.errors.some((e) => e.includes('SVC_RUN_DEFINITELY_UNSET')));
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('cmdService help states that --dry-run is off by default', async () => {
+  const out = await captureOutput(() => cmdService(['--help']));
+  assert.ok(out.logs.join('\n').includes('--dry-run                 Print the plan without touching the host OS supervisor (default: false)'));
+});

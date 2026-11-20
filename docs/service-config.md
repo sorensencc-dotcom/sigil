@@ -89,6 +89,31 @@ Store configuration at `.sigil/service.json` by default. Override the path by pa
    - `port` (integer, 1-65535, required): Web listener port.
    - `auth_mode` (string, optional): Authentication mode (`cookie` or `bearer`).
    - `public_origin` (string, optional): Canonical public URL for web sessions.
+5. **`secrets`** (object, optional): Values `sigil service run` loads into each component's environment before it starts. Names are logged; values never are.
+   - `env_files` (array of paths): `KEY=VALUE` files. Blank lines, `#` comments, an `export ` prefix, and surrounding quotes are handled.
+   - `file_env` (object): Maps a variable name to a file whose trimmed contents become its value (for example `SIGIL_DATABASE_URL`).
+   - `user_env` (array of names): On Windows, copies these user-scope variables from `HKCU\Environment` when the process does not already have them. Scheduled tasks, S4U ones in particular, do not reliably inherit user variables.
+   - `required` (array of names): The component refuses to start and names every missing variable.
+6. **`supervisor`** (object, optional): How Windows registers each scheduled task.
+   - `logon_type` (`interactive` or `s4u`): Default `interactive`, which runs only while you are logged on. `s4u` runs whether or not you are logged on and needs an elevated shell to install.
+   - `run_level` (`limited` or `highest`): Default `limited`.
+
+The top-level `secrets` block lists where values come from. `relay.secrets` names the variables the relay reads; it does not load anything.
+
+```json
+{
+  "secrets": {
+    "env_files": [
+      "C:\\Users\\you\\.sigil-secrets\\floor-warden.env",
+      "C:\\Users\\you\\.sigil-secrets\\github-oauth.env"
+    ],
+    "file_env": { "SIGIL_DATABASE_URL": "C:\\Users\\you\\.sigil-secrets\\sigil-database-url.txt" },
+    "user_env": ["SIGIL_ROOM_BOT_KEY_WRAP_KEY", "SIGIL_ROOM_KEY_WRAP_KEY"],
+    "required": ["SIGIL_DATABASE_URL", "SIGIL_ROOM_BOT_KEY_WRAP_KEY", "SIGIL_ROOM_KEY_WRAP_KEY", "GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET"]
+  },
+  "supervisor": { "logon_type": "s4u", "run_level": "highest" }
+}
+```
 
 All ports defined across `relay`, `relay.stream_port`, `relay.ingress_port`, `relay.public_port`, and `rooms_web.port` must be unique. `sigil doctor` enforces port disjointness.
 
@@ -104,16 +129,19 @@ If `.sigil/service.json` exists in the repository root, `sigil doctor` checks it
 
 ### `sigil service` subcommands
 
-The `sigil service` command accepts five subcommands:
-1. `install`: Generates the supervisor registration plan and log directories.
-2. `start`: Computes commands to trigger supervisor services.
-3. `stop`: Computes commands to stop running supervisor services.
-4. `status`: Inspects component health and listening ports.
-5. `uninstall`: Computes commands to deregister supervisor units.
+The `sigil service` command accepts six subcommands:
+1. `install`: Registers one supervisor unit per component and creates the log directory.
+2. `start`: Starts the registered units.
+3. `stop`: Stops the units. On Windows it also kills each runner's process tree, so agents that listen on no port do not survive as orphans.
+4. `status`: Reports task state, listening ports, and PIDs. A component is healthy only when its task is `Running` and every expected port is bound.
+5. `uninstall`: Removes the units.
+6. `run <component>`: What each Windows task executes. It loads `secrets`, waits until the component's dependency ports accept connections (agents wait for the relay HTTP and stream ports; rooms-web waits for the relay), starts the component, appends its output to `.sigil/logs/<component>.out.log` and `.err.log`, and restarts it with exponential backoff (1 s doubling to 300 s, reset after 60 s of uptime). Task Scheduler's own restart setting fires only when a task fails to launch, not when the program exits non-zero, so the restart loop lives in the runner.
+
+Each Windows task runs `node <repo>\sigil\cli\sigil.mjs service run <component> --service-config <path>` with the project root as its working directory.
 
 Flags:
 - `--service-config <path>`: Points to a specific service configuration file.
-- `--dry-run`: Runs in simulation mode without altering system supervisor state. Default is `true`.
+- `--dry-run`: Prints the plan without altering supervisor state. Default is `false`: without it, the command acts on the host.
 - `--json`: Formats output as structured JSON.
 
 ## Credential store management

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { quoteWindowsArg } from './service-runner.mjs';
 
 export const DEFAULT_SERVICE_CONFIG = path.join('.sigil', 'service.json');
 export const ALLOWED_BRIDGES = ['claude', 'codex', 'copilot', 'router', 'floor-warden'];
@@ -162,13 +163,58 @@ export function validateServiceConfig(config, { checkFiles = false, basePath = p
     }
   }
 
+  // Secrets loaded by `sigil service run` before the component starts.
+  if (config.secrets !== undefined) {
+    const s = config.secrets;
+    const isStringArray = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string' && x.length > 0);
+    if (!s || typeof s !== 'object' || Array.isArray(s)) {
+      issues.push({ code: 'SECRETS_INVALID', path: 'secrets', message: 'secrets must be an object' });
+    } else {
+      if (s.env_files !== undefined && !isStringArray(s.env_files)) {
+        issues.push({ code: 'SECRETS_ENV_FILES_INVALID', path: 'secrets.env_files', message: 'secrets.env_files must be an array of file paths' });
+      }
+      if (s.file_env !== undefined && (!s.file_env || typeof s.file_env !== 'object' || Array.isArray(s.file_env)
+        || !Object.values(s.file_env).every((v) => typeof v === 'string' && v.length > 0))) {
+        issues.push({ code: 'SECRETS_FILE_ENV_INVALID', path: 'secrets.file_env', message: 'secrets.file_env must map variable names to file paths' });
+      }
+      if (s.user_env !== undefined && !isStringArray(s.user_env)) {
+        issues.push({ code: 'SECRETS_USER_ENV_INVALID', path: 'secrets.user_env', message: 'secrets.user_env must be an array of variable names' });
+      }
+      if (s.required !== undefined && !isStringArray(s.required)) {
+        issues.push({ code: 'SECRETS_REQUIRED_INVALID', path: 'secrets.required', message: 'secrets.required must be an array of variable names' });
+      }
+    }
+  }
+
+  if (config.supervisor !== undefined) {
+    const sv = config.supervisor;
+    if (!sv || typeof sv !== 'object' || Array.isArray(sv)) {
+      issues.push({ code: 'SUPERVISOR_INVALID', path: 'supervisor', message: 'supervisor must be an object' });
+    } else {
+      if (sv.logon_type !== undefined && !LOGON_TYPES.includes(sv.logon_type)) {
+        issues.push({ code: 'SUPERVISOR_LOGON_TYPE_INVALID', path: 'supervisor.logon_type', message: `supervisor.logon_type must be one of: ${LOGON_TYPES.join(', ')}` });
+      }
+      if (sv.run_level !== undefined && !RUN_LEVELS.includes(sv.run_level)) {
+        issues.push({ code: 'SUPERVISOR_RUN_LEVEL_INVALID', path: 'supervisor.run_level', message: `supervisor.run_level must be one of: ${RUN_LEVELS.join(', ')}` });
+      }
+    }
+  }
+
   return {
     ok: issues.length === 0,
     issues,
   };
 }
 
-export function buildServicePlan(config, { platform = process.platform, nodePath = 'node', basePath = process.cwd() } = {}) {
+export const LOGON_TYPES = ['interactive', 's4u'];
+export const RUN_LEVELS = ['limited', 'highest'];
+
+export function buildServicePlan(config, {
+  platform = process.platform,
+  nodePath = 'node',
+  basePath = process.cwd(),
+  configPath = path.join(basePath, DEFAULT_SERVICE_CONFIG),
+} = {}) {
   const validation = validateServiceConfig(config, { checkFiles: false, basePath });
   if (!validation.ok) {
     throw new Error(`Cannot build service plan for invalid config: ${validation.issues.map((i) => i.message).join('; ')}`);
@@ -308,9 +354,27 @@ export function buildServicePlan(config, { platform = process.platform, nodePath
     });
   }
 
+  // Agents need the relay's HTTP and stream ports; rooms-web needs its HTTP port.
+  const sigilEntry = path.join(basePath, 'sigil', 'cli', 'sigil.mjs');
+  const absConfig = path.resolve(basePath, configPath);
+  for (const comp of components) {
+    if (comp.name.startsWith('agent-')) comp.depends_on_ports = [relayPort, streamPort];
+    else if (comp.name === 'rooms-web') comp.depends_on_ports = [relayPort];
+    else comp.depends_on_ports = [];
+    comp.task = {
+      execute: nodePath,
+      arguments: [sigilEntry, 'service', 'run', comp.name, '--service-config', absConfig].map(quoteWindowsArg).join(' '),
+      working_directory: basePath,
+    };
+  }
+
   return {
     platform,
     log_dir: logDir,
+    supervisor: {
+      logon_type: config.supervisor?.logon_type ?? 'interactive',
+      run_level: config.supervisor?.run_level ?? 'limited',
+    },
     components,
   };
 }
