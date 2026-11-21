@@ -648,3 +648,43 @@ test('a high-risk capability envelope is rejected without a decision, accepted o
   assert.equal(rejectedUnrelated.status, 403);
   assert.equal(rejectedUnrelated.body.code, 'APPROVAL_REQUIRED');
 });
+
+test('approval challenges store the bound envelope, and a challenge without one still works', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const ids = { human: `usr_${suffix}`, endpoint: `ep_${suffix}` };
+  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  assertDisposableTestDatabase(connectionString);
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  for (const file of (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort()) {
+    await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
+  }
+  await pool.query(`
+    INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+      VALUES ('${ids.endpoint}', '${ids.human}', 'claude', 'agent', 'install_${suffix}', 'Claude', 'active', NOW());
+  `);
+  const repository = new PostgresRepository({ pool });
+  const base = (id) => ({ id, endpointId: ids.endpoint, actionHash: `hash_${id}`, webauthnChallenge: `webauthn_${id}`, callbackUrl: 'http://127.0.0.1:4567/cb', token: `token_${id}`, expiresAt: new Date(Date.now() + 300_000).toISOString() });
+  const envelope = { message_id: 'msg_1', conversation_id: 'conv_1', message_type: 'chat.message', capabilities: ['sigil.approval/request'], body: { text: 'gated', nested: { n: 1 } } };
+
+  await repository.createApprovalChallenge({ ...base('with_env'), conversationId: 'conv_1', messageId: 'msg_1', capabilities: ['sigil.approval/request'], envelope });
+  const bound = await repository.getApprovalChallenge('with_env');
+  assert.deepEqual(bound.envelope, envelope);
+  assert.equal(bound.conversationId, 'conv_1');
+  assert.equal(bound.messageId, 'msg_1');
+  assert.deepEqual(bound.capabilities, ['sigil.approval/request']);
+
+  await repository.createApprovalChallenge(base('no_env'));
+  const plain = await repository.getApprovalChallenge('no_env');
+  assert.equal(Object.hasOwn(plain, 'envelope'), false);
+  assert.equal(plain.actionHash, 'hash_no_env');
+
+  // The envelope columns are all set or all null; a half-bound row is refused.
+  await assert.rejects(
+    pool.query(`INSERT INTO approval_challenges (challenge_id, endpoint_id, action_hash, webauthn_challenge, callback_url, token_hash, status, created_at, expires_at, envelope)
+                VALUES ('half_${suffix}', '${ids.endpoint}', 'h', 'w_${suffix}', 'http://127.0.0.1:1/cb', 't', 'pending', NOW(), NOW() + INTERVAL '5 minutes', '{}'::jsonb)`),
+    /approval_challenges_envelope_columns_together/,
+  );
+});

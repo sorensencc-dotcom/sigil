@@ -469,10 +469,11 @@ export class PostgresRepository {
 
   async createApprovalChallenge(challenge) {
     const result = await this.pool.query(
-      `INSERT INTO approval_challenges (challenge_id, endpoint_id, action_hash, webauthn_challenge, callback_url, token_hash, status, created_at, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8)
-       RETURNING challenge_id, endpoint_id, action_hash, webauthn_challenge, callback_url, status, created_at, expires_at`,
-      [challenge.id, challenge.endpointId, challenge.actionHash, challenge.webauthnChallenge, challenge.callbackUrl, crypto.createHash('sha256').update(challenge.token).digest('hex'), new Date().toISOString(), challenge.expiresAt]
+      `INSERT INTO approval_challenges (challenge_id, endpoint_id, action_hash, webauthn_challenge, callback_url, token_hash, status, created_at, expires_at, conversation_id, message_id, capabilities, envelope)
+       VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10, $11, $12)
+       RETURNING challenge_id, endpoint_id, action_hash, webauthn_challenge, callback_url, status, created_at, expires_at, conversation_id, message_id, capabilities`,
+      [challenge.id, challenge.endpointId, challenge.actionHash, challenge.webauthnChallenge, challenge.callbackUrl, crypto.createHash('sha256').update(challenge.token).digest('hex'), new Date().toISOString(), challenge.expiresAt,
+        challenge.envelope ? challenge.conversationId : null, challenge.envelope ? challenge.messageId : null, challenge.envelope ? challenge.capabilities : null, challenge.envelope ? JSON.stringify(challenge.envelope) : null]
     );
     return result.rows[0];
   }
@@ -480,7 +481,7 @@ export class PostgresRepository {
   async getApprovalChallenge(challengeId) {
     const result = await this.pool.query('SELECT * FROM approval_challenges WHERE challenge_id = $1', [challengeId]);
     const row = result.rows[0];
-    return row ? { id: row.challenge_id, endpointId: row.endpoint_id, actionHash: row.action_hash, webauthnChallenge: row.webauthn_challenge, callbackUrl: row.callback_url, expiresAt: row.expires_at, used: row.status === 'consumed', consuming: row.status === 'consuming' } : null;
+    return row ? { id: row.challenge_id, endpointId: row.endpoint_id, actionHash: row.action_hash, webauthnChallenge: row.webauthn_challenge, callbackUrl: row.callback_url, expiresAt: row.expires_at, used: row.status === 'consumed', consuming: row.status === 'consuming', ...(row.envelope ? { conversationId: row.conversation_id, messageId: row.message_id, capabilities: row.capabilities, envelope: row.envelope } : {}) } : null;
   }
 
   async finalizeApprovalDecision({ challengeId, humanId, credentialId, endpointId, now = new Date() } = {}) {

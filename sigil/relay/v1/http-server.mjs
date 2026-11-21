@@ -12,6 +12,7 @@ import { createBearerAuthenticator } from './transport-auth.mjs';
 import { handleRoomRoute } from './room-routes.mjs';
 import { handleContactsRoute } from './contacts.mjs';
 import { lookupTrustedEntry } from './trusted-endpoint.mjs';
+import { bindChallengeEnvelope } from './approval-envelope.mjs';
 import { createFloorWardenReplyHandler } from './floor-warden-replies.mjs';
 import { createFloorWardenGate } from './floor-warden-gate.mjs';
 import { applyBrowserCors, isBrowserRoute } from './browser-cors.mjs';
@@ -428,6 +429,21 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         }));
       }
       let actionHash = body?.action_hash;
+      // Optional `envelope`: the signed envelope the human is asked to approve. The relay
+      // recomputes its canonical hash, checks the sender is the authenticated endpoint, and
+      // verifies the signature, so the stored details always match what the approval binds.
+      let bound = null;
+      if (body?.envelope != null) {
+        try {
+          const entry = principal?.endpoint_id ? await lookupTrustedEntry(repository, registry, principal.endpoint_id) : null;
+          bound = bindChallengeEnvelope({ envelope: body.envelope, actionHash, principalEndpointId: principal?.endpoint_id, entry, now });
+        } catch (error) {
+          if (!error.code) throw error;
+          response.writeHead(error.code === 'ROUTE_NOT_AUTHORIZED' ? 403 : 400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+          return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} }));
+        }
+        actionHash = bound.actionHash;
+      }
       const effectiveRelayOrigin = resolveRelayOrigin();
       if (!actionHash || !body?.callback_url || !effectiveRelayOrigin || !principal?.endpoint_id) {
         response.writeHead(400, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
@@ -439,6 +455,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       }
       try {
         const challenge = createApprovalChallenge({ relayOrigin: effectiveRelayOrigin, actionHash, endpointId: principal.endpoint_id, callbackUrl: body.callback_url });
+        if (bound) Object.assign(challenge, { conversationId: bound.conversationId, messageId: bound.messageId, capabilities: bound.capabilities, envelope: bound.envelope });
         if (repository?.createApprovalChallenge) await repository.createApprovalChallenge(challenge);
         else approvalChallenges.set(challenge.id, challenge);
         response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });

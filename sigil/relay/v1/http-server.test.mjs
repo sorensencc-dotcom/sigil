@@ -906,3 +906,52 @@ function request(portOrBaseUrl, methodOrOptions, path, body) {
     req.on('error', reject); req.end(b ? (typeof b === 'string' ? b : JSON.stringify(b)) : undefined);
   });
 }
+
+function signedChallengeEnvelope(keys, overrides = {}) {
+  const envelope = {
+    protocol: 'sigil/1', message_id: 'msg_gated_1', conversation_id: 'conv_gated', message_type: 'chat.message',
+    sender: { endpoint_id: 'ep_codex', owner_id: 'usr_chris' }, recipient: { endpoint_id: 'ep_claude' },
+    body: { text: 'run the gated tool' }, context_refs: [], capabilities: ['sigil.approval/request'], correlation_id: null,
+    idempotency_key: 'idem_gated_1', created_at: new Date(Date.now() - 60_000).toISOString(), expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+    signature: { algorithm: 'Ed25519', key_id: 'key_codex', value: '' }, ...overrides,
+  };
+  envelope.signature.value = crypto.sign(null, signedBytes(envelope), keys.privateKey).toString('base64url');
+  return envelope;
+}
+
+test('approval challenge with an envelope stores the verified envelope and binds its canonical hash', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const registry = new Map([['ep_codex', withKeys({ owner_id: 'usr_chris', status: 'active', key_id: 'key_codex', public_key: keys.publicKey })]]);
+  const challenges = new Map();
+  const server = createRelayServer({ relayOrigin: 'https://relay.example', approvalChallenges: challenges, registry, authenticate: async () => ({ endpoint_id: 'ep_codex' }) });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  const callback = 'http://127.0.0.1:4567/callback';
+  const post = (body) => request(port, { method: 'POST', path: '/v1/approval-challenges', body: { callback_url: callback, ...body } });
+  const envelope = signedChallengeEnvelope(keys);
+  const hash = crypto.createHash('sha256').update(signedBytes(envelope)).digest('hex');
+
+  const created = await post({ envelope });
+  const createdWithHash = await post({ envelope, action_hash: `sha256:${hash}` });
+  const wrongHash = await post({ envelope, action_hash: 'f'.repeat(64) });
+  const forged = await post({ envelope: { ...envelope, signature: { ...envelope.signature, value: Buffer.alloc(64, 1).toString('base64url') } } });
+  const otherSender = await post({ envelope: signedChallengeEnvelope(keys, { sender: { endpoint_id: 'ep_claude', owner_id: 'usr_chris' } }) });
+  const expired = await post({ envelope: signedChallengeEnvelope(keys, { expires_at: new Date(Date.now() - 1000).toISOString() }) });
+  const notObject = await post({ envelope: 'text' });
+  await new Promise((resolve) => server.close(resolve));
+
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const stored = challenges.get(created.body.challenge_id);
+  assert.equal(stored.actionHash, hash);
+  assert.equal(stored.conversationId, 'conv_gated');
+  assert.equal(stored.messageId, 'msg_gated_1');
+  assert.deepEqual(stored.capabilities, ['sigil.approval/request']);
+  assert.deepEqual(stored.envelope, envelope);
+  assert.equal(createdWithHash.status, 201);
+  assert.equal(challenges.get(createdWithHash.body.challenge_id).actionHash, hash, 'a sha256:-prefixed hash is normalized to hex');
+  assert.deepEqual([wrongHash.status, wrongHash.body.code], [400, 'INVALID_ACTION']);
+  assert.deepEqual([forged.status, forged.body.code], [400, 'INVALID_SIGNATURE']);
+  assert.deepEqual([otherSender.status, otherSender.body.code], [403, 'ROUTE_NOT_AUTHORIZED']);
+  assert.deepEqual([expired.status, expired.body.code], [400, 'MESSAGE_EXPIRED']);
+  assert.deepEqual([notObject.status, notObject.body.code], [400, 'INVALID_ACTION']);
+  assert.equal(challenges.size, 2, 'rejected requests create no challenge');
+});

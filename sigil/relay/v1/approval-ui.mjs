@@ -51,6 +51,7 @@ export function renderApprovalPage({ challenge, error = null } = {}) {
     ${statusMessage}
 
     <div class="details">
+      ${envelopeRows(challenge)}
       <div class="detail-row">
         <span class="label">Target Endpoint</span>
         <code class="val">${safeEndpointId}</code>
@@ -159,6 +160,30 @@ export function renderApprovalPage({ challenge, error = null } = {}) {
 </html>`;
 }
 
+// The relay verified this envelope's signature and recomputed its hash when the challenge
+// was created, so these rows are exactly what the approval authorizes. A challenge created
+// with only an action_hash has no envelope; say so instead of implying the details are known.
+const BODY_PREVIEW_LIMIT = 2000;
+function envelopeRows(challenge) {
+  const envelope = challenge?.envelope;
+  if (!envelope || typeof envelope !== 'object') {
+    return `<div class="detail-row"><span class="label">Action Details</span><span class="val">The requester did not attach the action details. Approve only if your agent shows the same action hash.</span></div>`;
+  }
+  let body = '';
+  try { body = JSON.stringify(envelope.body ?? null, null, 2) ?? ''; } catch { body = '[unreadable body]'; }
+  const truncated = body.length > BODY_PREVIEW_LIMIT;
+  const preview = truncated ? `${body.slice(0, BODY_PREVIEW_LIMIT)}\n… (truncated; ${body.length} characters)` : body;
+  const capabilities = Array.isArray(challenge.capabilities) ? challenge.capabilities.join(', ') : '';
+  const recipient = envelope.recipient?.endpoint_id ?? envelope.broadcast_scope?.conversation_id ?? '';
+  return [
+    ['Action', envelope.message_type],
+    ['Capabilities', capabilities],
+    ['Conversation', challenge.conversationId ?? envelope.conversation_id],
+    ['Recipient', recipient],
+  ].map(([label, value]) => `<div class="detail-row"><span class="label">${label}</span><code class="val">${escapeHtml(String(value ?? ''))}</code></div>`).join('\n      ')
+    + `\n      <div class="detail-row"><span class="label">Body</span><pre class="val body">${escapeHtml(preview)}</pre></div>`;
+}
+
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;')
@@ -240,6 +265,7 @@ function baseCss() {
     .val { color: var(--heading); word-break: break-all; }
     code.val { font-family: monospace; font-size: 12px; background: rgba(110,118,129,0.1); padding: 2px 4px; border-radius: 4px; }
     code.hash { color: #58a6ff; }
+    pre.body { margin: 0; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; }
     .btn {
       display: inline-flex;
       align-items: center;
