@@ -1,0 +1,42 @@
+.trail/learnings/2026-11-21-ag-ui-support-is-a-read-chris.md
+  h_5c172e9b435f5a 1-35
+.trail/learnings/2026-11-21-keep-mcp-connectors-isolated-from-room-chris.md
+  h_5c172e9b435f5a 1-27
+docs/service-config.md
+  h_5c172e9b435f5a 70,82-88,94,98,103,124-155
+docs/superpowers/specs/2026-11-21-sigil-ag-ui-projection-design.md
+  h_5c172e9b435f5a 1-143
+sigil/cli/service-config.mjs
+  h_5c172e9b435f5a 7,73-78,80-81,83,121-164,280-295,297-303,307-316,319-322,324-327,330-344,389-414,442
+sigil/cli/service-config.test.mjs
+  h_5c172e9b435f5a 11,18-21,76,157,175-215
+sigil/cli/windows-supervisor.ps1
+  h_5c172e9b435f5a 44-52,185-194
+sigil/cli/windows-supervisor.test.mjs
+  h_5c172e9b435f5a 3-6,183-220
+verify/ag-ui-approval/AgUiApproval.tla
+  h_5c172e9b435f5a 1-162
+verify/ag-ui-approval/MC.cfg
+  h_5c172e9b435f5a 1-12
+verify/ag-ui-approval/MC_current.cfg
+  h_5c172e9b435f5a 1-12
+verify/ag-ui-approval/chart-current.mmd
+  h_5c172e9b435f5a 1-92
+verify/ag-ui-approval/chart.mmd
+  h_5c172e9b435f5a 1-67
+verify/ag-ui-approval/expected.md
+  h_5c172e9b435f5a 1-21
+verify/ag-ui-approval/view.mjs
+  h_5c172e9b435f5a 1-45
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6a0feeffd32891769a91d6babf19376ce361c2a8",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
