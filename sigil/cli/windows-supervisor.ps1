@@ -41,6 +41,15 @@ function Get-RunnerPids([string]$component) {
   }
 }
 
+function Get-ScheduledTaskIfPresent([string]$taskName) {
+  try {
+    return Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+  } catch {
+    if ($_.FullyQualifiedErrorId -like 'CmdletizationQuery_NotFound_TaskName,*') { return $null }
+    throw
+  }
+}
+
 if ($Action -eq 'Install') {
   $logonType = if ($plan.supervisor -and $plan.supervisor.logon_type -eq 's4u') { 'S4U' } else { 'Interactive' }
   $runLevel = if ($plan.supervisor -and $plan.supervisor.run_level -eq 'highest') { 'Highest' } else { 'Limited' }
@@ -173,8 +182,16 @@ if ($Action -eq 'Uninstall') {
   foreach ($comp in $plan.components) {
     $taskName = $comp.supervisor_target.task_name
     if ($PSCmdlet.ShouldProcess($taskName, "Unregister scheduled task")) {
-      Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-      Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+      $task = Get-ScheduledTaskIfPresent $taskName
+      if ($task) {
+        if ($task.State.ToString() -eq 'Running') {
+          Stop-ScheduledTask -TaskName $taskName -ErrorAction Stop
+        }
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop
+        if (Get-ScheduledTaskIfPresent $taskName) {
+          throw "Scheduled task $taskName is still registered after uninstall."
+        }
+      }
       $results += [pscustomobject]@{ Component = $comp.name; TaskName = $taskName; Status = 'Uninstalled' }
     }
   }

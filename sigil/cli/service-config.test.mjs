@@ -8,10 +8,15 @@ import {
   buildServicePlan,
   loadServiceConfigFile,
   ALLOWED_BRIDGES,
+  ALLOWED_CONNECTORS,
 } from './service-config.mjs';
 
 test('ALLOWED_BRIDGES includes required bridge kinds', () => {
   assert.deepEqual(ALLOWED_BRIDGES, ['claude', 'codex', 'copilot', 'router', 'floor-warden']);
+});
+
+test('ALLOWED_CONNECTORS includes the KB-Sync MCP provider', () => {
+  assert.deepEqual(ALLOWED_CONNECTORS, ['kb-sync']);
 });
 
 test('validateServiceConfig passes a complete, valid service config', () => {
@@ -68,6 +73,7 @@ test('validateServiceConfig flags missing relay or relay.port', () => {
   const result2 = validateServiceConfig({ relay: {} }, { checkFiles: false });
   assert.equal(result2.ok, false);
   assert.ok(result2.issues.some((i) => i.code === 'RELAY_PORT_REQUIRED'));
+  assert.ok(validateServiceConfig({ relay: null }).issues.some((i) => i.code === 'RELAY_REQUIRED'));
 });
 
 test('validateServiceConfig flags invalid and colliding ports', () => {
@@ -148,6 +154,7 @@ test('buildServicePlan generates planned commands and targets for all components
   const plan = buildServicePlan(config, { platform: 'win32', nodePath: 'node.exe' });
   assert.equal(plan.platform, 'win32');
   assert.equal(plan.components.length, 3);
+  assert.deepEqual(plan.components.map((component) => component.name), ['relay', 'agent-chief', 'rooms-web']);
 
   const relayComp = plan.components.find((c) => c.name === 'relay');
   assert.ok(relayComp);
@@ -163,6 +170,47 @@ test('buildServicePlan generates planned commands and targets for all components
   const webComp = plan.components.find((c) => c.name === 'rooms-web');
   assert.ok(webComp);
   assert.deepEqual(webComp.ports, [5173]);
+});
+
+test('connector-only service config plans only the KB-Sync MCP component', () => {
+  const basePath = path.join(os.tmpdir(), 'sigil kb-sync');
+  const config = {
+    version: 1,
+    connectors: [{
+      name: 'kb-sync',
+      provider: 'kb-sync',
+      port: 4411,
+      relay_url: 'http://127.0.0.1:8791',
+      identity: '.sigil/grokbot.identity.json',
+    }],
+  };
+  const validation = validateServiceConfig(config, { basePath });
+  assert.equal(validation.ok, true, JSON.stringify(validation.issues));
+
+  const plan = buildServicePlan(config, { platform: 'win32', nodePath: 'node.exe', basePath });
+  assert.deepEqual(plan.components.map((component) => component.name), ['connector-kb-sync']);
+  const [connector] = plan.components;
+  assert.deepEqual(connector.command, [
+    'node.exe',
+    'sigil/cli/connector-daemon.mjs',
+    '--port', '4411',
+    '--relay-url', 'http://127.0.0.1:8791',
+    '--identity', '.sigil/grokbot.identity.json',
+  ]);
+  assert.deepEqual(connector.ports, [4411]);
+  assert.deepEqual(connector.depends_on_ports, []);
+  assert.equal(connector.supervisor_target.task_name, 'SigilStack_connector-kb-sync');
+});
+
+test('connector validation rejects unsupported providers and connector-only profiles without relay URLs', () => {
+  const invalid = validateServiceConfig({
+    connectors: [{ name: 'kb-sync', provider: 'unknown', port: 4411, identity: 'identity.json' }],
+  });
+  assert.ok(invalid.issues.some((issue) => issue.code === 'CONNECTOR_PROVIDER_UNSUPPORTED'));
+  assert.ok(invalid.issues.some((issue) => issue.code === 'CONNECTOR_RELAY_URL_REQUIRED'));
+
+  const roomConfig = validateServiceConfig({ agents: [] });
+  assert.ok(roomConfig.issues.some((issue) => issue.code === 'RELAY_REQUIRED'));
 });
 
 test('loadServiceConfigFile loads valid json and throws on missing file or syntax error', () => {
