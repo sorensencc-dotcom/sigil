@@ -1,0 +1,19 @@
+docs/superpowers/specs/2026-11-21-sigil-ag-ui-projection-design.md
+  s_256f74889fb0f4::t_256e05bd6f375f 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fb4727cec7b36b291caf5e9f1b144275cf91d583",
+  "prompts": {},
+  "sessions": {
+    "s_256f74889fb0f4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "572b269d-9798-4254-85a8-957baee9a60e",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
