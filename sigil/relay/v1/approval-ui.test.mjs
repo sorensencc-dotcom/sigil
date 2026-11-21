@@ -305,3 +305,34 @@ test('dynamic relayOrigin with ephemeral port 0 validates WebAuthn assertion suc
 
 
 
+
+const activeChallenge = (extra = {}) => ({
+  id: 'chal_env_1', endpointId: 'ep_codex', actionHash: 'abcd'.repeat(16), callbackUrl: 'http://127.0.0.1:4567/cb',
+  expiresAt: new Date(Date.now() + 3600000).toISOString(), webauthnChallenge: 'challenge_bytes', ...extra,
+});
+
+test('renderApprovalPage shows the verified envelope details and escapes untrusted body text', () => {
+  const html = renderApprovalPage({
+    challenge: activeChallenge({
+      conversationId: 'conv_gated', messageId: 'msg_1', capabilities: ['sigil.approval/request'],
+      envelope: { message_type: 'chat.message', conversation_id: 'conv_gated', recipient: { endpoint_id: 'ep_claude' }, body: { text: '<script>alert(1)</script> delete everything' } },
+    }),
+  });
+  assert.match(html, /chat\.message/);
+  assert.match(html, /sigil\.approval\/request/);
+  assert.match(html, /ep_claude/);
+  assert.match(html, /delete everything/);
+  assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
+  assert.match(html, /&lt;script&gt;/);
+});
+
+test('renderApprovalPage truncates a very long body and flags it', () => {
+  const html = renderApprovalPage({ challenge: activeChallenge({ capabilities: [], envelope: { message_type: 'chat.message', body: { text: 'x'.repeat(5000) } } }) });
+  assert.match(html, /truncated; \d+ characters/);
+  assert.ok(html.length < 20000);
+});
+
+test('renderApprovalPage says so when the challenge carries no envelope', () => {
+  const html = renderApprovalPage({ challenge: activeChallenge() });
+  assert.match(html, /did not attach the action details/);
+});
