@@ -4,6 +4,7 @@ import { quoteWindowsArg } from './service-runner.mjs';
 
 export const DEFAULT_SERVICE_CONFIG = path.join('.sigil', 'service.json');
 export const ALLOWED_BRIDGES = ['claude', 'codex', 'copilot', 'router', 'floor-warden'];
+export const ALLOWED_CONNECTORS = ['kb-sync'];
 
 export function findProjectRoot(fromDir = process.cwd()) {
   let dir = path.resolve(fromDir);
@@ -69,10 +70,17 @@ export function validateServiceConfig(config, { checkFiles = false, basePath = p
     }
   }
 
+  // A connector-only config can be managed independently from the room stack.
+  const hasConnectors = Array.isArray(config.connectors) && config.connectors.length > 0;
+  const standaloneConnectorConfig = hasConnectors
+    && config.agents === undefined
+    && config.rooms_web === undefined;
+
   // Relay validation
-  if (!config.relay || typeof config.relay !== 'object' || Array.isArray(config.relay)) {
+  if (!(config.relay === undefined && standaloneConnectorConfig)
+    && (!config.relay || typeof config.relay !== 'object' || Array.isArray(config.relay))) {
     issues.push({ code: 'RELAY_REQUIRED', path: 'relay', message: 'Config must define a "relay" object' });
-  } else {
+  } else if (config.relay && typeof config.relay === 'object' && !Array.isArray(config.relay)) {
     const relay = config.relay;
     if (relay.port === undefined) {
       issues.push({ code: 'RELAY_PORT_REQUIRED', path: 'relay.port', message: 'relay.port is required' });
@@ -107,6 +115,50 @@ export function validateServiceConfig(config, { checkFiles = false, basePath = p
           }
         }
       }
+    }
+  }
+
+  // MCP connector validation
+  if (config.connectors !== undefined) {
+    if (!Array.isArray(config.connectors)) {
+      issues.push({ code: 'CONNECTORS_INVALID', path: 'connectors', message: 'connectors must be an array' });
+    } else {
+      const connectorNames = new Set();
+      config.connectors.forEach((connector, index) => {
+        const itemPath = `connectors[${index}]`;
+        if (!connector || typeof connector !== 'object' || Array.isArray(connector)) {
+          issues.push({ code: 'CONNECTOR_INVALID', path: itemPath, message: 'Connector must be an object' });
+          return;
+        }
+        if (typeof connector.name !== 'string' || !/^[a-z0-9][a-z0-9-]*$/.test(connector.name)) {
+          issues.push({ code: 'CONNECTOR_NAME_INVALID', path: `${itemPath}.name`, message: 'Connector name must use lowercase letters, numbers, and hyphens' });
+        } else if (connectorNames.has(connector.name)) {
+          issues.push({ code: 'CONNECTOR_NAME_DUPLICATE', path: `${itemPath}.name`, message: `Duplicate connector name: ${connector.name}` });
+        } else {
+          connectorNames.add(connector.name);
+        }
+        if (!ALLOWED_CONNECTORS.includes(connector.provider)) {
+          issues.push({ code: 'CONNECTOR_PROVIDER_UNSUPPORTED', path: `${itemPath}.provider`, message: `Unsupported connector provider: "${connector.provider}". Allowed: ${ALLOWED_CONNECTORS.join(', ')}` });
+        }
+        if (!isValidPort(connector.port)) {
+          issues.push({ code: 'PORT_INVALID', path: `${itemPath}.port`, message: `Port for ${itemPath}.port must be an integer between 1 and 65535 (got ${connector.port})` });
+        } else {
+          recordPort(connector.port, `${itemPath}.port`);
+        }
+        if (typeof connector.identity !== 'string' || connector.identity.length === 0) {
+          issues.push({ code: 'CONNECTOR_IDENTITY_REQUIRED', path: `${itemPath}.identity`, message: 'Connector identity path is required' });
+        } else if (checkFiles) {
+          const idPath = path.resolve(basePath, connector.identity);
+          if (!fs.existsSync(idPath)) {
+            issues.push({ code: 'FILE_NOT_FOUND', path: `${itemPath}.identity`, message: `Connector identity file not found: ${idPath}` });
+          }
+        }
+        if (connector.relay_url !== undefined && (typeof connector.relay_url !== 'string' || connector.relay_url.length === 0)) {
+          issues.push({ code: 'CONNECTOR_RELAY_URL_INVALID', path: `${itemPath}.relay_url`, message: 'Connector relay_url must be a non-empty string' });
+        } else if (config.relay === undefined && typeof connector.relay_url !== 'string') {
+          issues.push({ code: 'CONNECTOR_RELAY_URL_REQUIRED', path: `${itemPath}.relay_url`, message: 'relay_url is required when the service config does not define a relay' });
+        }
+      });
     }
   }
 
@@ -225,69 +277,71 @@ export function buildServicePlan(config, {
 
   // 1. Relay
   const relay = config.relay;
-  const relayPort = relay.port;
-  const streamPort = relay.stream_port !== undefined ? relay.stream_port : relayPort + 1;
-  const ingressPort = relay.ingress_port;
-  const publicPort = relay.public_port;
+  const relayPort = relay?.port;
+  const streamPort = relay ? (relay.stream_port !== undefined ? relay.stream_port : relayPort + 1) : undefined;
+  if (relay) {
+    const ingressPort = relay.ingress_port;
+    const publicPort = relay.public_port;
 
-  const relayArgs = ['sigil/cli/sigil.mjs', 'relay', 'up', '--port', String(relayPort)];
-  if (relay.registry) relayArgs.push('--registry', relay.registry);
-  if (relay.domain) relayArgs.push('--domain', relay.domain);
-  if (relay.federation_mode) relayArgs.push('--federation-mode', relay.federation_mode);
+    const relayArgs = ['sigil/cli/sigil.mjs', 'relay', 'up', '--port', String(relayPort)];
+    if (relay.registry) relayArgs.push('--registry', relay.registry);
+    if (relay.domain) relayArgs.push('--domain', relay.domain);
+    if (relay.federation_mode) relayArgs.push('--federation-mode', relay.federation_mode);
 
-  if (relay.identities) {
-    if (relay.identities.federation) relayArgs.push('--federation-identity', relay.identities.federation);
-    if (relay.identities.room_system) relayArgs.push('--room-system-identity', relay.identities.room_system);
-    if (relay.identities.room_human) relayArgs.push('--room-human-identity', relay.identities.room_human);
-  }
+    if (relay.identities) {
+      if (relay.identities.federation) relayArgs.push('--federation-identity', relay.identities.federation);
+      if (relay.identities.room_system) relayArgs.push('--room-system-identity', relay.identities.room_system);
+      if (relay.identities.room_human) relayArgs.push('--room-human-identity', relay.identities.room_human);
+    }
 
-  if (relay.reconcile_kinds) {
-    if (Array.isArray(relay.reconcile_kinds)) {
-      for (const item of relay.reconcile_kinds) relayArgs.push('--reconcile-kind', item);
-    } else if (typeof relay.reconcile_kinds === 'object') {
-      for (const [ep, kind] of Object.entries(relay.reconcile_kinds)) {
-        relayArgs.push('--reconcile-kind', `${ep}=${kind}`);
+    if (relay.reconcile_kinds) {
+      if (Array.isArray(relay.reconcile_kinds)) {
+        for (const item of relay.reconcile_kinds) relayArgs.push('--reconcile-kind', item);
+      } else if (typeof relay.reconcile_kinds === 'object') {
+        for (const [ep, kind] of Object.entries(relay.reconcile_kinds)) {
+          relayArgs.push('--reconcile-kind', `${ep}=${kind}`);
+        }
       }
     }
+
+    if (relay.secrets) {
+      if (relay.secrets.room_bot_key_wrap_key_env) {
+        relayArgs.push('--room-bot-key-wrap-key', relay.secrets.room_bot_key_wrap_key_env);
+      }
+      if (relay.secrets.room_key_wrap_key_env) {
+        relayArgs.push('--room-key-wrap-key', relay.secrets.room_key_wrap_key_env);
+      }
+      if (relay.secrets.floor_warden_reply_token_env) {
+        relayArgs.push('--floor-warden-reply-token-env', relay.secrets.floor_warden_reply_token_env);
+      }
+    }
+
+    if (relay.ingress_origin) relayArgs.push('--ingress-origin', relay.ingress_origin);
+    if (ingressPort !== undefined) relayArgs.push('--ingress-port', String(ingressPort));
+    if (relay.public_origin) relayArgs.push('--public-origin', relay.public_origin);
+    if (publicPort !== undefined) relayArgs.push('--public-port', String(publicPort));
+
+    if (Array.isArray(relay.browser_origins)) {
+      for (const origin of relay.browser_origins) {
+        relayArgs.push('--browser-origin', origin);
+      }
+    }
+
+    const relayPorts = [relayPort, streamPort];
+    if (ingressPort !== undefined) relayPorts.push(ingressPort);
+    if (publicPort !== undefined) relayPorts.push(publicPort);
+
+    components.push({
+      name: 'relay',
+      command: [nodePath, ...relayArgs],
+      ports: relayPorts,
+      log_files: {
+        out: path.join(logDir, 'relay.out.log'),
+        err: path.join(logDir, 'relay.err.log'),
+      },
+      supervisor_target: getSupervisorTarget('relay', platform),
+    });
   }
-
-  if (relay.secrets) {
-    if (relay.secrets.room_bot_key_wrap_key_env) {
-      relayArgs.push('--room-bot-key-wrap-key', relay.secrets.room_bot_key_wrap_key_env);
-    }
-    if (relay.secrets.room_key_wrap_key_env) {
-      relayArgs.push('--room-key-wrap-key', relay.secrets.room_key_wrap_key_env);
-    }
-    if (relay.secrets.floor_warden_reply_token_env) {
-      relayArgs.push('--floor-warden-reply-token-env', relay.secrets.floor_warden_reply_token_env);
-    }
-  }
-
-  if (relay.ingress_origin) relayArgs.push('--ingress-origin', relay.ingress_origin);
-  if (ingressPort !== undefined) relayArgs.push('--ingress-port', String(ingressPort));
-  if (relay.public_origin) relayArgs.push('--public-origin', relay.public_origin);
-  if (publicPort !== undefined) relayArgs.push('--public-port', String(publicPort));
-
-  if (Array.isArray(relay.browser_origins)) {
-    for (const origin of relay.browser_origins) {
-      relayArgs.push('--browser-origin', origin);
-    }
-  }
-
-  const relayPorts = [relayPort, streamPort];
-  if (ingressPort !== undefined) relayPorts.push(ingressPort);
-  if (publicPort !== undefined) relayPorts.push(publicPort);
-
-  components.push({
-    name: 'relay',
-    command: [nodePath, ...relayArgs],
-    ports: relayPorts,
-    log_files: {
-      out: path.join(logDir, 'relay.out.log'),
-      err: path.join(logDir, 'relay.err.log'),
-    },
-    supervisor_target: getSupervisorTarget('relay', platform),
-  });
 
   // 2. Agents
   if (Array.isArray(config.agents)) {
@@ -332,7 +386,32 @@ export function buildServicePlan(config, {
     }
   }
 
-  // 3. Rooms-web
+  // 3. MCP connectors
+  if (Array.isArray(config.connectors)) {
+    for (const connector of config.connectors) {
+      const relayUrl = connector.relay_url || `http://127.0.0.1:${relayPort}`;
+      const args = [
+        'sigil/cli/connector-daemon.mjs',
+        '--port', String(connector.port),
+        '--relay-url', relayUrl,
+        '--identity', connector.identity,
+      ];
+      const name = `connector-${connector.name}`;
+      components.push({
+        name,
+        command: [nodePath, ...args],
+        ports: [connector.port],
+        log_files: {
+          out: path.join(logDir, `${name}.out.log`),
+          err: path.join(logDir, `${name}.err.log`),
+        },
+        supervisor_target: getSupervisorTarget(name, platform),
+        depends_on_ports: connector.relay_url || !relay ? [] : [relayPort, relay.stream_port ?? relayPort + 1],
+      });
+    }
+  }
+
+  // 4. Rooms-web
   if (config.rooms_web && typeof config.rooms_web === 'object') {
     const rw = config.rooms_web;
     const rwPort = rw.port !== undefined ? rw.port : 5173;
@@ -360,7 +439,7 @@ export function buildServicePlan(config, {
   for (const comp of components) {
     if (comp.name.startsWith('agent-')) comp.depends_on_ports = [relayPort, streamPort];
     else if (comp.name === 'rooms-web') comp.depends_on_ports = [relayPort];
-    else comp.depends_on_ports = [];
+    else if (!Array.isArray(comp.depends_on_ports)) comp.depends_on_ports = [];
     comp.task = {
       execute: nodePath,
       arguments: [sigilEntry, 'service', 'run', comp.name, '--service-config', absConfig].map(quoteWindowsArg).join(' '),
