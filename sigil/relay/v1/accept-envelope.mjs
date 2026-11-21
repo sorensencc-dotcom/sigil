@@ -288,7 +288,18 @@ async function acceptWithRepository(envelope, options) {
       // Rooms are relay-local; refuse before the approval gate (see sync branch).
       assertNotRoomConversation(envelope, repository.lookupRoom ? await repository.lookupRoom(envelope.conversation_id, client) : null);
     }
-    await enforceCapabilityRiskGate(envelope, repository, { client, now });
+    // A retry of an envelope this relay already accepted must not consume a second
+    // approval: the first acceptance used it, so the gate would reject with
+    // APPROVAL_REQUIRED before the duplicate check below could answer 202.
+    // Skip the gate only for a local-delivery retry whose idempotency record has the
+    // same canonical hash. Signature, expiry, grants and rate checks still run, and
+    // the duplicate check at "prior" below returns the original acceptance or throws,
+    // so the skip can never accept a new envelope. Forwarded routes keep the gate.
+    const acceptedRetry = route.action !== 'forward' && repository.lookupIdempotency
+      ? (await repository.lookupIdempotency(envelope.sender.endpoint_id, envelope.idempotency_key, client))?.canonical_hash
+        === crypto.createHash('sha256').update(signedBytes(envelope)).digest('hex')
+      : false;
+    if (!acceptedRetry) await enforceCapabilityRiskGate(envelope, repository, { client, now });
 
     // Queue-forward: enqueueForward's INSERT + audit are atomic inside this txn.
     if (route.action === 'forward') {

@@ -637,6 +637,16 @@ test('a high-risk capability envelope is rejected without a decision, accepted o
   const decisionRow = await pool.query('SELECT status FROM approval_decisions WHERE decision_id = $1', [`decision_${suffix}`]);
   assert.equal(decisionRow.rows[0].status, 'consumed');
 
+  // A worker whose request timed out resends the identical envelope. The approval is
+  // already consumed, so the retry must return the original acceptance (not
+  // APPROVAL_REQUIRED) and must not touch the decision again.
+  const retried = await acceptEnvelopeAsync(firstAttempt, { registered, repository, now: new Date('2029-12-31T12:02:30Z') });
+  assert.equal(retried.status, 202, `retry got ${retried.status} ${retried.body?.code}`);
+  assert.equal(retried.body.duplicate, true);
+  assert.equal(retried.body.message_id, approved.body.message_id);
+  const afterRetry = await pool.query('SELECT status FROM approval_decisions WHERE decision_id = $1', [`decision_${suffix}`]);
+  assert.equal(afterRetry.rows[0].status, 'consumed');
+
   // A different envelope (distinct message_id -> distinct canonical hash) from
   // the same endpoint does NOT inherit the decision just consumed above --
   // approval is scoped to one specific action_hash, not a blanket per-endpoint
