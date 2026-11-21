@@ -1,0 +1,42 @@
+sigil/relay/v1/http-server.mjs
+  s_e01b90a9c20631::t_0d9f84e5a6e968 15
+  s_e01b90a9c20631::t_3dc82dbca19e68 458
+  s_e01b90a9c20631::t_a180fa5dc96f17 432-446
+sigil/relay/v1/approval-ui.mjs
+  s_e01b90a9c20631::t_f750b9b43e265a 163-186
+  s_e01b90a9c20631::t_f53963565db676 54
+  s_e01b90a9c20631::t_4f7e7e79d35c47 268
+sigil/relay/v1/approval-ui.test.mjs
+  s_e01b90a9c20631::t_5cf7b0d32275df 308-338
+sigil/migrations/042_approval_challenge_envelope.sql
+  s_e01b90a9c20631::t_d902b4291d4c8e 1-17
+sigil/relay/v1/approval-envelope.test.mjs
+  s_e01b90a9c20631::t_db28eeeca45ade 1-79
+sigil/relay/v1/postgres-repository.mjs
+  s_e01b90a9c20631::t_a03123885c412a 484
+  s_e01b90a9c20631::t_33e92f39ebf245 472-476
+sigil/relay/v1/http-server.test.mjs
+  s_e01b90a9c20631::t_5cf7b0d32275df 909-957
+sigil/relay/v1/postgres-repository.integration.test.mjs
+  s_e01b90a9c20631::t_7b2ea446b52d35 651-690
+sigil/relay/v1/approval-envelope.mjs
+  s_e01b90a9c20631::t_c150df40badf26 1-45
+.trail/learnings/2026-11-21-approval-challenges-can-bind-the-signed-chris.md
+  s_e01b90a9c20631::t_0c6b3c16ee8050 1-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7bba85e65846fae1d7ee79cd069a29e790bdee9c",
+  "prompts": {},
+  "sessions": {
+    "s_e01b90a9c20631": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dce39537-2b23-4cf1-96ee-73afc5ad90ed",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
