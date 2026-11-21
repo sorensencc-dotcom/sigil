@@ -1,0 +1,92 @@
+---
+title: "Sigil AG-UI run with a gated envelope"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: waiting
+    lg1: ok
+    lg2: bad
+    lg3: active
+    lg4: Breaks ErrorMeansNoEffect or WorkerRetryNotRejected
+    lg5: Breaks WorkerRetryNotRejected in some cases
+    lg6: Path to the ErrorMeansNoEffect or WorkerRetryNotRejected bug
+  }
+  class lg0 orange
+  class lg1 teal
+  class lg2 pink
+  class lg3 blue
+  class lg4 breaks
+  class lg5 mayBreak
+  class lg6 bugPath
+  s0: No run yet
+  s1: Streaming
+  s2: Finished, no gated action
+  s3: Paused for approval (approval waiting)
+  s4: Stream cut
+  s5: Error shown
+  s6: Paused for approval (approved)
+  s7: Paused for approval (approval expired)
+  s8: Paused for approval (approval used)
+  s9: Streaming, waiting for worker
+  s10: Streaming, action done and shown
+  s11: Streaming, approval expired
+  s12: Finished, action done
+  s13: Stream cut, action done
+  s14: Error shown, but action done
+  [*] --> s0
+  s0 --> s1: client starts a run
+  s1 --> s2: agent finishes
+  s1 --> s3: worker asks for approval
+  s1 --> s4: connection drops
+  s3 --> s5: client cancels the approval
+  s3 --> s6: you approve with your key
+  s3 --> s7: approval times out
+  s6 --> s5: client cancels the approval
+  s6 --> s7: approval times out
+  s6 --> s8: worker sends the gated envelope
+  s6 --> s9: client resumes [approved]
+  s7 --> s5: client resumes [no usable approval]
+  s8 --> s8: worker resends the same envelope
+  s8 --> s10: client resumes [action already done]
+  s9 --> s10: worker sends the gated envelope
+  s9 --> s11: approval times out
+  s9 --> s4: connection drops
+  s10 --> s12: agent finishes
+  s10 --> s13: connection drops
+  s11 --> s5: approval times out
+  s11 --> s4: connection drops
+  s4 --> s9: client retries the resume
+  s4 --> s13: worker sends the gated envelope
+  s13 --> s14: client retries the resume [fails]
+  s4 --> s5: client retries the resume [fails]
+  classDef breaks fill:#ffecee,stroke:#e72e3b,stroke-width:2.5px,color:#cd2834
+  classDef mayBreak fill:#fff3e6,stroke:#e8730c,stroke-width:2.5px,color:#b85a06
+  class s0 blue
+  class s0 bugPath
+  class s1 blue
+  class s1 bugPath
+  class s2 teal
+  class s3 orange
+  class s3 bugPath
+  class s4 pink
+  class s5 pink
+  class s6 orange
+  class s6 bugPath
+  class s7 orange
+  class s8 orange
+  class s8 mayBreak
+  class s8 bugPath
+  class s9 blue
+  class s9 bugPath
+  class s10 blue
+  class s10 mayBreak
+  class s10 bugPath
+  class s11 blue
+  class s12 teal
+  class s12 mayBreak
+  class s13 pink
+  class s13 mayBreak
+  class s13 bugPath
+  class s14 pink
+  class s14 breaks
+  class s14 bugPath
