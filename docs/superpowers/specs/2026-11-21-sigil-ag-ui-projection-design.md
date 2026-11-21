@@ -1,6 +1,6 @@
 # Sigil AG-UI projection design
 
-- **Status:** Draft, not approved for build (Tier 1 sign-off required)
+- **Status:** Approved by Tier 1 (Chris Sorensen) in chat on 2026-11-21. Build in the order of section 9; open questions in section 10 stay open until the step that needs them.
 - **Date:** 2026-11-21
 - **Model:** `verify/ag-ui-approval/` (TLA+, checked with TLC; results in `verify/ag-ui-approval/expected.md`)
 - **Protocol:** [AG-UI 1.0 run input specification](https://docs.ag-ui.com/spec/1.0/basic/run-input.md) and its interrupt and resume pattern
