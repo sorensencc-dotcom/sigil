@@ -67,7 +67,7 @@ Store configuration at `.sigil/service.json` by default. Override the path by pa
 ### Schema definitions
 
 1. **`version`** (integer, optional): Schema version. Default is `1`.
-2. **`relay`** (object, required):
+2. **`relay`** (object, required for room stacks; omitted by a standalone connector-only config):
    - `port` (integer, 1-65535, required): Main HTTP API port.
    - `stream_port` (integer, 1-65535, optional): WebSocket stream port. Defaults to `port + 1`.
    - `ingress_port` (integer, 1-65535, optional): Reply ingress port.
@@ -79,22 +79,28 @@ Store configuration at `.sigil/service.json` by default. Override the path by pa
    - `secrets` (object, optional): Environment variable references for key wrapping and reply tokens.
    - `public_origin` (string, optional): Canonical public URL.
    - `browser_origins` (array of strings, optional): Allowed browser CORS origins.
-3. **`agents`** (array of objects, optional):
+3. **`connectors`** (array of objects, optional):
+   - `name` (string, required): Lowercase letters, numbers, and hyphens; unique within the config.
+   - `provider` (string, required): Built-in adapter name. `kb-sync` is currently supported.
+   - `port` (integer, 1-65535, required): Loopback MCP HTTP listener port.
+   - `identity` (string, required): Path to the Sigil connector identity file.
+   - `relay_url` (string, required when `relay` is omitted): Relay endpoint. Defaults to the configured relay when omitted.
+4. **`agents`** (array of objects, optional):
    - `name` (string, required): Distinct agent name.
    - `identity` (string, required): Path to the agent identity file.
    - `relay_url` (string, optional): Target relay URL. Defaults to `http://127.0.0.1:<relay.port>`.
    - `room_bridge` (string, optional): Bridge implementation (`claude`, `codex`, `copilot`, `router`, `floor-warden`).
    - `bridge_config` (object, optional): Specific settings for the chosen bridge.
-4. **`rooms_web`** (object, optional):
+5. **`rooms_web`** (object, optional):
    - `port` (integer, 1-65535, required): Web listener port.
    - `auth_mode` (string, optional): Authentication mode (`cookie` or `bearer`).
    - `public_origin` (string, optional): Canonical public URL for web sessions.
-5. **`secrets`** (object, optional): Values `sigil service run` loads into each component's environment before it starts. Names are logged; values never are.
+6. **`secrets`** (object, optional): Values `sigil service run` loads into each component's environment before it starts. Names are logged; values never are.
    - `env_files` (array of paths): `KEY=VALUE` files. Blank lines, `#` comments, an `export ` prefix, and surrounding quotes are handled.
    - `file_env` (object): Maps a variable name to a file whose trimmed contents become its value (for example `SIGIL_DATABASE_URL`).
    - `user_env` (array of names): On Windows, copies these user-scope variables from `HKCU\Environment` when the process does not already have them. Scheduled tasks, S4U ones in particular, do not reliably inherit user variables.
    - `required` (array of names): The component refuses to start and names every missing variable.
-6. **`supervisor`** (object, optional): How Windows registers each scheduled task.
+7. **`supervisor`** (object, optional): How Windows registers each scheduled task.
    - `logon_type` (`interactive` or `s4u`): Default `interactive`, which runs only while you are logged on. `s4u` runs whether or not you are logged on and needs an elevated shell to install.
    - `run_level` (`limited` or `highest`): Default `limited`.
 
@@ -115,7 +121,38 @@ The top-level `secrets` block lists where values come from. `relay.secrets` name
 }
 ```
 
-All ports defined across `relay`, `relay.stream_port`, `relay.ingress_port`, `relay.public_port`, and `rooms_web.port` must be unique. `sigil doctor` enforces port disjointness.
+All ports defined across `relay`, `relay.stream_port`, `relay.ingress_port`, `relay.public_port`, `rooms_web.port`, and `connectors[].port` must be unique within a service config. `sigil doctor` enforces port disjointness.
+
+### Standalone MCP connector service
+
+Use a separate service config when the KB-Sync MCP connector should have its own lifecycle. Service commands apply only to components present in the selected config, so this file installs and controls the connector task without stopping or restarting the room stack.
+
+Save this as `.sigil/kb-sync-service.json` and adjust the relay URL and identity path for the host:
+
+```json
+{
+  "version": 1,
+  "connectors": [
+    {
+      "name": "kb-sync",
+      "provider": "kb-sync",
+      "port": 4411,
+      "relay_url": "http://127.0.0.1:8791",
+      "identity": ".sigil/grokbot.identity.json"
+    }
+  ]
+}
+```
+
+The connector binds to loopback and has its own `connector-kb-sync` supervisor task and logs. Manage it independently with:
+
+```bash
+sigil service install --service-config .sigil/kb-sync-service.json
+sigil service start --service-config .sigil/kb-sync-service.json
+sigil service status --service-config .sigil/kb-sync-service.json
+```
+
+The connector provider must be one of Sigil's built-in adapters. The service config does not accept arbitrary commands or arguments.
 
 ## CLI commands
 

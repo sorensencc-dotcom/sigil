@@ -1,5 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import {
   executeWindowsSupervisor,
   installWindowsService,
@@ -175,4 +179,42 @@ realPs1('windows-supervisor.ps1 Status reports a not-installed portless componen
   const results = executeWindowsSupervisor('Status', realPlan());
   assert.equal(results[0].TaskState, 'NotInstalled');
   assert.equal(results[0].Healthy, false);
+});
+
+realPs1('windows-supervisor.ps1 Uninstall is idempotent when the task is absent', () => {
+  const results = executeWindowsSupervisor('Uninstall', realPlan());
+  assert.equal(results[0].Status, 'Uninstalled');
+});
+
+realPs1('windows-supervisor.ps1 Uninstall fails when Task Scheduler denies task removal', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-uninstall-test-'));
+  try {
+    const harness = path.join(tempDir, 'uninstall-denied.ps1');
+    const planBase64 = Buffer.from(JSON.stringify(realPlan())).toString('base64');
+    const scriptPath = path.resolve('sigil/cli/windows-supervisor.ps1');
+    fs.writeFileSync(harness, `
+function Get-ScheduledTask {
+  [CmdletBinding()]
+  param([string]$TaskName)
+  [pscustomobject]@{ State = 'Ready' }
+}
+function Stop-ScheduledTask {
+  [CmdletBinding()]
+  param([string]$TaskName)
+  throw 'A Ready task should not be stopped.'
+}
+function Unregister-ScheduledTask {
+  [CmdletBinding()]
+  param([string]$TaskName, [switch]$Confirm)
+  throw 'Access is denied.'
+}
+& ${JSON.stringify(scriptPath)} -Action Uninstall -PlanBase64 '${planBase64}'
+`, 'utf8');
+
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', harness], { encoding: 'utf8' });
+    assert.notEqual(result.status, 0, result.stdout);
+    assert.match(`${result.stdout}\n${result.stderr}`, /Access is denied/i);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });
