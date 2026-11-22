@@ -50,3 +50,4 @@ no API key, $0).
 ## Testing before you push
 
 - `npm run test:live:local`: starts a throwaway local PostgreSQL, runs the live gate (the suites that skip without SIGIL_TEST_DATABASE_URL and otherwise only run in Linux CI), and removes it; run it before pushing changes that touch CLI output, the relay, or anything a *.pg / live suite covers.
+- On Windows, run tests from an uppercase drive path (`C:\dev\...`, not `c:\dev\...`). A lowercase drive makes vitest load under two path casings, and every spec fails with "Vitest failed to find the current suite". `packages/sigil-rooms-web/vite.config.ts` stops vitest early with a clear error.
