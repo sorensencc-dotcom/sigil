@@ -1,6 +1,6 @@
 ---
 title: "Rooms web redesign: most features need only browser work, since the relay already serves the data"
-author: Chris
+author: Claude
 date: 2026-11-22
 branch: docs/rooms-web-redesign-plan
 cost: { minutes: 1, tokens: 1280 }

@@ -17,11 +17,11 @@ The brief was written without access to `C:\dev`. The source check settles six o
 | Brief assumption | Finding on main | Effect on plan |
 |---|---|---|
 | The source snapshot may be stale. | `packages/sigil-rooms-web` on main matches the brief's component list. The last web change is PR #166 (sidebar on narrow viewports). The `fix/241` working tree has no rooms-web diff. [SOURCE main 39112b7] | The component inventory below is current. The running Windows UI is still unseen, because the relay did not answer on `127.0.0.1:8765` during the check. |
-| Purpose needs relay support. | `POST /v1/rooms` already accepts `description`, and `Room.description` is typed in the client. `client.createRoom` sends only `name`. [SOURCE main 39112b7] | Idea 1 becomes pure client work. Whether it belongs in create-room is still Chris's call (Q8). |
+| Purpose needs relay support. | `POST /v1/rooms` already accepts `description`, and `Room.description` is typed in the client. `client.createRoom` sends only `name`. [SOURCE main 39112b7] | Idea 1 becomes pure client work. Whether it belongs in create-room is still Chris's call (Q9). |
 | A loop cap may not exist. | `Room.max_agent_turns` exists. The relay posts `agent_cap_reached`, and `POST /rooms/:id/continue` refills the budget. A human post resets it (`room-loop-guards.test.mjs`). [SOURCE main 39112b7] | Idea 9 can show a real cap. |
 | Busy status may not be exposed. | `GET /v1/rooms/:id/invocations` exists and the client never calls it. Timeline event kinds include `router_decision`, `invocation_refused`, `invocation_stopped`, `invocation_failed`, `router_failed`, and `room_halted`. [SOURCE main 39112b7] | Idea 8 (status line) is client work. Machine, repo, and branch are not exposed, so this plan does not promise them. |
 | Signatures are invisible to the client. | Each history row already carries `canonical_bytes` (the stored signed bytes, base64url) and `envelope.signature` `{algorithm, key_id, value}`. The client type `RoomEnvelope` drops `signature`. [SOURCE main 39112b7] | An "inspect envelope" view is P0 client work. True in-browser verification still needs a key lookup the browser can reach. |
-| Approval cards need new relay work. | The relay renders its own approval page (`approval-ui.mjs`) with a WebAuthn ceremony (`approval-ceremony.mjs`) for high-risk capabilities. The AG-UI projection (`ag-ui-projection.mjs`) is on main, and its follow-up steps are filed as sorensencc-dotcom/sigil issues #240 to #245. [SOURCE main 39112b7] | Idea 13 reuses that flow. This plan specifies no second approval UI. |
+| Approval cards need new relay work. | The relay renders its own approval page (`approval-ui.mjs`) with a WebAuthn ceremony (`approval-ceremony.mjs`) for high-risk capabilities. The AG-UI projection (`ag-ui-projection.mjs`) is on main, and its follow-up steps are filed as sorensencc-dotcom/sigil issues #240 to #245; #240 and #241 are closed, so #242 to #245 remain. [SOURCE main 39112b7] | Idea 13 reuses that flow. This plan specifies no second approval UI. |
 
 A second review on 2026-11-22 found three limits, each confirmed on main [SOURCE main 39112b7]:
 
@@ -85,7 +85,7 @@ In scope (no relay change):
 4. A recipient preview on @mention and Send (idea 11). It mirrors `room-dispatch.mjs`: mentioned agents the sender may invoke show "Will wake"; with no mention, the room's router picks among `joins` agents the sender may invoke, shown as "Router picks from A, B"; unmentioned `mentions_only` agents, `report_only` members, and agents whose `invokable_by` excludes the sender show "Won't wake" with the reason.
 5. An "Inspect envelope" drawer that shows canonical bytes, algorithm, key id, and signature value, labeled "Relay-attested, not verified in this browser" (ideas 12 and 18a).
 6. Catch-up cues: a New divider, Jump to latest, and day dividers (idea 3, partial). The New divider reads a per-room watermark the client keeps in `localStorage`, so it survives reload in one browser only. Jump to latest and day dividers need no stored state.
-7. An optional purpose line in create-room, the room header, and the room list, if Chris approves Q8 (idea 1).
+7. An optional purpose line in create-room, the room header, and the room list, if Chris approves Q9 (idea 1).
 8. A row action menu: copy text, copy link, and inspect envelope (idea 12).
 9. Visual refresh within the existing tokens (section 5, idea 16).
 10. A collapsed agent exchange that folds agent-only stretches in threads (ideas 4 and 6).
@@ -98,7 +98,7 @@ Goal: holds, approvals, and join requests reach the right person inside the room
 
 In scope:
 
-1. One in-timeline card for holds, approvals, and agent questions, bound to the approver. It opens the relay's existing WebAuthn approval flow. Depends on sorensencc-dotcom/sigil issues #240 to #245 (idea 13).
+1. One in-timeline card for holds, approvals, and agent questions, bound to the approver. It opens the relay's existing WebAuthn approval flow. Depends on sorensencc-dotcom/sigil issues #242 to #245 (idea 13).
 2. True in-browser Ed25519 verification of `canonical_bytes` (idea 18b). Needs a key lookup endpoint on the relay origin, so the current CSP allows it. The UI names the trust anchor, because a key fetched from the relay cannot catch a compromised relay:
    - "Matches the relay's key": the signature checks against a key the relay served. This proves the stored bytes are intact.
    - "Matches your pinned key": the signature checks against a key pinned in the viewer's contacts. Only this state may use `--trust-verified`.
@@ -120,7 +120,7 @@ In scope only if Chris approves:
 2. Handoff rooms with an archived, still-verifiable state (idea 2).
 3. Ask-first agent-started threads, if relay semantics for them exist (idea 5).
 4. Presence beyond invocations, such as machine (idea 7).
-5. PWA and Web Push. The Nov 11 memo paused this work (idea 17, Q5).
+5. PWA and Web Push. The Nov 11 memo paused this work (idea 17, Q6).
 
 ### Client work versus relay work
 
@@ -137,7 +137,7 @@ In scope only if Chris approves:
 | New divider across devices | No | A read of the caller's ack cursor |
 | Find in room, windowing | No | Yes |
 | Purpose line | Yes (`description` accepted) | No |
-| Approval and hold card | Card shell only | Hold state in history or stream; AG-UI issues #240 to #245 |
+| Approval and hold card | Card shell only | Hold state in history or stream; AG-UI issues #242 to #245 |
 | Join-request queue | Partial (InvitePage) | Knock or request state |
 | Mentions view | Yes (`/v1/mentions`) | No |
 | Presence (machine) | No | Yes |
@@ -183,7 +183,7 @@ In scope only if Chris approves:
 | LoginPage | Reuse | Restyle. Map each error code to a plain sentence. |
 | InvitePage | Extend (P1) | Add a pending-approval state for the join-request queue. |
 | RoomList | Replace | Two tiers: Pinned shelf of tiles, then rows with avatar stack, last message preview, time, unread count, and working dot. Pins move to the shelf. |
-| NewRoomForm | Extend | Add optional purpose (sent as `description`) if Q8 says yes. Add room templates only with idea 2. |
+| NewRoomForm | Extend | Add optional purpose (sent as `description`) if Q9 says yes. Add room templates only with idea 2. |
 | RoomHeader | Replace | Becomes a floating title pill with name, member count, and menus for roster and trust. Move Stop to StatusLine; keep a pill Stop only on narrow screens if testing shows the status line is missed. |
 | RosterPanel | Replace | Sentence controls in place of raw enums. Show owner, the turn cap, and a pending or connected state for invited agents. |
 | Timeline | Extend | Add day dividers, New divider, Jump to latest, and collapsed agent exchanges. Keep page loading as is until P2 windowing. |
@@ -233,23 +233,23 @@ Effort: S is under 2 days, M is 2 to 5 days, and L is over 5 days. Risk is the c
 | 3 | As a manager, I set each agent's wake rule in plain sentences and see the room's turn cap (read-only). | 9 AgentMsgr [LIVE 2026-11-21, MARKETING], Agora [RECORDED]; [SOURCE main 39112b7] | P0 | S | Low | Final sentence copy. |
 | 4 | As a sender, I see who my message will wake before I press Send. | 11 [LIVE 2026-11-21, MARKETING] | P0 | M | Medium (router mode makes the result a prediction) | How to word "the router decides". |
 | 5 | As any member, I open a row's envelope and see its signed bytes and signature fields, labeled as relay-attested. | 18a Block Buzz [LIVE 2026-11-21], [RECORDED]; [SOURCE main 39112b7] | P0 | S | Low | None. |
-| 6 | As a returning member, the room opens at a New divider with Jump to latest and day dividers, and the divider explains when an unread thread reply holds back receipts. | 3 [LIVE 2026-11-21] | P0 | L | Medium (ack model edge cases; one-browser watermark) | Q13. |
-| 7 | As an owner, I give a room an optional purpose that shows in the header and room list. | 1 [LIVE 2026-11-21]; [SOURCE main 39112b7] | P0 | S | Low | Q8. |
+| 6 | As a returning member, the room opens at a New divider with Jump to latest and day dividers. | 3 [LIVE 2026-11-21] | P0 | L | Medium (ack model edge cases; one-browser watermark) | Q13. |
+| 7 | As an owner, I give a room an optional purpose that shows in the header and room list. | 1 [LIVE 2026-11-21]; [SOURCE main 39112b7] | P0 | S | Low | Q9. |
 | 8 | As a reader, long agent-to-agent stretches fold into one card I can expand, and every reply stays attributable. | 4 [LIVE 2026-11-21]; 6 [LIVE 2026-11-21] | P0 | M | Medium (fold must not hide holds) | None. |
 | 9 | As any member, I copy a row's text or link from a row menu. | 12 [LIVE 2026-11-21] | P0 | S | Low | Whether "mark unread" is wanted, given the ack model. |
-| 10 | As a user, the console feels current: clear type scale, density modes, and trust colors. | 16 Block Buzz, Friday [LIVE 2026-11-21] | P0 | M | Medium (subjective without live screenshots) | Q2, Q10. |
+| 10 | As a user, the console feels current: clear type scale, density modes, and trust colors. | 16 Block Buzz, Friday [LIVE 2026-11-21] | P0 | M | Medium (subjective without live screenshots) | Q2, Q3. |
 | 10a | As a user, the console uses the Grok-style layout: two-tier sidebar with a pinned shelf and previews, floating title pill, centered 44rem column, card bubbles, pill composer, and a comfortable or compact density toggle. | Layout and density reference [SCREENSHOT 2026-11-22]; 16 | P0 | L | Medium (sidebar rework touches mobile drawer) | None; traits chosen 2026-11-22. |
 | 10b | As a member, every sender has a stable avatar that marks human or agent. | Layout and density reference [SCREENSHOT 2026-11-22]; 10 | P0 | S | Low | None. |
-| 11 | As an approver, an approval or hold appears in the room as a card naming me, and approving opens the relay's WebAuthn flow and leaves a signed record. | 13 Hyperagent [LIVE 2026-11-21], Nia Teams [LIVE 2026-11-21], Reason [LIVE 2026-11-21], endue [RECORDED]; [SOURCE main 39112b7] | P1 | L | High (depends on #240 to #245) | Hold state delivery to the client. |
+| 11 | As an approver, an approval or hold appears in the room as a card naming me, and approving opens the relay's WebAuthn flow and leaves a signed record. | 13 Hyperagent [LIVE 2026-11-21], Nia Teams [LIVE 2026-11-21], Reason [LIVE 2026-11-21], endue [RECORDED]; [SOURCE main 39112b7] | P1 | L | High (depends on #242 to #245) | Hold state delivery to the client. |
 | 12 | As any member, my browser verifies each row's signature itself, names the key it trusted (relay-served or pinned), and says so only when it did. | 18b [SOURCE main 39112b7] | P1 | M | Medium (key lookup, trust anchor, browser Ed25519 support) | Q12. |
 | 13 | As any member, I open a room trust summary that states what is signed, what the relay can see, and what is not yet verified. | 19 Agent Room, Agent Relay [LIVE 2026-11-21] | P1 | S | Low | None. |
-| 14 | As an owner, I see join requests and accept, assign a role, or revoke. | 15 AgentMsgr, Crosswalk [LIVE 2026-11-21], Phone Line [RECORDED] | P1 | M | Medium | Relay knock state; Q9. |
+| 14 | As an owner, I see join requests and accept, assign a role, or revoke. | 15 AgentMsgr, Crosswalk [LIVE 2026-11-21], Phone Line [RECORDED] | P1 | M | Medium | Relay knock state (no open question yet; check the relay first). |
 | 15 | As an owner, I bring an agent in by copying an invite, and the roster shows pending until it connects. | 14 AgentMsgr, Reason, Agent Room, Plasma Radio [LIVE 2026-11-21; Plasma mock MARKETING] | P1 | M | Low | Invite format. |
 | 16 | As a user, I see every message that mentions me across rooms. | [SOURCE main 39112b7] | P1 | S | Low | None. |
-| 17 | As a member, I search within a room. | 3 [LIVE 2026-11-21] | P2 | L | High (relay windowing) | Q6. |
+| 17 | As a member, I search within a room. | 3 [LIVE 2026-11-21] | P2 | L | High (relay windowing) | Q7. |
 | 18 | As an owner, I create a handoff room that I can archive while it stays verifiable. | 2 AgentCouch [LIVE 2026-11-21, MARKETING] | P2 | L | Medium | Archive semantics. |
 | 19 | As an owner, an agent asks me before it starts a thread. | 5 Threadlines [LIVE 2026-11-21] | P2 | L | High (relay semantics unknown) | Whether agent-started threads exist. |
-| 20 | As an owner, approvals reach my phone. | 17 [LIVE 2026-11-21, MARKETING] | P2 | L | High (paused) | Q5. |
+| 20 | As an owner, approvals reach my phone. | 17 [LIVE 2026-11-21, MARKETING] | P2 | L | High (paused) | Q6. |
 
 ## 7. Open questions for Chris
 
@@ -263,10 +263,28 @@ Effort: S is under 2 days, M is 2 to 5 days, and L is over 5 days. Risk is the c
 8. **Markdown.** What is the policy for agent output? This plan keeps plain text.
 9. **Purpose.** Should room purpose appear in create-room? The relay already accepts it.
 10. **Guest identity.** What is the long-term guest model? Non-operator humans sign with relay-custodial keys today.
-11. **Approval surface.** Should the in-room card open the relay's own approval page, or should the AG-UI work (#240 to #245) render approvals inside the client?
+11. **Approval surface.** Should the in-room card open the relay's own approval page, or should the AG-UI work (#242 to #245) render approvals inside the client?
 12. **Key lookup and pinning.** Which relay endpoint should serve sender public keys? Should contacts hold pinned keys, so a viewer can verify authorship without trusting the relay?
 13. **Unread across devices.** Is a one-browser New divider enough for P0, or should the relay expose the caller's ack cursor first?
 14. **Turn cap editing.** Should managers edit `max_agent_turns` (1 to 50)? That needs a new relay route.
+
+### Answers from Chris, 2026-11-22
+
+| Q | Answer | Effect on the plan |
+|---|---|---|
+| 2 | Bring up the relay and client, run a live walkthrough, and document it with screenshots. | Separate session. Evidence feeds the P0 diagnosis. |
+| 3 | The whole brand could use a refresh. | Brand refresh enters P0 scope. Needs a design pass beyond Rewrite Labs Console tokens. |
+| 4 | Yes, drop the Nov 11 "drop composer polish" line. | First-class UI is in scope. |
+| 5 | Asked what "attachments" means. | Open. Defined below. |
+| 6 | Asked how un-pausing affects other work. | Open. Explained below. |
+| 7 | Asked for use cases. | Open. |
+| 8 | Wants better than plain text. | Markdown policy needed. Open design question: safe subset, no raw HTML. |
+| 9 | Yes, optional at room creation. | Purpose stays optional. |
+| 10 | No guests. Every participant is a user or a user's linked agent. | Removes the guest model. Relay-custodial human keys need a replacement plan. |
+| 11 | Asked for best UX options. | Open. |
+| 12 | Asked for plain-language explanation. | Open. |
+| 13 | Asked for examples. | Open. |
+| 14 | Asked for examples. | Open. |
 
 ## 8. Failure modes and non-goals
 
