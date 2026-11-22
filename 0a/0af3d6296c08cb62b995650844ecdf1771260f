@@ -1,0 +1,35 @@
+docs/superpowers/specs/2026-11-22-rooms-web-live-walkthrough.md
+  s_c5064704c7f31c::t_aaa81315f4e789 1-295
+docs/superpowers/specs/2026-11-22-rooms-web-live-walkthrough/statechart/today.cfg
+  s_c5064704c7f31c::t_aaa81315f4e789 1-4
+docs/superpowers/specs/2026-11-22-rooms-web-live-walkthrough/statechart/plan.cfg
+  s_c5064704c7f31c::t_aaa81315f4e789 1-4
+.trail/workspace.json
+  s_c5064704c7f31c::t_a8c07951c9c86e 1-5
+docs/superpowers/specs/2026-11-22-rooms-web-live-walkthrough/statechart/RoomUi.tla
+  s_c5064704c7f31c::t_aaa81315f4e789 1-70
+.trail/learnings/2026-11-22-judge-the-rooms-client-from-a-chris.md
+  s_c5064704c7f31c::t_aaa81315f4e789 1-25
+docs/superpowers/specs/2026-11-22-rooms-web-live-walkthrough/statechart/view.mjs
+  s_c5064704c7f31c::t_aaa81315f4e789 1-25
+.trail/learnings/2026-11-22-transient-stop-and-status-messages-must-chris.md
+  s_c5064704c7f31c::t_aaa81315f4e789 1-25
+docs/superpowers/specs/2026-11-22-sigil-rooms-web-redesign-plan.md
+  s_c5064704c7f31c::t_962a952031c434 322,365-401
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0a0af3d6296c08cb62b995650844ecdf1771260f",
+  "prompts": {},
+  "sessions": {
+    "s_c5064704c7f31c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "39ffafec-9bf8-4f5b-a3f8-57e7675ab7c9",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
