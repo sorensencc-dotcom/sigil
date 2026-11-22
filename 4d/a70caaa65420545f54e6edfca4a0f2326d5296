@@ -1,0 +1,35 @@
+docs/superpowers/specs/statechart/p1.cfg
+  s_c5064704c7f31c::t_94eae51de4086a 1-6
+docs/superpowers/specs/statechart/RoomsPlan.tla
+  s_c5064704c7f31c::t_94eae51de4086a 1-102
+docs/superpowers/specs/statechart/view.mjs
+  s_c5064704c7f31c::t_94eae51de4086a 1-10
+docs/superpowers/specs/statechart/p0.cfg
+  s_c5064704c7f31c::t_94eae51de4086a 1-6
+docs/superpowers/specs/2026-11-22-sigil-rooms-web-redesign-plan.md
+  s_ef6e4ff07e9ea9::t_58f4bd9bd7d4d2 346-364
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4da70caaa65420545f54e6edfca4a0f2326d5296",
+  "prompts": {},
+  "sessions": {
+    "s_c5064704c7f31c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "39ffafec-9bf8-4f5b-a3f8-57e7675ab7c9",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_ef6e4ff07e9ea9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a203e6-b451-7a00-a4bf-245de48caeb8",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
