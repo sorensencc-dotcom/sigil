@@ -56,15 +56,18 @@ import { provisionIngressEndpoint } from './agentmail-provision.mjs';
 import { createAgentMailDeployment } from '../ingress/v1/agentmail-bootstrap.mjs';
 import { cmdService } from './service-command.mjs';
 import { cmdSecret } from './secret-command.mjs';
+import { cmdSchema, cmdTemplate } from './schema-commands.mjs';
 
 const DEFAULT_CLI_CONFIG = path.join('.sigil', 'config.json');
 
 const DEFAULT_REGISTRY = path.join('.sigil', 'registry.json');
 
-function usage() {
+export function usage() {
   console.log(`sigil <command> [options]
 
 Commands:
+  schema [type] [--json]                                    Inspect protocol and envelope JSON schemas for agents
+  template <type> [--to id] [--out path]                   Emit scaffolded envelope template (task|task.result|room.message|contract)
   init <name> [--owner <owner_id> | --federation-owner <federated_id>] [--registry path] [--domain domain]      Create a local identity and register it (domain defaults to "local"; --federation-owner allows an owner id whose domain differs from --domain)
   sign-contract --contract path --identity path [--output path]          Sign a TorqueQuery agent dispatch contract
   verify-contract --contract path --registry path                        Verify a signed TorqueQuery agent dispatch contract
@@ -820,7 +823,7 @@ async function cmdResend(argv) {
 }
 
 async function cmdInbox(argv) {
-  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, watch: { type: 'boolean' }, wait: { type: 'boolean' }, loop: { type: 'boolean' }, gaps: { type: 'boolean' }, local: { type: 'boolean' }, ledger: { type: 'string' }, interval: { type: 'string' }, timeout: { type: 'string' }, config: { type: 'string' } } });
+  const args = parseArgs({ args: argv, options: { identity: { type: 'string' }, 'relay-url': { type: 'string' }, 'stream-url': { type: 'string' }, watch: { type: 'boolean' }, wait: { type: 'boolean' }, loop: { type: 'boolean' }, gaps: { type: 'boolean' }, local: { type: 'boolean' }, ledger: { type: 'string' }, interval: { type: 'string' }, timeout: { type: 'string' }, config: { type: 'string' }, json: { type: 'boolean' } } });
   const config = loadConfigFile(opt(args, ['config']) ?? DEFAULT_CLI_CONFIG);
   const resolved = resolveConfig({ flags: { relayUrl: opt(args, ['relay-url']), streamUrl: opt(args, ['stream-url']), identity: opt(args, ['identity']) }, config });
   if (!resolved.identityPath) throw new Error('usage: sigil inbox --identity path --relay-url url [--watch] (or set SIGIL_IDENTITY / default_identity in .sigil/config.json)');
@@ -829,6 +832,10 @@ async function cmdInbox(argv) {
 
   if (Boolean(args.values.local)) {
     const records = await readInboxLedger(ledgerPath);
+    if (Boolean(args.values.json)) {
+      console.log(JSON.stringify(records, null, 2));
+      return;
+    }
     if (Boolean(args.values.gaps)) {
       const grouped = new Map();
       for (const record of records) { const envelope = record.envelope ?? record; const seq = envelope.stream_seq ?? envelope.streamSeq; if (Number.isSafeInteger(seq)) { const key = `${envelope.conversation_id}:${envelope.sender?.endpoint_id}`; const list = grouped.get(key) ?? []; list.push(seq); grouped.set(key, list); } }
@@ -1096,9 +1103,13 @@ async function cmdPeerAdd(argv) {
 }
 
 async function cmdPeerList(argv) {
-  const args = parseArgs({ args: argv, options: { 'database-url': { type: 'string' } } });
+  const args = parseArgs({ args: argv, options: { 'database-url': { type: 'string' }, json: { type: 'boolean' } } });
   await withRepository(args, 'sigil peer list requires --database-url (or SIGIL_DATABASE_URL) -- in-memory relays have no durable peer directory', async (repository) => {
     const peers = await repository.listPeers();
+    if (opt(args, ['json'])) {
+      console.log(JSON.stringify(peers, null, 2));
+      return;
+    }
     for (const peer of peers) console.log(`${peer.domain}\t${peer.relayUrl}\t${peer.trustMode}\t${peer.keys.map((k) => k.kid).join(',')}\t(${freshness(peer.lastResolvedAt)})`);
   });
 }
@@ -1184,6 +1195,7 @@ async function cmdDoctor(argv) {
       'relay-url': { type: 'string' },
       config: { type: 'string' },
       'service-config': { type: 'string' },
+      json: { type: 'boolean' },
     },
   });
   const config = loadConfigFile(opt(args, ['config']) ?? DEFAULT_CLI_CONFIG);
@@ -1194,7 +1206,11 @@ async function cmdDoctor(argv) {
     relayUrl: opt(args, ['relay-url']),
     serviceConfigPath: opt(args, ['service-config']),
   });
-  printDoctorReport(result);
+  if (opt(args, ['json'])) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    printDoctorReport(result);
+  }
   if (!result.pass) process.exitCode = 1;
 }
 
@@ -2132,7 +2148,9 @@ async function cmdRoute(argv) {
 export async function main() {
   const [command, sub, ...rest] = process.argv.slice(2);
   try {
-    if (command === 'init') await cmdInit(process.argv.slice(3));
+    if (command === 'schema') await cmdSchema(process.argv.slice(3));
+    else if (command === 'template') await cmdTemplate(process.argv.slice(3));
+    else if (command === 'init') await cmdInit(process.argv.slice(3));
     else if (command === 'sign-contract') await cmdSignContract(process.argv.slice(3));
     else if (command === 'verify-contract') await cmdVerifyContract(process.argv.slice(3));
     else if (command === 'relay' && sub === 'up') await cmdRelayUp(rest);
