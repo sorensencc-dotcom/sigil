@@ -149,3 +149,147 @@ Page scroll width equals viewport width, so there is no page-level horizontal ov
 - **The live client was not signed in to.** Live differences come from its served assets, not from walking its screens.
 - **Light theme, the New room submit path, and invites** were not walked.
 - Screenshots are downscaled captures from the built-in browser.
+
+## Statechart check
+
+A TLA+ model of the invocation lifecycle checks four rules, each written as what you should see on screen. Source and configs are in [statechart/](2026-11-22-rooms-web-live-walkthrough/statechart/). TLC explored 16 states for today's client and 18 for the plan's status line.
+
+| Rule | Today | With the plan's status line |
+|---|---|---|
+| WorkingVisible: a running agent shows a working cue | Breaks | Holds |
+| StopFeedback: pressing Stop shows a result | Breaks | Holds |
+| FailureExplained: a failure shows a plain sentence | Breaks | **Breaks** |
+| CapOffered: a capped room shows Continue | Breaks | **Breaks** |
+
+Bug paths on the plan's design:
+
+- FailureExplained: mention the agent, the agent starts, the agent fails to start, you press Stop with nothing running. The "nothing to stop" note replaces the failure sentence.
+- CapOffered: two mention-and-start rounds, the agent uses its last turn, you press Stop with nothing running. The note replaces the Continue offer.
+
+**Plan change.** The "nothing to stop" message must be a transient toast. The failure line and the cap banner stay on screen until the state changes.
+
+Only the idle Stop press and the failed invocation were seen live. The raw cap row and raw stopped row are inferred from the same raw-event path. The model leaves out threads, roster permissions, the router's choice, `room_halted`, and a reply that lands after Stop.
+
+<details><summary>Mermaid source: today's client</summary>
+
+~~~mermaid
+---
+title: "Rooms client: what the screen shows while an agent works"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: Breaks CapOffered or FailureExplained or StopFeedback or WorkingVisible
+    lg1: Path to the CapOffered or FailureExplained or StopFeedback or WorkingVisible bug
+  }
+  class lg0 breaks
+  class lg1 bugPath
+  s0: Idle
+  s1: Idle, Stop pressed, screen unchanged
+  s2: Mention sent, agent not started
+  s3: Agent running, screen shows nothing
+  s4: Stopped, raw event line
+  s5: Failed, raw code line
+  s6: Replied
+  s7: Failed, raw code line, Stop pressed
+  s8: Replied, Stop pressed, screen unchanged
+  s9: Capped, raw event line
+  [*] --> s0
+  s0 --> s1: you press Stop [nothing is running]
+  s0 --> s2: you mention the agent
+  s1 --> s2: you mention the agent
+  s2 --> s3: the agent starts
+  s2 --> s4: you press Stop [work is running]
+  s3 --> s4: you press Stop [work is running]
+  s3 --> s5: the agent fails to start
+  s3 --> s6: the agent replies
+  s4 --> s2: you mention the agent
+  s5 --> s2: you mention the agent
+  s5 --> s7: you press Stop [nothing is running]
+  s6 --> s2: you mention the agent
+  s6 --> s8: you press Stop [nothing is running]
+  s7 --> s2: you mention the agent
+  s8 --> s2: you mention the agent
+  s3 --> s9: the agent uses its last turn
+  s9 --> s0: you press Continue
+  classDef breaks fill:#ffecee,stroke:#e72e3b,stroke-width:2.5px,color:#cd2834
+  class s0 bugPath
+  class s1 breaks
+  class s1 bugPath
+  class s2 bugPath
+  class s3 breaks
+  class s3 bugPath
+  class s4 breaks
+  class s5 breaks
+  class s5 bugPath
+  class s6 bugPath
+  class s7 breaks
+  class s8 breaks
+  class s9 breaks
+  class s9 bugPath
+
+~~~
+
+</details>
+
+<details><summary>Mermaid source: with the plan's status line</summary>
+
+~~~mermaid
+---
+title: "Rooms client: what the screen shows while an agent works"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: Breaks CapOffered or FailureExplained
+    lg1: Path to the CapOffered or FailureExplained bug
+  }
+  class lg0 breaks
+  class lg1 bugPath
+  s0: Idle
+  s1: Mention sent, agent not started
+  s2: Idle, Stop pressed, screen unchanged
+  s3: Stopped, result shown
+  s4: Agent running, working cue shown
+  s5: Failed, plain sentence
+  s6: Replied
+  s7: Stopped, Stop note replaced the message
+  s8: Failed, Stop note replaced the message
+  s9: Replied, Stop pressed, screen unchanged
+  s10: Capped, Continue offered
+  s11: Capped, Stop note replaced the message
+  [*] --> s0
+  s0 --> s1: you mention the agent
+  s0 --> s2: you press Stop [nothing is running]
+  s1 --> s3: you press Stop [work is running]
+  s1 --> s4: the agent starts
+  s2 --> s1: you mention the agent
+  s3 --> s1: you mention the agent
+  s3 --> s7: you press Stop [nothing is running]
+  s4 --> s3: you press Stop [work is running]
+  s4 --> s5: the agent fails to start
+  s4 --> s6: the agent replies
+  s5 --> s1: you mention the agent
+  s5 --> s8: you press Stop [nothing is running]
+  s6 --> s1: you mention the agent
+  s6 --> s9: you press Stop [nothing is running]
+  s7 --> s1: you mention the agent
+  s8 --> s1: you mention the agent
+  s9 --> s1: you mention the agent
+  s4 --> s10: the agent uses its last turn
+  s10 --> s0: you press Continue
+  s10 --> s11: you press Stop [nothing is running]
+  s11 --> s0: you press Continue
+  classDef breaks fill:#ffecee,stroke:#e72e3b,stroke-width:2.5px,color:#cd2834
+  class s0 bugPath
+  class s1 bugPath
+  class s4 bugPath
+  class s5 bugPath
+  class s6 bugPath
+  class s8 breaks
+  class s8 bugPath
+  class s10 bugPath
+  class s11 breaks
+  class s11 bugPath
+
+~~~
+
+</details>
