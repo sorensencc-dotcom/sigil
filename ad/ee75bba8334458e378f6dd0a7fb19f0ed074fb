@@ -1,0 +1,21 @@
+sigil/relay/v1/ag-ui-projection.mjs
+  s_52c047a391f974::t_e854be2b45ad09 1-93
+sigil/relay/v1/ag-ui-projection.test.mjs
+  s_52c047a391f974::t_96a86907a2ac15 1-229
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "adee75bba8334458e378f6dd0a7fb19f0ed074fb",
+  "prompts": {},
+  "sessions": {
+    "s_52c047a391f974": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a2010c-6e39-7630-b31b-435dc11a30ef",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
