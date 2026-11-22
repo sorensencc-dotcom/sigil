@@ -81,13 +81,13 @@ C:\Users\soren\.claude\skills\statechart\scripts\statechart.ps1 verify/ag-ui-app
 
 - **Auth:** the same endpoint bearer token or human session as the stream server, and the same origin allowlist. A caller sees only conversations its endpoint or human is a member of.
 - **Input:** AG-UI `RunAgentInput`. `threadId` = `conversation_id`. `runId` is required. `forwardedProps.sigil.task_id` selects the task to attach to. `messages`, `tools`, and `context` are accepted and ignored in phase 1. A request with neither `task_id` nor `resume` returns `400`.
-- **Protocol version:** the relay requires `protocolVersion` and rejects unknown versions. Pin the version before build (see section 10).
+- **Protocol version:** the relay speaks AG-UI 1.0 and sets `RUN_STARTED.protocolVersion` to `"1.0"`. `RunAgentInput.protocolVersion` names the client's version. An absent value identifies a pre-version client, which this endpoint accepts as a legacy request. The relay serves requests declaring `1.x`, including newer minor versions, and answers with `"1.0"`. It rejects a declared major version other than 1 before `RUN_STARTED`, with HTTP 400 and `Content-Type: application/json`; the body is `{"code":"UNSUPPORTED_PROTOCOL_VERSION","message":"Supported protocol major version is 1."}`. This is a relay transport rule, not an AG-UI event: input rejection happens before `RUN_STARTED`, when no stream exists for `RUN_ERROR` ([run-input error handling, lines 132 to 138](https://github.com/ag-ui-protocol/ag-ui/blob/fdbca490dc90fd8fbce2b342df79383bd70559af/docs/spec/1.0/basic/run-input.mdx#L132-L138)). If it cannot interpret a declaration, it serves the request and SHOULD warn. This follows [version negotiation, lines 83 to 97](https://github.com/ag-ui-protocol/ag-ui/blob/fdbca490dc90fd8fbce2b342df79383bd70559af/docs/spec/1.0/basic/versioning.mdx#L83-L97) and [run input, lines 29 to 33](https://github.com/ag-ui-protocol/ag-ui/blob/fdbca490dc90fd8fbce2b342df79383bd70559af/docs/spec/1.0/basic/run-input.mdx#L29-L33). The schema defines the input field ([lines 1555 to 1568](https://github.com/ag-ui-protocol/ag-ui/blob/fdbca490dc90fd8fbce2b342df79383bd70559af/docs/spec/1.0/schema.json#L1555-L1568)) and producer declaration ([lines 531 to 557](https://github.com/ag-ui-protocol/ag-ui/blob/fdbca490dc90fd8fbce2b342df79383bd70559af/docs/spec/1.0/schema.json#L531-L557)).
 
 ## 7. Event mapping
 
 | Relay fact | AG-UI event |
 |---|---|
-| Attach accepted | `RUN_STARTED {threadId, runId}` |
+| Attach accepted | `RUN_STARTED {threadId, runId, protocolVersion: "1.0"}` |
 | Room or conversation history at attach time | `MESSAGES_SNAPSHOT` |
 | Worker progress (`room.message` from the assignee) | `TEXT_MESSAGE_START`, `TEXT_MESSAGE_CONTENT` (whole message as one `delta`), `TEXT_MESSAGE_END` |
 | Challenge created for an envelope in this task | `TOOL_CALL_START {toolCallId, toolCallName: <capability>}`, `TOOL_CALL_ARGS {delta: <envelope body JSON>}`, `TOOL_CALL_END`, then `RUN_FINISHED {outcome: {type: "interrupt", interrupts: [...]}}` |
@@ -110,7 +110,7 @@ Without step 1, an AG-UI client could show the human one set of arguments while 
 
 1. When the relay creates a challenge for an envelope in the attached task, it emits the interrupt (section 7) and ends the stream. The interrupt carries `metadata.sigil.approval_url`, built from relay config and never from worker or client input.
 2. The human approves through the existing `/approve` WebAuthn ceremony. The AG-UI client may show the link but cannot complete the approval.
-3. To resume, the client sends a new `POST /v1/ag-ui/runs` with the same `threadId`, a new `runId`, and `resume: [{interruptId: <challenge_id>, status, payload}]`. The relay reads challenge and decision state. Resume never consumes an approval; only the risk gate does, when the worker's envelope arrives.
+3. To resume, the client sends a new `POST /v1/ag-ui/runs` with the same `threadId`, a new `runId`, and `resume: [{interruptId: <challenge_id>, status: "resolved" | "cancelled", payload?}]`. The [1.0 schema](https://github.com/ag-ui-protocol/ag-ui/blob/fdbca490dc90fd8fbce2b342df79383bd70559af/docs/spec/1.0/schema.json#L1015-L1018) defines the status literals. The [interrupt and resume pattern](https://docs.ag-ui.com/spec/1.0/basic/patterns/interrupt-resume) explains that `resolved` answers an interrupt and `cancelled` abandons it. The relay ignores `payload` for both statuses and reads challenge and decision state. Only the existing WebAuthn decision authorizes the envelope. Resume never consumes an approval; only the risk gate does, when the worker's envelope arrives.
 
 | State at resume | Relay response |
 |---|---|
@@ -119,10 +119,10 @@ Without step 1, an AG-UI client could show the human one set of arguments while 
 | Decision `consumed` (envelope accepted) | Stream starts and replays the stored `TOOL_CALL_RESULT` and `sigil.receipt` at once. |
 | Challenge or decision expired | `RUN_ERROR {code: "APPROVAL_EXPIRED"}`; the interrupt is closed. |
 
-4. **Cancel:** a resume entry with the cancel status (literal pending, section 10) revokes the challenge and any unused decision for that hash, in a transaction that takes the same row lock as `consumeApprovalDecision`. A later approve or envelope then fails. If the envelope was accepted first, the cancel fails and the relay replays the stored result instead.
+4. **Cancel:** a resume entry with `status: "cancelled"` revokes the challenge and any unused decision for that hash, in a transaction that takes the same row lock as `consumeApprovalDecision`. A later approve or envelope then fails. If the envelope was accepted first, the cancel fails and the relay replays the stored result instead.
 5. A resume must cover every open interrupt of the last interrupted run. Partial coverage returns `RUN_ERROR`.
 6. While an interrupt is open, a `POST` without `resume` for that thread returns `409`.
-7. **Retries are idempotent.** A resume retried after a cut stream follows the same table, so a consumed decision replays the stored result. It never returns `RUN_ERROR` for an action that took effect, and it never causes a second execution.
+7. **Retries are idempotent.** After a cut stream, each retry is a new `POST` with the same `threadId` and resume entry but a fresh, previously unused `runId`. It follows the same table, so a consumed decision replays the stored result. It never returns `RUN_ERROR` for an action that took effect, and it never causes a second execution.
 
 ## 9. Build order
 
@@ -136,8 +136,8 @@ Without step 1, an AG-UI client could show the human one set of arguments while 
 
 ## 10. Open questions
 
-1. **Resume `status` literals.** One AG-UI docs page uses `resolved` / `cancelled`; the 1.0 spec text says answered / abandoned. Settle both literals from the 1.0 schema reference before step 6.
-2. **Interrupt fields marked draft.** `RunFinished.outcome` appears under a "Draft events" heading on the AG-UI concepts page. Confirm it is in the pinned protocol version.
+1. **Resolved. Resume `status` literals.** AG-UI 1.0 uses `resolved` and `cancelled`, as defined by [`ResumeEntry` in the frozen 1.0 schema](https://github.com/ag-ui-protocol/ag-ui/blob/fdbca490dc90fd8fbce2b342df79383bd70559af/docs/spec/1.0/schema.json#L1006-L1030). The [interrupt and resume pattern](https://docs.ag-ui.com/spec/1.0/basic/patterns/interrupt-resume) explains their answered and abandoned meanings. The relay uses `resolved` after approval and `cancelled` when the client abandons the interrupt.
+2. **Resolved. Fields marked draft on the concepts page.** The frozen 1.0 schema includes `RunFinishedEvent.outcome` ([lines 559 to 587](https://github.com/ag-ui-protocol/ag-ui/blob/fdbca490dc90fd8fbce2b342df79383bd70559af/docs/spec/1.0/schema.json#L559-L587), including `outcome` at lines 575 to 578) and its interrupt variant ([lines 908 to 923](https://github.com/ag-ui-protocol/ag-ui/blob/fdbca490dc90fd8fbce2b342df79383bd70559af/docs/spec/1.0/schema.json#L908-L923)). It also includes `RunStartedEvent.parentRunId` and `input` ([lines 531 to 557](https://github.com/ag-ui-protocol/ag-ui/blob/fdbca490dc90fd8fbce2b342df79383bd70559af/docs/spec/1.0/schema.json#L531-L557)). These fields are part of AG-UI 1.0. This phase emits neither optional `parentRunId` nor `input`.
 3. **Deny.** Sigil records only `approved` decisions; a human who does not approve just lets the challenge expire. A deny button needs a new decision status, a ceremony change, and a model update. It is out of scope here.
 4. **How the worker learns the outcome.** Today the worker calls `sigil_request_approval` and waits on the localhost callback. Confirm the projection observes this flow without changing it.
 5. **Scope of the model.** It covers one gated envelope and one client. Extend it before step 6 if a task can raise several challenges at once, or if two tabs can resume the same thread.
