@@ -1,0 +1,19 @@
+.trail/learnings/2026-11-22-judge-the-rooms-client-from-a-chris.md
+  s_20004e76f3151f::t_934e703a1766d0 1-25
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "95832bb9bfc640d49ec088714d74c197164c44bf",
+  "prompts": {},
+  "sessions": {
+    "s_20004e76f3151f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c31ea556-cf56-454b-be53-e5824d84609c",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
