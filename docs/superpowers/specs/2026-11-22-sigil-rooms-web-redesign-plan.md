@@ -343,3 +343,22 @@ New backlog stories from these answers (numbers continue section 6):
 | 23 | As a user, I sign with a key I hold, and no guest or relay-custodial human identity exists. | P1 | L | High (identity and relay work) |
 | 24 | As an approver, I approve inside the room without leaving it. | After P1 | L | High (#242 to #245) |
 | 25 | As a member, I attach a screenshot or file. | P2 | L | High (relay support unknown) |
+
+## 9. Statechart check of the plan
+
+Model: `docs/superpowers/specs/statechart/RoomsPlan.tla`, with `p0.cfg` (hold state not delivered to the client, New divider from a local watermark) and `p1.cfg` (hold state delivered, New divider from a relay read cursor). Two devices, a turn cap of 2, one trust check. TLC explored about 75,000 states for P0 and 61,000 for P1. The model encodes what this plan says. Where the plan is silent, the model allows every choice, so a break means the plan must state a rule.
+
+| Rule, as the reader sees it | P0 | P1 | What to add to the plan |
+|---|---|---|---|
+| A hold waiting on me always shows as a card | Breaks: no hold state reaches the client | Holds | Do not ship the approval card until #242 to #245 deliver hold state. Until then, P0 must say "approval needed" from the relay page, not from a card. |
+| A read row never appears under New | Breaks: read on device A, reopen on device B, B shows it as New | Holds | Matches Q13. Accepted split stays, and the P0 divider label must say "this browser". |
+| A folded exchange never hides a hold | Not reachable (no card in P0) | Breaks: fold a live exchange, then a hold arrives | A new hold, cap event, or signature state must unfold the exchange or pin a badge above it. Folding only checks the state at fold time today. |
+| A folded exchange never hides a cap event | Breaks | Breaks | Same rule. The cap event is the shortest path: fold while an agent works, then the agent replies and hits the cap. |
+| A forged row never looks trusted when I pinned the sender's key | Breaks | Breaks | The plan names two anchors with no precedence. State that a pinned key is always checked first, that a mismatch shows as a failure, and that "Matches the relay's key" never shows for a sender with a pin. |
+| "Matches your pinned key" only shows when the pin matched | Holds | Holds | None. |
+| Agents never exceed the turn cap | Holds | Holds | None. |
+
+Not modeled: approver identity (the relay's WebAuthn ceremony enforces it, not the client), the 2 s poll lag, effects of the stream having no invocation frame, and Stop scope labels. The statechart run on the walkthrough in PR #252 covers the status line.
+
+To rerun: `statechart RoomsPlan.tla --config p0.cfg --view view.mjs --out out-p0`.
+
