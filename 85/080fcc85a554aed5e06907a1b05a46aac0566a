@@ -1,0 +1,33 @@
+ci-workflow.test.mjs
+  s_61d696f3c2256e::t_89c4752a2638e7 30-38
+.github/workflows/ci.yml
+  s_a330b12fce3a16::t_add4ff1e897e74 187-214
+verify/ag-ui-approval/ag-ui-approval.test.mjs
+  s_61d696f3c2256e::t_ab8e75de89b783 1-8
+verify/ag-ui-approval/check.mjs
+  s_61d696f3c2256e::t_a8759514c61013 1-68
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "85080fcc85a554aed5e06907a1b05a46aac0566a",
+  "prompts": {},
+  "sessions": {
+    "s_61d696f3c2256e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a203f8-5de8-7760-bdce-061ce6e362c4",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_a330b12fce3a16": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d5f02fe4-5887-4c91-a89c-ec8ac095dc16",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
