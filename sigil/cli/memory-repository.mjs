@@ -68,6 +68,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
   const streamSequences = new Map();
   const relayJobs = new Map();
   const auditEvents = [];
+  const approvalChallenges = new Map();
   const approvalDecisions = new Map(); // decision_id -> row (in-memory stand-in for approval_decisions)
   const workspaces = new Map(); // workspace_id -> row (migration 027)
   const rooms = new Map(); // conversation_id -> room row (migration 027)
@@ -848,6 +849,107 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       grant.revoked_at = (now instanceof Date ? now : new Date(now)).toISOString();
       return { ...grant, duplicate: false };
     },
+    async createApprovalChallenge(challenge) {
+      const row = {
+        challenge_id: challenge.id,
+        endpoint_id: challenge.endpointId,
+        action_hash: challenge.actionHash,
+        webauthn_challenge: challenge.webauthnChallenge,
+        callback_url: challenge.callbackUrl,
+        status: 'pending',
+        created_at: new Date().toISOString(),
+        expires_at: challenge.expiresAt,
+        consumed_at: null,
+      };
+      approvalChallenges.set(challenge.id, row);
+      return row;
+    },
+    async getApprovalChallenge(challengeId) {
+      const row = approvalChallenges.get(challengeId);
+      return row ? {
+        id: row.challenge_id,
+        endpointId: row.endpoint_id,
+        actionHash: row.action_hash,
+        webauthnChallenge: row.webauthn_challenge,
+        callbackUrl: row.callback_url,
+        expiresAt: row.expires_at,
+        used: row.status === 'consumed' || row.status === 'cancelled',
+        status: row.status,
+      } : null;
+    },
+    async cancelApprovalChallenge({ challengeId, endpointId, now = new Date() } = {}) {
+      const row = approvalChallenges.get(challengeId);
+      if (!row || row.endpoint_id !== endpointId) {
+        throw Object.assign(new Error('Approval challenge not found'), { code: 'APPROVAL_CHALLENGE_NOT_FOUND' });
+      }
+      if (row.status === 'consumed') {
+        const stored = [...approvalDecisions.values()].find((decision) => decision.nonce === challengeId) ?? null;
+        if (stored?.status === 'consumed') {
+          throw Object.assign(new Error('Approval decision was already consumed by envelope acceptance'), {
+            code: 'APPROVAL_ALREADY_CONSUMED',
+            storedResult: stored,
+          });
+        }
+        row.status = 'cancelled';
+        onRollback(() => { row.status = 'consumed'; });
+        let revokedDecisionCount = 0;
+        if (stored?.status === 'approved') {
+          stored.status = 'revoked';
+          revokedDecisionCount = 1;
+          onRollback(() => { stored.status = 'approved'; });
+        }
+        return { challengeId, status: 'cancelled', revokedDecisionCount, duplicate: false };
+      }
+      if (row.status === 'cancelled') {
+        return { challengeId, status: 'cancelled', revokedDecisionCount: 0, duplicate: true };
+      }
+      if (row.status !== 'pending') {
+        throw Object.assign(new Error('Approval challenge is no longer pending'), { code: 'APPROVAL_EXPIRED' });
+      }
+      row.status = 'cancelled';
+      onRollback(() => { row.status = 'pending'; });
+      let revokedDecisionCount = 0;
+      for (const decision of approvalDecisions.values()) {
+        if (decision.endpoint_id === endpointId
+          && (decision.action_hash === row.action_hash || decision.action_hash === `sha256:${row.action_hash}`)
+          && decision.status === 'approved') {
+          decision.status = 'revoked';
+          revokedDecisionCount += 1;
+          onRollback(() => { decision.status = 'approved'; });
+        }
+      }
+      return { challengeId, status: 'cancelled', revokedDecisionCount, duplicate: false };
+    },
+    async finalizeApprovalDecision({ challengeId, humanId, credentialId, endpointId, now = new Date() } = {}) {
+      return this.withTransaction(async () => {
+        const challenge = approvalChallenges.get(challengeId);
+        const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
+        if (!challenge || challenge.status !== 'pending' || challenge.endpoint_id !== endpointId || new Date(challenge.expires_at) <= new Date(timestamp)) {
+          if (challenge?.status === 'cancelled') throw Object.assign(new Error('Approval challenge was cancelled'), { code: 'APPROVAL_CANCELLED' });
+          throw Object.assign(new Error('Approval challenge expired or already consumed'), { code: 'APPROVAL_EXPIRED' });
+        }
+        challenge.status = 'consumed';
+        challenge.consumed_at = timestamp;
+        onRollback(() => {
+          challenge.status = 'pending';
+          challenge.consumed_at = null;
+        });
+        const decision = {
+          decision_id: `decision_${crypto.randomUUID()}`,
+          human_id: humanId,
+          credential_id: credentialId,
+          endpoint_id: endpointId,
+          action_hash: challenge.action_hash,
+          status: 'approved',
+          nonce: challengeId,
+          created_at: timestamp,
+          expires_at: challenge.expires_at,
+        };
+        approvalDecisions.set(decision.decision_id, decision);
+        onRollback(() => { approvalDecisions.delete(decision.decision_id); });
+        return decision;
+      });
+    },
     // Test/demo seeding for the approval_decisions ceremony this repo has no
     // real WebAuthn flow for -- shaped like postgres-repository.mjs's
     // finalizeApprovalDecision output, minus the challenge/credential
@@ -878,6 +980,11 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
     // seeded here is trusted for the life of the process.
     async consumeApprovalDecision({ endpointId, actionHash, now = new Date() }) {
       const timestamp = (now instanceof Date ? now : new Date(now)).getTime();
+      const cancelledChallenge = [...approvalChallenges.values()].find((challenge) =>
+        challenge.endpoint_id === endpointId
+        && (challenge.action_hash === actionHash || challenge.action_hash === `sha256:${actionHash}`)
+        && challenge.status === 'cancelled');
+      if (cancelledChallenge) return null;
       const prefixedHash = `sha256:${actionHash}`;
       const decision = [...approvalDecisions.values()].find((d) => {
         if (d.endpoint_id !== endpointId) return false;

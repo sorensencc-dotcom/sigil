@@ -481,7 +481,66 @@ export class PostgresRepository {
   async getApprovalChallenge(challengeId) {
     const result = await this.pool.query('SELECT * FROM approval_challenges WHERE challenge_id = $1', [challengeId]);
     const row = result.rows[0];
-    return row ? { id: row.challenge_id, endpointId: row.endpoint_id, actionHash: row.action_hash, webauthnChallenge: row.webauthn_challenge, callbackUrl: row.callback_url, expiresAt: row.expires_at, used: row.status === 'consumed', consuming: row.status === 'consuming', ...(row.envelope ? { conversationId: row.conversation_id, messageId: row.message_id, capabilities: row.capabilities, envelope: row.envelope } : {}) } : null;
+    return row ? { id: row.challenge_id, endpointId: row.endpoint_id, actionHash: row.action_hash, webauthnChallenge: row.webauthn_challenge, callbackUrl: row.callback_url, expiresAt: row.expires_at, used: row.status === 'consumed' || row.status === 'cancelled', consuming: row.status === 'consuming', status: row.status, ...(row.envelope ? { conversationId: row.conversation_id, messageId: row.message_id, capabilities: row.capabilities, envelope: row.envelope } : {}) } : null;
+  }
+
+  async cancelApprovalChallenge({ challengeId, endpointId, now = new Date() } = {}) {
+    return this.withTransaction(async (client) => {
+      const locked = await client.query('SELECT * FROM approval_challenges WHERE challenge_id = $1 FOR UPDATE', [challengeId]);
+      const challenge = locked.rows[0];
+      if (!challenge || challenge.endpoint_id !== endpointId) {
+        throw Object.assign(new Error('Approval challenge not found'), { code: 'APPROVAL_CHALLENGE_NOT_FOUND' });
+      }
+      if (challenge.status === 'consumed') {
+        const stored = await client.query(
+          `SELECT decision_id, action_hash, status, created_at, expires_at
+             FROM approval_decisions
+            WHERE nonce = $1
+            LIMIT 1`,
+          [challengeId],
+        );
+        if (stored.rows[0]?.status === 'consumed') {
+          throw Object.assign(new Error('Approval decision was already consumed by envelope acceptance'), {
+            code: 'APPROVAL_ALREADY_CONSUMED',
+            storedResult: stored.rows[0],
+          });
+        }
+        await client.query(`UPDATE approval_challenges SET status = 'cancelled' WHERE challenge_id = $1`, [challengeId]);
+        const bareActionHash = challenge.action_hash.startsWith('sha256:')
+          ? challenge.action_hash.slice('sha256:'.length)
+          : challenge.action_hash;
+        const revoked = await client.query(
+          `UPDATE approval_decisions
+              SET status = 'revoked'
+            WHERE endpoint_id = $1
+              AND action_hash IN ($2, $3, $4)
+              AND status = 'approved'
+            RETURNING decision_id`,
+          [endpointId, bareActionHash, `sha256:${bareActionHash}`, challenge.action_hash],
+        );
+        return { challengeId, status: 'cancelled', revokedDecisionCount: revoked.rowCount, duplicate: false };
+      }
+      if (challenge.status === 'cancelled') {
+        return { challengeId, status: 'cancelled', revokedDecisionCount: 0, duplicate: true };
+      }
+      if (challenge.status !== 'pending') {
+        throw Object.assign(new Error('Approval challenge is no longer pending'), { code: 'APPROVAL_EXPIRED' });
+      }
+      await client.query(`UPDATE approval_challenges SET status = 'cancelled' WHERE challenge_id = $1`, [challengeId]);
+      const bareActionHash = challenge.action_hash.startsWith('sha256:')
+        ? challenge.action_hash.slice('sha256:'.length)
+        : challenge.action_hash;
+      const revoked = await client.query(
+        `UPDATE approval_decisions
+            SET status = 'revoked'
+          WHERE endpoint_id = $1
+            AND action_hash IN ($2, $3, $4)
+            AND status = 'approved'
+          RETURNING decision_id`,
+        [endpointId, bareActionHash, `sha256:${bareActionHash}`, challenge.action_hash],
+      );
+      return { challengeId, status: 'cancelled', revokedDecisionCount: revoked.rowCount, duplicate: false };
+    });
   }
 
   async finalizeApprovalDecision({ challengeId, humanId, credentialId, endpointId, now = new Date() } = {}) {
@@ -489,7 +548,10 @@ export class PostgresRepository {
     return this.withTransaction(async (client) => {
       const locked = await client.query('SELECT * FROM approval_challenges WHERE challenge_id = $1 FOR UPDATE', [challengeId]);
       const challenge = locked.rows[0];
-      if (!challenge || challenge.status !== 'pending' || challenge.endpoint_id !== endpointId || new Date(challenge.expires_at) <= new Date(timestamp)) throw Object.assign(new Error('Approval challenge expired or already consumed'), { code: 'APPROVAL_EXPIRED' });
+      if (!challenge || challenge.status !== 'pending' || challenge.endpoint_id !== endpointId || new Date(challenge.expires_at) <= new Date(timestamp)) {
+        if (challenge?.status === 'cancelled') throw Object.assign(new Error('Approval challenge was cancelled'), { code: 'APPROVAL_CANCELLED' });
+        throw Object.assign(new Error('Approval challenge expired or already consumed'), { code: 'APPROVAL_EXPIRED' });
+      }
       await client.query(`UPDATE approval_challenges SET status = 'consumed', consumed_at = $2 WHERE challenge_id = $1`, [challengeId, timestamp]);
       const decision = await client.query(
         `INSERT INTO approval_decisions (decision_id, human_id, credential_id, endpoint_id, action_hash, action_hash_algorithm, target, context_refs, scope, contract_version, nonce, status, created_at, expires_at)
@@ -524,6 +586,28 @@ export class PostgresRepository {
   // still-'approved' decision.
   async consumeApprovalDecision({ endpointId, actionHash, now = new Date(), client = this.pool } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const bareActionHash = actionHash.startsWith('sha256:')
+      ? actionHash.slice('sha256:'.length)
+      : actionHash;
+    const prefixedActionHash = `sha256:${bareActionHash}`;
+    await client.query(
+      `SELECT challenge_id
+         FROM approval_challenges
+        WHERE endpoint_id = $1
+          AND action_hash IN ($2, $3)
+        FOR UPDATE`,
+      [endpointId, bareActionHash, prefixedActionHash],
+    );
+    const cancelled = await client.query(
+      `SELECT challenge_id
+         FROM approval_challenges
+        WHERE endpoint_id = $1
+          AND action_hash IN ($2, $3)
+          AND status = 'cancelled'
+        LIMIT 1`,
+      [endpointId, bareActionHash, prefixedActionHash],
+    );
+    if (cancelled.rows[0]) return null;
     // Accepts both representations validateEnvelope's own (unused-in-practice)
     // requiresApproval/approvedActionHashes hook has always tolerated -- the
     // bare hex digest and the 'sha256:'-prefixed form -- so a decision
@@ -545,7 +629,7 @@ export class PostgresRepository {
           SET status = 'consumed'
         WHERE decision_id = (SELECT decision_id FROM candidate)
         RETURNING decision_id, action_hash, status`,
-      [endpointId, actionHash, `sha256:${actionHash}`, timestamp]
+      [endpointId, bareActionHash, prefixedActionHash, timestamp]
     );
     return result.rows[0] ?? null;
   }

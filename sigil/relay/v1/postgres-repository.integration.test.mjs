@@ -434,6 +434,83 @@ test('concurrent duplicate ack requests race safely to exactly one acknowledgeme
   }
 });
 
+test('cancelApprovalChallenge serializes cancel versus approve against live Postgres', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const ids = { human: `usr_${suffix}`, endpoint: `ep_${suffix}`, credential: `cred_${suffix}`, challenge: `challenge_${suffix}` };
+  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  assertDisposableTestDatabase(connectionString);
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
+  for (const file of sqlFiles) await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
+  await pool.query(`
+    INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+      VALUES ('${ids.endpoint}', '${ids.human}', 'claude', 'agent', 'install_${suffix}', 'Claude', 'active', NOW());
+    INSERT INTO human_credentials (credential_id, human_id, endpoint_id, type, public_key, status, valid_from, created_at)
+      VALUES ('${ids.credential}', '${ids.human}', '${ids.endpoint}', 'webauthn', decode('00', 'hex'), 'active', NOW(), NOW());
+    INSERT INTO approval_challenges (challenge_id, endpoint_id, action_hash, webauthn_challenge, callback_url, token_hash, status, created_at, expires_at)
+      VALUES ('${ids.challenge}', '${ids.endpoint}', 'hash_${suffix}', 'wa_${suffix}', 'http://127.0.0.1/callback', 'token_${suffix}', 'pending', NOW(), NOW() + INTERVAL '5 minutes');
+  `);
+
+  const repository = new PostgresRepository({ pool });
+  const raced = await Promise.allSettled([
+    repository.cancelApprovalChallenge({ challengeId: ids.challenge, endpointId: ids.endpoint, now: new Date() }),
+    repository.finalizeApprovalDecision({ challengeId: ids.challenge, humanId: ids.human, credentialId: ids.credential, endpointId: ids.endpoint, now: new Date() }),
+  ]);
+
+  const challengeRow = await pool.query('SELECT status FROM approval_challenges WHERE challenge_id = $1', [ids.challenge]);
+  assert.equal(challengeRow.rows[0].status, 'cancelled');
+  const decisionRows = await pool.query(
+    `SELECT status FROM approval_decisions
+      WHERE endpoint_id = $1 AND action_hash IN ($2, $3)`,
+    [ids.endpoint, `hash_${suffix}`, `sha256:hash_${suffix}`],
+  );
+  assert.equal(decisionRows.rows.every((row) => row.status !== 'approved'), true);
+  assert.equal(raced.some((result) => result.status === 'fulfilled'), true);
+});
+
+test('cancelApprovalChallenge serializes cancel versus envelope acceptance against live Postgres', { skip: !connectionString }, async (t) => {
+  const pool = new pg.Pool({ connectionString });
+  t.after(() => pool.end());
+  const suffix = crypto.randomUUID().replaceAll('-', '_');
+  const ids = { human: `usr_${suffix}`, endpoint: `ep_${suffix}`, credential: `cred_${suffix}`, challenge: `challenge_${suffix}` };
+  const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
+  assertDisposableTestDatabase(connectionString);
+  await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  const sqlFiles = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
+  for (const file of sqlFiles) await pool.query(await fs.readFile(path.join(migrationsDir, file), 'utf8'));
+  await pool.query(`
+    INSERT INTO humans (human_id, status, created_at) VALUES ('${ids.human}', 'active', NOW());
+    INSERT INTO endpoints (endpoint_id, owner_id, runtime, kind, installation_id, display_name, status, created_at)
+      VALUES ('${ids.endpoint}', '${ids.human}', 'claude', 'agent', 'install_${suffix}', 'Claude', 'active', NOW());
+    INSERT INTO human_credentials (credential_id, human_id, endpoint_id, type, public_key, status, valid_from, created_at)
+      VALUES ('${ids.credential}', '${ids.human}', '${ids.endpoint}', 'webauthn', decode('00', 'hex'), 'active', NOW(), NOW());
+    INSERT INTO approval_challenges (challenge_id, endpoint_id, action_hash, webauthn_challenge, callback_url, token_hash, status, created_at, expires_at)
+      VALUES ('${ids.challenge}', '${ids.endpoint}', 'hash_${suffix}', 'wa_${suffix}', 'http://127.0.0.1/callback', 'token_${suffix}', 'consumed', NOW(), NOW() + INTERVAL '5 minutes');
+    INSERT INTO approval_decisions (decision_id, human_id, credential_id, endpoint_id, action_hash, action_hash_algorithm, target, context_refs, scope, contract_version, nonce, status, created_at, expires_at)
+      VALUES ('decision_${suffix}', '${ids.human}', '${ids.credential}', '${ids.endpoint}', 'hash_${suffix}', 'sha256', '{}', '[]', 'approval', 'sigil/1', '${ids.challenge}', 'approved', NOW(), NOW() + INTERVAL '5 minutes');
+  `);
+
+  const repository = new PostgresRepository({ pool });
+  const raced = await Promise.allSettled([
+    repository.cancelApprovalChallenge({ challengeId: ids.challenge, endpointId: ids.endpoint, now: new Date() }),
+    repository.consumeApprovalDecision({ endpointId: ids.endpoint, actionHash: `hash_${suffix}`, now: new Date() }),
+  ]);
+
+  if (raced[0].status === 'rejected') {
+    assert.equal(raced[0].reason.code, 'APPROVAL_ALREADY_CONSUMED');
+  }
+  const challengeRow = await pool.query('SELECT status FROM approval_challenges WHERE challenge_id = $1', [ids.challenge]);
+  const decisionRow = await pool.query('SELECT status FROM approval_decisions WHERE decision_id = $1', [`decision_${suffix}`]);
+  assert.equal(
+    (challengeRow.rows[0].status === 'cancelled' && decisionRow.rows[0].status === 'revoked')
+      || (challengeRow.rows[0].status === 'consumed' && decisionRow.rows[0].status === 'consumed'),
+    true,
+  );
+});
+
 test('consumeApprovalDecision matches, is single-use, and respects expiry against live Postgres', { skip: !connectionString }, async (t) => {
   const pool = new pg.Pool({ connectionString });
   t.after(() => pool.end());

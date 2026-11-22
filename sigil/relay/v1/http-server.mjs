@@ -398,7 +398,34 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         return response.end(JSON.stringify({ request_id: requestId, code: error.code ?? 'AGENTMAIL_CONTROL_REJECTED', message: error.code === 'CONTROL_AUTHORIZATION_REQUIRED' ? 'AgentMail control authorization was denied' : 'AgentMail control request was rejected', details: {} }));
       }
     }
-      if (request.method === 'POST' && request.url === '/v1/approval-challenges') {
+    const cancelMatch = (request.method === 'DELETE' || request.method === 'POST')
+      ? parsedUrl.pathname.match(/^\/v1\/approval-challenges\/([^/]+)(?:\/cancel)?$/)
+      : null;
+    if (cancelMatch && !(request.method === 'POST' && request.url === '/v1/approval-challenges')) {
+      if (!repository?.cancelApprovalChallenge) {
+        response.writeHead(503, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'APPROVAL_CANCEL_UNAVAILABLE', message: 'Approval challenge cancellation is unavailable', details: {} }));
+      }
+      try {
+        const result = await repository.cancelApprovalChallenge({
+          challengeId: decodeURIComponent(cancelMatch[1]),
+          endpointId: principal?.endpoint_id,
+          now,
+        });
+        response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ request_id: requestId, code: 'OK', challenge_id: result.challengeId, status: result.status, duplicate: result.duplicate, revoked_decision_count: result.revokedDecisionCount }));
+      } catch (error) {
+        const status = error.code === 'APPROVAL_CHALLENGE_NOT_FOUND' ? 404 : error.code === 'APPROVAL_ALREADY_CONSUMED' ? 409 : 409;
+        response.writeHead(status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({
+          request_id: requestId,
+          code: error.code ?? 'APPROVAL_CANCEL_FAILED',
+          message: error.message,
+          details: error.storedResult ? { stored_result: error.storedResult } : {},
+        }));
+      }
+    }
+    if (request.method === 'POST' && request.url === '/v1/approval-challenges') {
       if (repository && (!repository.createApprovalChallenge || !repository.getApprovalChallenge || !repository.finalizeApprovalDecision)) return response.writeHead(503).end();
       let raw; try { raw = await readBody(request); } catch (error) { response.writeHead(413, { 'content-type': 'application/json', 'x-sigil-request-id': requestId }); return response.end(JSON.stringify({ request_id: requestId, code: error.code, message: error.message, details: {} })); }
       let body; try { body = JSON.parse(raw); } catch { body = null; }

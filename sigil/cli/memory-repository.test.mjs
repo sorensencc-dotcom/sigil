@@ -250,6 +250,80 @@ test('memory relay federation_directory_links: expired reaper path never resurre
   assert.equal(row.last_reason_code, 'redemption_dead_letter');
 });
 
+test('memory relay cancellation cancels challenges and refuses later approval and consumption', async () => {
+  const repository = createMemoryRepository();
+  const challenge = {
+    id: 'challenge_cancel',
+    endpointId: 'ep_claude',
+    actionHash: 'sha256:hash_cancel',
+    webauthnChallenge: 'webauthn_cancel',
+    callbackUrl: 'http://127.0.0.1/callback',
+    expiresAt: '2026-08-17T00:00:00Z',
+  };
+  await repository.createApprovalChallenge(challenge);
+
+  const cancelled = await repository.cancelApprovalChallenge({
+    challengeId: challenge.id,
+    endpointId: challenge.endpointId,
+    now: new Date('2026-08-16T12:00:00Z'),
+  });
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal(cancelled.revokedDecisionCount, 0);
+  await assert.rejects(
+    () => repository.finalizeApprovalDecision({
+      challengeId: challenge.id,
+      humanId: 'usr_cancel',
+      credentialId: 'cred_cancel',
+      endpointId: challenge.endpointId,
+      now: new Date('2026-08-16T12:01:00Z'),
+    }),
+    { code: 'APPROVAL_CANCELLED' },
+  );
+  assert.equal(await repository.consumeApprovalDecision({
+    endpointId: challenge.endpointId,
+    actionHash: 'hash_cancel',
+    now: new Date('2026-08-16T12:01:00Z'),
+  }), null);
+});
+
+test('memory relay cancellation revokes an unused approved decision and replaying cancel is idempotent', async () => {
+  const repository = createMemoryRepository();
+  const challenge = {
+    id: 'challenge_revoke',
+    endpointId: 'ep_claude',
+    actionHash: 'sha256:hash_revoke',
+    webauthnChallenge: 'webauthn_revoke',
+    callbackUrl: 'http://127.0.0.1/callback',
+    expiresAt: '2026-08-17T00:00:00Z',
+  };
+  await repository.createApprovalChallenge(challenge);
+  await repository.finalizeApprovalDecision({
+    challengeId: challenge.id,
+    humanId: 'usr_revoke',
+    credentialId: 'cred_revoke',
+    endpointId: challenge.endpointId,
+    now: new Date('2026-08-16T12:00:00Z'),
+  });
+  const cancelled = await repository.cancelApprovalChallenge({
+    challengeId: challenge.id,
+    endpointId: challenge.endpointId,
+    now: new Date('2026-08-16T12:01:00Z'),
+  });
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal(cancelled.revokedDecisionCount, 1);
+  assert.equal(await repository.consumeApprovalDecision({
+    endpointId: challenge.endpointId,
+    actionHash: 'hash_revoke',
+    now: new Date('2026-08-16T12:02:00Z'),
+  }), null);
+  const replay = await repository.cancelApprovalChallenge({
+    challengeId: challenge.id,
+    endpointId: challenge.endpointId,
+    now: new Date('2026-08-16T12:03:00Z'),
+  });
+  assert.equal(replay.duplicate, true);
+});
+
 test('memory relay consumeApprovalDecision: matches endpoint_id + action_hash, is single-use, and respects expiry', async () => {
   const repository = createMemoryRepository();
   await repository.recordApprovalDecision({ decisionId: 'decision_1', endpointId: 'ep_claude', actionHash: 'hash_a', expiresAt: '2026-08-17T00:00:00Z', now: new Date('2026-08-16T12:00:00Z') });
