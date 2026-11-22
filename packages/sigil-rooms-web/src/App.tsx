@@ -27,7 +27,7 @@ function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
   const { client } = useAuth();
   const sender = useSelfEndpoint();
   const membersQuery = useMembers(roomId);
-  const { nameFor, loginFor } = useContacts();
+  const { nameFor, loginFor, ownerNameFor } = useContacts();
   const rooms = useQuery({ queryKey: ['rooms'], queryFn: () => client.listRooms() });
   const roomName = rooms.data?.find((room) => room.conversation_id === roomId)?.name ?? roomId;
   const { pending, send, retry, sendError } = useSend(roomId);
@@ -49,7 +49,7 @@ function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
       <RoomHeader roomId={roomId} name={roomName} sender={sender} onGone={onGone} />
       <div className="room-body">
         <div className="room-main">
-          <Timeline roomId={roomId} pending={pending} onVisibleSeq={reportSeq} onGone={onGone} seenThreadRoots={seenRoots} onOpenThread={openThreadRoot} nameFor={nameFor} loginFor={loginFor} members={membersQuery.data ?? []} />
+          <Timeline roomId={roomId} pending={pending} onVisibleSeq={reportSeq} onGone={onGone} seenThreadRoots={seenRoots} onOpenThread={openThreadRoot} nameFor={nameFor} loginFor={loginFor} ownerNameFor={ownerNameFor} members={membersQuery.data ?? []} />
           <div className="notices">
             {pending
               .filter((row) => row.status === 'failed' && row.retryable !== false)
@@ -74,6 +74,7 @@ function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
             members={membersQuery.data ?? []}
             nameFor={nameFor}
             loginFor={loginFor}
+            ownerNameFor={ownerNameFor}
           />
         ) : null}
       </div>

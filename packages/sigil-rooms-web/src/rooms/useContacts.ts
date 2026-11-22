@@ -4,6 +4,7 @@ import type { Contact } from '../api/types';
 
 export type NameFor = (endpointId: string, fallbackDisplayName?: string) => string;
 export type LoginFor = (endpointId: string) => string | null;
+export type OwnerNameFor = (ownerId: string) => string | null;
 
 export const contactsKey = ['me', 'contacts'] as const;
 
@@ -36,8 +37,14 @@ export function createNameFor(contacts: Contact[]): NameFor {
   };
 }
 
+// A human contact's login is the human id, the same value endpoints carry as owner_id.
+export function createOwnerNameFor(contacts: Contact[]): OwnerNameFor {
+  return (ownerId) => contacts.find((contact) => contact.kind === 'human' && contact.login === ownerId)?.display_name || null;
+}
+
 export function useContacts() {
   const { client } = useAuth();
   const query = useQuery({ queryKey: contactsKey, queryFn: () => client.listContacts() });
-  return { ...query, nameFor: createNameFor(query.data ?? []), loginFor: createLoginFor(query.data ?? []) };
+  const contacts = query.data ?? [];
+  return { ...query, nameFor: createNameFor(contacts), loginFor: createLoginFor(contacts), ownerNameFor: createOwnerNameFor(contacts) };
 }

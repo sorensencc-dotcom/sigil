@@ -1,5 +1,14 @@
 # Status
 
+## Session update: 2026-11-22 Issue 257 rooms-web sender chips
+
+- **Goal:** Show on every row who sent it, whether human or agent, and which owner an agent acts for (issue #257, plan story 1, P0).
+- **Completed:** New `packages/sigil-rooms-web/src/rooms/SenderChip.tsx` (chip, `senderKind`, `actingForLabel`, `senderName`) and `createOwnerNameFor` in `useContacts.ts`. Wired into `RowView`, the thread root in `ThreadPanel`, `Timeline`, and `App`. Chip styles in `styles.css`.
+- **Decisions:** Agent means a roster member with a `response_mode`, the same rule as the relay's `memberIsHuman`. A sender outside the loaded roster shows no mark. The acting-for line uses `envelope.sender.owner_id`, which `validate-envelope.mjs:92` checks against the endpoint owner. Owner name order: human contact, then the owner's human member in the room, then the raw owner id; the viewer's own agents read "acting for you". Avatar stays in ticket 10b.
+- **Tests:** rooms-web vitest 33 files, 242 tests pass; `tsc --noEmit` clean. Playwright 5 of 5 pass (two runs in a row).
+- **Follow-up fixes:** `vite.config.ts` now stops vitest with a clear error when the working directory has a lowercase drive (`c:\...`), and `AGENTS.md` states the uppercase-drive rule. The e2e check in `rooms.e2e.ts` that expected no copy of a thread reply in the main timeline was stale since `b61f2bb` added reply previews; it now checks that the reply shows only as a preview, never as its own row.
+- **Next action:** Push `feat/issue-257-sender-chips` (worktree `C:\dev\sigil-wt-issue-257`) and open the PR with the proposed "acting for" copy.
+
 ## Session update: 2026-11-19 Phase 7 room bots live, Chief and Helix CI retired
 
 - **Goal:** Replace Chief and Helix CI with the Phase 7 room bots (Grok Bot · Elon, First Mate · Orchestrator, Floor Warden), and prove that each one answers in room `room_056dd222-ec61-4426-87a4-9b0f9d143781`.

@@ -68,6 +68,26 @@ describe('RowView', () => {
     expect(screen.getByText('hello @Roster Ada')).toBeInTheDocument();
   });
 
+  it('marks an agent sender and names the owner it acts for', () => {
+    const members: Member[] = [
+      { endpoint_id: 'ep_ada', role: 'member', response_mode: 'joins', added_at: 't', invokable_by: 'owner', owner_id: 'usr_a', display_name: 'Ada Bot' },
+      { endpoint_id: 'ep_owner', role: 'owner', response_mode: null, added_at: 't', invokable_by: 'owner', owner_id: 'usr_a', display_name: 'Owner A' },
+    ];
+    render(<ul><RowView row={row(undefined)} sender={null} members={members} ownerNameFor={(id) => id === 'usr_a' ? 'Contact Owner' : null} /></ul>);
+    expect(screen.getByText('Ada Bot')).toHaveClass('sender');
+    expect(screen.getByText('Agent')).toBeInTheDocument();
+    expect(screen.getByText('acting for Contact Owner')).toBeInTheDocument();
+  });
+
+  it('marks a human sender without an acting-for line', () => {
+    const members: Member[] = [
+      { endpoint_id: 'ep_ada', role: 'member', response_mode: null, added_at: 't', invokable_by: 'owner', owner_id: 'usr_a', display_name: 'Ada' },
+    ];
+    render(<ul><RowView row={row(undefined)} sender={null} members={members} /></ul>);
+    expect(screen.getByText('Human')).toBeInTheDocument();
+    expect(screen.queryByText(/acting for/)).toBeNull();
+  });
+
   it('previews the latest reply under the root and opens the thread on click', async () => {
     const onReply = vi.fn();
     render(

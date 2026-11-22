@@ -1,7 +1,7 @@
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import type { HistoryItem } from '../api/types';
+import type { HistoryItem, Member } from '../api/types';
 import { renderWithClient } from '../testUtils';
 import { ThreadPanel } from './ThreadPanel';
 
@@ -39,7 +39,20 @@ describe('ThreadPanel', () => {
     panel(items, { nameFor: (id: string) => id === 'ep_a' ? 'Contact A' : id });
     expect(await screen.findByText('root @Contact A')).toBeInTheDocument();
     expect(screen.getByText('reply @Contact A')).toBeInTheDocument();
-    expect(screen.getByText('Contact A')).toBeInTheDocument();
+    // One sender label on the root, one on the reply.
+    expect(screen.getAllByText('Contact A')).toHaveLength(2);
+  });
+
+  it('shows a sender chip with the acting-for line on the thread root', async () => {
+    const members: Member[] = [
+      { endpoint_id: 'ep_a', role: 'member', response_mode: 'joins', added_at: 't', invokable_by: 'owner', owner_id: 'u', display_name: 'Bot A' },
+      { endpoint_id: 'ep_h', role: 'owner', response_mode: null, added_at: 't', invokable_by: 'owner', owner_id: 'u', display_name: 'Hana' },
+    ];
+    panel([msg(1, 'm1', 'root text')], { members });
+    expect(await screen.findByText('root text')).toBeInTheDocument();
+    expect(screen.getByText('Bot A')).toHaveClass('sender');
+    expect(screen.getByText('Agent')).toBeInTheDocument();
+    expect(screen.getByText('acting for Hana')).toBeInTheDocument();
   });
 
   it('sends a reply through onSend and shows a failed pending reply for this thread only', async () => {

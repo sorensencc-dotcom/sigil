@@ -109,13 +109,16 @@ test('rename, thread reply, Stop, and a response-mode change', async ({ page }) 
   await expect(page.getByText('thread root')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Rename room' })).toBeVisible();
 
-  // Thread: the reply shows in the panel and not in the main timeline.
+  // Thread: the reply shows in the panel, and the main timeline shows it only as a preview under the
+  // root, never as a row of its own.
   await page.getByRole('button', { name: 'Reply', exact: true }).click();
   const thread = page.getByRole('complementary', { name: 'Thread' });
   await thread.getByLabel('Reply in thread').fill('a threaded reply');
   await thread.getByRole('button', { name: 'Send' }).click();
   await expect(thread.getByText('a threaded reply')).toBeVisible();
-  await expect(page.getByLabel('Messages').getByText('a threaded reply')).toHaveCount(0);
+  const timeline = page.getByLabel('Messages');
+  await expect(timeline.locator('.reply-preview-text', { hasText: 'a threaded reply' })).toBeVisible();
+  await expect(timeline.locator('.text', { hasText: 'a threaded reply' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '1 reply' })).toBeVisible();
   await thread.getByRole('button', { name: 'Close' }).click();
 
