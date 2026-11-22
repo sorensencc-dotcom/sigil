@@ -1,0 +1,20 @@
+docs/superpowers/specs/2026-11-21-sigil-ag-ui-projection-design.md
+  s_116b394acbc10b::t_3a06acb3535674 90,122
+  s_116b394acbc10b::t_09ee817f1669a5 84,113,139-140
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5ab9b00b84e1284f5d744abcfbac8f9c8497c82e",
+  "prompts": {},
+  "sessions": {
+    "s_116b394acbc10b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a200cc-14f0-78c2-ace2-20d76bb5a8e9",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
