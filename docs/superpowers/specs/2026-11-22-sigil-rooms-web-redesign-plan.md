@@ -275,16 +275,16 @@ Effort: S is under 2 days, M is 2 to 5 days, and L is over 5 days. Risk is the c
 | 2 | Bring up the relay and client, run a live walkthrough, and document it with screenshots. | Separate session. Evidence feeds the P0 diagnosis. |
 | 3 | The whole brand could use a refresh. | Brand refresh enters P0 scope. Needs a design pass beyond Rewrite Labs Console tokens. |
 | 4 | Yes, drop the Nov 11 "drop composer polish" line. | First-class UI is in scope. |
-| 5 | Asked what "attachments" means. | Open. Defined below. |
-| 6 | Asked how un-pausing affects other work. | Open. Explained below. |
-| 7 | Asked for use cases. | Open. |
+| 5 | Accepted suggestion: defer. | Attachments move to P2 and wait on a relay support check. |
+| 6 | Accepted suggestion: un-pause later. | PWA and Web Push stay in P2. No effect on P0 or P1. |
+| 7 | Accepted suggestion: catch-up before search. | Catch-up stays in P0. Search stays in P2. |
 | 8 | Wants better than plain text. | Markdown policy needed. Open design question: safe subset, no raw HTML. |
 | 9 | Yes, optional at room creation. | Purpose stays optional. |
 | 10 | No guests. Every participant is a user or a user's linked agent. | Removes the guest model. Relay-custodial human keys need a replacement plan. |
-| 11 | Asked for best UX options. | Open. |
-| 12 | Asked for plain-language explanation. | Open. |
-| 13 | Asked for examples. | Open. |
-| 14 | Asked for examples. | Open. |
+| 11 | Accepted suggestion: relay approval page first, in-room AG-UI approvals later. | P1 ships the card that opens the relay page. A later phase moves approval into the room after #242 to #245. |
+| 12 | Accepted suggestion: pin keys in contacts. | P1 builds key pinning and a key lookup route. |
+| 13 | Accepted suggestion: one-browser New divider in P0, relay read cursor in P1. | No change to the P0 and P1 split. |
+| 14 | No recommendation given, none accepted. | Open. Turn cap stays read-only in P0. Decide before P1. |
 
 ## 8. Failure modes and non-goals
 
@@ -312,3 +312,34 @@ Failure modes to guard against:
 11. **Marketing montages treated as shipped UI.** This covers Agent Relay, Terminus Teams [SECONDARY, UNVERIFIED], and Concord MCP claims labeled U.
 12. **Global reply tokens beyond tests** (Nov 11).
 13. **Embedded competitor demos.** Link out instead.
+
+### Decisions and phase tracker
+
+Status as of 2026-11-22. Nothing is built yet. Each line names the phase that owns the work, so no later phase is lost.
+
+| Item | Phase | Status | Depends on |
+|---|---|---|---|
+| Live UI walkthrough with screenshots | Before P0 | Done: PR #252. The client on port 5173 was a stale 2026-10-30 build, and router, hold, and cap events were not reproduced. | Rebuild the client from main and sign in to close Q2 |
+| Brand refresh beyond Rewrite Labs Console tokens (Q3) | P0 | Added to scope. Needs a design pass. | Live walkthrough evidence |
+| Optional purpose at room creation (Q9) | P0 | Approved | None |
+| Markdown for agent output (Q8) | P1 | Wanted. Needs a policy: safe subset, no raw HTML, no remote images. | Policy decision |
+| Remove the guest model (Q10): every participant is a user or a user's linked agent | P1 | Decided. Needs a plan to replace relay-custodial human keys with keys users hold. | Relay and identity work |
+| Approval card opens the relay page (Q11, option A) | P1 | Approved | #242 to #245 for hold delivery |
+| In-room approvals through AG-UI (Q11, option B) | Later than P1 | Planned | #242 to #245 |
+| Key lookup route and contact key pinning (Q12) | P1 | Approved | Relay route; Ed25519 WebCrypto check |
+| Cross-device read cursor (Q13) | P1 | Approved | Relay read of the ack cursor |
+| Turn cap editing (Q14) | P1 | Open | Room settings route; Chris decision |
+| Attachments (Q5) | P2 | Deferred | Relay support check |
+| PWA and Web Push (Q6) | P2 | Deferred | Nov 11 memo pause lifted |
+| Find in room and history windowing (Q7) | P2 | Deferred | Relay windowing |
+| Handoff rooms, ask-first agent threads, presence | P2 | Deferred | Chris decisions on archive and thread semantics |
+
+New backlog stories from these answers (numbers continue section 6):
+
+| # | Story | Phase | Effort | Risk |
+|---|---|---|---|---|
+| 21 | As a user, I see a refreshed brand across the console, not only the existing tokens. | P0 | M to L | Medium (needs design direction) |
+| 22 | As a reader, agent output renders as a safe markdown subset. | P1 | M | Medium (no raw HTML; policy first) |
+| 23 | As a user, I sign with a key I hold, and no guest or relay-custodial human identity exists. | P1 | L | High (identity and relay work) |
+| 24 | As an approver, I approve inside the room without leaving it. | After P1 | L | High (#242 to #245) |
+| 25 | As a member, I attach a screenshot or file. | P2 | L | High (relay support unknown) |
