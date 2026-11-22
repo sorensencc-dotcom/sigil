@@ -184,3 +184,31 @@ jobs:
           name: relay-jobs-check
           path: relay-jobs-check.txt
           if-no-files-found: ignore
+
+  formal-verification:
+    name: Formal TLA+ Verification (TLC)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Download tla2tools
+        run: |
+          mkdir -p "$HOME/.tla"
+          curl -sSL https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar -o "$HOME/.tla/tla2tools.jar"
+
+      - name: Set up Node.js 24.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+
+      - name: Run ag-ui-approval formal model check
+        run: |
+          export TLA2TOOLS="$HOME/.tla/tla2tools.jar"
+          node verify/ag-ui-approval/check.mjs

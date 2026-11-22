@@ -27,3 +27,12 @@ test('CI runs the relay-jobs schedule checker and records its counts', () => {
   assert.match(job, /shell: bash/, 'piping to tee needs bash with pipefail so a failing checker fails the job');
   assert.match(job, /GITHUB_STEP_SUMMARY/);
 });
+
+test('CI runs the formal TLA+ verification job for ag-ui-approval', () => {
+  const workflow = fs.readFileSync(new URL('.github/workflows/ci.yml', import.meta.url), 'utf8');
+  const job = workflow.split(/^ {2}formal-verification:/m)[1];
+  assert.ok(job, 'ci.yml has no formal-verification job');
+  assert.match(job, /setup-java/);
+  assert.match(job, /tla2tools\.jar/);
+  assert.match(job, /node verify\/ag-ui-approval\/check\.mjs/);
+});
