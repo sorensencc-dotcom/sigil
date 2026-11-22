@@ -9,7 +9,7 @@ import { RowView } from './RowView';
 import { ackWatermark, isTopLevel, lastActivitySeq, latestReplies, replyCounts, rowsById, threadRootOf } from './threads';
 import { historyKey } from './historyQuery';
 import { useHistory } from './useHistory';
-import type { LoginFor, NameFor } from './useContacts';
+import type { LoginFor, NameFor, OwnerNameFor } from './useContacts';
 
 const NO_ROOTS: ReadonlySet<string> = new Set();
 
@@ -22,6 +22,7 @@ export function Timeline({
   onOpenThread = () => {},
   nameFor,
   loginFor,
+  ownerNameFor,
   members = [],
 }: {
   roomId: string;
@@ -32,6 +33,7 @@ export function Timeline({
   onOpenThread?: (rootId: string) => void;
   nameFor?: NameFor;
   loginFor?: LoginFor;
+  ownerNameFor?: OwnerNameFor;
   members?: Member[];
 }) {
   const { items, isLoading, error } = useHistory(roomId);
@@ -86,6 +88,7 @@ export function Timeline({
             sender={sender}
             nameFor={nameFor}
             loginFor={loginFor}
+            ownerNameFor={ownerNameFor}
             members={members}
             replies={row.item ? counts.get(row.item.message_id) ?? 0 : 0}
             latestReplies={row.item ? latestByRoot.get(row.item.message_id) ?? [] : []}

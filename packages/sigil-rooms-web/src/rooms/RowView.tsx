@@ -1,8 +1,9 @@
 import type { HistoryItem, Member } from '../api/types';
 import type { Row } from './mergeRows';
-import { formatMentionText, roomMemberName } from './resolveMentions';
+import { formatMentionText } from './resolveMentions';
+import { SenderChip, senderName } from './SenderChip';
 import { previewText } from './threads';
-import type { LoginFor, NameFor } from './useContacts';
+import type { LoginFor, NameFor, OwnerNameFor } from './useContacts';
 
 function Stamp({ at }: { at: string }) {
   const date = new Date(at);
@@ -15,6 +16,7 @@ export function RowView({
   sender,
   nameFor,
   loginFor,
+  ownerNameFor,
   members = [],
   replies = 0,
   latestReplies = [],
@@ -25,6 +27,7 @@ export function RowView({
   sender: string | null;
   nameFor?: NameFor;
   loginFor?: LoginFor;
+  ownerNameFor?: OwnerNameFor;
   members?: Member[];
   replies?: number;
   latestReplies?: HistoryItem[];
@@ -54,13 +57,19 @@ export function RowView({
     );
   }
   const mine = sender !== null && envelope.sender.endpoint_id === sender;
-  const senderName = members.length > 0
-    ? roomMemberName({ endpoint_id: envelope.sender.endpoint_id, display_name: row.item!.display_name ?? '' }, members, nameFor, loginFor)
-    : nameFor?.(envelope.sender.endpoint_id, row.item!.display_name) || row.item!.display_name || envelope.sender.endpoint_id;
   return (
     <li data-mine={mine ? 'true' : undefined}>
       <div className="meta">
-        <small className="sender">{senderName}</small>
+        <SenderChip
+          endpointId={envelope.sender.endpoint_id}
+          ownerId={envelope.sender.owner_id}
+          name={senderName(envelope.sender.endpoint_id, row.item!.display_name, members, nameFor, loginFor)}
+          members={members}
+          viewer={sender}
+          ownerNameFor={ownerNameFor}
+          nameFor={nameFor}
+          loginFor={loginFor}
+        />
         <Stamp at={envelope.created_at} />
       </div>
       <span className="text">{formatMentionText(envelope.body.text, nameFor, members)}</span>
@@ -70,9 +79,7 @@ export function RowView({
             <span key={reply.message_id} className="reply-preview-item">
               <span className="reply-preview-meta">
                 <span className="reply-preview-sender">
-                  {members.length > 0
-                    ? roomMemberName({ endpoint_id: reply.envelope.sender.endpoint_id, display_name: reply.display_name ?? '' }, members, nameFor, loginFor)
-                    : nameFor?.(reply.envelope.sender.endpoint_id, reply.display_name) || reply.display_name || reply.envelope.sender.endpoint_id}
+                  {senderName(reply.envelope.sender.endpoint_id, reply.display_name, members, nameFor, loginFor)}
                 </span>
                 <Stamp at={reply.envelope.created_at} />
               </span>

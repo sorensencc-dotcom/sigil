@@ -1,5 +1,13 @@
 # Status
 
+## Session update: 2026-11-22 Issue 257 rooms-web sender chips
+
+- **Goal:** Show on every row who sent it, whether human or agent, and which owner an agent acts for (issue #257, plan story 1, P0).
+- **Completed:** New `packages/sigil-rooms-web/src/rooms/SenderChip.tsx` (chip, `senderKind`, `actingForLabel`, `senderName`) and `createOwnerNameFor` in `useContacts.ts`. Wired into `RowView`, the thread root in `ThreadPanel`, `Timeline`, and `App`. Chip styles in `styles.css`.
+- **Decisions:** Agent means a roster member with a `response_mode`, the same rule as the relay's `memberIsHuman`. A sender outside the loaded roster shows no mark. The acting-for line uses `envelope.sender.owner_id`, which `validate-envelope.mjs:92` checks against the endpoint owner. Owner name order: human contact, then the owner's human member in the room, then the raw owner id; the viewer's own agents read "acting for you". Avatar stays in ticket 10b.
+- **Tests:** rooms-web vitest 33 files, 242 tests pass; `tsc --noEmit` clean. Run vitest from an uppercase `C:` path (see the trail learning).
+- **Next action:** Push `feat/issue-257-sender-chips` (worktree `C:\dev\sigil-wt-issue-257`) and open the PR with the proposed "acting for" copy.
+
 ## Session update: 2026-11-19 Phase 7 room bots live, Chief and Helix CI retired
 
 - **Goal:** Replace Chief and Helix CI with the Phase 7 room bots (Grok Bot · Elon, First Mate · Orchestrator, Floor Warden), and prove that each one answers in room `room_056dd222-ec61-4426-87a4-9b0f9d143781`.
