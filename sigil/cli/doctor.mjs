@@ -149,7 +149,11 @@ export async function runDoctor({
   };
 
   if (identityPath) {
-    checks.keypair = checkKeypair(loadIdentityFn(identityPath));
+    try {
+      checks.keypair = checkKeypair(loadIdentityFn(identityPath));
+    } catch (err) {
+      checks.keypair = { ok: false, error: err.message };
+    }
   }
 
   if (relayUrl) {

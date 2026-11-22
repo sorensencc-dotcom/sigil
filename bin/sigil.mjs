@@ -24,32 +24,16 @@ function applyConfig(config) {
 }
 
 if (command === '--help' || command === '-h' || !command) {
-  console.log(`Sigil CLI & Host Connector
-
-Usage:
-  sigil init <name> --owner <owner_id>   Create a local identity and register it
-  sigil init codex --owner <owner_id>    Create local Codex endpoint configuration
-  sigil relay up [--port N] [--database-url url]
-                                         Start a local Sigil relay
-  sigil relay well-known generate --identity path --domain d --endpoint url
-                                         Emit this relay's .well-known/sigil discovery document
-  sigil send [options] --to <id> --to-owner <owner> --message <text>
-                                         Send a signed task envelope
-  sigil inbox [options] [--watch|--wait] Read/wait for incoming envelopes
-  sigil agent run [options]              Start autonomous worker daemon
-  sigil service <command>                Manage supervisor services (install|start|stop|status|uninstall)
-  sigil secret <command>                 Manage secrets in OS credential store (set|get|delete)
-  sigil doctor                           Run conformance and configuration diagnostics
-  sigil mcp                              Start the MCP stdio bridge
-  sigil configure                        Show host configuration instructions
-  sigil configure --codex                Register Sigil in Codex MCP configuration
-  sigil configure --claude               Print Claude MCP configuration JSON
-  sigil --help                           Show this help
-`);
+  const cli = await import('../sigil/cli/sigil.mjs');
+  if (typeof cli.usage === 'function') {
+    cli.usage();
+  } else {
+    console.log('Sigil CLI');
+  }
   process.exit(command ? 0 : 1);
 }
 
-if (['relay', 'send', 'inbox', 'agent', 'service', 'secret', 'doctor', 'peer', 'oidc-issuer', 'human', 'bot', 'ingress', 'room', 'agentmail', 'resend', 'federation', 'route', 'endpoint', 'sign-contract', 'verify-contract'].includes(command) || (command === 'init' && process.argv[3] !== 'codex')) {
+if (['relay', 'send', 'inbox', 'agent', 'service', 'secret', 'doctor', 'peer', 'oidc-issuer', 'human', 'bot', 'ingress', 'room', 'agentmail', 'resend', 'federation', 'route', 'endpoint', 'sign-contract', 'verify-contract', 'schema', 'template'].includes(command) || (command === 'init' && process.argv[3] !== 'codex')) {
   const cli = await import('../sigil/cli/sigil.mjs');
   await cli.main?.();
 } else if (command === 'configure') {
