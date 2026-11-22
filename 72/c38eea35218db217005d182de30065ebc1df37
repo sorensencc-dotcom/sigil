@@ -1,0 +1,22 @@
+docs/superpowers/specs/2026-11-22-sigil-rooms-web-redesign-plan.md
+  s_c5064704c7f31c::t_bc958ceb7eda44 271-288
+  s_c5064704c7f31c::t_cec82779a679ca 20,24,88,101,123,140,186,236-237,240,243,246,249,252,266
+.trail/learnings/2026-11-22-rooms-web-redesign-most-features-need-chris.md
+  s_c5064704c7f31c::t_2519a0f83a4ea9 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "72c38eea35218db217005d182de30065ebc1df37",
+  "prompts": {},
+  "sessions": {
+    "s_c5064704c7f31c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "39ffafec-9bf8-4f5b-a3f8-57e7675ab7c9",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
