@@ -1,0 +1,19 @@
+.trail/learnings/2026-11-22-transient-stop-and-status-messages-must-chris.md
+  s_8fce72db9f61f8::t_09442bc1d3d161 1-25
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "aa4bb6cb64bcd19f53f9ff64e83ba27f9e896d8a",
+  "prompts": {},
+  "sessions": {
+    "s_8fce72db9f61f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_8fce72db9f61f8",
+        "model": "unknown"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
