@@ -56,11 +56,11 @@ describe('cookie-mode consumers', () => {
     const setSender = vi.spyOn(tokenStore, 'setSender');
     const client = {
       sendMessage: vi.fn(async () => ({ message_id: 'm1' })),
-      history: vi.fn(async () => ({ items: [{ message_id: 'm1', room_seq: '1', envelope: { sender: { endpoint_id: 'ep_other' } } }], next_after_seq: '1', has_more: false }) as never),
+      historyBefore: vi.fn(async () => ({ items: [{ message_id: 'm1', room_seq: '1', envelope: { sender: { endpoint_id: 'ep_other' } } }], next_before_seq: null, has_older: false }) as never),
     };
     const { result } = renderHook(() => useSend('room_1'), { wrapper: wrap(client as never, false) });
     await act(async () => result.current.send('hi'));
-    await waitFor(() => expect(client.history).toHaveBeenCalled());
+    await waitFor(() => expect(client.historyBefore).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 20));
     expect(getSender).not.toHaveBeenCalled();
     expect(setSender).not.toHaveBeenCalled();

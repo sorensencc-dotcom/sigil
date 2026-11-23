@@ -47,7 +47,8 @@ export async function makeDb() {
 }
 
 export async function applyMigrations(db) {
-  const files = fs.readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql')).sort();
+  // PGlite has no pg_trgm; the relay-jobs model does not exercise this optional room-search index.
+  const files = fs.readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql') && f !== '043_room_message_search.sql').sort();
   for (const f of files) {
     try {
       await db.exec(fs.readFileSync(path.join(MIGRATIONS, f), 'utf8'));
