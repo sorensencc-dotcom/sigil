@@ -65,8 +65,8 @@ test('paste a token, list rooms, send, see it come back live, and ack', async ({
   await expect.poll(() => ackRequests.length, { timeout: 5000 }).toBeGreaterThan(0);
   expect(JSON.parse(ackRequests.at(-1)!)).toHaveProperty('up_to_room_seq');
 
-  // The token is in sessionStorage, not localStorage.
-  expect(await page.evaluate(() => localStorage.length)).toBe(0);
+  // The token is in sessionStorage, not localStorage. localStorage also holds the browser's room watermark.
+  expect(await page.evaluate(() => localStorage.getItem('sigil.token'))).toBeNull();
   expect(await page.evaluate(() => sessionStorage.getItem('sigil.token'))).toBe(harness.humanToken);
 });
 

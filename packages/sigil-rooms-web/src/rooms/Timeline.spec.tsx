@@ -1,19 +1,21 @@
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../api/client';
 import type { HistoryItem } from '../api/types';
 import { renderWithClient } from '../testUtils';
 import { Timeline } from './Timeline';
 
-function msg(seq: number, id: string, text: string, type = 'room.message'): HistoryItem {
+function msg(seq: number, id: string, text: string, type = 'room.message', createdAt = '2026-11-23T12:00:00.000Z'): HistoryItem {
   return {
     room_seq: String(seq), message_id: id, canonical_bytes: 'b',
-    envelope: { message_id: id, message_type: type, sender: { endpoint_id: 'ep_a', owner_id: 'u' }, body: type === 'room.event' ? { kind: 'invocation_stopped', reason: text } : { text }, created_at: 't' },
+    envelope: { message_id: id, message_type: type, sender: { endpoint_id: 'ep_a', owner_id: 'u' }, body: type === 'room.event' ? { kind: 'invocation_stopped', reason: text } : { text }, created_at: createdAt },
   };
 }
 
 describe('Timeline', () => {
+  beforeEach(() => localStorage.clear());
+
   it('renders messages as plain text, never as HTML', async () => {
     const history = vi.fn(async () => ({ code: 'OK', items: [msg(1, 'm1', '<img src=x onerror=alert(1)> **bold**')], next_after_seq: '1' }));
     const { container } = renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { history });
@@ -67,6 +69,31 @@ describe('Timeline', () => {
     const history = vi.fn(async () => ({ code: 'OK', items: [msg(1, 'm1', 'a'), msg(2, 'm2', 'b')], next_after_seq: '2' }));
     renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={onVisibleSeq} onGone={() => {}} />, { history });
     await waitFor(() => expect(onVisibleSeq).toHaveBeenLastCalledWith('2'));
+  });
+
+  it('opens at this browser’s saved new-message divider and can jump to latest', async () => {
+    localStorage.setItem('sigil.room:room_1:watermark', '1');
+    const history = vi.fn(async () => ({ code: 'OK', items: [msg(1, 'm1', 'seen'), msg(2, 'm2', 'new')], next_after_seq: '2' }));
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { history });
+
+    expect(await screen.findByText('New messages · this browser')).toBeInTheDocument();
+    const scroller = screen.getByRole('region', { name: 'Messages' });
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 600 });
+    expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Jump to latest' }));
+    expect(scroller.scrollTop).toBe(600);
+  });
+
+  it('separates history rows by their calendar day', async () => {
+    const history = vi.fn(async () => ({ code: 'OK', items: [
+      msg(1, 'm1', 'yesterday', 'room.message', '2026-11-22T12:00:00.000Z'),
+      msg(2, 'm2', 'today', 'room.message', '2026-11-23T12:00:00.000Z'),
+    ], next_after_seq: '2' }));
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { history });
+
+    await screen.findByText('today');
+    expect(screen.getByText('Sunday, November 22, 2026')).toBeInTheDocument();
+    expect(screen.getByText('Monday, November 23, 2026')).toBeInTheDocument();
   });
 
   it('shows pending and failed rows', async () => {

@@ -4,7 +4,7 @@ import { ApiError } from '../api/client';
 import type { HistoryItem, Member, RoomSearchItem } from '../api/types';
 import { ErrorBanner } from '../errors/ErrorBanner';
 import { useAuth, useSelfEndpoint } from '../auth/AuthContext';
-import { mergeRows, type PendingMessage } from './mergeRows';
+import { mergeRows, type PendingMessage, type Row } from './mergeRows';
 import { RowView } from './RowView';
 import { ackWatermark, isTopLevel, lastActivitySeq, latestReplies, replyCounts, rowsById, threadRootOf } from './threads';
 import { historyKey } from './historyQuery';
@@ -12,6 +12,18 @@ import { useHistory } from './useHistory';
 import type { LoginFor, NameFor, OwnerNameFor } from './useContacts';
 
 const NO_ROOTS: ReadonlySet<string> = new Set();
+type TimelineEntry = { kind: 'row'; row: Row } | { kind: 'day'; key: string; label: string } | { kind: 'new' };
+
+function readWatermark(roomId: string): bigint | null {
+  try {
+    const value = localStorage.getItem(`sigil.room:${roomId}:watermark`);
+    if (value === null) return null;
+    const seq = BigInt(value);
+    return seq >= 0n ? seq : null;
+  } catch {
+    return null;
+  }
+}
 const SEARCH_RESULT_WINDOW_MAX = 100;
 
 export function Timeline({
@@ -62,12 +74,40 @@ export function Timeline({
     [items, byId, pending, activity, focusedSeq],
   );
   const watermark = useMemo(() => ackWatermark(items, seenThreadRoots, byId), [items, seenThreadRoots, byId]);
+  const [savedWatermark] = useState(() => readWatermark(roomId));
+  const entries = useMemo(() => {
+    const result: TimelineEntry[] = [];
+    let previousDay: string | null = null;
+    let addedNewDivider = false;
+    for (const row of rows) {
+      if (row.item) {
+        const replies = latestByRoot.get(row.item.message_id) ?? [];
+        const latestActivity = replies[replies.length - 1] ?? row.item;
+        const createdAt = new Date(latestActivity.envelope.created_at);
+        const date = `${createdAt.getFullYear()}-${createdAt.getMonth()}-${createdAt.getDate()}`;
+        if (date !== previousDay) {
+          result.push({ kind: 'day', key: `day:${row.key}`, label: createdAt.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }) });
+          previousDay = date;
+        }
+        const activitySeq = activity.get(row.item.message_id) ?? row.seq!;
+        if (!addedNewDivider && savedWatermark !== null && activitySeq > savedWatermark) {
+          result.push({ kind: 'new' });
+          addedNewDivider = true;
+        }
+      }
+      result.push({ kind: 'row', row });
+    }
+    return result;
+  }, [rows, activity, latestByRoot, savedWatermark]);
 
   const scroller = useRef<HTMLElement>(null);
+  const newDivider = useRef<HTMLLIElement>(null);
+  const positionedRoom = useRef<string | null>(null);
   const stickToBottom = useRef(true);
   const prependPosition = useRef<{ height: number; top: number } | null>(null);
   const loadingOlder = useRef(false);
   const pendingScrollSeq = useRef<string | null>(null);
+  const [showJump, setShowJump] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState<RoomSearchItem[]>([]);
@@ -83,6 +123,15 @@ export function Timeline({
     if (previous) {
       el.scrollTop = previous.top + (el.scrollHeight - previous.height);
       prependPosition.current = null;
+    } else if (positionedRoom.current !== roomId) {
+      positionedRoom.current = roomId;
+      if (newDivider.current) {
+        el.scrollTop = Math.max(0, newDivider.current.offsetTop - el.offsetTop);
+        stickToBottom.current = false;
+      } else {
+        el.scrollTop = el.scrollHeight;
+        stickToBottom.current = true;
+      }
     } else if (stickToBottom.current) {
       el.scrollTop = el.scrollHeight;
     }
@@ -92,11 +141,16 @@ export function Timeline({
       row?.scrollIntoView?.({ block: 'center' });
       pendingScrollSeq.current = null;
     }
-  }, [items, pending.length]);
+    setShowJump(!stickToBottom.current || !atLatest);
+  }, [roomId, items, entries.length, pending.length, atLatest]);
 
   useEffect(() => {
-    if (watermark !== '0') onVisibleSeq(watermark);
-  }, [watermark, onVisibleSeq]);
+    if (watermark === '0') return;
+    onVisibleSeq(watermark);
+    try {
+      localStorage.setItem(`sigil.room:${roomId}:watermark`, watermark);
+    } catch {}
+  }, [roomId, watermark, onVisibleSeq]);
 
   useEffect(() => {
     if (error instanceof ApiError && error.code === 'ROOM_NOT_FOUND') onGone();
@@ -162,6 +216,9 @@ export function Timeline({
   async function jumpToLatest() {
     stickToBottom.current = true;
     await goToLatest();
+    const el = scroller.current;
+    if (el) el.scrollTop = el.scrollHeight;
+    setShowJump(false);
   }
 
   async function fetchNewer() {
@@ -177,6 +234,7 @@ export function Timeline({
       onScroll={(event) => {
         const el = event.currentTarget;
         stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+        setShowJump(!stickToBottom.current || !atLatest);
         if (el.scrollTop < 48) void fetchOlder();
       }}
     >
@@ -190,7 +248,6 @@ export function Timeline({
         <div className="history-controls">
           {hasOlder ? <button type="button" className="ghost" disabled={loadingOlder.current} onClick={() => void fetchOlder()}>Load older messages</button> : null}
           {hasNewer ? <button type="button" className="ghost" onClick={() => void fetchNewer()}>Load newer messages</button> : null}
-          {!atLatest ? <button type="button" className="ghost" onClick={() => void jumpToLatest()}>Jump to latest</button> : null}
         </div>
       </div>
       {searchError ? <ErrorBanner error={searchError} /> : null}
@@ -209,23 +266,28 @@ export function Timeline({
           </ul>
           {searchHasMore ? <button type="button" className="ghost" disabled={searching} onClick={() => void loadMoreSearch()}>{searching ? 'Searching…' : 'More results'}</button> : null}
         </section>
-      ) : searchTerm && !searching && !searchError ? <p className="room-search-empty">No messages found for “{searchTerm}”.</p> : null}
+        ) : searchTerm && !searching && !searchError ? <p className="room-search-empty">No messages found for “{searchTerm}”.</p> : null}
+      {showJump || !atLatest ? <button className="timeline-jump" type="button" onClick={() => void jumpToLatest()}>Jump to latest</button> : null}
       <ul>
-        {rows.map((row) => (
+        {entries.map((entry) => entry.kind === 'day' ? (
+          <li className="timeline-day" key={entry.key}><time>{entry.label}</time></li>
+        ) : entry.kind === 'new' ? (
+          <li className="timeline-divider" key="new" ref={newDivider}><span>New messages · this browser</span></li>
+        ) : (
           <RowView
-            key={row.key}
+            key={entry.row.key}
+            row={entry.row}
             roomId={roomId}
-            row={row}
             sender={sender}
             nameFor={nameFor}
             loginFor={loginFor}
             ownerNameFor={ownerNameFor}
             members={members}
-            replies={row.item ? counts.get(row.item.message_id) ?? 0 : 0}
-            latestReplies={row.item ? latestByRoot.get(row.item.message_id) ?? [] : []}
-            highlighted={row.item != null && String(row.item.room_seq) === focusedSeq}
+            replies={entry.row.item ? counts.get(entry.row.item.message_id) ?? 0 : 0}
+            latestReplies={entry.row.item ? latestByRoot.get(entry.row.item.message_id) ?? [] : []}
+            highlighted={entry.row.item != null && String(entry.row.item.room_seq) === focusedSeq}
             onContinue={(threadRootId) => { if (!resume.isPending) resume.mutate(threadRootId); }}
-            onReply={row.item && row.item.envelope.message_type === 'room.message' ? () => onOpenThread(threadRootOf(row.item!, byId)) : undefined}
+            onReply={entry.row.item && entry.row.item.envelope.message_type === 'room.message' ? () => onOpenThread(threadRootOf(entry.row.item!, byId)) : undefined}
           />
         ))}
       </ul>
