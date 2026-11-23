@@ -11,7 +11,11 @@ export function StatusLine({ roomId, onGone }: { roomId: string; onGone: () => v
   const invocations = useQuery({
     queryKey: ['room', roomId, 'invocations'],
     queryFn: () => client.listInvocations(roomId),
-    refetchInterval: (query) => (query.state.data?.some((row) => row.status === 'queued' || row.status === 'running') ? 2_000 : false),
+    refetchInterval: (query) => {
+      if (query.state.fetchStatus !== 'idle') return false;
+      if (query.state.status === 'error') return 15_000;
+      return query.state.data?.some((row) => row.status === 'queued' || row.status === 'running') ? 2_000 : false;
+    },
   });
   const stop = useMutation({
     mutationFn: () => client.stopRoom(roomId),
@@ -21,16 +25,20 @@ export function StatusLine({ roomId, onGone }: { roomId: string; onGone: () => v
     },
   });
   const working = (invocations.data ?? []).filter((row) => row.status === 'queued' || row.status === 'running');
-  if (working.length === 0 && !invocations.error && !stop.error) return null;
-  // Cookie mode: the operator stops the room; everyone else stops only their own runs.
-  const stopLabel = mode === 'cookie' ? (session?.is_operator ? 'Stop room' : 'Stop my runs') : 'Stop';
   const memberList = members.data ?? [];
+  const canStop = session?.human_id != null && working.some((row) =>
+    row.subject_human_id === session.human_id || memberList.some((member) => member.endpoint_id === row.endpoint_id && member.owner_id === session.human_id),
+  );
+  if (working.length === 0 && !invocations.error && !stop.error && !invocations.isPending) return null;
+  const stopLabel = mode === 'cookie' ? 'Stop my runs' : 'Stop';
   return (
     <div className="status-line">
-      {working.length > 0 ? (
+      {invocations.isPending ? (
+        <div role="status" aria-live="polite">Checking room activity…</div>
+      ) : working.length > 0 ? (
         <div role="status" aria-live="polite">
           <span>Working: {working.map((row) => memberList.find((member) => member.endpoint_id === row.endpoint_id)?.display_name || row.endpoint_id).join(', ')}</span>
-          <button type="button" className="danger" disabled={stop.isPending} onClick={() => stop.mutate()}>{stopLabel}</button>
+          {canStop ? <button type="button" className="danger" disabled={stop.isPending} onClick={() => stop.mutate()}>{stopLabel}</button> : null}
         </div>
       ) : null}
       <ErrorBanner error={invocations.error} />

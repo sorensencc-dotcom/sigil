@@ -99,6 +99,7 @@ export interface Invocation {
   invocation_id: string;
   endpoint_id: string;
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'refused';
+  subject_human_id: string | null;
 }
 
 export interface Session {

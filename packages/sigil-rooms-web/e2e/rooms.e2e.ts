@@ -122,7 +122,6 @@ test('rename, thread reply, Stop, and a response-mode change', async ({ page }) 
   await expect(page.getByRole('button', { name: '1 reply' })).toBeVisible();
   await thread.getByRole('button', { name: 'Close' }).click();
 
-  // Idle rooms hide Stop; the status line exposes it while work is active.
   await expect(page.getByRole('button', { name: 'Stop' })).toHaveCount(0);
 
   // Response mode: add the agent from Node, then change its mode in the roster.
