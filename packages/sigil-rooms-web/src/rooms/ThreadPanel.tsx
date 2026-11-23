@@ -69,7 +69,7 @@ export function ThreadPanel({
           ) : <em>Original message not loaded</em>}
         </li>
         {rows.map((row) => (
-          <RowView key={row.key} row={row} sender={sender} nameFor={nameFor} loginFor={loginFor} ownerNameFor={ownerNameFor} members={members} />
+          <RowView key={row.key} row={row} roomId={roomId} sender={sender} nameFor={nameFor} loginFor={loginFor} ownerNameFor={ownerNameFor} members={members} />
         ))}
       </ul>
       <Composer send={onSend} disabledReason={disabledReason} label="Reply in thread" members={members} nameFor={nameFor} loginFor={loginFor} />

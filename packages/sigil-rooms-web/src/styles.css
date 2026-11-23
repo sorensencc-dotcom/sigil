@@ -228,6 +228,9 @@ li[data-pending='failed'] .status { color: var(--color-bad); }
 .thread-rows li[data-root='true'] { border-color: var(--color-rule-2); }
 
 .row-actions { display: flex; gap: var(--space-2xs); margin-top: var(--space-2xs); margin-left: calc(-1 * var(--space-sm)); }
+.row-menu { display: inline-block; position: relative; }
+.row-menu summary { cursor: pointer; color: var(--color-muted); font-size: .8rem; }
+.row-menu-items { position: absolute; z-index: 2; display: grid; min-width: max-content; padding: var(--space-2xs); background: var(--color-paper-2); border: 1px solid var(--color-rule); border-radius: var(--radius-chip); }
 li[data-kind='event'] .row-actions { margin: 0; }
 li[data-kind='event'] .ghost { background: var(--color-paper-2); border-color: var(--color-rule-2); color: var(--color-ink); }
 
