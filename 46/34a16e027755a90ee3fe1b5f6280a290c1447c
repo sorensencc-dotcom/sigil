@@ -1,0 +1,19 @@
+docs/superpowers/competition/2026-11-23-sigil-space-weekly.md
+  s_d72c35bddd733d::t_be5a012baaddb9 1-221
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4634a16e027755a90ee3fe1b5f6280a290c1447c",
+  "prompts": {},
+  "sessions": {
+    "s_d72c35bddd733d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a2060f-78be-77f0-88fd-7fd63b7fea29",
+        "model": "unknown"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
