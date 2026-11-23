@@ -85,11 +85,15 @@ function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
 function Shell({ theme, onThemeChange }: { theme: string; onThemeChange: (next: string) => void }) {
   const { mode, isLoggedIn, loading, login, signOut, rejected } = useAuth();
   const [pathname, setPathname] = useState(() => window.location.pathname);
-  const [roomId, setRoomId] = useState<string | null>(null);
+  const [roomId, setRoomId] = useState<string | null>(() => new URLSearchParams(window.location.search).get('room'));
   // On a phone the room list is a drawer; choosing a room closes it.
   const [drawerOpen, setDrawerOpen] = useState(false);
   const selectRoom = useCallback((id: string) => {
     setRoomId(id);
+    const url = new URL(window.location.href);
+    url.searchParams.set('room', id);
+    url.hash = '';
+    window.history.replaceState(null, '', url);
     setDrawerOpen(false);
   }, []);
   const navigate = useCallback((path: string) => {

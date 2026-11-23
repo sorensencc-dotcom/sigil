@@ -84,6 +84,7 @@ export function Timeline({
         {rows.map((row) => (
           <RowView
             key={row.key}
+            roomId={roomId}
             row={row}
             sender={sender}
             nameFor={nameFor}

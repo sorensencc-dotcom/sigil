@@ -5,6 +5,22 @@ import { SenderChip, senderName } from './SenderChip';
 import { previewText } from './threads';
 import type { LoginFor, NameFor, OwnerNameFor } from './useContacts';
 
+function RowMenu({ roomId, messageId, text }: { roomId?: string; messageId: string; text: string }) {
+  const copy = (value: string) => navigator.clipboard.writeText(value);
+  const link = new URL(window.location.href);
+  if (roomId) link.searchParams.set('room', roomId);
+  link.hash = `message-${messageId}`;
+  return (
+    <details className="row-menu">
+      <summary aria-label="Message actions">More</summary>
+      <div className="row-menu-items">
+        <button type="button" className="ghost" onClick={() => void copy(text)}>Copy text</button>
+        <button type="button" className="ghost" onClick={() => void copy(link.href)}>Copy link</button>
+      </div>
+    </details>
+  );
+}
+
 function Stamp({ at }: { at: string }) {
   const date = new Date(at);
   if (Number.isNaN(date.getTime())) return null;
@@ -22,8 +38,10 @@ export function RowView({
   latestReplies = [],
   onReply,
   onContinue,
+  roomId,
 }: {
   row: Row;
+  roomId?: string;
   sender: string | null;
   nameFor?: NameFor;
   loginFor?: LoginFor;
@@ -58,7 +76,7 @@ export function RowView({
   }
   const mine = sender !== null && envelope.sender.endpoint_id === sender;
   return (
-    <li data-mine={mine ? 'true' : undefined}>
+    <li id={`message-${envelope.message_id}`} data-mine={mine ? 'true' : undefined}>
       <div className="meta">
         <SenderChip
           endpointId={envelope.sender.endpoint_id}
@@ -73,6 +91,7 @@ export function RowView({
         <Stamp at={envelope.created_at} />
       </div>
       <span className="text">{formatMentionText(envelope.body.text, nameFor, members)}</span>
+      <RowMenu roomId={roomId} messageId={envelope.message_id} text={envelope.body.text ?? ''} />
       {latestReplies.length > 0 && onReply ? (
         <button type="button" className="reply-preview" onClick={onReply}>
           {latestReplies.map((reply) => (

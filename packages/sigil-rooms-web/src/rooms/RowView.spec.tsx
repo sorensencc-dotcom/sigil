@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { HistoryItem, Member } from '../api/types';
@@ -37,6 +37,22 @@ function replyItem(overrides: Partial<HistoryItem> & { text?: string; endpoint?:
 }
 
 describe('RowView', () => {
+  it('copies the message text and a room deep link from its action menu', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const previousClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    window.history.replaceState(null, '', '/');
+    render(<ul><RowView row={row('Ada')} roomId="room/one" sender={null} /></ul>);
+    await user.click(screen.getByText('More'));
+    await user.click(screen.getByRole('button', { name: 'Copy text' }));
+    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith('hi'));
+    await user.click(screen.getByRole('button', { name: 'Copy link' }));
+    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith(`${window.location.origin}/?room=room%2Fone#message-m1`));
+    if (previousClipboard) Object.defineProperty(navigator, 'clipboard', previousClipboard);
+    else Reflect.deleteProperty(navigator, 'clipboard');
+  });
+
   it('shows the sender display name instead of the endpoint id', () => {
     render(<ul><RowView row={row('Ada')} sender={null} /></ul>);
     expect(screen.getByText('Ada')).toBeInTheDocument();
