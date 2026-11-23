@@ -1,0 +1,41 @@
+packages/sigil-rooms-web/src/App.spec.tsx
+  s_39de2b8baa4e2b::t_caf0d7fffe49b1 6,12-14,43-51
+  s_39de2b8baa4e2b::t_8b4ed4916ee77a 52-53
+packages/sigil-rooms-web/src/api/client.ts
+  s_39de2b8baa4e2b::t_ac5b66c62d7dce 27,88-89
+packages/sigil-rooms-web/src/styles.css
+  s_39de2b8baa4e2b::t_ac5b66c62d7dce 122-124,158,166-167
+packages/sigil-rooms-web/src/rooms/NewRoomForm.spec.tsx
+  s_39de2b8baa4e2b::t_caf0d7fffe49b1 17,20,23-31
+packages/sigil-rooms-web/src/api/client.cookie.spec.ts
+  s_39de2b8baa4e2b::t_0ccbe854c22335 38
+  s_39de2b8baa4e2b::t_caf0d7fffe49b1 28,34-37,39-41
+packages/sigil-rooms-web/src/rooms/RoomList.tsx
+  s_39de2b8baa4e2b::t_ac5b66c62d7dce 25-26
+packages/sigil-rooms-web/src/App.tsx
+  s_39de2b8baa4e2b::t_ac5b66c62d7dce 32-33,50
+packages/sigil-rooms-web/src/rooms/NewRoomForm.tsx
+  s_39de2b8baa4e2b::t_ac5b66c62d7dce 10,12,15,27-28,32
+packages/sigil-rooms-web/src/rooms/RoomList.spec.tsx
+  s_39de2b8baa4e2b::t_caf0d7fffe49b1 17,19,40
+packages/sigil-rooms-web/src/rooms/RoomHeader.spec.tsx
+  s_39de2b8baa4e2b::t_caf0d7fffe49b1 16-20
+packages/sigil-rooms-web/src/rooms/RoomHeader.tsx
+  s_39de2b8baa4e2b::t_ac5b66c62d7dce 11,26-29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b208f276397924c09c1b0dc735085f3e2258deab",
+  "prompts": {},
+  "sessions": {
+    "s_39de2b8baa4e2b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20a46-a93d-71f0-9be2-5eb6a04fbd98",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
