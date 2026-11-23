@@ -25,12 +25,20 @@ describe('api client in cookie mode', () => {
   it('adds X-Sigil-CSRF: 1 on POST only and never an Authorization header', async () => {
     const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse(200, { room: { conversation_id: 'r', name: 'n' } }));
     const { client } = make(fetchImpl as unknown as typeof fetch);
-    await client.createRoom('n');
+    await client.createRoom('n', 'purpose');
     const init = fetchImpl.mock.calls[0]![1] as RequestInit;
     const headers = init.headers as Record<string, string>;
     expect(headers['X-Sigil-CSRF']).toBe('1');
     expect(init.credentials).toBe('same-origin');
     expect(Object.keys(headers).map((k) => k.toLowerCase())).not.toContain('authorization');
+    expect(JSON.parse(String(init.body))).toEqual({ name: 'n', description: 'purpose' });
+  });
+
+  it('omits description when creating a room without a purpose', async () => {
+    const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse(200, { room: { conversation_id: 'r', name: 'n' } }));
+    const { client } = make(fetchImpl as unknown as typeof fetch);
+    await client.createRoom('n');
+    expect(JSON.parse(String(fetchImpl.mock.calls[0]![1]?.body))).toEqual({ name: 'n' });
   });
 
   it('calls onUnauthorized on a 401 and works without any token', async () => {

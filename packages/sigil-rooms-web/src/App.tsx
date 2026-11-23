@@ -29,7 +29,8 @@ function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
   const membersQuery = useMembers(roomId);
   const { nameFor, loginFor, ownerNameFor } = useContacts();
   const rooms = useQuery({ queryKey: ['rooms'], queryFn: () => client.listRooms() });
-  const roomName = rooms.data?.find((room) => room.conversation_id === roomId)?.name ?? roomId;
+  const room = rooms.data?.find((room) => room.conversation_id === roomId);
+  const roomName = room?.name ?? roomId;
   const { pending, send, retry, sendError } = useSend(roomId);
   const reportSeq = useAck(roomId);
   // RoomView is keyed by room, so the open thread resets when the room changes.
@@ -46,7 +47,7 @@ function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
       : null;
   return (
     <div className="room">
-      <RoomHeader roomId={roomId} name={roomName} sender={sender} onGone={onGone} />
+      <RoomHeader roomId={roomId} name={roomName} purpose={room?.description} sender={sender} onGone={onGone} />
       <div className="room-body">
         <div className="room-main">
           <Timeline roomId={roomId} pending={pending} onVisibleSeq={reportSeq} onGone={onGone} seenThreadRoots={seenRoots} onOpenThread={openThreadRoot} nameFor={nameFor} loginFor={loginFor} ownerNameFor={ownerNameFor} members={membersQuery.data ?? []} />

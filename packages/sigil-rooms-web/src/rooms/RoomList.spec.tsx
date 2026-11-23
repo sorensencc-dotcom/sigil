@@ -14,8 +14,9 @@ describe('RoomList', () => {
   it('lists rooms and reports a selection', async () => {
     const onSelect = vi.fn();
     renderWithClient(<RoomList selectedId={null} onSelect={onSelect} />, { listRooms: async () => rooms });
-    await userEvent.click(await screen.findByRole('button', { name: 'build' }));
+    await userEvent.click(await screen.findByRole('button', { name: /^build/ }));
     expect(onSelect).toHaveBeenCalledWith('room_1');
+    expect(screen.getByText('the build room')).toBeInTheDocument();
   });
 
   it('shows an empty state', async () => {
@@ -36,7 +37,7 @@ describe('RoomList pinning', () => {
     localStorage.clear();
     const view = renderWithClient(<RoomList selectedId={null} onSelect={() => {}} />, { listRooms: async () => rooms });
     await userEvent.click(await screen.findByRole('button', { name: 'Pin ops' }));
-    const names = () => screen.getAllByRole('button').filter((b) => /^(build|ops)$/.test(b.textContent ?? '')).map((b) => b.textContent);
+    const names = () => screen.getAllByRole('button').filter((b) => b.classList.contains('room-btn')).map((b) => b.querySelector('.room-btn__name')?.textContent);
     expect(names()).toEqual(['ops', 'build']);
     expect(JSON.parse(localStorage.getItem('sigil.pins') ?? '[]')).toEqual(['room_2']);
     view.unmount();

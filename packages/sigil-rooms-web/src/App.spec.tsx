@@ -10,6 +10,8 @@ function stubFetch(config: unknown, me: { status: number; body?: unknown }, room
       if (url === '/config.json') return new Response(JSON.stringify(config), { status: 200 });
       if (url === '/v1/auth/me') return new Response(JSON.stringify(me.body ?? { code: 'UNAUTHENTICATED' }), { status: me.status });
       if (url === '/v1/rooms') return new Response(JSON.stringify({ items: rooms }), { status: 200 });
+      if (url.includes('/v1/rooms/room_1/members')) return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      if (url.includes('/v1/rooms/room_1/messages')) return new Response(JSON.stringify({ items: [], next_after_seq: 0 }), { status: 200 });
       if (url === '/v1/me/contacts') return new Response(JSON.stringify({ items: [] }), { status: 200 });
       return new Response('{}', { status: 200 });
     }),
@@ -36,6 +38,17 @@ describe('App', () => {
     expect(await screen.findByText('No rooms yet.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Continue with GitHub' })).toBeNull();
     expect(screen.queryByLabelText('New room name')).toBeNull();
+  });
+
+  it('shows a room purpose in the list and selected room header', async () => {
+    stubFetch(
+      { authMode: 'cookie' },
+      { status: 200, body: { human_id: 'h', endpoint_id: 'ep', display_name: 'Ada', is_operator: true } },
+      [{ conversation_id: 'room_1', workspace_id: 'ws', name: 'build', description: 'the build room', created_at: 't', max_agent_turns: 6 }],
+    );
+    render(<App />);
+    await userEvent.click(await screen.findByRole('button', { name: /^build/ }));
+    expect(await screen.findAllByText('the build room')).toHaveLength(2);
   });
 
   it('updates the selected room in a copied-link URL', async () => {
