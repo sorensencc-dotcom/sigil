@@ -1,0 +1,30 @@
+sigil/relay/v1/floor-warden-gate.mjs
+  s_72d7b57d3d90e1::t_1cca61c2bd440b 7
+  s_72d7b57d3d90e1::t_e36f0c4f772e70 11
+docs/superpowers/plans/2026-10-17-sigil-rooms-phase-7-tunnel.md
+  s_72d7b57d3d90e1::t_c087a77e93d853 823
+sigil/cli/sigil.mjs
+  s_72d7b57d3d90e1::t_75892dc68fa360 491,493
+  s_72d7b57d3d90e1::t_53a68b1ad3f350 498
+sigil/relay/v1/reply-ingress-per-bot-limit.pg.test.mjs
+  s_72d7b57d3d90e1::t_1c3bd513e1bdb8 1-13,15-165
+  s_72d7b57d3d90e1::t_faf5272fb04d71 14
+sigil/relay/v1/reply-ingress.mjs
+  s_72d7b57d3d90e1::t_f6d5d75330e795 95
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c8f83be95e0754fcc05b508db3e941f73608be0c",
+  "prompts": {},
+  "sessions": {
+    "s_72d7b57d3d90e1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a9ed53a4-bcf5-4eb3-97cf-f4c0ad76c2b7",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

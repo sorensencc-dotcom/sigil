@@ -1,0 +1,42 @@
+.cursor/hooks/graft-hooks.cjs
+  h_5c172e9b435f5a 1-67
+.cursor/mcp.json
+  h_5c172e9b435f5a 1-12
+.serena/.gitignore
+  h_5c172e9b435f5a 1-2
+.gemini/settings.json
+  h_5c172e9b435f5a 1-12
+.kiro/settings/mcp.json
+  h_5c172e9b435f5a 1-12
+.kiro/steering/graft.md
+  h_5c172e9b435f5a 1-42
+.windsurf/rules/graft.md
+  h_5c172e9b435f5a 1-39
+.grok/config.toml
+  h_5c172e9b435f5a 1-3
+.github/copilot-instructions.md
+  h_5c172e9b435f5a 1-41
+.cursor/rules/graft.mdc
+  h_5c172e9b435f5a 1-43
+.serena/project.yml
+  h_5c172e9b435f5a 1-169
+.cursor/hooks.json
+  h_5c172e9b435f5a 1-21
+GEMINI.md
+  h_5c172e9b435f5a 1-41
+opencode.json
+  h_5c172e9b435f5a 1-14
+.ignore
+  h_5c172e9b435f5a 1-5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cab809497b1056640b3545c4e0c340c882bda03b",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

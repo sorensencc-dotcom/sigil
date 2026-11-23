@@ -1,0 +1,29 @@
+docs/specs/sigil-v1-conformance-gap-closure-design.md
+  s_3841bb92f28092::t_9038d0415ee5c6 578-579,581-585
+  s_3841bb92f28092::t_8ae94aaeb6951a 238-260
+  s_3841bb92f28092::t_465ec612c13e99 484-489
+  s_3841bb92f28092::t_23b51146fb9df6 272-287
+  s_3841bb92f28092::t_e5b74ce12a83c2 419-443
+  s_3841bb92f28092::t_d917e2a3f63934 104-123,131-141
+  s_3841bb92f28092::t_b6d83b993f39b8 193-208
+  s_3841bb92f28092::t_a7b9bf7548b7c6 354-384
+  s_3841bb92f28092::t_fbe585eea8cd41 539-561
+  s_3841bb92f28092::t_e9653c9861122b 609-639
+  s_3841bb92f28092::t_1592d839f86a55 142
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "170f5c0f08b26e25dff8bd8b8a011e7b31b07136",
+  "prompts": {},
+  "sessions": {
+    "s_3841bb92f28092": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5ae3c205-297a-40a4-896d-c3fbc44ef13e",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

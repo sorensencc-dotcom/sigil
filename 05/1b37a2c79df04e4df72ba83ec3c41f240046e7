@@ -1,0 +1,21 @@
+sigil/relay/v1/reply-token.mjs
+  s_7fbd1726dd2e7a::t_212731a2b5ebac 1-47
+sigil/relay/v1/reply-token.test.mjs
+  s_7fbd1726dd2e7a::t_212731a2b5ebac 1-51
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "051b37a2c79df04e4df72ba83ec3c41f240046e7",
+  "prompts": {},
+  "sessions": {
+    "s_7fbd1726dd2e7a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15a41-8bc7-7442-a485-19be087640f5",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

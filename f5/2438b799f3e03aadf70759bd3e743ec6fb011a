@@ -1,0 +1,31 @@
+sigil/cli/bot-commands.mjs
+  s_45bddb49f83c59::t_8652e61134aef2 34-35,113
+sigil/cli/agent-run-floor-warden.test.mjs
+  s_45bddb49f83c59::t_12817c35b53153 1-491
+  s_45bddb49f83c59::t_65f0cd626af608 492-564
+sigil/cli/agent-daemon.mjs
+  s_45bddb49f83c59::t_75152f88c8e094 34-36,55-70,72-73,128-135,167,182,257,260-261,266,321-322
+  s_45bddb49f83c59::t_4920b52496269c 258-259,262-265
+  s_45bddb49f83c59::t_98b500f1622e41 319-320
+sigil/cli/sigil.mjs
+  s_45bddb49f83c59::t_b1194c888c15ec 61,1081-1146,1148,1151,1155-1157,1159-1168,1173-1174,1215-1218,1225-1230
+  s_45bddb49f83c59::t_2f4a53e6a83f5f 62
+sigil/cli/bot-commands.pg.test.mjs
+  s_45bddb49f83c59::t_9809be23cbb34c 68
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f52438b799f3e03aadf70759bd3e743ec6fb011a",
+  "prompts": {},
+  "sessions": {
+    "s_45bddb49f83c59": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "588abe99-cc40-463e-afdb-05d0681cc5b4",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

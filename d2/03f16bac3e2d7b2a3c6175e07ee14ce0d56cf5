@@ -1,0 +1,19 @@
+.trail/learnings/2026-11-16-keep-the-word-token-out-of-chris.md
+  s_fb958deaa181e9::t_f272f552ed5548 1-32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d203f16bac3e2d7b2a3c6175e07ee14ce0d56cf5",
+  "prompts": {},
+  "sessions": {
+    "s_fb958deaa181e9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "87d4d2aa-9a13-46d4-be6a-1ebfaa3cbe41",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

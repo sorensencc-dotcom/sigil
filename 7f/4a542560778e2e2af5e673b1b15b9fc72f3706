@@ -1,0 +1,52 @@
+sigil/relay/v1/room-dispatch.mjs
+  s_ea2b05d2bf79dd::t_bba25e0a3049ea 81
+packages/sigil-rooms-web/src/api/client.spec.ts
+  s_ea2b05d2bf79dd::t_8b6dd205c6f102 68-93
+sigil/relay/v1/room-continue-route.test.mjs
+  s_ea2b05d2bf79dd::t_b89864954ee0a2 13,72-75,77-160,162-194
+  s_ea2b05d2bf79dd::t_0934353371e80a 1-12,14-71,76,161
+sigil/contracts/v1/relay-api.json
+  s_ea2b05d2bf79dd::t_0505d17894f143 22
+sigil/relay/v1/room-loop-guards.test.mjs
+  s_ea2b05d2bf79dd::t_63940cf9a9c03e 115
+packages/sigil-rooms-web/src/api/contract.spec.ts
+  s_ea2b05d2bf79dd::t_8b6dd205c6f102 29,42-43
+packages/sigil-rooms-web/src/rooms/RowView.tsx
+  s_ea2b05d2bf79dd::t_bba25e0a3049ea 9,20-30
+packages/sigil-rooms-web/src/rooms/Timeline.tsx
+  s_ea2b05d2bf79dd::t_bba25e0a3049ea 1,5,9,31-37,72
+packages/sigil-rooms-web/src/api/types.ts
+  s_ea2b05d2bf79dd::t_bba25e0a3049ea 10-11,16
+sigil/contracts/v1/room-event-schema.test.mjs
+  s_ea2b05d2bf79dd::t_04ebec9e963d79 47-49,51
+  s_ea2b05d2bf79dd::t_c7b371020f0ae0 50
+sigil/contracts/v1/room-event-schema.mjs
+  s_ea2b05d2bf79dd::t_bba25e0a3049ea 6,20
+packages/sigil-rooms-web/src/rooms/RowView.continue.spec.tsx
+  s_ea2b05d2bf79dd::t_8b6dd205c6f102 1-49
+sigil/contracts/v1/relay-api.test.mjs
+  s_ea2b05d2bf79dd::t_facb7483cedc6c 48,139-149
+sigil/contracts/v1/errors-and-states.json
+  s_ea2b05d2bf79dd::t_0505d17894f143 39-40
+sigil/relay/v1/room-routes.mjs
+  s_ea2b05d2bf79dd::t_577157dd43310d 58-111,175,206-225
+packages/sigil-rooms-web/src/api/client.ts
+  s_ea2b05d2bf79dd::t_bba25e0a3049ea 30,97-101
+  s_ea2b05d2bf79dd::t_87c86ccd5c90a9 102-103
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7f4a542560778e2e2af5e673b1b15b9fc72f3706",
+  "prompts": {},
+  "sessions": {
+    "s_ea2b05d2bf79dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fda5c393-0c85-48fc-9fbd-fc4101d6b963",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

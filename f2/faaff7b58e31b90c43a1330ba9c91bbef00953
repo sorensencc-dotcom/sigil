@@ -1,0 +1,20 @@
+sigil/bridges/v1/cli-registry.test.mjs
+  s_9790afb09688c4::t_f12312c7ec2bf4 29-36,95-134,147-162
+  s_9790afb09688c4::t_9c3c3d0715a27f 163
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f2faaff7b58e31b90c43a1330ba9c91bbef00953",
+  "prompts": {},
+  "sessions": {
+    "s_9790afb09688c4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a14a29-2b66-76c3-b2b3-0f120e161d97",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

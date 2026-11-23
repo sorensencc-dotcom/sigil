@@ -1,0 +1,40 @@
+.trail/learnings/2026-11-21-keep-mcp-connectors-isolated-from-room-chris.md
+  s_076de1bb3b85f5::t_2e40d9800b6c19 1-27
+docs/service-config.md
+  s_076de1bb3b85f5::t_14d42c3ca07076 126-155
+  s_076de1bb3b85f5::t_b77d33cb6dd450 70,82-88,94,98,103,124
+  s_076de1bb3b85f5::t_1cbf4c516c88f2 125
+sigil/cli/windows-supervisor.ps1
+  s_076de1bb3b85f5::t_c00178f1b9beb6 44-52,185,191-193
+  s_076de1bb3b85f5::t_68dc3118ddb213 186-190,194
+sigil/cli/service-config.mjs
+  s_076de1bb3b85f5::t_fdd8ac4df8cee8 281,389,414,442
+  s_076de1bb3b85f5::t_c4916fb2badbed 283-295,297-303,307-316,319-322,324-327,330-343
+  s_076de1bb3b85f5::t_f1bf41be13b689 80-81
+  s_076de1bb3b85f5::t_82b689af2ea24a 83
+  s_076de1bb3b85f5::t_94125efc3c881f 7,73-78,121-164,280,282,344,390-410,412
+  s_076de1bb3b85f5::t_d8cdadcd0a5c57 411,413
+sigil/cli/service-config.test.mjs
+  s_076de1bb3b85f5::t_9f8cdb68e9c1ab 11,18-21,157,175-214
+  s_076de1bb3b85f5::t_c37a6202fa6c9f 76
+  s_076de1bb3b85f5::t_8512ff6aa4707c 215
+sigil/cli/windows-supervisor.test.mjs
+  s_076de1bb3b85f5::t_d5e7e0ef35d1a1 3-6,183,189-219
+  s_076de1bb3b85f5::t_ea8e0c5f97af30 184-188,220
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e1b5eba2ac13064e5485bf6d071d19400e3bc4b3",
+  "prompts": {},
+  "sessions": {
+    "s_076de1bb3b85f5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1fbfc-f0d9-75b3-904c-c2c3e8690b12",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

@@ -1,0 +1,18 @@
+sigil/connectors/v1/connector-server.mjs
+  h_5c172e9b435f5a 26,35
+sigil/connectors/v1/mcp-memory-bridge.mjs
+  h_5c172e9b435f5a 3,7-101,105-123,125-126
+sigil/connectors/v1/mcp-memory-bridge.test.mjs
+  h_5c172e9b435f5a 181-231
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ce605a76a75bac801687aa376e4641dfd5726231",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

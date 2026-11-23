@@ -1,0 +1,40 @@
+sigil/cli/inbox-wait.test.mjs
+  s_3841bb92f28092::t_422da41a861984 3-5,8,41-63
+  s_3841bb92f28092::t_1320f681ab2d11 64-65
+sigil/cli/sigil.mjs
+  s_f6aa48b2d59f04::t_cb10c79f7c4259 27,40,54-62,111,117,138,143-156,169-176,186
+sigil/cli/inbox-wait.mjs
+  s_bed36bc834b400::t_1fe8218ac4ba6f 2,25,61-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "a4dcc65f967920fb1ae3a633cb2ca7295300e674",
+  "prompts": {},
+  "sessions": {
+    "s_3841bb92f28092": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5ae3c205-297a-40a4-896d-c3fbc44ef13e",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_bed36bc834b400": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f2b61664-db06-4322-a0b2-7f2788dcbb07",
+        "model": "unknown"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_f6aa48b2d59f04": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a007da-4822-7db0-998d-6f48eda7e830",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

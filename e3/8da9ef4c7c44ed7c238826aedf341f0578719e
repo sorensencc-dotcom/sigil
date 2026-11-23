@@ -1,0 +1,55 @@
+packages/relay-jobs-verification/check.mjs
+  s_371397916dc2b7::t_76eeb891a956f9 1-44
+sigil/relay/v1/postgres-repository.mjs
+  s_371397916dc2b7::t_18bd2620ec7af4 2374-2382
+packages/relay-jobs-verification/mutate.mjs
+  s_371397916dc2b7::t_76eeb891a956f9 1-41,47-75
+  s_371397916dc2b7::t_5880e3f90b1814 42-46
+sigil/relay/v1/federation-reaper.mjs
+  s_371397916dc2b7::t_b8aad56407ca3d 43-47
+  s_371397916dc2b7::t_daf5001738323a 153
+  s_371397916dc2b7::t_b84315d6011536 270
+sigil/cli/memory-repository.mjs
+  s_371397916dc2b7::t_72f8f073f6d783 193-198
+sigil/relay/v1/federation-reaper.test.mjs
+  s_371397916dc2b7::t_e239876e9e3dd0 96-99
+packages/relay-jobs-verification/known-findings.json
+  s_371397916dc2b7::t_9f12c8eed5485d 1
+packages/relay-jobs-verification/pg-harness.mjs
+  s_371397916dc2b7::t_76eeb891a956f9 1-59
+packages/relay-jobs-verification/explore.mjs
+  s_371397916dc2b7::t_76eeb891a956f9 1-32,34-141,143-160,168-184,193-219,221-307
+  s_371397916dc2b7::t_ac33d30962a365 142
+  s_371397916dc2b7::t_aa208e6e5c2a6b 220
+  s_371397916dc2b7::t_7a9b244db238ef 161-167
+  s_371397916dc2b7::t_1a450a6317d516 185-192
+  s_371397916dc2b7::t_282981ac958743 33
+packages/relay-jobs-verification/package-lock.json
+  s_6855f0d0a26af3::t_4011b8c320f135 1-21
+packages/relay-jobs-verification/package.json
+  s_6855f0d0a26af3::t_c1c48eba6e409f 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e38da9ef4c7c44ed7c238826aedf341f0578719e",
+  "prompts": {},
+  "sessions": {
+    "s_371397916dc2b7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d6a3ea46-b020-4a1e-9832-d8a16146313d",
+        "model": "unknown"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_6855f0d0a26af3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a17368-d1b4-70d2-90cc-f09481c22c66",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+docs/superpowers/plans/2026-10-16-sigil-rooms-phase-5-more-bridges.md
+  h_5c172e9b435f5a 7,33,94-97,99-100,103,109,112-113,116-117,124-125,127-130,132,138-139,141-142,232,671,673,677,681,685,687,689,692-694,696,698,701,709-713,722,724,726-728,730,735,741,754,768,772,781,796,896,900,904,927-928,939
+docs/superpowers/specs/2026-10-16-sigil-rooms-phase-5-more-bridges-design.md
+  h_5c172e9b435f5a 3,55-56,150,152-155,159,164-166,171-172,196,205-206,227-229,249-250,279-280,282-284
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1bde1cd7bb024dea8a9206e91a3d85ea6e93d749",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

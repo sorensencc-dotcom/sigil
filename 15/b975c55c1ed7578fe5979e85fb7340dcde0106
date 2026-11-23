@@ -1,0 +1,22 @@
+sigil/cli/agent-run-floor-warden.test.mjs
+  s_7fbd1726dd2e7a::t_2cda88dc729d0c 301,305,356-376
+  s_7fbd1726dd2e7a::t_68d6f6ee54cd56 377
+sigil/cli/sigil.mjs
+  s_7fbd1726dd2e7a::t_2cda88dc729d0c 1118-1119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "15b975c55c1ed7578fe5979e85fb7340dcde0106",
+  "prompts": {},
+  "sessions": {
+    "s_7fbd1726dd2e7a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15a41-8bc7-7442-a485-19be087640f5",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

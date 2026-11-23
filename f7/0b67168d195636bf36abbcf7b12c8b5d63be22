@@ -1,0 +1,23 @@
+sigil/bridges/v1/agent-cli.test.mjs
+  s_56c9c85774587a::t_0d1012918a1c1e 22,25-28
+sigil/bridges/v1/claude-cli.mjs
+  s_56c9c85774587a::t_c8a9a8750d749c 30,39-47
+sigil/bridges/v1/codex-cli.mjs
+  s_56c9c85774587a::t_bb6cb37f3d9c90 25,30-38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f70b67168d195636bf36abbcf7b12c8b5d63be22",
+  "prompts": {},
+  "sessions": {
+    "s_56c9c85774587a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d3ca11b8-1593-4409-a485-49c67f3a63ad",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

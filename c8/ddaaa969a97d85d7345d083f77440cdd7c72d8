@@ -1,0 +1,25 @@
+package.json
+  s_78141c3b938eae::t_512425d9f49fd3 3
+CHANGELOG.md
+  s_78141c3b938eae::t_f005d15483cf7a 9-10,20
+STATUS.md
+  s_78141c3b938eae::t_ede3d25c4a2e30 3-11
+package-lock.json
+  s_78141c3b938eae::t_2d915c3e45bb77 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c8ddaaa969a97d85d7345d083f77440cdd7c72d8",
+  "prompts": {},
+  "sessions": {
+    "s_78141c3b938eae": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1d81c-e22f-7e70-a731-a0502de0d514",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

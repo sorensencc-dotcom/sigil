@@ -1,0 +1,27 @@
+sigil/relay/v1/reply-ingress.pg.test.mjs
+  s_188f0cbea2aac3::t_6f24c1be573c13 17,72,159-161,285-294
+  s_188f0cbea2aac3::t_63de8c2be57b96 77,166
+  s_188f0cbea2aac3::t_a5e028837bca13 189-190,221,273-274,276
+  s_188f0cbea2aac3::t_e83cba4103cf8a 152-156,188,295
+  s_188f0cbea2aac3::t_7ffb09085abd17 223,275
+  s_188f0cbea2aac3::t_28f95de00851b7 1-16,18-71,73-76,78-89,95-151,157,162-165,167-187,191-218,220,222,224-268,270-272,277-284,296-308
+  s_188f0cbea2aac3::t_378a624fa55d25 91,93,269
+  s_188f0cbea2aac3::t_802674479482d8 158,219
+  s_188f0cbea2aac3::t_c17ce31d8ea4c9 90,92,94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c94d62c8334d6d24e12e535df85bc5cc6dc936d9",
+  "prompts": {},
+  "sessions": {
+    "s_188f0cbea2aac3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15b17-5abb-7c11-bc7d-3194f7328635",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

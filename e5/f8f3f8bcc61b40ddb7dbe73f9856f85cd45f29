@@ -1,0 +1,24 @@
+packages/relay-jobs-verification/pg-harness.mjs
+  s_3d47f544d83c8d::t_2f042a7c2f3a30 50-51
+packages/sigil-rooms-web/src/rooms/Composer.spec.tsx
+  s_3d47f544d83c8d::t_2f042a7c2f3a30 68,72,124-125,127
+  s_3d47f544d83c8d::t_8437d748472921 69
+packages/sigil-rooms-web/src/rooms/cookieMode.spec.tsx
+  s_3d47f544d83c8d::t_2f042a7c2f3a30 59,63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e5f8f3f8bcc61b40ddb7dbe73f9856f85cd45f29",
+  "prompts": {},
+  "sessions": {
+    "s_3d47f544d83c8d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20591-fa75-7fb1-99b1-86d1919e003e",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

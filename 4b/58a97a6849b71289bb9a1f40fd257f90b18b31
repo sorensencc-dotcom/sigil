@@ -1,0 +1,22 @@
+sigil/migrations/035_floor_warden_bridge.test.mjs
+  s_e636ac0c41889c::t_179683fd37b555 32,75-77
+  s_e636ac0c41889c::t_ff67ddcd37928c 1-31,33-74,78-93
+sigil/migrations/035_floor_warden_bridge.sql
+  s_e636ac0c41889c::t_ff67ddcd37928c 1-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4b58a97a6849b71289bb9a1f40fd257f90b18b31",
+  "prompts": {},
+  "sessions": {
+    "s_e636ac0c41889c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1efb2915-6195-49cd-aaa5-ea6648e9e650",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

@@ -1,0 +1,24 @@
+docs/superpowers/specs/2026-11-22-rooms-web-live-walkthrough.md
+  s_20004e76f3151f::t_76d9da37cf81dd 1-29,31-40,42-95,97-113,115-118,120-151
+  s_20004e76f3151f::t_5f8066501c0ca2 41
+  s_20004e76f3151f::t_3ca79bdd6686ec 114
+  s_20004e76f3151f::t_285637345ef623 30
+  s_20004e76f3151f::t_0e998ed2748edb 96
+  s_20004e76f3151f::t_294ca17bd22d7d 119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c3c351be559f58c5ed0dd5288c022bfb710e8c2f",
+  "prompts": {},
+  "sessions": {
+    "s_20004e76f3151f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c31ea556-cf56-454b-be53-e5824d84609c",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

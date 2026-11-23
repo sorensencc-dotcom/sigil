@@ -1,0 +1,21 @@
+sigil/relay/v1/room-bot-signer.mjs
+  s_e636ac0c41889c::t_97a988ceb14b1d 1-35
+sigil/relay/v1/room-bot-signer.test.mjs
+  s_e636ac0c41889c::t_907848be9809ca 1-116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0a71c883f5c75efbece1c2e04ed12ba5e5c917ee",
+  "prompts": {},
+  "sessions": {
+    "s_e636ac0c41889c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1efb2915-6195-49cd-aaa5-ea6648e9e650",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

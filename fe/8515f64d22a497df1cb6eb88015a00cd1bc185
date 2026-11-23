@@ -1,0 +1,22 @@
+sigil/relay/v1/identity-auth-repository.integration.test.mjs
+  s_c2faf5c68b8a4c::t_87f9cb4e03ba1e 256-300
+  s_c2faf5c68b8a4c::t_6932ee21b96277 301
+sigil/cli/inbox-wait.test.mjs
+  s_c2faf5c68b8a4c::t_2dffb57fcf1ac9 171,176-178
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "fe8515f64d22a497df1cb6eb88015a00cd1bc185",
+  "prompts": {},
+  "sessions": {
+    "s_c2faf5c68b8a4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f4721667-6a4f-48e8-b32c-a563d8dcf589",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

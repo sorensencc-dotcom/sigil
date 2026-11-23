@@ -1,0 +1,19 @@
+.trail/learnings/2026-11-20-windows-sigil-service-runs-a-per-chris.md
+  s_49a187d5a1dcc1::t_ceb4411b1b5d44 1-36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "593c890bd52c08eb7fd9c5f3eea193c0cf3fbc2d",
+  "prompts": {},
+  "sessions": {
+    "s_49a187d5a1dcc1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_49a187d5a1dcc1",
+        "model": "unknown"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

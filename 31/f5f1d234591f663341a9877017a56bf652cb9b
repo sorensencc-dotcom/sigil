@@ -1,0 +1,41 @@
+dual-interface-cli.test.mjs
+  s_52c047a391f974::t_95e0f064b8ee2f 1-123
+bin/sigil.mjs
+  s_52c047a391f974::t_f63024a664054b 27-32,36
+docs/specs/sigil-dual-interface-cli-spec-v1.0.md
+  s_553b63e9dbf80f::t_5f8d33f20935ce 1-147
+sigil/cli/schema-commands.mjs
+  s_52c047a391f974::t_d7a73f686a0b01 1-250
+sigil/cli/host.mjs
+  s_52c047a391f974::t_21cf3c93cd6475 1-78
+sigil/cli/doctor.mjs
+  s_553b63e9dbf80f::t_b38fd9d3e962ea 152-156
+sigil/cli/sigil.mjs
+  s_553b63e9dbf80f::t_88b5d323cffb90 59,65,69-70,826,835-838,1106,1109-1112,1198,1209-1213,2151-2153
+scripts/prove-dual-interface-cli.mjs
+  s_553b63e9dbf80f::t_5ec38c60fb54e4 1-131
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "31f5f1d234591f663341a9877017a56bf652cb9b",
+  "prompts": {},
+  "sessions": {
+    "s_52c047a391f974": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a2010c-6e39-7630-b31b-435dc11a30ef",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_553b63e9dbf80f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20112-a8ec-7440-a1b4-ab392cef9e68",
+        "model": "unknown"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

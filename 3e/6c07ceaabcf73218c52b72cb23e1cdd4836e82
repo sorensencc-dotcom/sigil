@@ -1,0 +1,19 @@
+sigil/relay/v1/room-report-only.pg.test.mjs
+  s_c74226617cd7b9::t_d045bfcf886de7 16,19-20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3e6c07ceaabcf73218c52b72cb23e1cdd4836e82",
+  "prompts": {},
+  "sessions": {
+    "s_c74226617cd7b9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15648-52f1-74e1-9328-bfd34e28d815",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

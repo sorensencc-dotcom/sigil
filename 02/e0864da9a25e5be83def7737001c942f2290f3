@@ -1,0 +1,30 @@
+STATUS.md
+  s_78141c3b938eae::t_62c593861d735d 3-5,10
+  s_78141c3b938eae::t_ef40d5fdea89ed 6-8
+  s_78141c3b938eae::t_1fa2c9e8185881 9
+.github/workflows/release.yml
+  s_78141c3b938eae::t_306ecbafe11f00 29,62
+sigil/bridges/v1/ironbot-report-concurrency.test.mjs
+  s_78141c3b938eae::t_b1db7d8935c904 21,275
+  s_78141c3b938eae::t_8131618ad37a47 154
+tests/release-workflow.test.mjs
+  s_78141c3b938eae::t_cb7d15e57a6d9c 1-10
+package.json
+  s_78141c3b938eae::t_ae83a58ec14797 42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "02e0864da9a25e5be83def7737001c942f2290f3",
+  "prompts": {},
+  "sessions": {
+    "s_78141c3b938eae": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1d81c-e22f-7e70-a731-a0502de0d514",
+        "model": "gpt-6-luna"
+      },
+      "human_author": null
+    }
+  }
+}

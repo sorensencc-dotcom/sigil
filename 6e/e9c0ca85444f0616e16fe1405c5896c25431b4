@@ -1,0 +1,19 @@
+packages/sigil-rooms-web/src/styles.css
+  s_7a0390bb7d5cfc::t_8bd06c00bfc9f0 135,151,155,212-214
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6ee9c0ca85444f0616e16fe1405c5896c25431b4",
+  "prompts": {},
+  "sessions": {
+    "s_7a0390bb7d5cfc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fea57a9a-ad38-4e8a-a3e5-181aba492d70",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

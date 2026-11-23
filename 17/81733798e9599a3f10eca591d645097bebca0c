@@ -1,0 +1,33 @@
+sigil/integration/vertical-slice.test.mjs
+  s_8dd1ad151f659e::t_a19f105da5290a 45-48
+  s_8dd1ad151f659e::t_9a0d1cc5e9dd64 36-44,49-57
+sigil/relay/v1/accept-envelope.test.mjs
+  s_8dd1ad151f659e::t_6dfd2769d92f32 141-172,183-185,188-193
+  s_8dd1ad151f659e::t_d3240378e5aa40 173-182,186-187
+  s_8dd1ad151f659e::t_18f6e04f7279dd 92
+sigil/relay/v1/accept-envelope.mjs
+  s_8dd1ad151f659e::t_3647e49b363f58 44-54
+sigil/relay/v1/http-server.test.mjs
+  s_8dd1ad151f659e::t_f787a9a380a5d9 39
+  s_8dd1ad151f659e::t_c6a7188bcfc780 109
+  s_8dd1ad151f659e::t_17de0f685eb10e 132
+  s_8dd1ad151f659e::t_2fe6ffd2dd1341 151
+  s_8dd1ad151f659e::t_bf5e7d96cc0b6f 83
+  s_8dd1ad151f659e::t_77a8a904d9e8ce 63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "1781733798e9599a3f10eca591d645097bebca0c",
+  "prompts": {},
+  "sessions": {
+    "s_8dd1ad151f659e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "51061bde-6290-4632-b90c-09117e55b1be",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

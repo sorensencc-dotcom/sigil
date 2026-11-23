@@ -1,0 +1,33 @@
+sigil/cli/sigil.mjs
+  s_2afe06807554bb::t_0104636626c9f2 15,17,22
+  s_2afe06807554bb::t_20fa1d5e9201f5 61,64,70-79,83
+  s_4d5378553c6b81::t_bc275ef4f7cb40 16,35,117,124,141-154
+package.json
+  s_4d5378553c6b81::t_97656c7d0f827a 45-48
+package-lock.json
+  s_4d5378553c6b81::t_11d24bed6967d0 11-13,20-40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "7af2ce37067708b3e0d426173ed888694ce5a81b",
+  "prompts": {},
+  "sessions": {
+    "s_2afe06807554bb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6294ff91-fde0-4654-bfc7-e05c971e527f",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_4d5378553c6b81": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a005b0-ab11-7f52-989d-e699d42e7a83",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

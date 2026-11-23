@@ -1,0 +1,19 @@
+.gitignore
+  s_c2faf5c68b8a4c::t_cfbd9f64590e2e 3-5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "99899e704055256088881eaebb7f6cea77eaa278",
+  "prompts": {},
+  "sessions": {
+    "s_c2faf5c68b8a4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f4721667-6a4f-48e8-b32c-a563d8dcf589",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+sigil/relay/v1/http-server.mjs
+  s_a8b1940dd60de5::t_0173e762e2c24f 485
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4c0744a198f9bf67402e46c5f5caf894b82734e7",
+  "prompts": {},
+  "sessions": {
+    "s_a8b1940dd60de5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a205bc-d09e-78d3-b665-1ad053ace4fa",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

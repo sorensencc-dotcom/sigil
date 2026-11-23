@@ -1,0 +1,14 @@
+docs/superpowers/competition/2026-10-18-sigil-space-baseline-analysis.md
+  h_5c172e9b435f5a 1-159
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "38cf41d56fa7ae0c5d7758a7ffb4aa0d30e1d9b0",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

@@ -1,0 +1,20 @@
+.trail/learnings/2026-11-08-floor-warden-watch-is-an-explicit-chris.md
+  h_5c172e9b435f5a 1-28
+sigil/bridges/v1/floor-warden-bridge.mjs
+  h_5c172e9b435f5a 41,119,121-165,176,179-190,194-221,233-234,236,248,253,270-271,278,315,317,327,330,363,432,445-451,515-518
+sigil/bridges/v1/floor-warden-watch-state.mjs
+  h_5c172e9b435f5a 1-197
+sigil/bridges/v1/floor-warden-watch-state.test.mjs
+  h_5c172e9b435f5a 1-102
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b5928906326267c95ff246d916e75c089d4c6ded",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

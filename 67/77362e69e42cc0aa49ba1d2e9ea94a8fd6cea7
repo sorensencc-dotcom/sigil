@@ -1,0 +1,25 @@
+docs/superpowers/specs/2026-10-02-sigil-rooms-design.md
+  s_cf48dae32d5dd9::t_b75a94f76d0ebe 242
+README.md
+  s_cf48dae32d5dd9::t_de0e036712b7da 136-177
+STATUS.md
+  s_cf48dae32d5dd9::t_b75a94f76d0ebe 3-16
+docs/superpowers/plans/2026-10-16-floor-warden-bridge-verification-notes.md
+  s_cf48dae32d5dd9::t_db4e246c40a9d8 23,25-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6777362e69e42cc0aa49ba1d2e9ea94a8fd6cea7",
+  "prompts": {},
+  "sessions": {
+    "s_cf48dae32d5dd9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b2d6e6eb-486c-43c6-b0b9-03b0bd947fd1",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

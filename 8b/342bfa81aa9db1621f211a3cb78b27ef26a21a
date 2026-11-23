@@ -1,0 +1,16 @@
+scripts/windows/register-sigil-task.ps1
+  h_5c172e9b435f5a 9,19-20
+scripts/windows/start-sigil-stack.ps1
+  h_5c172e9b435f5a 9,13,17,28-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8b342bfa81aa9db1621f211a3cb78b27ef26a21a",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

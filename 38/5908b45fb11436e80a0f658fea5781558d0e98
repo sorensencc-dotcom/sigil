@@ -1,0 +1,40 @@
+sigil/cli/memory-repository.test.mjs
+  s_4d5378553c6b81::t_91b0e32877a382 1-14
+sigil/cli/sigil.mjs
+  s_2afe06807554bb::t_d7bd1ce1cd3706 1-143
+sigil/cli/identity.mjs
+  s_2afe06807554bb::t_59f367317430a5 1-35
+package.json
+  s_4d5378553c6b81::t_899c62e196d9ba 18
+sigil/cli/registry-store.mjs
+  s_2afe06807554bb::t_db3dbd0787a712 1-51
+.gitignore
+  s_2afe06807554bb::t_a65bfa6ff7e32a 1-2
+sigil/cli/memory-repository.mjs
+  s_4d5378553c6b81::t_91b0e32877a382 28,34
+  s_2afe06807554bb::t_62fbe7c20e1c5c 1-27,29-33,35-48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "385908b45fb11436e80a0f658fea5781558d0e98",
+  "prompts": {},
+  "sessions": {
+    "s_2afe06807554bb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6294ff91-fde0-4654-bfc7-e05c971e527f",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_4d5378553c6b81": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a005b0-ab11-7f52-989d-e699d42e7a83",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

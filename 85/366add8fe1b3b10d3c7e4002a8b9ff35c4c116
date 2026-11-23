@@ -1,0 +1,26 @@
+STATUS.md
+  h_5c172e9b435f5a 3-24
+sigil/cli/credential-store.mjs
+  h_5c172e9b435f5a 2-3,47-97,148-157,159-162,170,228-250,262,297-300
+sigil/cli/credential-store.test.mjs
+  h_5c172e9b435f5a 3-5,13-16,97-159
+sigil/cli/service-command.mjs
+  h_5c172e9b435f5a 11,32,90,132-170
+sigil/cli/service-command.test.mjs
+  h_5c172e9b435f5a 176-233
+sigil/cli/systemd-supervisor.mjs
+  h_5c172e9b435f5a 1-269
+sigil/cli/systemd-supervisor.test.mjs
+  h_5c172e9b435f5a 1-227
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "85366add8fe1b3b10d3c7e4002a8b9ff35c4c116",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

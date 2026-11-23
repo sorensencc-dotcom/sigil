@@ -1,0 +1,34 @@
+sigil/bridges/v1/fixtures/fake-agent-cli.mjs
+  s_82f4e37c320f0a::t_ba137d5e5aa456 9-10,13,22-41,49-52
+  s_82f4e37c320f0a::t_1b3f0c34cafc2a 44-48
+  s_82f4e37c320f0a::t_a34fa8494a1c10 42-43
+sigil/bridges/v1/fixtures/fake-agent-cli.cmd
+  s_82f4e37c320f0a::t_a34fa8494a1c10 1-2
+sigil/bridges/v1/cli-conformance.test.mjs
+  s_82f4e37c320f0a::t_67044dd422f3d7 1-10,12-29,34,36-37,43-54,56-84,87,89,91-96,101-109,111-113
+  s_82f4e37c320f0a::t_1b3f0c34cafc2a 30-33,35,40-41,85-86,88,90,97-100
+  s_82f4e37c320f0a::t_a34fa8494a1c10 11,38-39,42,110
+  s_82f4e37c320f0a::t_ba137d5e5aa456 55
+sigil/bridges/v1/cli-runner.mjs
+  s_82f4e37c320f0a::t_08a95934811aa8 40-46
+sigil/bridges/v1/cli-runner.test.mjs
+  s_82f4e37c320f0a::t_e88aaf5adfcb72 21-29
+  s_82f4e37c320f0a::t_1b3f0c34cafc2a 30
+  s_82f4e37c320f0a::t_08a95934811aa8 20,31-32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f8e3aa926bab92401ade2a08a83823a260c854fd",
+  "prompts": {},
+  "sessions": {
+    "s_82f4e37c320f0a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a14f97-4c91-7b90-bb23-987bd1f04259",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

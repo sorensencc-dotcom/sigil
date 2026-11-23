@@ -1,0 +1,34 @@
+sigil/relay/v1/http-server.mjs
+  s_a8b1940dd60de5::t_7c8a83eeb80ff7 404,431-434,465,469-471
+  s_a8b1940dd60de5::t_604b9242d98b73 438,440,455-456
+  s_a8b1940dd60de5::t_382ea5d658415d 27,112,379,386-398,400,402,405-410,414-418,420-430,435-437,439,441-445,451-454,457-464,472-484,486-493
+  s_a8b1940dd60de5::t_3c589696a7b3ca 411-413,419,466-468
+  s_a8b1940dd60de5::t_07f0735d5e0eef 399,401,403,446-450,485
+  s_a8b1940dd60de5::t_8669fe31d47028 494-495
+sigil/relay/v1/postgres-repository.mjs
+  s_a8b1940dd60de5::t_379c47c1c06d11 487-503
+sigil/cli/memory-repository.mjs
+  s_a8b1940dd60de5::t_379c47c1c06d11 862-865,884-890
+sigil/relay/v1/ag-ui-runs.test.mjs
+  s_a8b1940dd60de5::t_69156d319cec25 67-82,94-96
+  s_a8b1940dd60de5::t_0d5586f071354a 1-51,56-66,83-93,97-136
+  s_a8b1940dd60de5::t_4bd3e7e655f700 52-55
+sigil/cli/memory-repository.test.mjs
+  s_a8b1940dd60de5::t_257d7f1a5d4424 289-298
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3b7e7ec40a8ff5da8aa0a9938a07fbc0d90c1000",
+  "prompts": {},
+  "sessions": {
+    "s_a8b1940dd60de5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a205bc-d09e-78d3-b665-1ad053ace4fa",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

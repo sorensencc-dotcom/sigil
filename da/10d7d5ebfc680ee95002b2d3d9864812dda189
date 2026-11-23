@@ -1,0 +1,26 @@
+sigil/relay/v1/floor-warden-reply-tokens.pg.test.mjs
+  s_158d0166252aeb::t_ca0a088837f90a 1-21,23-55
+  s_158d0166252aeb::t_5f11c80698a7fd 22
+sigil/cli/memory-repository.mjs
+  s_158d0166252aeb::t_bf99ce4f26fcec 76,252-300
+sigil/relay/v1/postgres-repository.mjs
+  s_158d0166252aeb::t_bf99ce4f26fcec 346-398
+sigil/cli/memory-repository.reply-tokens.test.mjs
+  s_158d0166252aeb::t_ca0a088837f90a 1-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "da10d7d5ebfc680ee95002b2d3d9864812dda189",
+  "prompts": {},
+  "sessions": {
+    "s_158d0166252aeb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15a28-da28-71c1-b0ee-1cb21afdb858",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

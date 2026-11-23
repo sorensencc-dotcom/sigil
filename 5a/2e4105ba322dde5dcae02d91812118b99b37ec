@@ -1,0 +1,27 @@
+sigil/cli/memory-repository.mjs
+  s_8dd1ad151f659e::t_97dbe9f9a75c08 99-102
+sigil/relay/v1/stream-server.test.mjs
+  s_8dd1ad151f659e::t_c230fac6df95f6 22-42
+sigil/relay/v1/postgres-repository.test.mjs
+  s_8dd1ad151f659e::t_d86d9b6bcbaa6e 167-188
+sigil/relay/v1/stream-server.mjs
+  s_8dd1ad151f659e::t_e37322782c3ef0 22-27
+sigil/relay/v1/postgres-repository.mjs
+  s_8dd1ad151f659e::t_c232d40d589c1c 35-41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "5a2e4105ba322dde5dcae02d91812118b99b37ec",
+  "prompts": {},
+  "sessions": {
+    "s_8dd1ad151f659e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "51061bde-6290-4632-b90c-09117e55b1be",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

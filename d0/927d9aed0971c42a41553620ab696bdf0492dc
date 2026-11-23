@@ -1,0 +1,20 @@
+scripts/chief-watchdog.ps1
+  h_5c172e9b435f5a 26-45
+scripts/setup-chief-daemon.ps1
+  h_5c172e9b435f5a 8,14-37,42
+scripts/windows/register-sigil-task.ps1
+  h_5c172e9b435f5a 19-38
+tests/chief-watchdog.test.mjs
+  h_5c172e9b435f5a 5,9-11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d0927d9aed0971c42a41553620ab696bdf0492dc",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

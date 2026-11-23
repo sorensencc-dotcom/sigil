@@ -1,0 +1,19 @@
+docs/superpowers/specs/2026-08-15-sigil-inbox-wait-design.md
+  s_bed36bc834b400::t_87a438b21e21f6 1-107
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "aca19aefc978f753243087d12f30a26e75173f3c",
+  "prompts": {},
+  "sessions": {
+    "s_bed36bc834b400": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f2b61664-db06-4322-a0b2-7f2788dcbb07",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

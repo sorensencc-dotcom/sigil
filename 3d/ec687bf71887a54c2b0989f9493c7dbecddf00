@@ -1,0 +1,26 @@
+sigil/relay/v1/accept-envelope.mjs
+  s_256f74889fb0f4::t_9eeef69cb256de 291-302
+sigil/relay/v1/postgres-repository.integration.test.mjs
+  s_256f74889fb0f4::t_e2f8d5e9d16ba1 640-649
+sigil/relay/v1/accept-envelope.high-risk-retry.test.mjs
+  s_256f74889fb0f4::t_e9b032c2e9c0ee 1-11,16-27,29-33,36,40-41,43-47,66
+  s_256f74889fb0f4::t_641949582b6208 12-15,28,34-35,37-39,42,48-65
+.trail/learnings/2026-11-21-a-retried-high-risk-envelope-skips-chris.md
+  s_256f74889fb0f4::t_3976d6d568de8f 1-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3dec687bf71887a54c2b0989f9493c7dbecddf00",
+  "prompts": {},
+  "sessions": {
+    "s_256f74889fb0f4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "572b269d-9798-4254-85a8-957baee9a60e",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

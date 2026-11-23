@@ -1,0 +1,24 @@
+packages/sigil-rooms-web/src/rooms/SenderChip.spec.tsx
+  s_a76962d884a1cb::t_5e6d684c93ce50 4,39-49,77-78,86,93
+packages/sigil-rooms-web/src/rooms/SenderChip.tsx
+  s_a76962d884a1cb::t_7c9281fa74f04b 7-18,80-87
+packages/sigil-rooms-web/src/styles.css
+  s_a76962d884a1cb::t_81c4fa6228fcef 202-203
+  s_a76962d884a1cb::t_73d21640156f79 23-24,45-46,194-201
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7a7e29336bda9373b65fea3e474ccc357f8f8d04",
+  "prompts": {},
+  "sessions": {
+    "s_a76962d884a1cb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20712-9b64-73f3-98d7-420a84e796ee",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

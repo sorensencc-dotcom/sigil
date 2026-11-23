@@ -1,0 +1,19 @@
+docs/superpowers/specs/2026-11-22-sigil-rooms-web-redesign-plan.md
+  s_c5064704c7f31c::t_f148bb4c919f93 278-280,284-287,315-345
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4c05f1fb41d3df11eac9d1efe5088f0a1a78ac3d",
+  "prompts": {},
+  "sessions": {
+    "s_c5064704c7f31c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "39ffafec-9bf8-4f5b-a3f8-57e7675ab7c9",
+        "model": "unknown"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+sigil/cli/bot-commands.mjs
+  s_e636ac0c41889c::t_617f9bf1aff00d 7,11,47,60,71-74,100-121,124-128,134
+sigil/cli/bot-commands.pg.test.mjs
+  s_e636ac0c41889c::t_ab6298af12ca83 15-17,42,78-82,101-102,139-155,157-169
+  s_e636ac0c41889c::t_33eb49d2bb6c44 156
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "548110bf13b65397d74b599c26ef50f72c04e6e9",
+  "prompts": {},
+  "sessions": {
+    "s_e636ac0c41889c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1efb2915-6195-49cd-aaa5-ea6648e9e650",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

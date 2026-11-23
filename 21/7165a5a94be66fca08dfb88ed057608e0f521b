@@ -1,0 +1,25 @@
+.claude/skills/verify-relay-job-leases/SKILL.md
+  s_371397916dc2b7::t_7c4188822603da 55
+  s_371397916dc2b7::t_74c6472b60e36c 45,47,49-51
+  s_371397916dc2b7::t_93a8116ae87e8c 20
+  s_371397916dc2b7::t_3f3a241b706838 1-18,23-40,42-44,46,48,52-54,56-57,59-76
+  s_371397916dc2b7::t_76eeb891a956f9 19,21-22
+  s_371397916dc2b7::t_0f866ea6c8f8b0 41
+  s_371397916dc2b7::t_f73b6368f76e87 58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "217165a5a94be66fca08dfb88ed057608e0f521b",
+  "prompts": {},
+  "sessions": {
+    "s_371397916dc2b7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d6a3ea46-b020-4a1e-9832-d8a16146313d",
+        "model": "unknown"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

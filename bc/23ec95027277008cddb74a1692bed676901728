@@ -1,0 +1,19 @@
+STATUS.md
+  s_e95f07017c292b::t_4f7356f0cc437c 3-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bc23ec95027277008cddb74a1692bed676901728",
+  "prompts": {},
+  "sessions": {
+    "s_e95f07017c292b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1b41c-3ff3-7732-98d4-f37c705a4dd5",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+docs/superpowers/specs/2026-10-16-sigil-rooms-phase-6-floor-warden-bridge-design.md
+  s_e636ac0c41889c::t_fa757129f0a197 112,126-127,153,163
+docs/superpowers/plans/2026-10-16-sigil-rooms-phase-6-floor-warden-bridge.md
+  s_e636ac0c41889c::t_fa757129f0a197 307,352,356,445,524,537
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ebfab0e3f00437426e2753c1f4c4abd3a0f7f6a3",
+  "prompts": {},
+  "sessions": {
+    "s_e636ac0c41889c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1efb2915-6195-49cd-aaa5-ea6648e9e650",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

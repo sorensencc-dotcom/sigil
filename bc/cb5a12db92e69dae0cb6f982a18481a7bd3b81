@@ -1,0 +1,34 @@
+sigil/relay/v1/floor-warden-e2e.pg.test.mjs
+  s_834a96433b2920::t_f6df7c0cf8e9c0 156
+  s_834a96433b2920::t_567f0965811091 395-396,398
+  s_834a96433b2920::t_33eebb7dd71a59 25
+sigil/bridges/v1/floor-warden-bridge.mjs
+  s_834a96433b2920::t_33eebb7dd71a59 41
+  s_834a96433b2920::t_f6df7c0cf8e9c0 393-394
+sigil/cli/redacting-logger.mjs
+  s_834a96433b2920::t_f6df7c0cf8e9c0 42-52
+README.md
+  s_834a96433b2920::t_567f0965811091 156
+STATUS.md
+  s_834a96433b2920::t_567f0965811091 5
+sigil/cli/sigil.mjs
+  s_834a96433b2920::t_f6df7c0cf8e9c0 1126-1127
+sigil/bridges/v1/floor-warden-bridge.test.mjs
+  s_834a96433b2920::t_351f282f064cf9 542-555
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bccb5a12db92e69dae0cb6f982a18481a7bd3b81",
+  "prompts": {},
+  "sessions": {
+    "s_834a96433b2920": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0fb73b57-22bb-47e1-8b81-629159c188d5",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

@@ -1,0 +1,37 @@
+packages/sigil-rooms-web/src/pages/InvitePage.tsx
+  s_8ff75bf40ceba1::t_b469641ff7280f 25
+  s_8ff75bf40ceba1::t_12f3900132c472 2
+  s_8ff75bf40ceba1::t_6688638a80a79a 18
+packages/sigil-rooms-web/src/auth/TokenGate.tsx
+  s_8ff75bf40ceba1::t_5958307e648a10 24
+  s_8ff75bf40ceba1::t_78001b6ce5a98e 2
+packages/sigil-rooms-web/src/pages/LoginPage.tsx
+  s_8ff75bf40ceba1::t_3742a43c206b14 1
+  s_8ff75bf40ceba1::t_63eae2fae6b9bb 12
+  s_8ff75bf40ceba1::t_352dfc67dd0ede 17
+packages/sigil-rooms-web/src/App.tsx
+  s_8ff75bf40ceba1::t_9a6ece2047dc24 98
+  s_8ff75bf40ceba1::t_a7cac0b99b80b4 5
+  s_8ff75bf40ceba1::t_36827a22b57a9c 87-91
+packages/sigil-rooms-web/src/pages/pages.spec.tsx
+  s_8ff75bf40ceba1::t_ec08cd9565bfcf 2
+  s_8ff75bf40ceba1::t_054904719998df 56-81
+packages/sigil-rooms-web/src/auth/GateHeader.tsx
+  s_8ff75bf40ceba1::t_ab2beeb41f155b 1-27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6d7eb54da3d8b4a111ea7a5a89997a613e9970b9",
+  "prompts": {},
+  "sessions": {
+    "s_8ff75bf40ceba1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "77e63bc4-4500-4ae0-8135-7bc4b36b942b",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

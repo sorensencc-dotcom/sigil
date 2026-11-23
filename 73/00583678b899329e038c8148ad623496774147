@@ -1,0 +1,19 @@
+docs/superpowers/specs/2026-10-16-sigil-hybrid-dm-decisions.md
+  s_fa11606c187761::t_1e8aff211cd632 58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7300583678b899329e038c8148ad623496774147",
+  "prompts": {},
+  "sessions": {
+    "s_fa11606c187761": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a14674-d160-7dd2-98f1-0646f6f76765",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+docs/superpowers/plans/2026-10-17-sigil-rooms-phase-7-tunnel.md
+  s_e593bb71cc0bc7::t_af883501452cf1 1-917
+docs/superpowers/specs/2026-10-17-sigil-rooms-phase-7-tunnel-design.md
+  s_e593bb71cc0bc7::t_bbf2eeb4c864c9 1-427
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bfeef2360b4e4fe8a3e47e08d39fecf046625db3",
+  "prompts": {},
+  "sessions": {
+    "s_e593bb71cc0bc7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_e593bb71cc0bc7",
+        "model": "unknown"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

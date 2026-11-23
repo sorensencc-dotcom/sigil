@@ -1,0 +1,31 @@
+sigil/scripts/install-git-hooks.mjs
+  s_7fbd1726dd2e7a::t_b041e19a58edce 28-33,35
+sigil/scripts/prepush-preflight.mjs
+  s_4c3dbe757a2cde::t_c91ebc1fe6e74b 1-43
+sigil/scripts/prepush-preflight.test.mjs
+  s_4c3dbe757a2cde::t_1e08e6663b0bdd 1-39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "540f1cd1d69ebb0c4d1f03c5e35aa98ced31cf2d",
+  "prompts": {},
+  "sessions": {
+    "s_4c3dbe757a2cde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_4c3dbe757a2cde",
+        "model": "unknown"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_7fbd1726dd2e7a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15a41-8bc7-7442-a485-19be087640f5",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

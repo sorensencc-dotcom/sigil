@@ -1,0 +1,23 @@
+.github/workflows/release.yml
+  s_fc7dab84f80317::t_b69a2fdbfbfa67 60-62
+STATUS.md
+  s_fc7dab84f80317::t_b69a2fdbfbfa67 6-11
+tests/release-workflow.test.mjs
+  s_fc7dab84f80317::t_84c9945027a89f 7-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f6c22a93c76996c1acebe339f0dc48b25f9fe43e",
+  "prompts": {},
+  "sessions": {
+    "s_fc7dab84f80317": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1dc1e-997a-7172-83fd-b2dfbe9070ab",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

@@ -1,0 +1,167 @@
+sigil/cli/sigil.mjs
+  s_9790afb09688c4::t_49deed1f93893b 32-33,45,62-63,66,87-88,207,328-342,351-356,518,1087-1146,1148,1151,1155-1157,1159-1168,1173-1174,1213-1216,1223-1228,1998-1999
+sigil/bridges/v1/cli-registry.test.mjs
+  s_9790afb09688c4::t_49deed1f93893b 184-206
+.cursor/hooks.json
+  s_9790afb09688c4::t_340d3a6293a10e 1-21
+.cursor/hooks/graft-hooks.cjs
+  s_9790afb09688c4::t_aeacb2aa9d68fc 1-67
+.cursor/mcp.json
+  s_9790afb09688c4::t_8e87303b59361a 1-12
+.cursor/rules/graft.mdc
+  s_9790afb09688c4::t_d09325e64fc472 1-43
+.gemini/settings.json
+  s_9790afb09688c4::t_1d73589ab762b9 1-12
+.github/copilot-instructions.md
+  s_9790afb09688c4::t_da3def4e169d06 1-41
+.grok/config.toml
+  s_9790afb09688c4::t_31767909898cfc 1-3
+.ignore
+  s_9790afb09688c4::t_dcfe9923f3b781 1-5
+.kiro/settings/mcp.json
+  s_9790afb09688c4::t_d0fa770ded6192 1-12
+.kiro/steering/graft.md
+  s_9790afb09688c4::t_af566c4bde1d3c 1-42
+.serena/.gitignore
+  s_9790afb09688c4::t_fc799fdb1f13d4 1-2
+.serena/project.yml
+  s_9790afb09688c4::t_880bbbf0c1b0d7 1-169
+.windsurf/rules/graft.md
+  s_9790afb09688c4::t_f12024f23ce7e0 1-39
+GEMINI.md
+  s_9790afb09688c4::t_895ed5d0ae4380 1-41
+README.md
+  s_9790afb09688c4::t_ed728128bdea0f 136-177
+STATUS.md
+  s_9790afb09688c4::t_e06d1076385c76 3-16
+docs/superpowers/plans/2026-10-16-floor-warden-bridge-verification-notes.md
+  s_9790afb09688c4::t_0a1be01c37fa3c 1-48
+docs/superpowers/plans/2026-10-16-sigil-hybrid-rooms-direct-messages.md
+  s_9790afb09688c4::t_e2dafbc8384280 1-694
+docs/superpowers/plans/2026-10-16-sigil-rooms-phase-5-more-bridges.md
+  s_9790afb09688c4::t_1fd10f6c8d3abe 29,34,52,257-266,584,595,599,614,944,957
+docs/superpowers/plans/2026-10-16-sigil-rooms-phase-6-floor-warden-bridge.md
+  s_9790afb09688c4::t_2ee69e728635b2 1-679
+docs/superpowers/specs/2026-10-02-sigil-rooms-design.md
+  s_9790afb09688c4::t_00fcdd867f3640 242
+docs/superpowers/specs/2026-10-16-sigil-hybrid-dm-decisions.md
+  s_9790afb09688c4::t_d9aed8007761f6 1-61
+docs/superpowers/specs/2026-10-16-sigil-hybrid-rooms-direct-messages-design.md
+  s_9790afb09688c4::t_1d5bc70cb38633 1-554
+docs/superpowers/specs/2026-10-16-sigil-rooms-phase-5-more-bridges-design.md
+  s_9790afb09688c4::t_03687c813aa527 5,190,245,263-267,269,281
+docs/superpowers/specs/2026-10-16-sigil-rooms-phase-6-floor-warden-bridge-design.md
+  s_9790afb09688c4::t_49e8a18383a55b 1-233
+opencode.json
+  s_9790afb09688c4::t_4d9f012b8ce88b 1-14
+packages/sigil-rooms-web/src/api/client.spec.ts
+  s_9790afb09688c4::t_1170a94ef6a297 68-93
+packages/sigil-rooms-web/src/api/client.ts
+  s_9790afb09688c4::t_db155586c70104 30,97-103
+packages/sigil-rooms-web/src/api/contract.spec.ts
+  s_9790afb09688c4::t_4101072ba86d8f 29,42-43
+packages/sigil-rooms-web/src/api/types.ts
+  s_9790afb09688c4::t_50aba15c3f6ccb 10-11,16
+packages/sigil-rooms-web/src/rooms/RowView.continue.spec.tsx
+  s_9790afb09688c4::t_388f466a69a4f7 1-49
+packages/sigil-rooms-web/src/rooms/RowView.tsx
+  s_9790afb09688c4::t_58d99ec109f6b6 9,20-30
+packages/sigil-rooms-web/src/rooms/Timeline.tsx
+  s_9790afb09688c4::t_de37e9304b5c73 1,5,9,31-37,72
+sigil/bridges/v1/floor-warden-bridge.mjs
+  s_9790afb09688c4::t_0980705457135d 1-446
+sigil/bridges/v1/floor-warden-bridge.test.mjs
+  s_9790afb09688c4::t_e901dc98b1746b 1-555
+sigil/bridges/v1/floor-warden-payload.mjs
+  s_9790afb09688c4::t_4cee92917611c4 1-86
+sigil/bridges/v1/floor-warden-payload.test.mjs
+  s_9790afb09688c4::t_4386ee5dabdca6 1-114
+sigil/bridges/v1/session-store.mjs
+  s_9790afb09688c4::t_7437037085db69 17
+sigil/cli/agent-daemon.mjs
+  s_9790afb09688c4::t_0b4df342cdc0e5 34-36,55-70,72-75,130-137,169,184,259-268,321-324
+sigil/cli/agent-run-floor-warden.test.mjs
+  s_9790afb09688c4::t_40efe74322a154 1-598
+sigil/cli/bot-commands.mjs
+  s_9790afb09688c4::t_50de38ccbfeab8 1-157
+sigil/cli/bot-commands.pg.test.mjs
+  s_9790afb09688c4::t_856769a5c3a397 1-170
+sigil/cli/memory-repository.floor-warden.test.mjs
+  s_9790afb09688c4::t_16f59bf5d0bfeb 1-74
+sigil/cli/memory-repository.mjs
+  s_9790afb09688c4::t_73373a141df57c 75-76,247-272,547,550-552,554-559
+sigil/cli/redacting-logger.mjs
+  s_9790afb09688c4::t_6059730f74678f 1-52
+sigil/cli/relay-up-flags.test.mjs
+  s_9790afb09688c4::t_a124c1ecafe7c8 7,36-89
+sigil/contracts/v1/errors-and-states.json
+  s_9790afb09688c4::t_a316bc0cdd0ed9 25-29,44-51
+sigil/contracts/v1/relay-api.json
+  s_9790afb09688c4::t_df2a92faec7b38 21-23
+sigil/contracts/v1/relay-api.test.mjs
+  s_9790afb09688c4::t_8be696a78083ec 48,121-149,158-170
+sigil/contracts/v1/room-event-schema.mjs
+  s_9790afb09688c4::t_52cd9c026a1426 3,6,20
+sigil/contracts/v1/room-event-schema.test.mjs
+  s_9790afb09688c4::t_939e7bf27832d2 47-51
+sigil/migrations/035_floor_warden_bridge.sql
+  s_9790afb09688c4::t_b43f94e06e707f 1-18
+sigil/migrations/035_floor_warden_bridge.test.mjs
+  s_9790afb09688c4::t_8843a6bcd457ef 1-93
+sigil/relay/v1/accept-envelope.mjs
+  s_9790afb09688c4::t_2b0c9b78fc6d34 412
+sigil/relay/v1/accept-options.test.mjs
+  s_9790afb09688c4::t_17e5e967efb3db 50
+sigil/relay/v1/floor-warden-e2e.pg.test.mjs
+  s_9790afb09688c4::t_f980c278c32b33 1-526
+sigil/relay/v1/floor-warden-replies.mjs
+  s_9790afb09688c4::t_80f4d1a9cf756e 1-167
+sigil/relay/v1/floor-warden-replies.pg.test.mjs
+  s_9790afb09688c4::t_f3cbd3effb8aaf 1-180
+sigil/relay/v1/floor-warden-replies.test.mjs
+  s_9790afb09688c4::t_a0cae05e0ef72f 1-554
+sigil/relay/v1/floor-warden-repository.pg.test.mjs
+  s_9790afb09688c4::t_0559828346daf6 1-120
+sigil/relay/v1/floor-warden-token.mjs
+  s_9790afb09688c4::t_3266da3cc364f8 1-30
+sigil/relay/v1/floor-warden-token.test.mjs
+  s_9790afb09688c4::t_5e34841d8a9db0 1-38
+sigil/relay/v1/http-server.mjs
+  s_9790afb09688c4::t_fa31af0893dc4e 13,98,113-116,253-288
+sigil/relay/v1/postgres-repository.mjs
+  s_9790afb09688c4::t_3cf5af0b24cf89 342-378,2121-2124,2126-2129,2132
+sigil/relay/v1/room-bot-signer.mjs
+  s_9790afb09688c4::t_4914fb3b1ba823 1-40
+sigil/relay/v1/room-bot-signer.test.mjs
+  s_9790afb09688c4::t_4d17e95694c9a7 1-116
+sigil/relay/v1/room-continue-route.test.mjs
+  s_9790afb09688c4::t_e4a670811b040e 1-223
+sigil/relay/v1/room-dispatch.mjs
+  s_9790afb09688c4::t_2b7c7537eedc4d 26-31,35-37,70-97
+sigil/relay/v1/room-dispatch.test.mjs
+  s_9790afb09688c4::t_1d3804c7b15f41 363
+sigil/relay/v1/room-loop-guards.pg.test.mjs
+  s_9790afb09688c4::t_e6c89d80ffda3a 1-175
+sigil/relay/v1/room-loop-guards.test.mjs
+  s_9790afb09688c4::t_3ff8d9ed10c26d 1-266
+sigil/relay/v1/room-routes.mjs
+  s_9790afb09688c4::t_b439b1a570df71 4,58-111,175,206-213,215-225,284,442-444,470
+sigil/relay/v1/room-routes.test.mjs
+  s_9790afb09688c4::t_a3e4615a65aa91 246,274
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6f78312cb066e0a2b53e4d69b302e77b23df21c4",
+  "prompts": {},
+  "sessions": {
+    "s_9790afb09688c4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a14a29-2b66-76c3-b2b3-0f120e161d97",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

@@ -1,0 +1,43 @@
+packages/sigil-rooms-web/src/rooms/RowView.tsx
+  s_ece608a5010af8::t_be7d9749921021 3-4,6,19,30,63-72,82
+packages/sigil-rooms-web/src/rooms/SenderChip.tsx
+  s_ece608a5010af8::t_ea70d15a377d77 15-20
+  s_ece608a5010af8::t_ee05334000becc 1-14,21-74
+packages/sigil-rooms-web/src/rooms/ThreadPanel.spec.tsx
+  s_ece608a5010af8::t_c7224586c44aa5 4,42-55
+packages/sigil-rooms-web/src/App.tsx
+  s_ece608a5010af8::t_be7d9749921021 30,52,77
+.trail/learnings/2026-11-22-rooms-web-vitest-fails-from-a-chris.md
+  s_ece608a5010af8::t_51c9f4a19ee10d 1-20
+packages/sigil-rooms-web/src/rooms/useContacts.ts
+  s_ece608a5010af8::t_0e17a213188479 7
+  s_ece608a5010af8::t_1604f03e379d63 40-44,48-49
+packages/sigil-rooms-web/src/styles.css
+  s_ece608a5010af8::t_c7224586c44aa5 189-193
+packages/sigil-rooms-web/src/rooms/Timeline.tsx
+  s_ece608a5010af8::t_be7d9749921021 12,25,36,91
+packages/sigil-rooms-web/src/rooms/RowView.spec.tsx
+  s_ece608a5010af8::t_c7224586c44aa5 71-90
+packages/sigil-rooms-web/src/rooms/ThreadPanel.tsx
+  s_ece608a5010af8::t_be7d9749921021 8,11,22,33,53-69,72
+packages/sigil-rooms-web/src/rooms/SenderChip.spec.tsx
+  s_ece608a5010af8::t_6139554ac76aa4 1-89
+STATUS.md
+  s_ece608a5010af8::t_aae934252aa9b3 3-10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d696d1eb922f32be04adc11b3e481975c098aef7",
+  "prompts": {},
+  "sessions": {
+    "s_ece608a5010af8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a0fae397-18fc-4b34-8afd-cb165a31eea3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

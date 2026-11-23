@@ -1,0 +1,26 @@
+sigil/relay/v1/rejection-audit.test.mjs
+  s_8dd1ad151f659e::t_046a8abce6992c 1-46
+sigil/relay/v1/accept-envelope.mjs
+  s_8dd1ad151f659e::t_55682b43ffc9f3 115-126
+  s_8dd1ad151f659e::t_fa3fd70f0f9acb 3-9
+sigil/relay/v1/accept-envelope.test.mjs
+  s_8dd1ad151f659e::t_58d96ce5ebd0c5 218-231
+sigil/relay/v1/rejection-audit.mjs
+  s_8dd1ad151f659e::t_a5b5dfc3b09f68 1-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "d049b1bd2a76437e7acfacb8216e6a7b7efa775c",
+  "prompts": {},
+  "sessions": {
+    "s_8dd1ad151f659e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "51061bde-6290-4632-b90c-09117e55b1be",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

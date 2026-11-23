@@ -1,0 +1,24 @@
+.github/workflows/release.yml
+  s_78141c3b938eae::t_306ecbafe11f00 29,62
+tests/release-workflow.test.mjs
+  s_78141c3b938eae::t_cb7d15e57a6d9c 1-10
+STATUS.md
+  s_78141c3b938eae::t_d12429fbb95272 8-9
+  s_78141c3b938eae::t_62c593861d735d 3-7,10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "04fe55c90e79389506ad6c32b8f3dba1ce00644b",
+  "prompts": {},
+  "sessions": {
+    "s_78141c3b938eae": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1d81c-e22f-7e70-a731-a0502de0d514",
+        "model": "gpt-6-luna"
+      },
+      "human_author": null
+    }
+  }
+}

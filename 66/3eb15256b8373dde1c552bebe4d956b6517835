@@ -1,0 +1,18 @@
+STATUS.md
+  h_5c172e9b435f5a 6
+docs/superpowers/plans/2026-10-16-phase-5-verification-notes.md
+  h_5c172e9b435f5a 43-44
+sigil/bridges/v1/cli-registry.test.mjs
+  h_5c172e9b435f5a 31-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "663eb15256b8373dde1c552bebe4d956b6517835",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

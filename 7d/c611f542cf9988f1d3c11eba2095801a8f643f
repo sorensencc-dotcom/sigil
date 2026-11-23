@@ -1,0 +1,19 @@
+README.md
+  s_c2faf5c68b8a4c::t_fc488bd1439a9d 15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "7dc611f542cf9988f1d3c11eba2095801a8f643f",
+  "prompts": {},
+  "sessions": {
+    "s_c2faf5c68b8a4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f4721667-6a4f-48e8-b32c-a563d8dcf589",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

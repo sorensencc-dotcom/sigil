@@ -1,0 +1,19 @@
+docs/handoff.md
+  s_42b84b1143f597::t_d8f2374bf4fb70 1-41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "4e9b7574678e77742a454c97cbfe8db8264bb553",
+  "prompts": {},
+  "sessions": {
+    "s_42b84b1143f597": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff87d-e129-7310-ab30-dc054de846f6",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

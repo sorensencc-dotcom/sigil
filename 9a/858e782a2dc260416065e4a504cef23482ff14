@@ -1,0 +1,20 @@
+TODOS.md
+  s_13f2bc9cd762c9::t_beae14f4282119 7
+  s_13f2bc9cd762c9::t_a7eee8ed57ff60 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9a858e782a2dc260416065e4a504cef23482ff14",
+  "prompts": {},
+  "sessions": {
+    "s_13f2bc9cd762c9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ca16ec9a-66a2-47ef-8058-abfc8c1f1a41",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

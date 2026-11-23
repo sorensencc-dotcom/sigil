@@ -1,0 +1,22 @@
+.trail/learnings/2026-11-08-watchdog-sigterm-wait-hangs-node-test-chris.md
+  h_5c172e9b435f5a 1-31
+scripts/chief-watchdog.ps1
+  h_5c172e9b435f5a 80-109,113-115,117-136,144-147,151-152,154-155,157-158,160,164-170,173
+sigil/cli/agent-daemon.mjs
+  h_5c172e9b435f5a 93-105,116-121,126,128,426-427
+sigil/cli/agent-daemon.test.mjs
+  h_5c172e9b435f5a 629-641
+tests/chief-watchdog.test.mjs
+  h_5c172e9b435f5a 21-50,107
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5e356651d0b8be5067004f137121678ff229f901",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

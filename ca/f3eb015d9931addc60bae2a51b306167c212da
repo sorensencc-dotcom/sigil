@@ -1,0 +1,40 @@
+sigil/relay/v1/room-dispatch.mjs
+  s_ea2b05d2bf79dd::t_22a08e3b72ace0 92
+  s_ea2b05d2bf79dd::t_07e857dc5ca6b8 70-91,93-97
+sigil/cli/memory-repository.mjs
+  s_ea2b05d2bf79dd::t_07e857dc5ca6b8 550-552
+sigil/relay/v1/room-routes.mjs
+  s_ea2b05d2bf79dd::t_07e857dc5ca6b8 4,260
+  s_ea2b05d2bf79dd::t_6d63c06cb39da4 418-420,446
+sigil/relay/v1/room-loop-guards.pg.test.mjs
+  s_ea2b05d2bf79dd::t_a1ac2cf799cfd5 1-175
+sigil/relay/v1/room-routes.test.mjs
+  s_ea2b05d2bf79dd::t_ec5ba9f858f888 246,274
+sigil/relay/v1/postgres-repository.mjs
+  s_ea2b05d2bf79dd::t_07e857dc5ca6b8 2121-2124
+sigil/relay/v1/room-loop-guards.test.mjs
+  s_ea2b05d2bf79dd::t_4140314b505cb8 13,214-217
+  s_ea2b05d2bf79dd::t_0f21ba12c1a266 1-12,14-213,218-265
+sigil/contracts/v1/room-event-schema.mjs
+  s_ea2b05d2bf79dd::t_07e857dc5ca6b8 3
+sigil/relay/v1/floor-warden-replies.test.mjs
+  s_ea2b05d2bf79dd::t_32288355f41e53 519-533
+sigil/relay/v1/room-dispatch.test.mjs
+  s_ea2b05d2bf79dd::t_9fd2216b81c247 363
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "caf3eb015d9931addc60bae2a51b306167c212da",
+  "prompts": {},
+  "sessions": {
+    "s_ea2b05d2bf79dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fda5c393-0c85-48fc-9fbd-fc4101d6b963",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+sigil/relay/v1/postgres-repository.integration.test.mjs
+  s_1853461f9d361c::t_e751a27580cf94 63-64
+sigil/relay/v1/postgres-repository.mjs
+  s_1853461f9d361c::t_e751a27580cf94 72-76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "550bdcd31799a9f71d7318b38bf70de05987f5c5",
+  "prompts": {},
+  "sessions": {
+    "s_1853461f9d361c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffbe4-9a61-7781-9c7c-b26b276c172e",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

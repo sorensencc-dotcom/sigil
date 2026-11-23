@@ -1,0 +1,27 @@
+sigil/relay/v1/relay-config.mjs
+  s_7fbd1726dd2e7a::t_f8f2ac4f33d62d 14
+sigil/relay/v1/reply-ingress.mjs
+  s_7fbd1726dd2e7a::t_163b4f5de477e1 62-64
+  s_7fbd1726dd2e7a::t_dd37b9a2276e70 13-27,32-39,42,46-48,51-61,65-71,81-94
+  s_7fbd1726dd2e7a::t_f8f2ac4f33d62d 2,12
+  s_7fbd1726dd2e7a::t_1951d180bd7251 30-31,49-50,95
+sigil/relay/v1/reply-ingress-limits.test.mjs
+  s_7fbd1726dd2e7a::t_dd37b9a2276e70 1-8,10-14,16-52
+  s_7fbd1726dd2e7a::t_065a6d913c5dba 9,15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "310ae71aba6d82b2ab8b01ce27398f89da8784cd",
+  "prompts": {},
+  "sessions": {
+    "s_7fbd1726dd2e7a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15a41-8bc7-7442-a485-19be087640f5",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

@@ -1,0 +1,20 @@
+sigil/cli/relay-admin-listener.pg.test.mjs
+  s_b0e96dd577a630::t_852a5b58d627d6 83,97,124,136,176,188
+  s_b0e96dd577a630::t_b64eea27b2d642 42-53,61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5e0944fec183ddd4d612944f108fe2769b26d6a4",
+  "prompts": {},
+  "sessions": {
+    "s_b0e96dd577a630": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a92a48c5-aed8-4ddc-988a-9f92f0aae42b",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

@@ -1,0 +1,14 @@
+docs/superpowers/competition/2026-10-19-sigil-space-weekly.md
+  h_5c172e9b435f5a 112,114-119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "de266ff0051fa286fea899ac9768977fd21c2297",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
