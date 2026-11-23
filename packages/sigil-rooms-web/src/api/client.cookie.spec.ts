@@ -70,4 +70,12 @@ describe('api client in cookie mode', () => {
     expect(init.method).toBe('GET');
     expect(init.credentials).toBe('same-origin');
   });
+
+  it('lists room invocations from the room-scoped endpoint', async () => {
+    const items = [{ invocation_id: 'i1', endpoint_id: 'ep_agent', status: 'running' }];
+    const fetchImpl = vi.fn(async (_url: string) => jsonResponse(200, { items }));
+    const { client } = make(fetchImpl as unknown as typeof fetch);
+    expect(await client.listInvocations('room/1')).toEqual(items);
+    expect(fetchImpl.mock.calls[0]![0]).toBe('/v1/rooms/room%2F1/invocations');
+  });
 });

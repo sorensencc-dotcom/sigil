@@ -9,6 +9,7 @@ import { TestAuthProvider } from '../auth/AuthContext';
 import * as tokenStore from '../auth/tokenStore';
 import { RoomHeader } from './RoomHeader';
 import { RoomList } from './RoomList';
+import { StatusLine } from './StatusLine';
 import { useSend } from './useSend';
 
 const members: Member[] = [
@@ -38,16 +39,16 @@ describe('cookie-mode consumers', () => {
     expect(await screen.findByLabelText('New room name')).toBeInTheDocument();
   });
 
-  it('labels the stop control by role and posts the same stop', async () => {
+  it('labels Stop by role and posts the same stop from the working status line', async () => {
     const stopRoom = vi.fn(async () => ({ code: 'OK', cancelled: 0 }));
-    const client = { listMembers: vi.fn(async () => members), stopRoom };
-    const a = render(<RoomHeader roomId="room_1" name="b" sender={null} onGone={() => {}} />, { wrapper: wrap(client, false) });
+    const client = { listMembers: vi.fn(async () => members), listInvocations: vi.fn(async () => [{ invocation_id: 'i1', endpoint_id: 'ep_me', status: 'running' as const }]), stopRoom };
+    const a = render(<StatusLine roomId="room_1" onGone={() => {}} />, { wrapper: wrap(client, false) });
     expect(screen.queryByRole('button', { name: 'Stop room' })).toBeNull();
-    await userEvent.click(screen.getByRole('button', { name: 'Stop my runs' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Stop my runs' }));
     expect(stopRoom).toHaveBeenCalledWith('room_1');
     a.unmount();
-    render(<RoomHeader roomId="room_1" name="b" sender={null} onGone={() => {}} />, { wrapper: wrap(client, true) });
-    expect(screen.getByRole('button', { name: 'Stop room' })).toBeInTheDocument();
+    render(<StatusLine roomId="room_1" onGone={() => {}} />, { wrapper: wrap(client, true) });
+    expect(await screen.findByRole('button', { name: 'Stop room' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Stop my runs' })).toBeNull();
   });
 

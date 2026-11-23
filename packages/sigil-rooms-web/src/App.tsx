@@ -13,6 +13,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { Composer } from './rooms/Composer';
 import { RoomHeader } from './rooms/RoomHeader';
 import { RoomList } from './rooms/RoomList';
+import { StatusLine } from './rooms/StatusLine';
 import { ThreadPanel } from './rooms/ThreadPanel';
 import { Timeline } from './rooms/Timeline';
 import { useAck } from './rooms/useAck';
@@ -48,6 +49,7 @@ function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
   return (
     <div className="room">
       <RoomHeader roomId={roomId} name={roomName} purpose={room?.description} sender={sender} onGone={onGone} />
+      <StatusLine roomId={roomId} onGone={onGone} />
       <div className="room-body">
         <div className="room-main">
           <Timeline roomId={roomId} pending={pending} onVisibleSeq={reportSeq} onGone={onGone} seenThreadRoots={seenRoots} onOpenThread={openThreadRoot} nameFor={nameFor} loginFor={loginFor} ownerNameFor={ownerNameFor} members={membersQuery.data ?? []} />

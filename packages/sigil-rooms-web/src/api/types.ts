@@ -95,6 +95,12 @@ export interface StopResult {
   cancelled: number;
 }
 
+export interface Invocation {
+  invocation_id: string;
+  endpoint_id: string;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'refused';
+}
+
 export interface Session {
   human_id: string;
   endpoint_id: string;
