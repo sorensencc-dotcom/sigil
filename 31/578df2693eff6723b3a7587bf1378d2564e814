@@ -1,0 +1,73 @@
+sigil/relay/v1/room-routes.mjs
+  s_3d47f544d83c8d::t_94dd08be65afd2 408-411
+  s_3d47f544d83c8d::t_3af0022a1a888b 19-22
+  s_3d47f544d83c8d::t_14ab9b99e2ea89 363-377
+  s_3d47f544d83c8d::t_a4d0c31f124c44 348,350-362,378-383,385-386,388-402
+  s_3d47f544d83c8d::t_c90c71c48914f8 349,387
+sigil/relay/v1/postgres-repository.room-history.test.mjs
+  s_3d47f544d83c8d::t_e5ee9a68540bf5 1-29
+packages/sigil-rooms-web/src/rooms/Timeline.spec.tsx
+  s_3d47f544d83c8d::t_d815ec49a878e3 54
+  s_3d47f544d83c8d::t_a01f25563a9ae8 25-36
+  s_3d47f544d83c8d::t_bae18342551d0d 39-53,55-56
+  s_3d47f544d83c8d::t_03ab1576765006 37-38
+packages/sigil-rooms-web/src/rooms/RowView.tsx
+  s_3d47f544d83c8d::t_82f7e205683415 25,37,51,63
+packages/sigil-rooms-web/src/api/client.spec.ts
+  s_3d47f544d83c8d::t_bdebfab89e3fb5 98-112
+sigil/relay/v1/postgres-repository.mjs
+  s_3d47f544d83c8d::t_206142c18ec0ac 2354-2366,2368,2370-2384
+  s_3d47f544d83c8d::t_91cc50704fb965 2352-2353,2367,2369
+packages/sigil-rooms-web/src/testUtils.tsx
+  s_3d47f544d83c8d::t_4d3616803863fd 9-17,20
+packages/sigil-rooms-web/src/rooms/historyQuery.ts
+  s_3d47f544d83c8d::t_0b5a94cb7a8c01 6-14,20,22-86
+packages/sigil-rooms-web/src/rooms/useHistory.ts
+  s_3d47f544d83c8d::t_70bd39e32178bd 3,9-22
+sigil/migrations/043_room_message_search.test.mjs
+  s_3d47f544d83c8d::t_7919134065afb0 3
+  s_3d47f544d83c8d::t_963b6a3fa6b3ce 1-2,5-11,28
+  s_3d47f544d83c8d::t_43976cc8999040 4,12-27
+sigil/relay/v1/room-routes.test.mjs
+  s_3d47f544d83c8d::t_ca88c550475230 168-169
+  s_3d47f544d83c8d::t_3c91c827de94da 142-167,170-179
+sigil/migrations/043_room_message_search.sql
+  s_3d47f544d83c8d::t_3f57d9ee05c1f1 1-7
+packages/sigil-rooms-web/src/api/types.ts
+  s_3d47f544d83c8d::t_78c81bc5eca66d 33-37,48-49,51-52
+  s_3d47f544d83c8d::t_f5c8d6017d009f 38-47,50
+sigil/cli/memory-repository.mjs
+  s_3d47f544d83c8d::t_df43985d08a6a1 504-526
+packages/sigil-rooms-web/src/rooms/Timeline.tsx
+  s_3d47f544d83c8d::t_849e2c0a9b5c46 15,136
+  s_3d47f544d83c8d::t_9c52f8b982e698 4,146
+  s_3d47f544d83c8d::t_f11c4ac56b6fbd 41,61-62,204-205
+  s_3d47f544d83c8d::t_a3e726558afcff 2,40,108,167-171,192-193
+  s_3d47f544d83c8d::t_5cbd5ae53e9945 67-72,74-79,81-94,107,109-135,137-145,147-166,173-182,184-191,194-203,206-212,225
+  s_3d47f544d83c8d::t_0868ba26488b03 73
+  s_3d47f544d83c8d::t_a1fc0d23cd8cd7 95
+packages/sigil-rooms-web/src/rooms/useSend.ts
+  s_3d47f544d83c8d::t_8f45ea9fe0723b 4
+  s_3d47f544d83c8d::t_d64018f3eece7f 7,109,115
+packages/sigil-rooms-web/src/api/client.ts
+  s_3d47f544d83c8d::t_f10a172c02d98a 1,29-30,96-102
+packages/sigil-rooms-web/src/styles.css
+  s_3d47f544d83c8d::t_b0b9ff5a8a6918 176-178,180-186
+  s_3d47f544d83c8d::t_ee16320f8f3a17 179
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "31578df2693eff6723b3a7587bf1378d2564e814",
+  "prompts": {},
+  "sessions": {
+    "s_3d47f544d83c8d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20591-fa75-7fb1-99b1-86d1919e003e",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
