@@ -1,0 +1,31 @@
+.claude/skills/verify-ag-ui-approval/SKILL.md
+  s_a8b1940dd60de5::t_d74dd2cec891a7 1-16
+CLAUDE.md
+  s_a8b1940dd60de5::t_d74dd2cec891a7 72
+verify/ag-ui-approval/check.mjs
+  s_a8b1940dd60de5::t_a825a98ec6e41c 57,59-61,65
+  s_a8b1940dd60de5::t_d74dd2cec891a7 3,26,29-30,39-56,58,62-64
+verify/ag-ui-approval/expected.md
+  s_a8b1940dd60de5::t_a825a98ec6e41c 7,14,27-29,33-34
+  s_a8b1940dd60de5::t_d74dd2cec891a7 22-26,30-32,35-38
+verify/ag-ui-approval/covered-files.txt
+  s_a8b1940dd60de5::t_d74dd2cec891a7 1-6
+verify/ag-ui-approval/drift.sh
+  s_a8b1940dd60de5::t_d74dd2cec891a7 1-16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5800b91be743d36f80630c33226e2822cc6ae220",
+  "prompts": {},
+  "sessions": {
+    "s_a8b1940dd60de5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a205bc-d09e-78d3-b665-1ad053ace4fa",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
