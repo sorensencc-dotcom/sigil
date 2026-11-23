@@ -1,0 +1,30 @@
+packages/sigil-rooms-web/src/rooms/StatusLine.spec.tsx
+  s_1db7136a480670::t_f99a654709ff70 42,115
+  s_1db7136a480670::t_a29dc2b915b0fd 1-2,4-7,12,14-16,18-30,33-35,38,41,43,47-53,62-65,68-79,81-114,116-121,125,136,139-147
+  s_1db7136a480670::t_1927c577835c8a 17,54-61
+packages/sigil-rooms-web/src/rooms/cookieMode.spec.tsx
+  s_1db7136a480670::t_114e6b0269e0e9 51-52
+  s_1db7136a480670::t_66f3364be02efd 44
+packages/sigil-rooms-web/src/App.spec.tsx
+  s_1db7136a480670::t_3e2a4dd171e64d 13
+packages/sigil-rooms-web/src/api/client.cookie.spec.ts
+  s_1db7136a480670::t_efa93419ee228c 1,13-14,77-90,108-109,119-125
+  s_1db7136a480670::t_e23a03adad9f31 110-117
+  s_1db7136a480670::t_aae9958d475400 91-107
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1da4799d1571ef5f89316e15514421e395aeaa74",
+  "prompts": {},
+  "sessions": {
+    "s_1db7136a480670": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20a44-fbba-7542-9925-3f3e56a23d90",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
