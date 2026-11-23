@@ -95,6 +95,21 @@ describe('api client', () => {
     expect(calls[3]![0]).toBe('http://relay.test/v1/rooms/ws-ticket');
     expect(calls[3]![1].method).toBe('POST');
   });
+
+  it('builds bounded latest-history and room-search requests', async () => {
+    const calls: Array<[string, RequestInit]> = [];
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push([url, init]);
+      return jsonResponse(200, { code: 'OK', items: [], next_before_seq: null, has_more: false, has_older: false });
+    });
+    const { client } = make(fetchImpl as unknown as typeof fetch);
+    await client.historyBefore('room_1', 'latest', 80);
+    await client.searchHistory('room_1', 'deploy 100%', '500', 10);
+    expect(calls.map(([url]) => url)).toEqual([
+      'http://relay.test/v1/rooms/room_1/messages?before_seq=latest&limit=80',
+      'http://relay.test/v1/rooms/room_1/messages/search?q=deploy%20100%25&before_seq=500&limit=10',
+    ]);
+  });
 });
 
 describe('api client: continueThread', () => {
