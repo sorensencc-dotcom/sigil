@@ -11,6 +11,6 @@ The check runs `MC_current.cfg` and `MC.cfg`, then compares the expected failure
 
 When a covered file changes, compare its behavior with `verify/ag-ui-approval/AgUiApproval.tla`. Update the model and expected results only when the code changes the modeled behavior. Re-run the drift script, review the change list, then move the sync commit to the commit where the covered code and model agree.
 
-Sync commit: `bc3bdebc3e9679a4da35d6a66097a6f5433c1937`
+Sync commit: `ae78cce`
 
 Covered files: `verify/ag-ui-approval/covered-files.txt`.
