@@ -40,6 +40,7 @@ describe('useLive', () => {
     await waitFor(() => expect(sockets.length).toBe(1));
     sockets[0]!.onFrame({ type: 'room.updated', room_id: 'room_1', room_seq: '3', changed: 'messages' });
     await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'messages'] }));
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'invocations'] });
   });
 
   it('cancels in-flight history fetches before invalidating on a messages frame', async () => {
@@ -48,7 +49,8 @@ describe('useLive', () => {
     sockets[0]!.onFrame({ type: 'room.updated', room_id: 'room_1', room_seq: '3', changed: 'messages' });
     await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'messages'] }));
     expect(cancel).toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'messages'] });
-    expect(cancel.mock.invocationCallOrder[0]!).toBeLessThan(spy.mock.invocationCallOrder[0]!);
+    const messageInvalidation = spy.mock.calls.findIndex(([args]) => args?.queryKey?.[2] === 'messages');
+    expect(cancel.mock.invocationCallOrder[0]!).toBeLessThan(spy.mock.invocationCallOrder[messageInvalidation]!);
   });
 
   it('still invalidates when cancelQueries rejects', async () => {

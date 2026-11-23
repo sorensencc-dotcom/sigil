@@ -1,4 +1,4 @@
-import type { AckResult, Contact, Session, HistoryPage, InvokableBy, Member, ResponseMode, Room, RoomSearchPage, SendResult, StopResult, TicketResult } from './types';
+import type { AckResult, Contact, Session, HistoryPage, Invocation, InvokableBy, Member, ResponseMode, Room, RoomSearchPage, SendResult, StopResult, TicketResult } from './types';
 
 export class ApiError extends Error {
   readonly code: string;
@@ -31,6 +31,7 @@ export interface ApiClient {
   sendMessage(roomId: string, text: string, idempotencyKey: string, threadRootId?: string, mentions?: string[]): Promise<SendResult>;
   continueThread(roomId: string, threadRootId: string): Promise<SendResult>;
   listMembers(roomId: string): Promise<Member[]>;
+  listInvocations(roomId: string): Promise<Invocation[]>;
   renameRoom(roomId: string, name: string): Promise<Room>;
   setResponseMode(roomId: string, endpointId: string, mode: ResponseMode): Promise<Member>;
   setInvokableBy(roomId: string, endpointId: string, mode: InvokableBy): Promise<Member>;
@@ -46,8 +47,9 @@ export interface ApiClient {
 }
 
 export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized, fetchImpl = (...args) => fetch(...args) }: ClientOptions): ApiClient {
-  async function request<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<T> {
+  async function request<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
     let response: Response;
+    let text: string;
     try {
       if (mode === 'cookie') {
         // The session cookie is HttpOnly and travels on its own; the CSRF header is required on every non-GET.
@@ -58,6 +60,7 @@ export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized
           credentials: 'same-origin',
           headers,
           body: body === undefined ? undefined : JSON.stringify(body),
+          signal,
         });
       } else {
         const token = getToken?.() ?? null;
@@ -67,13 +70,14 @@ export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized
           method,
           headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
           body: body === undefined ? undefined : JSON.stringify(body),
+          signal,
         });
       }
+      text = await response.text();
     } catch (error) {
       if (error instanceof ApiError) throw error;
       throw new ApiError('NETWORK', 0, mode === 'cookie' ? "Can't reach the server." : `Can't reach relay at ${baseUrl}. Check --browser-origin.`);
     }
-    const text = await response.text();
     let parsed: any = null;
     try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
     if (!response.ok) {
@@ -117,6 +121,22 @@ export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized
     },
     async listMembers(roomId) {
       return (await request<{ items: Member[] }>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/members`)).items;
+    },
+    async listInvocations(roomId) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10_000);
+      try {
+        // shortcut: a 500-row cap per active status; add pagination if a room may exceed the cap.
+        const lists = await Promise.all((['queued', 'running'] as const).map((status) =>
+          request<{ items: Invocation[] }>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/invocations?status=${status}&limit=500`, undefined, controller.signal),
+        ));
+        return lists.flatMap(({ items }) => items);
+      } catch (error) {
+        controller.abort();
+        throw error;
+      } finally {
+        clearTimeout(timeout);
+      }
     },
     async renameRoom(roomId, name) {
       return (await request<{ room: Room }>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/rename`, { name })).room;

@@ -122,10 +122,7 @@ test('rename, thread reply, Stop, and a response-mode change', async ({ page }) 
   await expect(page.getByRole('button', { name: '1 reply' })).toBeVisible();
   await thread.getByRole('button', { name: 'Close' }).click();
 
-  // Stop with nothing running answers 200 and leaves the button usable.
-  await page.getByRole('button', { name: 'Stop' }).click();
-  await expect(page.getByRole('button', { name: 'Stop' })).toBeEnabled();
-  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Stop' })).toHaveCount(0);
 
   // Response mode: add the agent from Node, then change its mode in the roster.
   const roomsResponse = await fetch(`${harness.relayUrl}/v1/rooms`, { headers: { authorization: `Bearer ${harness.humanToken}` } });
