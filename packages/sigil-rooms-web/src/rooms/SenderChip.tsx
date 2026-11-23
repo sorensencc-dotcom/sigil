@@ -4,6 +4,18 @@ import type { LoginFor, NameFor, OwnerNameFor } from './useContacts';
 
 export type SenderKind = 'human' | 'agent' | 'unknown';
 
+export function senderMonogram(endpointId: string): string {
+  const id = endpointId.replace(/^ep[_-]/i, '').replace(/[^a-z0-9]/gi, '');
+  const letters = id.slice(0, 2).toUpperCase();
+  return letters.padEnd(2, letters[0] ?? '?');
+}
+
+export function senderAvatarColor(endpointId: string): number {
+  let hash = 0;
+  for (const character of endpointId) hash = (Math.imul(hash, 31) + character.charCodeAt(0)) >>> 0;
+  return hash % 6;
+}
+
 // Mirrors the relay's memberIsHuman: a member with a response mode is an agent. The relay also checks
 // the endpoint kind, which the client cannot see, so a sender outside the loaded roster claims nothing.
 export function senderKind(endpointId: string, members: Member[]): SenderKind {
@@ -65,6 +77,14 @@ export function SenderChip({
   return (
     <span className="sender-chip" data-sender-kind={kind}>
       <span className="sender-line">
+        <span
+          className="sender-avatar"
+          data-sender-kind={kind}
+          data-color={senderAvatarColor(endpointId)}
+          aria-hidden="true"
+        >
+          {senderMonogram(endpointId)}
+        </span>
         <small className="sender">{name}</small>
         {kind !== 'unknown' ? <span className="kind-mark">{KIND_LABEL[kind]}</span> : null}
       </span>

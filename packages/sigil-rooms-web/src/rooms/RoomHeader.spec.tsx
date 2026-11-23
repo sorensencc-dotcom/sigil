@@ -44,4 +44,15 @@ describe('RoomHeader', () => {
     expect(screen.queryByRole('button', { name: 'Rename room' })).toBeNull();
     expect(screen.queryByLabelText('Response mode for ep_claude')).toBeNull();
   });
+
+  it('opens an honest trust summary for any room member', async () => {
+    renderWithClient(<RoomHeader roomId="room_1" name="build" sender={null} onGone={() => {}} />, { listMembers });
+    await userEvent.click(screen.getByRole('button', { name: 'Trust' }));
+    const summary = screen.getByRole('region', { name: 'Room trust summary' });
+    expect(summary).toHaveTextContent('What is signed');
+    expect(summary).toHaveTextContent('What the relay can see');
+    expect(summary).toHaveTextContent('Not yet verified');
+    expect(summary).toHaveTextContent('relay-custodial key');
+    expect(screen.getByRole('button', { name: 'Trust' })).toHaveAttribute('aria-expanded', 'true');
+  });
 });

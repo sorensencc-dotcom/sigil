@@ -156,6 +156,7 @@ function roomMessageRow(row) {
   // from columns (timestamp/JSON re-serialization can change the bytes).
   return {
     room_seq: String(row.room_seq),
+    stream_seq: row.streamSeq == null ? null : String(row.streamSeq),
     message_id: row.message_id,
     display_name: row.sender_display_name ?? row.sender_endpoint_id,
     report_post: row.report_post === true,
@@ -486,10 +487,22 @@ export class PostgresRepository {
 
   async listApprovalChallengesForConversation(conversationId) {
     const result = await this.pool.query(
-      `SELECT challenge_id, endpoint_id, action_hash, expires_at, capabilities, envelope
-         FROM approval_challenges WHERE conversation_id = $1 AND envelope IS NOT NULL
-        ORDER BY created_at, challenge_id`, [conversationId]);
-    return result.rows.map((row) => ({ id: row.challenge_id, endpointId: row.endpoint_id, actionHash: row.action_hash, expiresAt: row.expires_at, capabilities: row.capabilities, envelope: typeof row.envelope === 'string' ? JSON.parse(row.envelope) : row.envelope }));
+      `SELECT ac.challenge_id, ac.endpoint_id, ac.action_hash, ac.expires_at, ac.capabilities, ac.envelope,
+              ac.status, ac.created_at, ad.status AS decision_status, ad.expires_at AS decision_expires_at
+         FROM approval_challenges ac
+         LEFT JOIN LATERAL (
+           SELECT status, expires_at FROM approval_decisions WHERE nonce = ac.challenge_id
+           ORDER BY created_at DESC LIMIT 1
+         ) ad ON true
+        WHERE ac.conversation_id = $1 AND ac.envelope IS NOT NULL
+        ORDER BY ac.created_at, ac.challenge_id`, [conversationId]);
+    return result.rows.map((row) => ({
+      id: row.challenge_id, endpointId: row.endpoint_id, actionHash: row.action_hash,
+      expiresAt: row.expires_at, capabilities: row.capabilities,
+      envelope: typeof row.envelope === 'string' ? JSON.parse(row.envelope) : row.envelope,
+      status: row.status, decisionStatus: row.decision_status ?? null,
+      decisionExpiresAt: row.decision_expires_at ?? null, createdAt: row.created_at,
+    }));
   }
 
   async getApprovalChallengeForMessage(conversationId, messageId) {
@@ -2336,7 +2349,7 @@ export class PostgresRepository {
   }
   async listRoomMessages(conversationId, afterSeq = 0n, limit = 100, client = this.pool) {
     const result = await client.query(
-      `SELECT room_seq, message_id, protocol, message_type, body, context_refs, capabilities, correlation_id,
+      `SELECT room_seq, stream_seq AS "streamSeq", message_id, protocol, message_type, body, context_refs, capabilities, correlation_id,
               sender_endpoint_id, sender_owner_id, broadcast_scope, conversation_id, idempotency_key,
               signature_algorithm, signature_key_id, signature_value, expires_at, created_at, canonical_bytes,
               report_post,
@@ -2346,6 +2359,51 @@ export class PostgresRepository {
         ORDER BY room_seq
         LIMIT $3`,
       [conversationId, String(afterSeq), limit],
+    );
+    return result.rows.map(roomMessageRow);
+  }
+  async getRoomMessage(conversationId, messageId, client = this.pool) {
+    const result = await client.query(
+      `SELECT room_seq, stream_seq AS "streamSeq", message_id, protocol, message_type, body, context_refs, capabilities, correlation_id,
+              sender_endpoint_id, sender_owner_id, broadcast_scope, conversation_id, idempotency_key,
+              signature_algorithm, signature_key_id, signature_value, expires_at, created_at, canonical_bytes,
+              report_post,
+              COALESCE(NULLIF((SELECT e.display_name FROM endpoints e WHERE e.endpoint_id = envelopes.sender_endpoint_id), ''), sender_endpoint_id) AS sender_display_name
+         FROM envelopes WHERE conversation_id = $1 AND message_id = $2 AND room_seq IS NOT NULL LIMIT 1`,
+      [conversationId, messageId],
+    );
+    return result.rows[0] ? roomMessageRow(result.rows[0]) : null;
+  }
+  async listRoomMessagesBefore(conversationId, beforeSeq = null, limit = 100, queryClient = this.pool) {
+    const result = await queryClient.query(
+      `SELECT room_seq, message_id, protocol, message_type, body, context_refs, capabilities, correlation_id,
+              sender_endpoint_id, sender_owner_id, broadcast_scope, conversation_id, idempotency_key,
+              signature_algorithm, signature_key_id, signature_value, expires_at, created_at, canonical_bytes,
+              report_post,
+              COALESCE(NULLIF((SELECT e.display_name FROM endpoints e WHERE e.endpoint_id = envelopes.sender_endpoint_id), ''), sender_endpoint_id) AS sender_display_name
+         FROM envelopes
+        WHERE conversation_id = $1 AND ($2::bigint IS NULL OR room_seq < $2)
+        ORDER BY room_seq DESC
+        LIMIT $3`,
+      [conversationId, beforeSeq == null ? null : String(beforeSeq), limit],
+    );
+    return result.rows.map(roomMessageRow).reverse();
+  }
+  async searchRoomMessages(conversationId, query, beforeSeq = null, limit = 50, queryClient = this.pool) {
+    const pattern = `%${query.replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
+    const result = await queryClient.query(
+      `SELECT room_seq, message_id, protocol, message_type, body, context_refs, capabilities, correlation_id,
+              sender_endpoint_id, sender_owner_id, broadcast_scope, conversation_id, idempotency_key,
+              signature_algorithm, signature_key_id, signature_value, expires_at, created_at, canonical_bytes,
+              report_post,
+              COALESCE(NULLIF((SELECT e.display_name FROM endpoints e WHERE e.endpoint_id = envelopes.sender_endpoint_id), ''), sender_endpoint_id) AS sender_display_name
+         FROM envelopes
+        WHERE conversation_id = $1 AND message_type = 'room.message'
+          AND room_seq IS NOT NULL AND ($3::bigint IS NULL OR room_seq < $3)
+          AND body->>'text' ILIKE $2 ESCAPE E'\\\\'
+        ORDER BY room_seq DESC
+        LIMIT $4`,
+      [conversationId, pattern, beforeSeq == null ? null : String(beforeSeq), limit],
     );
     return result.rows.map(roomMessageRow);
   }

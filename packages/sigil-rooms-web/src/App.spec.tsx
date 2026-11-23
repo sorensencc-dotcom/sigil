@@ -3,13 +3,13 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 
-function stubFetch(config: unknown, me: { status: number; body?: unknown }) {
+function stubFetch(config: unknown, me: { status: number; body?: unknown }, rooms: unknown[] = []) {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/config.json') return new Response(JSON.stringify(config), { status: 200 });
       if (url === '/v1/auth/me') return new Response(JSON.stringify(me.body ?? { code: 'UNAUTHENTICATED' }), { status: me.status });
-      if (url === '/v1/rooms') return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      if (url === '/v1/rooms') return new Response(JSON.stringify({ items: rooms }), { status: 200 });
       if (url === '/v1/me/contacts') return new Response(JSON.stringify({ items: [] }), { status: 200 });
       return new Response('{}', { status: 200 });
     }),
@@ -36,6 +36,18 @@ describe('App', () => {
     expect(await screen.findByText('No rooms yet.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Continue with GitHub' })).toBeNull();
     expect(screen.queryByLabelText('New room name')).toBeNull();
+  });
+
+  it('updates the selected room in a copied-link URL', async () => {
+    stubFetch({ authMode: 'cookie' }, { status: 200, body: { human_id: 'h', endpoint_id: 'ep', display_name: 'Ada', is_operator: false } }, [
+      { conversation_id: 'room-one', name: 'One' },
+      { conversation_id: 'room-two', name: 'Two' },
+    ]);
+    window.history.replaceState(null, '', '/?room=room-one#message-old');
+    render(<App />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Two' }));
+    expect(new URL(window.location.href).searchParams.get('room')).toBe('room-two');
+    expect(window.location.hash).toBe('');
   });
 
   it('token mode still renders the TokenGate', async () => {

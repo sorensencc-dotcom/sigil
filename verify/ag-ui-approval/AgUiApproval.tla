@@ -1,6 +1,7 @@
 ---- MODULE AgUiApproval ----
 \* Sigil AG-UI projection (docs/superpowers/specs/2026-11-21-sigil-ag-ui-projection-design.md).
-\* One thread, one gated (high-risk) envelope, one AG-UI client.
+\* The first state machine models one gated envelope and client. The second
+\* models multiple interrupts and clients resuming the same thread.
 \* The worker's envelope consumes the approval in the relay risk gate.
 \* The AG-UI client only observes and resumes; resume never consumes.
 \* Fixed = TRUE models the proposed relay: an identical envelope retry returns the
@@ -8,7 +9,7 @@
 \* Fixed = FALSE models the relay as it is on main (2026-11-21).
 EXTENDS Naturals
 
-CONSTANTS MaxRuns, Fixed
+CONSTANTS MaxRuns, MaxInterrupts, MaxClients, Fixed
 
 VARIABLES
   run,        \* current AG-UI run number (0 = none yet)
@@ -21,10 +22,16 @@ VARIABLES
   resultShown,     \* client was told the gated action's result
   terminals,  \* run -> terminal events emitted
   cut,        \* runs whose stream was cut before a terminal event
-  outcome     \* client belief: "none" | "success" | "interrupt" | "error" | "truncated"
+  outcome,    \* client belief: "none" | "success" | "interrupt" | "error" | "truncated"
+  multiRequested, multiDecision, multiEffects, multiResumed, multiRunState,
+  multiResults, multiPartialRejected, multiPendingRejected
 
-vars == <<run, phase, decision, consumes, toolRuns, workerRetries, workerRejected, resultShown, terminals, cut, outcome>>
+oldVars == <<run, phase, decision, consumes, toolRuns, workerRetries, workerRejected, resultShown, terminals, cut, outcome>>
+multiVars == <<multiRequested, multiDecision, multiEffects, multiResumed, multiRunState, multiResults, multiPartialRejected, multiPendingRejected>>
+vars == <<oldVars, multiVars>>
 Runs == 1..MaxRuns
+Interrupts == 1..MaxInterrupts
+Clients == 1..MaxClients
 worker == <<consumes, toolRuns, workerRetries, workerRejected>>
 
 Init ==
@@ -32,6 +39,14 @@ Init ==
   /\ consumes = 0 /\ toolRuns = 0 /\ workerRetries = 0 /\ workerRejected = FALSE
   /\ resultShown = FALSE
   /\ terminals = [r \in Runs |-> 0] /\ cut = {} /\ outcome = "none"
+  /\ multiRequested = FALSE
+  /\ multiDecision = [i \in Interrupts |-> "none"]
+  /\ multiEffects = [i \in Interrupts |-> 0]
+  /\ multiResumed = {}
+  /\ multiRunState = [c \in Clients |-> "idle"]
+  /\ multiResults = [c \in Clients |-> {}]
+  /\ multiPartialRejected = {}
+  /\ multiPendingRejected = {}
 
 Emit(r) == terminals' = [terminals EXCEPT ![r] = @ + 1]
 
@@ -140,11 +155,75 @@ Idle ==
      \/ phase = "interrupted" /\ run = MaxRuns
   /\ UNCHANGED vars
 
-Next ==
+OldNext ==
   \/ ClientStartsRun \/ WorkerRequestsApproval \/ HumanApproves \/ ApprovalExpires
   \/ WorkerSubmitsEnvelope \/ WorkerRetriesEnvelope
   \/ ClientResumes \/ ClientResumesTooEarly \/ ClientCancels \/ WaitExpires \/ AgentFinishes
   \/ StreamDrops \/ ClientRetriesAfterDrop \/ Idle
+
+MultiRequest ==
+  /\ ~multiRequested
+  /\ multiRequested' = TRUE
+  /\ multiDecision' = [i \in Interrupts |-> "pending"]
+  /\ UNCHANGED <<multiEffects, multiResumed, multiRunState, multiResults, multiPartialRejected, multiPendingRejected>>
+
+MultiApprove(i) ==
+  /\ multiRequested /\ i \in Interrupts /\ multiDecision[i] = "pending"
+  /\ multiDecision' = [multiDecision EXCEPT ![i] = "approved"]
+  /\ UNCHANGED <<multiRequested, multiEffects, multiResumed, multiRunState, multiResults, multiPartialRejected, multiPendingRejected>>
+
+MultiCancel(i) ==
+  /\ multiRequested /\ i \in Interrupts /\ multiDecision[i] \in {"pending", "approved"}
+  /\ multiDecision' = [multiDecision EXCEPT ![i] = "cancelled"]
+  /\ UNCHANGED <<multiRequested, multiEffects, multiResumed, multiRunState, multiResults, multiPartialRejected, multiPendingRejected>>
+
+MultiExpire(i) ==
+  /\ multiRequested /\ i \in Interrupts /\ multiDecision[i] \in {"pending", "approved"}
+  /\ multiDecision' = [multiDecision EXCEPT ![i] = "expired"]
+  /\ UNCHANGED <<multiRequested, multiEffects, multiResumed, multiRunState, multiResults, multiPartialRejected, multiPendingRejected>>
+
+MultiConsume(i) ==
+  /\ multiRequested /\ i \in Interrupts /\ multiDecision[i] = "approved"
+  /\ multiDecision' = [multiDecision EXCEPT ![i] = "consumed"]
+  /\ multiEffects' = [multiEffects EXCEPT ![i] = @ + 1]
+  /\ multiResults' = [c \in Clients |-> IF c \in multiResumed THEN multiResults[c] \cup {i} ELSE multiResults[c]]
+  /\ UNCHANGED <<multiRequested, multiResumed, multiRunState, multiPartialRejected, multiPendingRejected>>
+
+MultiPartialResume(c) ==
+  /\ multiRequested /\ c \in Clients /\ multiRunState[c] = "idle"
+  /\ multiPartialRejected' = multiPartialRejected \cup {c}
+  /\ multiRunState' = [multiRunState EXCEPT ![c] = "error"]
+  /\ UNCHANGED <<multiRequested, multiDecision, multiEffects, multiResumed, multiResults, multiPendingRejected>>
+
+MultiResumePending(c) ==
+  /\ multiRequested /\ c \in Clients /\ multiRunState[c] = "idle"
+  /\ \E i \in Interrupts : multiDecision[i] = "pending"
+  /\ multiPendingRejected' = multiPendingRejected \cup {c}
+  /\ UNCHANGED <<multiRequested, multiDecision, multiEffects, multiResumed, multiRunState, multiResults, multiPartialRejected>>
+
+MultiResumeExpired(c) ==
+  /\ multiRequested /\ c \in Clients /\ multiRunState[c] = "idle"
+  /\ \A i \in Interrupts : multiDecision[i] # "pending"
+  /\ \E i \in Interrupts : multiDecision[i] \in {"expired", "cancelled"}
+  /\ multiResumed' = multiResumed \cup {c}
+  /\ multiRunState' = [multiRunState EXCEPT ![c] = "error"]
+  /\ multiResults' = [multiResults EXCEPT ![c] = @ \cup {i \in Interrupts : multiDecision[i] = "consumed"}]
+  /\ UNCHANGED <<multiRequested, multiDecision, multiEffects, multiPartialRejected, multiPendingRejected>>
+
+MultiResumeReady(c) ==
+  /\ multiRequested /\ c \in Clients /\ multiRunState[c] = "idle"
+  /\ \A i \in Interrupts : multiDecision[i] \in {"approved", "consumed"}
+  /\ multiResumed' = multiResumed \cup {c}
+  /\ multiRunState' = [multiRunState EXCEPT ![c] = "waiting"]
+  /\ multiResults' = [multiResults EXCEPT ![c] = @ \cup {i \in Interrupts : multiDecision[i] = "consumed"}]
+  /\ UNCHANGED <<multiRequested, multiDecision, multiEffects, multiPartialRejected, multiPendingRejected>>
+
+MultiNext ==
+  \/ MultiRequest
+  \/ \E i \in Interrupts : MultiApprove(i) \/ MultiCancel(i) \/ MultiExpire(i) \/ MultiConsume(i)
+  \/ \E c \in Clients : MultiPartialResume(c) \/ MultiResumePending(c) \/ MultiResumeExpired(c) \/ MultiResumeReady(c)
+
+Next == (OldNext /\ UNCHANGED multiVars) \/ (MultiNext /\ UNCHANGED oldVars)
 
 Spec == Init /\ [][Next]_vars
 
@@ -159,4 +238,10 @@ UncutRunsEndOnce ==
 ErrorMeansNoEffect == outcome = "error" => toolRuns = 0
 SuccessShowsResult == (outcome = "success" /\ toolRuns > 0) => resultShown
 TruncatedNeverSuccess == phase = "truncated" => outcome # "success"
+MultiEffectAtMostOnce == \A i \in Interrupts : multiEffects[i] <= 1
+MultiNoEffectWithoutApproval == \A i \in Interrupts : multiEffects[i] > 0 => multiDecision[i] = "consumed"
+MultiNoResumeWhilePending == \A c \in multiResumed : \A i \in Interrupts : multiDecision[i] # "pending"
+MultiConsumedDecisionReplays == \A c \in multiResumed : \A i \in Interrupts : multiDecision[i] = "consumed" => i \in multiResults[c]
+MultiCancelPreventsEffect == \A i \in Interrupts : multiDecision[i] = "cancelled" => multiEffects[i] = 0
+MultiPartialCoverageRejected == \A c \in multiPartialRejected : multiRunState[c] = "error"
 ====

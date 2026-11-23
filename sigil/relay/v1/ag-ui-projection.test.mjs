@@ -227,3 +227,17 @@ for (const terminalFact of [challengeCreated, taskResult, rejection]) {
     ]);
   });
 }
+
+test('multiple challenges from one interrupted run share one interrupt terminal event', () => {
+  const result = projectRelayFact({
+    type: 'challenges.created',
+    challenges: [
+      { challenge: challengeCreated.challenge, capability: 'deploy' },
+      { challenge: { ...challengeCreated.challenge, id: 'challenge-2', envelope: { message_id: 'tool-2', body: { target: 'production' } } }, capability: 'publish' },
+    ],
+  }, run);
+  const terminal = result.events.filter((event) => event.type === 'RUN_FINISHED');
+  assert.equal(terminal.length, 1);
+  assert.deepEqual(terminal[0].outcome.interrupts.map((interrupt) => interrupt.id), ['challenge-1', 'challenge-2']);
+  assert.deepEqual(result.events.filter((event) => event.type === 'TOOL_CALL_START').map((event) => event.toolCallId), ['tool-1', 'tool-2']);
+});
