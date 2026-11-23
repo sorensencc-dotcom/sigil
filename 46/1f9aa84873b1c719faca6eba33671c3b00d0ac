@@ -1,0 +1,60 @@
+packages/sigil-rooms-web/src/rooms/StatusLine.tsx
+  s_a359aaf37c4ba2::t_5a44806a4d5b1d 7
+  s_a359aaf37c4ba2::t_a31dca6730a1d5 1,9,18
+  s_a359aaf37c4ba2::t_d7e478fa1a588a 2-6,8,10-17,19-23,25-35,37-40
+  s_a359aaf37c4ba2::t_1e9c6c6344611b 24,36
+packages/sigil-rooms-web/src/rooms/StatusLine.spec.tsx
+  s_a359aaf37c4ba2::t_cc0b776b412fd2 1-24,34-36,45-56
+  s_a359aaf37c4ba2::t_a31dca6730a1d5 25-33
+  s_a359aaf37c4ba2::t_1e9c6c6344611b 37-44
+packages/sigil-rooms-web/src/api/client.cookie.spec.ts
+  s_a359aaf37c4ba2::t_cc0b776b412fd2 65-67,69-72
+  s_a359aaf37c4ba2::t_bcd5362efafed2 68
+packages/sigil-rooms-web/src/live/useLive.spec.tsx
+  s_a359aaf37c4ba2::t_77ffdb49a4cd41 52-53
+  s_a359aaf37c4ba2::t_3cc8b8fef8f4e7 43
+packages/sigil-rooms-web/src/App.tsx
+  s_a359aaf37c4ba2::t_5a44806a4d5b1d 51
+  s_a359aaf37c4ba2::t_d7e478fa1a588a 16
+packages/sigil-rooms-web/src/rooms/cookieMode.spec.tsx
+  s_a359aaf37c4ba2::t_5a44806a4d5b1d 12,42,44-45,50
+  s_a359aaf37c4ba2::t_12b55bbd2df356 47,51
+packages/sigil-rooms-web/src/live/useLive.ts
+  s_a359aaf37c4ba2::t_2b1415ca9dee18 25
+packages/sigil-rooms-web/src/api/client.ts
+  s_a359aaf37c4ba2::t_2b1415ca9dee18 1,32,113-114
+  s_a359aaf37c4ba2::t_ce2f691e39a38d 115
+packages/sigil-rooms-web/src/rooms/RoomHeader.spec.tsx
+  s_a359aaf37c4ba2::t_cc0b776b412fd2 3
+  s_a359aaf37c4ba2::t_5a44806a4d5b1d 27-31
+  s_ae96e6109f2429::t_cf55ed96641c89 32
+packages/sigil-rooms-web/src/api/types.ts
+  s_a359aaf37c4ba2::t_2b1415ca9dee18 78-80,82-83
+  s_a359aaf37c4ba2::t_3cc8b8fef8f4e7 81
+packages/sigil-rooms-web/src/styles.css
+  s_a359aaf37c4ba2::t_d7e478fa1a588a 76-78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "461f9aa84873b1c719faca6eba33671c3b00d0ac",
+  "prompts": {},
+  "sessions": {
+    "s_a359aaf37c4ba2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20a46-e29a-78c0-a625-09b7feda492a",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_ae96e6109f2429": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20a46-bff1-7422-a435-1cab5a899377",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
