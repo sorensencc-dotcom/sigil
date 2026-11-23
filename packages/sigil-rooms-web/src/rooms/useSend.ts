@@ -1,10 +1,10 @@
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useCallback, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
-import type { Contact, HistoryItem, Member } from '../api/types';
+import type { Contact, Member } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { getSender, setSender } from '../auth/tokenStore';
-import { fetchHistory, historyKey } from './historyQuery';
+import { fetchHistory, historyKey, type RoomHistoryWindow } from './historyQuery';
 import type { PendingMessage } from './mergeRows';
 import { extractMentionTokens, normalizeMentions } from './resolveMentions';
 import { contactsKey, createLoginFor, createNameFor } from './useContacts';
@@ -106,13 +106,13 @@ export function useSend(roomId: string) {
         // fetchQuery reuses an in-flight fetch for the same key; cancel it so one that started before this send committed cannot answer.
         await queryClient.cancelQueries({ queryKey: historyKey(room) });
         // fetchQuery refreshes the cache even when no timeline is mounted.
-        const rows = await queryClient.fetchQuery<HistoryItem[]>({
+        const history = await queryClient.fetchQuery<RoomHistoryWindow>({
           queryKey: historyKey(room),
           queryFn: () => fetchHistory(client, queryClient, room),
           staleTime: 0,
         });
         if (mode !== 'cookie' && !getSender()) {
-          const mine = rows.find((row) => row.message_id === messageId);
+          const mine = history.items.find((row) => row.message_id === messageId);
           if (mine) {
             setSender(mine.envelope.sender.endpoint_id);
             setSenderLearned(true);

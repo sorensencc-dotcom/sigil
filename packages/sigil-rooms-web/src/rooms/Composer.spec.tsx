@@ -65,11 +65,11 @@ describe('useSend', () => {
 
   it('adds a sending row, then records message_id and the sender on success', async () => {
     const sendMessage = vi.fn(async () => ({ code: 'OK', message_id: 'm9', room_seq: '9' }));
-    const history = vi.fn(async () => ({
-      code: 'OK', next_after_seq: '9',
+    const historyBefore = vi.fn(async () => ({
+      code: 'OK', next_after_seq: '9', next_before_seq: null, has_older: false,
       items: [{ room_seq: '9', message_id: 'm9', canonical_bytes: 'b', envelope: { message_id: 'm9', message_type: 'room.message', sender: { endpoint_id: 'ep_web', owner_id: 'u' }, body: { text: 'hi' }, created_at: 't' } }],
     }));
-    const { result } = renderHook(() => useSend('room_1'), { wrapper: wrapper({ sendMessage, history }) });
+    const { result } = renderHook(() => useSend('room_1'), { wrapper: wrapper({ sendMessage, historyBefore }) });
     act(() => result.current.send('hi'));
     expect(result.current.pending[0]).toMatchObject({ text: 'hi', status: 'sending' });
     await waitFor(() => expect(result.current.pending[0]?.messageId).toBe('m9'));
@@ -121,10 +121,10 @@ describe('useSend', () => {
 
   it('does not mark an accepted message failed when the history refetch fails', async () => {
     const sendMessage = vi.fn(async () => ({ code: 'OK', message_id: 'm3', room_seq: '3' }));
-    const history = vi.fn(async () => { throw new ApiError('NETWORK', 0, 'offline'); });
-    const { result } = renderHook(() => useSend('room_1'), { wrapper: wrapper({ sendMessage, history }) });
+    const historyBefore = vi.fn(async () => { throw new ApiError('NETWORK', 0, 'offline'); });
+    const { result } = renderHook(() => useSend('room_1'), { wrapper: wrapper({ sendMessage, historyBefore }) });
     act(() => result.current.send('ok'));
-    await waitFor(() => expect(history).toHaveBeenCalled());
+    await waitFor(() => expect(historyBefore).toHaveBeenCalled());
     await waitFor(() => expect(result.current.pending[0]?.messageId).toBe('m3'));
     expect(result.current.pending[0]?.status).toBe('sending');
     expect(result.current.sendError).toBeNull();

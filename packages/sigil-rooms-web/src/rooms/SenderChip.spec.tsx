@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { Contact, Member } from '../api/types';
-import { SenderChip, actingForLabel, senderKind } from './SenderChip';
+import { SenderChip, actingForLabel, senderAvatarColor, senderKind, senderMonogram } from './SenderChip';
 import { createOwnerNameFor } from './useContacts';
 
 function member(endpointId: string, ownerId: string | null, responseMode: Member['response_mode'], displayName = endpointId): Member {
@@ -36,6 +36,17 @@ describe('senderKind', () => {
   });
 });
 
+describe('sender avatars', () => {
+  it('derives a stable two-letter monogram and one of six stable colors from the endpoint id', () => {
+    expect(senderMonogram('ep_dana_bot')).toBe('DA');
+    expect(senderMonogram('ep_dana_bot')).toBe(senderMonogram('ep_dana_bot'));
+    expect(senderAvatarColor('ep_dana_bot')).toBe(senderAvatarColor('ep_dana_bot'));
+    expect(senderAvatarColor('ep_dana_bot')).toBeGreaterThanOrEqual(0);
+    expect(senderAvatarColor('ep_dana_bot')).toBeLessThan(6);
+    expect(new Set(Array.from({ length: 100 }, (_, i) => senderAvatarColor(`ep_member_${i}`))).size).toBe(6);
+  });
+});
+
 describe('actingForLabel', () => {
   it('names the owner from a human contact first', () => {
     const ownerNameFor = createOwnerNameFor([contact('human', 'usr_dana', 'Dana from contacts')]);
@@ -63,6 +74,8 @@ describe('actingForLabel', () => {
 describe('SenderChip', () => {
   it('shows an agent mark and the acting-for line', () => {
     render(<SenderChip endpointId="ep_dana_bot" ownerId="usr_dana" name="Scout" members={members} viewer={null} />);
+    expect(screen.getByText('DA')).toHaveAttribute('data-sender-kind', 'agent');
+    expect(screen.getByText('DA')).toHaveAttribute('data-color', String(senderAvatarColor('ep_dana_bot')));
     expect(screen.getByText('Scout')).toHaveClass('sender');
     expect(screen.getByText('Agent')).toBeInTheDocument();
     expect(screen.getByText('acting for Dana')).toBeInTheDocument();
@@ -70,12 +83,14 @@ describe('SenderChip', () => {
 
   it('shows a human mark and no acting-for line', () => {
     render(<SenderChip endpointId="ep_dana" ownerId="usr_dana" name="Dana" members={members} viewer={null} />);
+    expect(screen.getByText('DA')).toHaveAttribute('data-sender-kind', 'human');
     expect(screen.getByText('Human')).toBeInTheDocument();
     expect(screen.queryByText(/acting for/)).toBeNull();
   });
 
   it('shows no mark for an unknown sender', () => {
     render(<SenderChip endpointId="ep_left" ownerId="usr_x" name="Left" members={members} viewer={null} />);
+    expect(screen.getByText('LE')).toHaveAttribute('data-sender-kind', 'unknown');
     expect(screen.getByText('Left')).toBeInTheDocument();
     expect(screen.queryByText('Human')).toBeNull();
     expect(screen.queryByText('Agent')).toBeNull();

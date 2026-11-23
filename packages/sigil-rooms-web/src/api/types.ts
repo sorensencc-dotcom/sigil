@@ -30,6 +30,26 @@ export interface HistoryPage {
   code: string;
   items: HistoryItem[];
   next_after_seq: string | number;
+  next_before_seq?: string | number | null;
+  has_more?: boolean;
+  has_older?: boolean;
+}
+
+export interface RoomSearchItem {
+  room_seq: string | number;
+  message_id: string;
+  display_name?: string;
+  sender_endpoint_id: string;
+  created_at: string;
+  snippet: string;
+  thread_root_id?: string;
+}
+
+export interface RoomSearchPage {
+  code: string;
+  items: RoomSearchItem[];
+  next_before_seq: string | number | null;
+  has_more: boolean;
 }
 
 export interface SendResult {
