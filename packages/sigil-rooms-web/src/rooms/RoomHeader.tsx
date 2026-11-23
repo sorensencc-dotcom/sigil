@@ -8,7 +8,7 @@ import { RosterPanel } from './RosterPanel';
 import { isManager } from './roles';
 import { useMembers } from './useMembers';
 
-export function RoomHeader({ roomId, name, sender, onGone }: { roomId: string; name: string; sender: string | null; onGone: () => void }) {
+export function RoomHeader({ roomId, name, purpose, sender, onGone }: { roomId: string; name: string; purpose?: string | null; sender: string | null; onGone: () => void }) {
   const { client, mode, session } = useAuth();
   const members = useMembers(roomId);
   const [showRoster, setShowRoster] = useState(false);
@@ -23,7 +23,10 @@ export function RoomHeader({ roomId, name, sender, onGone }: { roomId: string; n
   const stopLabel = mode === 'cookie' ? (session?.is_operator ? 'Stop room' : 'Stop my runs') : 'Stop';
   return (
     <header className="room-header">
-      <RenameTitle roomId={roomId} name={name} canRename={manager} onGone={onGone} />
+      <div className="room-heading">
+        <RenameTitle roomId={roomId} name={name} canRename={manager} onGone={onGone} />
+        {purpose ? <p className="room-purpose">{purpose}</p> : null}
+      </div>
       <div className="room-actions">
         <button type="button" className="ghost" aria-expanded={showRoster} onClick={() => setShowRoster((open) => !open)}>Roster</button>
         <button type="button" className="danger" disabled={stop.isPending} onClick={() => stop.mutate()}>{stopLabel}</button>

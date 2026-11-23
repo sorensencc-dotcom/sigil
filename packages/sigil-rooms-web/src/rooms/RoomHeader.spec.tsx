@@ -13,6 +13,11 @@ const members: Member[] = [
 const listMembers = vi.fn(async () => members);
 
 describe('RoomHeader', () => {
+  it('shows the room purpose with the title', () => {
+    renderWithClient(<RoomHeader roomId="room_1" name="build" purpose="the build room" sender="ep_web" onGone={() => {}} />, { listMembers });
+    expect(screen.getByText('the build room')).toBeInTheDocument();
+  });
+
   it('posts Stop and disables the button while the request runs', async () => {
     let finish!: (value: { code: string; cancelled: number }) => void;
     const stopRoom = vi.fn(() => new Promise<{ code: string; cancelled: number }>((resolve) => { finish = resolve; }));

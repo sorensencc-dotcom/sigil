@@ -24,7 +24,7 @@ export interface ClientOptions {
 
 export interface ApiClient {
   listRooms(): Promise<Room[]>;
-  createRoom(name: string): Promise<Room>;
+  createRoom(name: string, description?: string): Promise<Room>;
   history(roomId: string, afterSeq: string, limit?: number): Promise<HistoryPage>;
   sendMessage(roomId: string, text: string, idempotencyKey: string, threadRootId?: string, mentions?: string[]): Promise<SendResult>;
   continueThread(roomId: string, threadRootId: string): Promise<SendResult>;
@@ -85,8 +85,8 @@ export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized
     async listRooms() {
       return (await request<{ items: Room[] }>('GET', '/v1/rooms')).items;
     },
-    async createRoom(name) {
-      return (await request<{ room: Room }>('POST', '/v1/rooms', { name })).room;
+    async createRoom(name, description) {
+      return (await request<{ room: Room }>('POST', '/v1/rooms', { name, ...(description !== undefined ? { description } : {}) })).room;
     },
     history(roomId, afterSeq, limit = 100) {
       return request<HistoryPage>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/messages?after_seq=${encodeURIComponent(afterSeq)}&limit=${limit}`);

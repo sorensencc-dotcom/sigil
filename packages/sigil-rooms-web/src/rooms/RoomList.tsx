@@ -22,7 +22,8 @@ export function RoomList({ selectedId, onSelect }: { selectedId: string | null; 
           {rooms.map((room) => (
             <li key={room.conversation_id}>
               <button className="room-btn" aria-current={room.conversation_id === selectedId} onClick={() => onSelect(room.conversation_id)}>
-                {room.name}
+                <span className="room-btn__name">{room.name}</span>
+                {room.description ? <span className="room-btn__purpose">{room.description}</span> : null}
               </button>
               <button
                 className="pin"
