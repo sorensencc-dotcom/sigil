@@ -74,7 +74,7 @@ export function Timeline({
     [items, byId, pending, activity, focusedSeq],
   );
   const watermark = useMemo(() => ackWatermark(items, seenThreadRoots, byId), [items, seenThreadRoots, byId]);
-  const [savedWatermark] = useState(() => readWatermark(roomId));
+  const savedWatermark = useMemo(() => readWatermark(roomId), [roomId]);
   const entries = useMemo(() => {
     const result: TimelineEntry[] = [];
     let previousDay: string | null = null;
@@ -103,6 +103,8 @@ export function Timeline({
   const scroller = useRef<HTMLElement>(null);
   const newDivider = useRef<HTMLLIElement>(null);
   const positionedRoom = useRef<string | null>(null);
+  const initialHistoryLoadRoom = useRef<string | null>(null);
+  const [initialHistoryRoom, setInitialHistoryRoom] = useState<string | null>(null);
   const stickToBottom = useRef(true);
   const prependPosition = useRef<{ height: number; top: number } | null>(null);
   const loadingOlder = useRef(false);
@@ -116,9 +118,22 @@ export function Timeline({
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<unknown>(null);
 
+  useEffect(() => {
+    if (isLoading || items.length === 0 || initialHistoryRoom === roomId || initialHistoryLoadRoom.current === roomId) return;
+    if (savedWatermark !== null && BigInt(items[0]!.room_seq) > savedWatermark) {
+      initialHistoryLoadRoom.current = roomId;
+      void goToSequence(savedWatermark.toString()).then(
+        () => setInitialHistoryRoom(roomId),
+        (caught: unknown) => { setSearchError(caught); setInitialHistoryRoom(roomId); },
+      );
+    } else {
+      setInitialHistoryRoom(roomId);
+    }
+  }, [goToSequence, initialHistoryRoom, isLoading, items, roomId, savedWatermark]);
+
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (!el) return;
+    if (!el || initialHistoryRoom !== roomId) return;
     const previous = prependPosition.current;
     if (previous) {
       el.scrollTop = previous.top + (el.scrollHeight - previous.height);
@@ -142,15 +157,25 @@ export function Timeline({
       pendingScrollSeq.current = null;
     }
     setShowJump(!stickToBottom.current || !atLatest);
-  }, [roomId, items, entries.length, pending.length, atLatest]);
+  }, [initialHistoryRoom, roomId, items, entries.length, pending.length, atLatest]);
 
   useEffect(() => {
-    if (watermark === '0') return;
-    onVisibleSeq(watermark);
-    try {
-      localStorage.setItem(`sigil.room:${roomId}:watermark`, watermark);
-    } catch {}
-  }, [roomId, watermark, onVisibleSeq]);
+    const oldestSeq = items[0] ? BigInt(items[0].room_seq) : null;
+    const coversSavedBoundary = savedWatermark === null ? !hasOlder : oldestSeq !== null && oldestSeq <= savedWatermark + 1n;
+    const reportVisibleWatermark = () => {
+      if (document.visibilityState !== 'visible' || watermark === '0' || !coversSavedBoundary) return;
+      const computed = BigInt(watermark);
+      const saved = readWatermark(roomId);
+      const next = saved !== null && saved > computed ? saved : computed;
+      onVisibleSeq(watermark);
+      try {
+        localStorage.setItem(`sigil.room:${roomId}:watermark`, next.toString());
+      } catch {}
+    };
+    reportVisibleWatermark();
+    document.addEventListener('visibilitychange', reportVisibleWatermark);
+    return () => document.removeEventListener('visibilitychange', reportVisibleWatermark);
+  }, [hasOlder, items, onVisibleSeq, roomId, savedWatermark, watermark]);
 
   useEffect(() => {
     if (error instanceof ApiError && error.code === 'ROOM_NOT_FOUND') onGone();

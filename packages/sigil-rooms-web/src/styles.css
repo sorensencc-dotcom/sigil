@@ -202,7 +202,7 @@ input:disabled, textarea:disabled, select:disabled { opacity: 0.55; cursor: not-
 .timeline .timeline-day, .timeline .timeline-divider { width: 100%; justify-self: center; padding: var(--space-xs); background: transparent; border: 0; color: var(--color-muted); text-align: center; font-size: var(--text-sm); }
 .timeline .timeline-day { padding-bottom: 0; }
 .timeline .timeline-divider { color: var(--color-accent); }
-.timeline-jump { position: sticky; z-index: 1; top: 0; display: block; margin: 0 0 var(--space-sm) auto; padding: var(--space-xs) var(--space-md); border: var(--rule-hair) solid var(--color-rule-2); border-radius: var(--radius-pill); background: var(--color-paper-2); color: var(--color-ink); cursor: pointer; }
+.timeline-jump { position: sticky; z-index: 3; top: 0; display: block; margin: 0 0 var(--space-sm) auto; padding: var(--space-xs) var(--space-md); border: var(--rule-hair) solid var(--color-rule-2); border-radius: var(--radius-pill); background: var(--color-paper-2); color: var(--color-ink); cursor: pointer; }
 .timeline li, .thread-rows li {
   display: grid; gap: var(--space-xs); width: min(85%, 44rem); justify-self: start; padding: var(--space-md);
   background: var(--color-paper-2); border: var(--rule-hair) solid var(--color-rule); border-radius: var(--radius-card);
