@@ -859,6 +859,10 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
         status: 'pending',
         created_at: new Date().toISOString(),
         expires_at: challenge.expiresAt,
+        conversation_id: challenge.conversationId ?? null,
+        message_id: challenge.messageId ?? null,
+        capabilities: challenge.capabilities ?? [],
+        envelope: challenge.envelope ?? null,
         consumed_at: null,
       };
       approvalChallenges.set(challenge.id, row);
@@ -876,6 +880,13 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
         used: row.status === 'consumed' || row.status === 'cancelled',
         status: row.status,
       } : null;
+    },
+    async listApprovalChallengesForConversation(conversationId) {
+      return [...approvalChallenges.values()].filter((row) => row.conversation_id === conversationId && row.envelope).map((row) => ({ id: row.challenge_id, endpointId: row.endpoint_id, actionHash: row.action_hash, expiresAt: row.expires_at, capabilities: row.capabilities, envelope: row.envelope }));
+    },
+    async getApprovalChallengeForMessage(conversationId, messageId) {
+      const row = [...approvalChallenges.values()].find((item) => item.conversation_id === conversationId && item.message_id === messageId && item.envelope);
+      return row ? { id: row.challenge_id, endpointId: row.endpoint_id, actionHash: row.action_hash, expiresAt: row.expires_at, capabilities: row.capabilities, envelope: row.envelope } : null;
     },
     async cancelApprovalChallenge({ challengeId, endpointId, now = new Date() } = {}) {
       const row = approvalChallenges.get(challengeId);

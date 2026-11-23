@@ -484,6 +484,23 @@ export class PostgresRepository {
     return row ? { id: row.challenge_id, endpointId: row.endpoint_id, actionHash: row.action_hash, webauthnChallenge: row.webauthn_challenge, callbackUrl: row.callback_url, expiresAt: row.expires_at, used: row.status === 'consumed' || row.status === 'cancelled', consuming: row.status === 'consuming', status: row.status, ...(row.envelope ? { conversationId: row.conversation_id, messageId: row.message_id, capabilities: row.capabilities, envelope: row.envelope } : {}) } : null;
   }
 
+  async listApprovalChallengesForConversation(conversationId) {
+    const result = await this.pool.query(
+      `SELECT challenge_id, endpoint_id, action_hash, expires_at, capabilities, envelope
+         FROM approval_challenges WHERE conversation_id = $1 AND envelope IS NOT NULL
+        ORDER BY created_at, challenge_id`, [conversationId]);
+    return result.rows.map((row) => ({ id: row.challenge_id, endpointId: row.endpoint_id, actionHash: row.action_hash, expiresAt: row.expires_at, capabilities: row.capabilities, envelope: typeof row.envelope === 'string' ? JSON.parse(row.envelope) : row.envelope }));
+  }
+
+  async getApprovalChallengeForMessage(conversationId, messageId) {
+    const result = await this.pool.query(
+      `SELECT challenge_id, endpoint_id, action_hash, expires_at, capabilities, envelope
+         FROM approval_challenges WHERE conversation_id = $1 AND message_id = $2 AND envelope IS NOT NULL
+        ORDER BY created_at DESC LIMIT 1`, [conversationId, messageId]);
+    const row = result.rows[0];
+    return row ? { id: row.challenge_id, endpointId: row.endpoint_id, actionHash: row.action_hash, expiresAt: row.expires_at, capabilities: row.capabilities, envelope: typeof row.envelope === 'string' ? JSON.parse(row.envelope) : row.envelope } : null;
+  }
+
   async cancelApprovalChallenge({ challengeId, endpointId, now = new Date() } = {}) {
     return this.withTransaction(async (client) => {
       const locked = await client.query('SELECT * FROM approval_challenges WHERE challenge_id = $1 FOR UPDATE', [challengeId]);
