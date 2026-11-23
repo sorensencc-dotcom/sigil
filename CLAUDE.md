@@ -69,6 +69,7 @@ Project skills live in `.claude/skills/`:
 - `.claude/skills/verify-room-delivery/SKILL.md`: use when a change touches room message delivery to a Floor Warden bot. It model-checks `verify/room-delivery` with TLC.
 - `.claude/skills/verify-suspend-pick/SKILL.md`: use when a change touches router pick vs human suspension lock order. It checks `verify/suspend-pick`.
 - `.claude/skills/verify-floor-warden-watch/SKILL.md`: use when a change touches Floor Warden invocation-watch. It exhaustively walks `applyWatchEvent` in `verify/floor-warden-watch`.
+- `.claude/skills/verify-ag-ui-approval/SKILL.md`: use when a change touches the approval risk gate, challenge persistence, AG-UI projection, or AG-UI run route. It model-checks `verify/ag-ui-approval` with TLC.
 
 Runbooks and guides:
 
