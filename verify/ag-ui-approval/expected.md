@@ -1,17 +1,21 @@
 # Expected TLC results
 
-Run with the statechart skill (TLC, one worker), `MaxRuns = 3`.
+Run with the statechart skill (TLC, one worker), `MaxRuns = 3`, `MaxInterrupts = 2`, and `MaxClients = 2`.
+
+The model includes two simultaneous interrupts and two clients resuming the same thread. It checks complete interrupt coverage, pending-resume refusal, expiry/cancel behavior, replay of consumed decisions, and at-most-once effects.
 
 ## MC.cfg (Fixed = TRUE, proposed relay)
 
-68 states generated, 36 distinct states found. Every rule holds:
+184904 states generated, 38052 distinct states found. Every rule holds:
 NoEffectWithoutApproval, ConsumedAtMostOnce, EffectAtMostOnce, WorkerRetryNotRejected,
 OneTerminalPerRun, UncutRunsEndOnce, ErrorMeansNoEffect, SuccessShowsResult,
-TruncatedNeverSuccess, NoDeadlock.
+TruncatedNeverSuccess, MultiEffectAtMostOnce, MultiNoEffectWithoutApproval,
+MultiNoResumeWhilePending, MultiConsumedDecisionReplays, MultiCancelPreventsEffect,
+MultiPartialCoverageRejected, NoDeadlock.
 
 ## MC_current.cfg (Fixed = FALSE, relay on main 2026-11-21)
 
-18 states generated, 12 distinct states found. Two rules break:
+655 states generated, 260 distinct states found. Two existing counterexamples remain:
 
 - WorkerRetryNotRejected: start run, worker asks for approval, you approve,
   worker sends the gated envelope, worker resends the same envelope (403 APPROVAL_REQUIRED).
@@ -25,14 +29,14 @@ TruncatedNeverSuccess, NoDeadlock.
   "MC_current.cfg": {
     "contains": "Error: Invariant WorkerRetryNotRejected is violated",
     "exit": "nonzero",
-    "generatedStates": 18,
-    "distinctStates": 12
+    "generatedStates": 655,
+    "distinctStates": 260
   },
   "MC.cfg": {
     "contains": "Model checking completed. No error has been found",
     "exit": "zero",
-    "generatedStates": 68,
-    "distinctStates": 36
+    "generatedStates": 184904,
+    "distinctStates": 38052
   }
 }
 -->
