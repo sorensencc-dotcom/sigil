@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 
@@ -22,10 +23,11 @@ function resolveTla2Tools() {
 }
 
 export function runCheck() {
+  const required = process.argv.includes('--require-tla');
   const tlaJar = resolveTla2Tools();
   if (!tlaJar) {
-    if (process.env.CI) {
-      console.error('Error: TLA2TOOLS jar not found in CI environment');
+    if (process.env.CI || required) {
+      console.error('Error: TLA2TOOLS jar not found');
       process.exit(1);
     }
     console.warn('[SKIP] tla2tools.jar not found, skipping TLC execution locally');
@@ -34,32 +36,34 @@ export function runCheck() {
 
   const java = resolveJava();
 
-  const buggyResult = spawnSync(java, ['-cp', tlaJar, 'tlc2.TLC', '-config', 'MC_current.cfg', 'AgUiApproval.tla'], {
-    cwd: __dirname,
-    encoding: 'utf8',
-  });
-
-  const buggyOutput = (buggyResult.stdout || '') + (buggyResult.stderr || '');
-  if (!buggyOutput.includes('Error: Invariant WorkerRetryNotRejected is violated')) {
-    console.error('Expected MC_current.cfg to violate WorkerRetryNotRejected invariant, but output was:');
-    console.error(buggyOutput);
-    process.exit(1);
+  const expectationBlock = fs.readFileSync(path.join(__dirname, 'expected.md'), 'utf8').match(/<!-- TLC_EXPECTATIONS\s+([\s\S]*?)\s+-->/)?.[1];
+  if (!expectationBlock) throw new Error('expected.md is missing its TLC_EXPECTATIONS JSON block');
+  const expected = JSON.parse(expectationBlock);
+  const run = (config) => {
+    const metaDir = fs.mkdtempSync(path.join(os.tmpdir(), `sigil-ag-ui-${config.replace(/[^a-z0-9]/gi, '-')}-`));
+    try {
+      return spawnSync(java, ['-cp', tlaJar, 'tlc2.TLC', '-workers', '1', '-metadir', metaDir, '-config', config, 'AgUiApproval.tla'], {
+        cwd: __dirname, encoding: 'utf8', windowsHide: true,
+      });
+    } finally {
+      const tempRoot = `${path.resolve(os.tmpdir())}${path.sep}`;
+      const target = path.resolve(metaDir);
+      if (target.startsWith(tempRoot)) fs.rmSync(target, { recursive: true, force: true });
+    }
+  };
+  for (const config of ['MC_current.cfg', 'MC.cfg']) {
+    const result = run(config);
+    const output = `${result.stdout || ''}${result.stderr || ''}`;
+    const states = output.match(/(\d+) states generated, (\d+) distinct states found/);
+    const expectation = expected[config];
+    const exitMatches = expectation?.exit === 'nonzero' ? result.status !== 0 : result.status === 0;
+    if (result.error || !expectation || !output.includes(expectation.contains) || !exitMatches || Number(states?.[1]) !== expectation.generatedStates || Number(states?.[2]) !== expectation.distinctStates) {
+      console.error(`Expected ${config} to match expected.md (${expectation?.contains}, ${expectation?.generatedStates} generated, ${expectation?.distinctStates} distinct states), but it did not:`);
+      console.error(output || result.error?.message || 'No TLC output');
+      process.exit(1);
+    }
+    console.log(`✔ [PASS] ${config}: expected outcome, ${expectation.generatedStates} generated, ${expectation.distinctStates} distinct states`);
   }
-  console.log('✔ [PASS] MC_current.cfg replayed bug: WorkerRetryNotRejected violated');
-
-  const fixedResult = spawnSync(java, ['-cp', tlaJar, 'tlc2.TLC', '-config', 'MC.cfg', 'AgUiApproval.tla'], {
-    cwd: __dirname,
-    encoding: 'utf8',
-  });
-
-  const fixedOutput = (fixedResult.stdout || '') + (fixedResult.stderr || '');
-  if (!fixedOutput.includes('Model checking completed. No error has been found')) {
-    console.error('Expected MC.cfg to complete with no errors, but output was:');
-    console.error(fixedOutput);
-    process.exit(1);
-  }
-  console.log('✔ [PASS] MC.cfg verified: Model checking completed with 0 errors (36 distinct states)');
-
   return { pass: true };
 }
 

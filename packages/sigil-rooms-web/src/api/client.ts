@@ -1,4 +1,4 @@
-import type { AckResult, Contact, Session, HistoryPage, InvokableBy, Member, ResponseMode, Room, SendResult, StopResult, TicketResult } from './types';
+import type { AckResult, Contact, Session, HistoryPage, InvokableBy, Member, ResponseMode, Room, RoomSearchPage, SendResult, StopResult, TicketResult } from './types';
 
 export class ApiError extends Error {
   readonly code: string;
@@ -26,6 +26,8 @@ export interface ApiClient {
   listRooms(): Promise<Room[]>;
   createRoom(name: string, description?: string): Promise<Room>;
   history(roomId: string, afterSeq: string, limit?: number): Promise<HistoryPage>;
+  historyBefore(roomId: string, beforeSeq: string | 'latest', limit?: number): Promise<HistoryPage>;
+  searchHistory(roomId: string, query: string, beforeSeq?: string | null, limit?: number): Promise<RoomSearchPage>;
   sendMessage(roomId: string, text: string, idempotencyKey: string, threadRootId?: string, mentions?: string[]): Promise<SendResult>;
   continueThread(roomId: string, threadRootId: string): Promise<SendResult>;
   listMembers(roomId: string): Promise<Member[]>;
@@ -90,6 +92,13 @@ export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized
     },
     history(roomId, afterSeq, limit = 100) {
       return request<HistoryPage>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/messages?after_seq=${encodeURIComponent(afterSeq)}&limit=${limit}`);
+    },
+    historyBefore(roomId, beforeSeq, limit = 100) {
+      return request<HistoryPage>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/messages?before_seq=${encodeURIComponent(beforeSeq)}&limit=${limit}`);
+    },
+    searchHistory(roomId, query, beforeSeq = null, limit = 20) {
+      const cursor = beforeSeq == null ? '' : `&before_seq=${encodeURIComponent(beforeSeq)}`;
+      return request<RoomSearchPage>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/messages/search?q=${encodeURIComponent(query)}${cursor}&limit=${limit}`);
     },
     sendMessage(roomId, text, idempotencyKey, threadRootId, mentions) {
       return request<SendResult>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/messages`, {

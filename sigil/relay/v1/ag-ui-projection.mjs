@@ -17,41 +17,36 @@ function projectEvents(fact, { threadId, runId, assigneeEndpointId, relayConfig 
         { type: 'TEXT_MESSAGE_END', messageId },
       ];
     }
-    case 'challenge.created': {
-      const { id, envelope, actionHash, expiresAt } = fact.challenge;
-      if (!envelope) return [];
-      const delta = JSON.stringify(envelope.body);
-      if (Buffer.byteLength(delta, 'utf8') > MAX_TOOL_CALL_ARGS_BYTES) {
-        return [{
-          type: 'RUN_ERROR',
-          message: 'Tool call arguments exceed the relay size limit',
-          code: 'REQUEST_TOO_LARGE',
-        }];
+    case 'challenge.created':
+      return projectEvents({ type: 'challenges.created', challenges: [{ challenge: fact.challenge, capability: fact.capability }] }, { threadId, runId, assigneeEndpointId, relayConfig });
+    case 'challenges.created': {
+      const events = [];
+      const interrupts = [];
+      for (const { challenge, capability } of fact.challenges) {
+        const { id, envelope, actionHash, expiresAt } = challenge;
+        if (!envelope) continue;
+        const delta = JSON.stringify(envelope.body);
+        if (Buffer.byteLength(delta, 'utf8') > MAX_TOOL_CALL_ARGS_BYTES) {
+          return [{ type: 'RUN_ERROR', message: 'Tool call arguments exceed the relay size limit', code: 'REQUEST_TOO_LARGE' }];
+        }
+        const toolCallId = envelope.message_id;
+        const approvalUrl = new URL('/approve', relayConfig.relayOrigin);
+        approvalUrl.searchParams.set('challenge', id);
+        events.push(
+          { type: 'TOOL_CALL_START', toolCallId, toolCallName: capability },
+          { type: 'TOOL_CALL_ARGS', toolCallId, delta },
+          { type: 'TOOL_CALL_END', toolCallId },
+        );
+        interrupts.push({
+          id,
+          reason: 'confirmation',
+          toolCallId,
+          expiresAt: expiresAt instanceof Date ? expiresAt.toISOString() : expiresAt,
+          metadata: { sigil: { action_hash: actionHash, approval_url: approvalUrl.href } },
+        });
       }
-
-      const toolCallId = envelope.message_id;
-      const approvalUrl = new URL('/approve', relayConfig.relayOrigin);
-      approvalUrl.searchParams.set('challenge', id);
-      return [
-        { type: 'TOOL_CALL_START', toolCallId, toolCallName: fact.capability },
-        { type: 'TOOL_CALL_ARGS', toolCallId, delta },
-        { type: 'TOOL_CALL_END', toolCallId },
-        {
-          type: 'RUN_FINISHED',
-          threadId,
-          runId,
-          outcome: {
-            type: 'interrupt',
-            interrupts: [{
-              id,
-              reason: 'confirmation',
-              toolCallId,
-              expiresAt: expiresAt instanceof Date ? expiresAt.toISOString() : expiresAt,
-              metadata: { sigil: { action_hash: actionHash, approval_url: approvalUrl.href } },
-            }],
-          },
-        },
-      ];
+      if (interrupts.length) events.push({ type: 'RUN_FINISHED', threadId, runId, outcome: { type: 'interrupt', interrupts } });
+      return events;
     }
     case 'gated-envelope.accepted': {
       const { messageId, toolCallId, content } = fact;

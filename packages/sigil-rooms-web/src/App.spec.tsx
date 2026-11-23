@@ -51,6 +51,18 @@ describe('App', () => {
     expect(await screen.findAllByText('the build room')).toHaveLength(2);
   });
 
+  it('updates the selected room in a copied-link URL', async () => {
+    stubFetch({ authMode: 'cookie' }, { status: 200, body: { human_id: 'h', endpoint_id: 'ep', display_name: 'Ada', is_operator: false } }, [
+      { conversation_id: 'room-one', name: 'One' },
+      { conversation_id: 'room-two', name: 'Two' },
+    ]);
+    window.history.replaceState(null, '', '/?room=room-one#message-old');
+    render(<App />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Two' }));
+    expect(new URL(window.location.href).searchParams.get('room')).toBe('room-two');
+    expect(window.location.hash).toBe('');
+  });
+
   it('token mode still renders the TokenGate', async () => {
     stubFetch({ relayUrl: 'http://relay.test', streamUrl: 'ws://stream.test' }, { status: 401 });
     render(<App />);
