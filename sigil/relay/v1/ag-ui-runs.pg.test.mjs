@@ -16,7 +16,7 @@ function envelope({ id, conversationId, sender, recipient, messageType, body, co
     protocol: 'sigil/1', message_id: id, conversation_id: conversationId, message_type: messageType,
     sender: { endpoint_id: sender.endpointId, owner_id: sender.ownerId },
     ...(recipient ? { recipient: { endpoint_id: recipient.endpointId } } : {}),
-    broadcast_scope: { conversation_id: conversationId }, body, context_refs: contextRefs,
+    ...(!recipient ? { broadcast_scope: { conversation_id: conversationId } } : {}), body, context_refs: contextRefs,
     capabilities, correlation_id: null, idempotency_key: `idem_${id}`,
     created_at: '2026-11-22T12:00:00.000Z', expires_at: '2026-12-22T12:00:00.000Z',
     signature: { algorithm: 'Ed25519', key_id: sender.keyId, value: '' },
