@@ -1,0 +1,19 @@
+sigil/relay/v1/ag-ui-runs.pg.test.mjs
+  s_d72c35bddd733d::t_82cc5998ebcb6b 19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "eee2f8d2c41fa7aadd17b6f136dc94d0caa60894",
+  "prompts": {},
+  "sessions": {
+    "s_d72c35bddd733d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a2060f-78be-77f0-88fd-7fd63b7fea29",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
