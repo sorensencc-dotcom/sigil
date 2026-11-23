@@ -482,6 +482,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
           } finally { polling = false; }
           if (projectState.terminal && !closed) { cleanup(); response.end(); }
         };
+        // shortcut: polls every 500 ms; replace with relay event fan-out when this route can subscribe directly.
         timer = setInterval(poll, 500);
         timer.unref?.();
         void poll();
