@@ -24,9 +24,11 @@ packages/sigil-rooms-web/src/live/useLive.ts
 packages/sigil-rooms-web/src/api/client.ts
   s_a359aaf37c4ba2::t_2b1415ca9dee18 34,122-123
   s_a359aaf37c4ba2::t_ce2f691e39a38d 124
+  s_1db7136a480670::t_6f19c346a2d329 1
 packages/sigil-rooms-web/src/rooms/RoomHeader.spec.tsx
   s_a359aaf37c4ba2::t_5a44806a4d5b1d 31,43-46
   s_ae96e6109f2429::t_cf55ed96641c89 47
+  s_1db7136a480670::t_68fb96439f2abc 42
 packages/sigil-rooms-web/src/api/types.ts
   s_a359aaf37c4ba2::t_2b1415ca9dee18 98-100,102-103
   s_a359aaf37c4ba2::t_3cc8b8fef8f4e7 101
@@ -39,6 +41,14 @@ packages/sigil-rooms-web/src/styles.css
   "base_commit_sha": "722c362ad84f67e401655dd24929dc7b0acd62b5",
   "prompts": {},
   "sessions": {
+    "s_1db7136a480670": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20a44-fbba-7542-9925-3f3e56a23d90",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
     "s_a359aaf37c4ba2": {
       "agent_id": {
         "tool": "codex",
