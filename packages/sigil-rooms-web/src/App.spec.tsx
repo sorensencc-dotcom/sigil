@@ -10,6 +10,7 @@ function stubFetch(config: unknown, me: { status: number; body?: unknown }, room
       if (url === '/config.json') return new Response(JSON.stringify(config), { status: 200 });
       if (url === '/v1/auth/me') return new Response(JSON.stringify(me.body ?? { code: 'UNAUTHENTICATED' }), { status: me.status });
       if (url === '/v1/rooms') return new Response(JSON.stringify({ items: rooms }), { status: 200 });
+      if (url.includes('/v1/rooms/') && url.includes('/invocations?status=')) return new Response(JSON.stringify({ items: [] }), { status: 200 });
       if (url.includes('/v1/rooms/room_1/members')) return new Response(JSON.stringify({ items: [] }), { status: 200 });
       if (url.includes('/v1/rooms/room_1/messages')) return new Response(JSON.stringify({ items: [], next_after_seq: 0 }), { status: 200 });
       if (url === '/v1/me/contacts') return new Response(JSON.stringify({ items: [] }), { status: 200 });

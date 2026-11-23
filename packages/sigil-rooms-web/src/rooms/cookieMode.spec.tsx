@@ -41,15 +41,15 @@ describe('cookie-mode consumers', () => {
 
   it('labels Stop by role and posts the same stop from the working status line', async () => {
     const stopRoom = vi.fn(async () => ({ code: 'OK', cancelled: 0 }));
-    const client = { listMembers: vi.fn(async () => members), listInvocations: vi.fn(async () => [{ invocation_id: 'i1', endpoint_id: 'ep_me', status: 'running' as const }]), stopRoom };
+    const client = { listMembers: vi.fn(async () => members), listInvocations: vi.fn(async () => [{ invocation_id: 'i1', endpoint_id: 'ep_me', status: 'running' as const, subject_human_id: 'h1' }]), stopRoom };
     const a = render(<StatusLine roomId="room_1" onGone={() => {}} />, { wrapper: wrap(client, false) });
     expect(screen.queryByRole('button', { name: 'Stop room' })).toBeNull();
     await userEvent.click(await screen.findByRole('button', { name: 'Stop my runs' }));
     expect(stopRoom).toHaveBeenCalledWith('room_1');
     a.unmount();
     render(<StatusLine roomId="room_1" onGone={() => {}} />, { wrapper: wrap(client, true) });
-    expect(await screen.findByRole('button', { name: 'Stop room' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Stop my runs' })).toBeNull();
+    expect(await screen.findByRole('button', { name: 'Stop my runs' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Stop room' })).toBeNull();
   });
 
   it('useSend never reads or writes the stored sender in cookie mode', async () => {
