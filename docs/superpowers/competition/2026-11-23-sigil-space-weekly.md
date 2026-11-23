@@ -200,6 +200,12 @@ Read at origin/main 53223d0, since PR #213 (2026-11-16, 5:08 PM ET). (V)
 
 2. Add Pepper and bot-link at monthly. Recommendation: yes. Pepper is a room a person sits in, with a per-agent name and token. bot-link seals each message on the sender's machine and requires a person to approve every chat that joins. Both are (U) until a snapshot exists. Monthly matches the 2026-11-09 placement for new names that do not yet have a weekly product diff. Leave the other discovery names off: Agentes.chat, AIChatLink, Agent Rooms for Obsidian, AGI, Agent Room (lemoncube7), AgentRoom (Litt-R), Harmonia, Goblin Launcher, ZumiBot, and Claude multi-agent chat. Goblin Launcher's discovery line names Grok Build and phone approvals. That page was not snapshotted, so Goblin Launcher stays off this week. Leave every WEAK name off.
 
+## Decisions (Chris, 2026-11-23)
+
+Chris approved both recommendations on 2026-11-23 at 10:56 AM ET:
+1. Add Vercel Board to the weekly watchlist.
+2. Add Pepper and bot-link at a monthly cadence. The other discovery names stay off the watchlist.
+
 This PR stays an unmerged draft until Chris reviews it.
 
 ## Sources that could not be read
