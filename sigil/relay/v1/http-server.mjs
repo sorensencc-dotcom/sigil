@@ -24,6 +24,7 @@ import { assertAccountLinkCeremony, assertAllowedIssuer, boundedCapabilityGrantE
 import { verifyRealIdToken, createJwksCache, createDiscoveryCache, CLOCK_SKEW_SECONDS } from './oidc-client.mjs';
 import { attemptDirectoryMatchOnOidcLogin } from './directory-trust.mjs';
 import { DEFAULT_INBOX_DEPTH_LIMIT, resolveDirectoryRateLimits, resolveRelayRequestFreshnessMs, resolveStreamSequence } from './relay-config.mjs';
+import { projectRelayFact } from './ag-ui-projection.mjs';
 
 function normalizeIssuerOrRespond(rawIssuer, response, requestId) {
   try {
@@ -108,6 +109,7 @@ export function createOnPersisted(stream, { repository = null, logger = null } =
 }
 
 export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain, federationMode, federationIdentity, fetchImpl, relayRequestFreshnessMs, stream_seq, resendMetrics, logger, agentmailIngress, agentmailControl, roomSystemIdentity, buildAcceptOptions: injectedBuildAcceptOptions, allowedOrigins = [], ticketStore = null, humanSigner = null, floorWardenReplies = null, registryRefreshAvailable } = {}) {
+  const agUiRunIds = new Map();
   // B3: one clamped relay-request freshness window for this server. It bounds
   // how long a captured signed peer request stays replayable and doubles as the
   // nonce row's expiry horizon (expiresAt = signed_at + freshnessMs).
@@ -374,11 +376,121 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       return response.end(result.body ? JSON.stringify(result.body) : '');
     }
 
-    if (isBrowserRoute(parsedUrl.pathname) && applyBrowserCors(request, response, allowedOrigins) === 'preflight') return;
+    if ((isBrowserRoute(parsedUrl.pathname) || parsedUrl.pathname === '/v1/ag-ui/runs') && applyBrowserCors(request, response, allowedOrigins) === 'preflight') return;
     const principal = authenticateRequest ? await authenticateRequest(request) : null;
     if (authenticateRequest && !principal) {
       response.writeHead(401, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
       return response.end(JSON.stringify({ request_id: requestId, code: 'UNAUTHENTICATED', message: 'Authentication required', details: {} }));
+    }
+
+    if (request.method === 'POST' && parsedUrl.pathname === '/v1/ag-ui/runs') {
+      const failAgUi = (status, code, message) => {
+        response.writeHead(status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
+        return response.end(JSON.stringify({ code, message }));
+      };
+      let input;
+      try { input = JSON.parse(await readBody(request, 64 * 1024)); } catch (error) {
+        return failAgUi(error.code === 'REQUEST_TOO_LARGE' ? 413 : 400, 'INVALID_RUN_INPUT', 'RunAgentInput must be valid JSON');
+      }
+      const threadId = input?.threadId;
+      const runId = input?.runId;
+      const taskId = input?.forwardedProps?.sigil?.task_id;
+      if (!input || Array.isArray(input) || typeof input !== 'object' || typeof threadId !== 'string' || !threadId || typeof runId !== 'string' || !runId ||
+          typeof input.protocolVersion !== 'string' ||
+          (input.resume === undefined && (typeof taskId !== 'string' || !taskId))) {
+        return failAgUi(400, 'INVALID_RUN_INPUT', 'threadId, runId, protocolVersion, and forwardedProps.sigil.task_id are required');
+      }
+      if (!/^1\.\d+$/.test(input.protocolVersion)) return failAgUi(400, 'UNSUPPORTED_PROTOCOL_VERSION', 'Supported protocol major version is 1.');
+      if (!authenticateRequest) return failAgUi(401, 'UNAUTHENTICATED', 'Authentication required');
+      if (input.resume !== undefined) return failAgUi(501, 'RESUME_UNAVAILABLE', 'Run resume is not available yet');
+      if (!repository?.isConversationMember || !repository?.lookupTaskRequest || !repository?.listRoomMessages) return failAgUi(503, 'AG_UI_UNAVAILABLE', 'AG-UI task history is unavailable');
+      try {
+        if (!await repository.isConversationMember(principal.endpoint_id, threadId)) return failAgUi(403, 'FOREIGN_CONVERSATION', 'Caller is not a member of this conversation');
+        const task = await repository.lookupTaskRequest(taskId, threadId);
+        if (!task) return failAgUi(404, 'TASK_NOT_FOUND', 'Task not found in this conversation');
+        if (!task.recipientEndpointId) return failAgUi(400, 'TASK_NOT_ASSIGNED', 'AG-UI runs require a task with one assigned endpoint');
+        const agUiRelayOrigin = resolveRelayOrigin();
+        if (!agUiRelayOrigin) return failAgUi(503, 'AG_UI_UNAVAILABLE', 'Relay origin is not configured');
+        const runKey = `${threadId}\u0000${runId}`;
+        if (agUiRunIds.has(runKey)) return failAgUi(409, 'RUN_ID_REUSED', 'runId has already been used for this thread');
+        agUiRunIds.set(runKey, true);
+        const history = await repository.listRoomMessages(threadId, 0n, 500);
+        let lastRoomSeq = BigInt(history.at(-1)?.room_seq ?? 0);
+        const projectState = { threadId, runId, assigneeEndpointId: task.recipientEndpointId, relayConfig: { relayOrigin: agUiRelayOrigin }, terminal: false };
+        const writeEvents = (events) => {
+          for (const event of events) response.write(`data: ${JSON.stringify(event)}\n\n`);
+        };
+        const emitFact = (fact) => {
+          const projected = projectRelayFact(fact, projectState);
+          Object.assign(projectState, projected.state);
+          writeEvents(projected.events);
+          return projectState.terminal;
+        };
+        response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-sigil-request-id': requestId });
+        if (emitFact({ type: 'attach.accepted' }) || emitFact({ type: 'history.snapshot', messages: history.map(({ envelope }) => ({ id: envelope.message_id, role: envelope.sender.endpoint_id === task.recipientEndpointId ? 'assistant' : 'user', content: typeof envelope.body?.text === 'string' ? envelope.body.text : JSON.stringify(envelope.body) })) })) return response.end();
+        if (history.some(({ envelope }) => envelope.message_type === 'task.result' && envelope.body?.task_id === taskId)) {
+          emitFact({ type: 'task.result.accepted' });
+          return response.end();
+        }
+        const seenChallenges = new Set();
+        let polling = false;
+        let closed = false;
+        let timer;
+        const cleanup = () => { closed = true; clearInterval(timer); };
+        request.on('aborted', cleanup);
+        response.on('close', cleanup);
+        const poll = async () => {
+          if (polling || closed || projectState.terminal) return;
+          polling = true;
+          try {
+            if (!await repository.isConversationMember(principal.endpoint_id, threadId)) {
+              cleanup();
+              if (!response.destroyed) response.end();
+              return;
+            }
+            if (repository.listApprovalChallengesForConversation) {
+              for (const challenge of await repository.listApprovalChallengesForConversation(threadId)) {
+                if (seenChallenges.has(challenge.id)) continue;
+                seenChallenges.add(challenge.id);
+                const refs = challenge.envelope?.context_refs ?? [];
+                if (challenge.envelope?.body?.task_id !== taskId && challenge.envelope?.correlation_id !== task.message_id && !refs.includes(task.message_id)) continue;
+                if (emitFact({ type: 'challenge.created', challenge, capability: challenge.capabilities?.[0] ?? challenge.envelope.capabilities?.[0] })) break;
+              }
+            }
+            if (!projectState.terminal) {
+              const rows = await repository.listRoomMessages(threadId, lastRoomSeq, 100);
+              for (const row of rows) {
+                lastRoomSeq = BigInt(row.room_seq);
+                const envelope = row.envelope;
+                const challenge = await repository.getApprovalChallengeForMessage?.(threadId, envelope.message_id);
+                const challengeEnvelope = challenge?.envelope;
+                const challengeRefs = challengeEnvelope?.context_refs ?? [];
+                if (challenge && (challengeEnvelope?.body?.task_id === taskId || challengeEnvelope?.correlation_id === task.message_id || challengeRefs.includes(task.message_id))) {
+                  const content = typeof envelope.body?.text === 'string' ? envelope.body.text : JSON.stringify(envelope.body);
+                  if (emitFact({ type: 'gated-envelope.accepted', messageId: envelope.message_id, toolCallId: envelope.message_id, content })) break;
+                } else if (envelope.message_type === 'room.message') {
+                  if (emitFact({ type: 'room.message', envelope })) break;
+                } else if (envelope.message_type === 'task.result' && envelope.body?.task_id === taskId) {
+                  if (emitFact({ type: 'task.result.accepted' })) break;
+                }
+              }
+            }
+          } catch (error) {
+            logger?.error?.('AG-UI stream polling failed', error);
+            cleanup();
+            if (!response.destroyed) response.end();
+          } finally { polling = false; }
+          if (projectState.terminal && !closed) { cleanup(); response.end(); }
+        };
+        timer = setInterval(poll, 500);
+        timer.unref?.();
+        void poll();
+        return;
+      } catch (error) {
+        logger?.error?.('AG-UI attach failed', error);
+        if (!response.headersSent) return failAgUi(503, 'AG_UI_UNAVAILABLE', 'AG-UI task is temporarily unavailable');
+        return response.end();
+      }
     }
 
     // Control operations are registered only behind an actual bearer/authentication
