@@ -2349,6 +2349,39 @@ export class PostgresRepository {
     );
     return result.rows.map(roomMessageRow);
   }
+  async listRoomMessagesBefore(conversationId, beforeSeq = null, limit = 100, queryClient = this.pool) {
+    const result = await queryClient.query(
+      `SELECT room_seq, message_id, protocol, message_type, body, context_refs, capabilities, correlation_id,
+              sender_endpoint_id, sender_owner_id, broadcast_scope, conversation_id, idempotency_key,
+              signature_algorithm, signature_key_id, signature_value, expires_at, created_at, canonical_bytes,
+              report_post,
+              COALESCE(NULLIF((SELECT e.display_name FROM endpoints e WHERE e.endpoint_id = envelopes.sender_endpoint_id), ''), sender_endpoint_id) AS sender_display_name
+         FROM envelopes
+        WHERE conversation_id = $1 AND ($2::bigint IS NULL OR room_seq < $2)
+        ORDER BY room_seq DESC
+        LIMIT $3`,
+      [conversationId, beforeSeq == null ? null : String(beforeSeq), limit],
+    );
+    return result.rows.map(roomMessageRow).reverse();
+  }
+  async searchRoomMessages(conversationId, query, beforeSeq = null, limit = 50, queryClient = this.pool) {
+    const pattern = `%${query.replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
+    const result = await queryClient.query(
+      `SELECT room_seq, message_id, protocol, message_type, body, context_refs, capabilities, correlation_id,
+              sender_endpoint_id, sender_owner_id, broadcast_scope, conversation_id, idempotency_key,
+              signature_algorithm, signature_key_id, signature_value, expires_at, created_at, canonical_bytes,
+              report_post,
+              COALESCE(NULLIF((SELECT e.display_name FROM endpoints e WHERE e.endpoint_id = envelopes.sender_endpoint_id), ''), sender_endpoint_id) AS sender_display_name
+         FROM envelopes
+        WHERE conversation_id = $1 AND message_type = 'room.message'
+          AND room_seq IS NOT NULL AND ($3::bigint IS NULL OR room_seq < $3)
+          AND body->>'text' ILIKE $2 ESCAPE E'\\\\'
+        ORDER BY room_seq DESC
+        LIMIT $4`,
+      [conversationId, pattern, beforeSeq == null ? null : String(beforeSeq), limit],
+    );
+    return result.rows.map(roomMessageRow);
+  }
   // Per-viewer contacts (/v1/me/contacts). endpoint_ids: an endpoint contact
   // resolves to its login as typed; a human contact to that human's endpoints
   // the viewer can already see (their own, or ones sharing an active room with

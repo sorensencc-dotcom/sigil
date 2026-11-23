@@ -22,6 +22,7 @@ export function RowView({
   latestReplies = [],
   onReply,
   onContinue,
+  highlighted = false,
 }: {
   row: Row;
   sender: string | null;
@@ -33,6 +34,7 @@ export function RowView({
   latestReplies?: HistoryItem[];
   onReply?: () => void;
   onContinue?: (threadRootId: string) => void;
+  highlighted?: boolean;
 }) {
   if (row.pending) {
     return (
@@ -46,7 +48,7 @@ export function RowView({
   if (envelope.message_type === 'room.event') {
     const { kind, reason, thread_root_id: threadRootId } = envelope.body;
     return (
-      <li data-kind="event">
+      <li data-kind="event" data-room-seq={row.item!.room_seq} data-search-match={highlighted || undefined}>
         <em>{kind}{reason ? `: ${reason}` : ''}</em>
         {kind === 'agent_cap_reached' && onContinue && threadRootId ? (
           <div className="row-actions">
@@ -58,7 +60,7 @@ export function RowView({
   }
   const mine = sender !== null && envelope.sender.endpoint_id === sender;
   return (
-    <li data-mine={mine ? 'true' : undefined}>
+    <li data-mine={mine ? 'true' : undefined} data-room-seq={row.item!.room_seq} data-search-match={highlighted || undefined}>
       <div className="meta">
         <SenderChip
           endpointId={envelope.sender.endpoint_id}

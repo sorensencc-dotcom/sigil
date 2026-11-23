@@ -22,15 +22,38 @@ describe('Timeline', () => {
     expect(container.querySelector('a')).toBeNull();
   });
 
-  it('pages until a page is shorter than the limit', async () => {
-    const full = Array.from({ length: 100 }, (_, i) => msg(i + 1, `m${i + 1}`, `t${i + 1}`));
-    const history = vi.fn(async (_room: string, after: string) =>
-      after === '0'
-        ? { code: 'OK', items: full, next_after_seq: '100' }
-        : { code: 'OK', items: [msg(101, 'm101', 't101')], next_after_seq: '101' });
-    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { history });
-    expect(await screen.findByText('t101')).toBeInTheDocument();
-    expect(history.mock.calls.map((c) => c[1])).toEqual(['0', '100']);
+  it('loads a bounded newest page and requests earlier pages on demand', async () => {
+    const recent = Array.from({ length: 100 }, (_, i) => msg(i + 101, `m${i + 101}`, `t${i + 101}`));
+    const historyBefore = vi.fn(async (_room: string, before: string, limit?: number) => before === 'latest'
+      ? { code: 'OK', items: recent, next_after_seq: '200', has_older: true }
+      : { code: 'OK', items: Array.from({ length: limit ?? 100 }, (_, i) => msg(i + 1, `m${i + 1}`, `t${i + 1}`)), next_after_seq: '100', has_older: false });
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { historyBefore });
+    expect(await screen.findByText('t200')).toBeInTheDocument();
+    expect(screen.queryByText('t1')).toBeNull();
+    expect(historyBefore.mock.calls.map((c) => c[1])).toEqual(['latest']);
+    await userEvent.click(screen.getByRole('button', { name: 'Load older messages' }));
+    expect(await screen.findByText('t1')).toBeInTheDocument();
+    expect(historyBefore.mock.calls.map((c) => c[1])).toEqual(['latest', '101']);
+  });
+
+  it('searches the room and opens a bounded context around a result', async () => {
+    const historyBefore = vi.fn(async (_room: string, before: string) => before === 'latest'
+      ? { code: 'OK', items: [msg(3, 'm3', 'latest')], next_after_seq: '3', has_older: true }
+      : { code: 'OK', items: [msg(1, 'm1', 'Deploy failed on node 7'), msg(2, 'm2', 'middle')], next_after_seq: '2', has_older: false });
+    const history = vi.fn(async (_room: string, after: string) => ({ code: 'OK', items: after === '1' ? [msg(3, 'm3', 'latest')] : [], next_after_seq: '3', has_more: false }));
+    const searchHistory = vi.fn(async () => ({
+      code: 'OK', has_more: false, next_before_seq: null,
+      items: [{ room_seq: '1', message_id: 'm1', sender_endpoint_id: 'ep_a', display_name: 'Ada', created_at: '2026-11-01T12:00:00Z', snippet: 'Deploy failed on node 7' }],
+    }));
+    const { container } = renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { historyBefore, history, searchHistory });
+    await screen.findByText('latest');
+    await userEvent.type(screen.getByRole('textbox', { name: 'Find in room' }), 'deploy');
+    await userEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await userEvent.click(await screen.findByRole('button', { name: /Ada/ }));
+    await waitFor(() => expect(container.querySelector('[data-search-match="true"]')).not.toBeNull());
+    expect(screen.getAllByText('Deploy failed on node 7')).toHaveLength(2);
+    expect(searchHistory).toHaveBeenCalledWith('room_1', 'deploy');
+    expect(historyBefore).toHaveBeenCalledWith('room_1', '2', 50);
   });
 
   it('renders a room.event row as a system line', async () => {

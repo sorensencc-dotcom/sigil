@@ -501,6 +501,29 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
         .slice(0, limit)
         .map((row) => ({ room_seq: String(row.roomSeq), message_id: row.message_id, display_name: registry.get(row.envelope.sender.endpoint_id)?.display_name || row.envelope.sender.endpoint_id, canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'), envelope: row.envelope }));
     },
+    async listRoomMessagesBefore(conversationId, beforeSeq = null, limit = 100) {
+      const cursor = beforeSeq == null ? null : BigInt(beforeSeq);
+      return [...envelopes.values()]
+        .filter((row) => row.envelope.conversation_id === conversationId && row.roomSeq != null && (cursor === null || row.roomSeq < cursor))
+        .sort((a, b) => (a.roomSeq < b.roomSeq ? 1 : a.roomSeq > b.roomSeq ? -1 : 0))
+        .slice(0, limit)
+        .reverse()
+        .map((row) => ({ room_seq: String(row.roomSeq), message_id: row.message_id, display_name: registry.get(row.envelope.sender.endpoint_id)?.display_name || row.envelope.sender.endpoint_id, canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'), envelope: row.envelope }));
+    },
+    async searchRoomMessages(conversationId, query, beforeSeq = null, limit = 50) {
+      const needle = query.toLocaleLowerCase('en-US');
+      const cursor = beforeSeq == null ? null : BigInt(beforeSeq);
+      return [...envelopes.values()]
+        .filter((row) => row.envelope.conversation_id === conversationId
+          && row.roomSeq != null
+          && row.envelope.message_type === 'room.message'
+          && (cursor === null || row.roomSeq < cursor)
+          && typeof row.envelope.body?.text === 'string'
+          && row.envelope.body.text.toLocaleLowerCase('en-US').includes(needle))
+        .sort((a, b) => (a.roomSeq > b.roomSeq ? -1 : a.roomSeq < b.roomSeq ? 1 : 0))
+        .slice(0, limit)
+        .map((row) => ({ room_seq: String(row.roomSeq), message_id: row.message_id, display_name: registry.get(row.envelope.sender.endpoint_id)?.display_name || row.envelope.sender.endpoint_id, canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'), envelope: row.envelope }));
+    },
     async listMentionsForEndpoint(endpointId, limit = 50) {
       const cap = Math.min(Math.max(Number(limit) || 50, 1), 100);
       const memberOf = new Set();
