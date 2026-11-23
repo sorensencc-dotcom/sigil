@@ -1,0 +1,58 @@
+sigil/relay/v1/http-server.mjs
+  s_d72c35bddd733d::t_c6a63c441f9bc3 444,513-516,557,610
+  s_d72c35bddd733d::t_5edfacde41dd3e 565,594,598-599,609,611-613
+  s_d72c35bddd733d::t_5cc90ac585a7fa 480-498,500-501,504
+  s_d72c35bddd733d::t_5176babe63d315 447-455
+  s_d72c35bddd733d::t_b82880ac06d9c8 113,399,402-403,411-443,445-446,456-460,465-479,499,502-503,505-506,510,528-555,560,578-583,595
+sigil/relay/v1/ag-ui-runs.test.mjs
+  s_d72c35bddd733d::t_cfa5fb3f4560ae 183
+  s_d72c35bddd733d::t_c07c55f9c14652 121,124-125
+  s_d72c35bddd733d::t_ac43392dc4b81a 45-64,158-182,184-231
+sigil/cli/memory-repository.test.mjs
+  s_d72c35bddd733d::t_4787d813fdb82d 300
+  s_d72c35bddd733d::t_172f8d166255e5 294-299
+sigil/relay/v1/ag-ui-runs.pg.test.mjs
+  s_d72c35bddd733d::t_efd50e5682c3f3 1-86,88-93,95-146,148-169
+  s_d72c35bddd733d::t_11ac065ccc10d4 87,94,147
+verify/ag-ui-approval/AgUiApproval.tla
+  s_d72c35bddd733d::t_6c00cfe08eabef 210-211
+  s_d72c35bddd733d::t_00996208247911 3-4
+  s_d72c35bddd733d::t_d2cce1b2c785f4 12,25-27,29-31,33-34,42-49,158,164-209,212-227,241-246
+verify/ag-ui-approval/MC_current.cfg
+  s_d72c35bddd733d::t_d2cce1b2c785f4 3-4,15-20
+sigil/relay/v1/ag-ui-projection.mjs
+  s_d72c35bddd733d::t_df25ecea93ee0e 21
+  s_d72c35bddd733d::t_ef1e109ef70808 20,22-46,48-49
+sigil/relay/v1/ag-ui-projection.test.mjs
+  s_d72c35bddd733d::t_b502daaaf8d9e7 230-243
+verify/ag-ui-approval/MC.cfg
+  s_d72c35bddd733d::t_d2cce1b2c785f4 3-4,15-20
+sigil/relay/v1/postgres-repository.mjs
+  s_d72c35bddd733d::t_4ddff5f49bb9a8 2365-2376
+  s_d72c35bddd733d::t_eaa574b3bcd047 159
+  s_d72c35bddd733d::t_fb3b8183733939 490-505,2352
+sigil/cli/memory-repository.mjs
+  s_d72c35bddd733d::t_8b23b8bac26e51 917-925
+  s_d72c35bddd733d::t_da8b19689726f4 502
+  s_d72c35bddd733d::t_4ddff5f49bb9a8 504-511
+  s_d72c35bddd733d::t_9df778b774f6e6 503
+verify/ag-ui-approval/expected.md
+  s_d72c35bddd733d::t_1ae9983ef608f3 3-5,9,12-14,32-33,38-39
+  s_d72c35bddd733d::t_2f78f7674dc732 18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e4a163be4f3c78f92fdc8c15e5142dfca3d1570c",
+  "prompts": {},
+  "sessions": {
+    "s_d72c35bddd733d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a2060f-78be-77f0-88fd-7fd63b7fea29",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
