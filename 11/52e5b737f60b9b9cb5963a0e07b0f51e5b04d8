@@ -1,0 +1,19 @@
+packages/sigil-rooms-web/e2e/rooms.e2e.ts
+  s_1db7136a480670::t_62fb4a1fe30f20 125-126
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1152e5b737f60b9b9cb5963a0e07b0f51e5b04d8",
+  "prompts": {},
+  "sessions": {
+    "s_1db7136a480670": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20a44-fbba-7542-9925-3f3e56a23d90",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
