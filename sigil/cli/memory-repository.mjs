@@ -499,7 +499,16 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
         .filter((row) => row.envelope.conversation_id === conversationId && row.roomSeq != null && row.roomSeq > BigInt(afterSeq))
         .sort((a, b) => (a.roomSeq < b.roomSeq ? -1 : a.roomSeq > b.roomSeq ? 1 : 0))
         .slice(0, limit)
-        .map((row) => ({ room_seq: String(row.roomSeq), message_id: row.message_id, display_name: registry.get(row.envelope.sender.endpoint_id)?.display_name || row.envelope.sender.endpoint_id, canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'), envelope: row.envelope }));
+        .map((row) => ({ room_seq: String(row.roomSeq), stream_seq: row.streamSeq == null ? null : String(row.streamSeq), message_id: row.message_id, display_name: registry.get(row.envelope.sender.endpoint_id)?.display_name || row.envelope.sender.endpoint_id, canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'), envelope: row.envelope }));
+    },
+    async getRoomMessage(conversationId, messageId) {
+      const row = envelopes.get(messageId);
+      if (!row || row.envelope.conversation_id !== conversationId || row.roomSeq == null) return null;
+      return {
+        room_seq: String(row.roomSeq), stream_seq: row.streamSeq == null ? null : String(row.streamSeq),
+        message_id: row.message_id, display_name: registry.get(row.envelope.sender.endpoint_id)?.display_name || row.envelope.sender.endpoint_id,
+        canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'), envelope: row.envelope,
+      };
     },
     async listRoomMessagesBefore(conversationId, beforeSeq = null, limit = 100) {
       const cursor = beforeSeq == null ? null : BigInt(beforeSeq);
@@ -905,7 +914,15 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       } : null;
     },
     async listApprovalChallengesForConversation(conversationId) {
-      return [...approvalChallenges.values()].filter((row) => row.conversation_id === conversationId && row.envelope).map((row) => ({ id: row.challenge_id, endpointId: row.endpoint_id, actionHash: row.action_hash, expiresAt: row.expires_at, capabilities: row.capabilities, envelope: row.envelope }));
+      return [...approvalChallenges.values()].filter((row) => row.conversation_id === conversationId && row.envelope).map((row) => {
+        const decision = [...approvalDecisions.values()].find((item) => item.nonce === row.challenge_id);
+        return {
+          id: row.challenge_id, endpointId: row.endpoint_id, actionHash: row.action_hash,
+          expiresAt: row.expires_at, capabilities: row.capabilities, envelope: row.envelope,
+          status: row.status, decisionStatus: decision?.status ?? null,
+          decisionExpiresAt: decision?.expires_at ?? null, createdAt: row.created_at,
+        };
+      });
     },
     async getApprovalChallengeForMessage(conversationId, messageId) {
       const row = [...approvalChallenges.values()].find((item) => item.conversation_id === conversationId && item.message_id === messageId && item.envelope);
