@@ -155,8 +155,6 @@ export function validateServiceConfig(config, { checkFiles = false, basePath = p
         }
         if (connector.relay_url !== undefined && (typeof connector.relay_url !== 'string' || connector.relay_url.length === 0)) {
           issues.push({ code: 'CONNECTOR_RELAY_URL_INVALID', path: `${itemPath}.relay_url`, message: 'Connector relay_url must be a non-empty string' });
-        } else if (config.relay === undefined && typeof connector.relay_url !== 'string') {
-          issues.push({ code: 'CONNECTOR_RELAY_URL_REQUIRED', path: `${itemPath}.relay_url`, message: 'relay_url is required when the service config does not define a relay' });
         }
       });
     }
@@ -248,6 +246,11 @@ export function validateServiceConfig(config, { checkFiles = false, basePath = p
       }
       if (sv.run_level !== undefined && !RUN_LEVELS.includes(sv.run_level)) {
         issues.push({ code: 'SUPERVISOR_RUN_LEVEL_INVALID', path: 'supervisor.run_level', message: `supervisor.run_level must be one of: ${RUN_LEVELS.join(', ')}` });
+      }
+      for (const key of ['start_at_startup', 'start_when_available']) {
+        if (sv[key] !== undefined && typeof sv[key] !== 'boolean') {
+          issues.push({ code: 'SUPERVISOR_FLAG_INVALID', path: `supervisor.${key}`, message: `supervisor.${key} must be a boolean` });
+        }
       }
     }
   }
@@ -389,11 +392,12 @@ export function buildServicePlan(config, {
   // 3. MCP connectors
   if (Array.isArray(config.connectors)) {
     for (const connector of config.connectors) {
-      const relayUrl = connector.relay_url || `http://127.0.0.1:${relayPort}`;
+      // Memory-only connector: no relay_url and no relay block means no --relay-url.
+      const relayUrl = connector.relay_url || (relay ? `http://127.0.0.1:${relayPort}` : undefined);
       const args = [
         'sigil/cli/connector-daemon.mjs',
         '--port', String(connector.port),
-        '--relay-url', relayUrl,
+        ...(relayUrl ? ['--relay-url', relayUrl] : []),
         '--identity', connector.identity,
       ];
       const name = `connector-${connector.name}`;
@@ -453,6 +457,8 @@ export function buildServicePlan(config, {
     supervisor: {
       logon_type: config.supervisor?.logon_type ?? 'interactive',
       run_level: config.supervisor?.run_level ?? 'limited',
+      start_at_startup: config.supervisor?.start_at_startup ?? false,
+      start_when_available: config.supervisor?.start_when_available ?? false,
     },
     components,
   };
