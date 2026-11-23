@@ -78,6 +78,11 @@ test('AG-UI resumes after a dropped stream and concurrent Postgres clients repla
        VALUES ($1, $2, $3, $4, $5, $3, 'active', NOW())`,
       [endpointId, humanId, name, name === 'web' ? 'human' : 'agent', `install_${endpointId}`],
     );
+    await pool.query(
+      `INSERT INTO endpoint_keys (key_id, endpoint_id, algorithm, public_key, status, valid_from)
+       VALUES ($1, $2, 'Ed25519', $3, 'active', NOW())`,
+      [keyId, endpointId, keys.publicKey.export({ type: 'spki', format: 'der' })],
+    );
     endpoints[name] = { endpointId, ownerId: humanId, keyId, keys };
   }
   await repository.registerHumanCredential({ humanId, endpointId: endpoints.web.endpointId, credentialId: `cred_${suffix}`, publicKey: 'test-public-key' });
