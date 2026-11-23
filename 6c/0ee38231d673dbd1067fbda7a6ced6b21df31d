@@ -1,0 +1,23 @@
+packages/sigil-rooms-web/src/styles.css
+  s_1db7136a480670::t_8d88caa36780f0 205
+packages/sigil-rooms-web/src/rooms/Timeline.tsx
+  s_1db7136a480670::t_e5b20bbc44ec4d 170
+  s_1db7136a480670::t_8d88caa36780f0 127
+  s_1db7136a480670::t_aa40947833144a 77,106-107,121-126,128-133,136,160,163-169,171-178
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6c0ee38231d673dbd1067fbda7a6ced6b21df31d",
+  "prompts": {},
+  "sessions": {
+    "s_1db7136a480670": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20a44-fbba-7542-9925-3f3e56a23d90",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
