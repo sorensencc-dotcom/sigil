@@ -18,7 +18,7 @@ function envelope({ id, conversationId, sender, recipient, messageType, body, co
     ...(recipient ? { recipient: { endpoint_id: recipient.endpointId } } : {}),
     ...(!recipient ? { broadcast_scope: { conversation_id: conversationId } } : {}), body, context_refs: contextRefs,
     capabilities, correlation_id: null, idempotency_key: `idem_${id}`,
-    created_at: '2026-11-22T12:00:00.000Z', expires_at: '2026-12-22T12:00:00.000Z',
+    created_at: '2026-11-22T12:00:00.000Z', expires_at: '2026-11-22T13:00:00.000Z',
     signature: { algorithm: 'Ed25519', key_id: sender.keyId, value: '' },
   };
   value.signature.value = crypto.sign(null, signedBytes(value), sender.keys.privateKey).toString('base64url');
