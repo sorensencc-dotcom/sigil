@@ -53,6 +53,8 @@ function Get-ScheduledTaskIfPresent([string]$taskName) {
 if ($Action -eq 'Install') {
   $logonType = if ($plan.supervisor -and $plan.supervisor.logon_type -eq 's4u') { 'S4U' } else { 'Interactive' }
   $runLevel = if ($plan.supervisor -and $plan.supervisor.run_level -eq 'highest') { 'Highest' } else { 'Limited' }
+  $startAtStartup = [bool]($plan.supervisor -and $plan.supervisor.start_at_startup -eq $true)
+  $startWhenAvailable = [bool]($plan.supervisor -and $plan.supervisor.start_when_available -eq $true)
   $results = @()
   foreach ($comp in $plan.components) {
     $taskName = $comp.supervisor_target.task_name
@@ -69,10 +71,17 @@ if ($Action -eq 'Install') {
     # restarts the child. Relative paths in the child command resolve against
     # the working directory, so it must be the project root.
     $taskAction = New-ScheduledTaskAction -Execute $comp.task.execute -Argument $comp.task.arguments -WorkingDirectory $comp.task.working_directory
-    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
+    # AtLogOn always stays; AtStartup is added only on opt-in.
+    $trigger = @(New-ScheduledTaskTrigger -AtLogOn -User $user)
+    $triggerNames = @('AtLogOn')
+    if ($startAtStartup) {
+      $trigger += New-ScheduledTaskTrigger -AtStartup
+      $triggerNames += 'AtStartup'
+    }
     $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType $logonType -RunLevel $runLevel
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
       -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
+    if ($startWhenAvailable) { $settings.StartWhenAvailable = $true }
 
     if ($PSCmdlet.ShouldProcess($taskName, "Register scheduled task")) {
       Register-ScheduledTask -TaskName $taskName -Action $taskAction -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
@@ -84,6 +93,8 @@ if ($Action -eq 'Install') {
       WorkingDirectory = $taskAction.WorkingDirectory
       LogonType = $principal.LogonType.ToString()
       RunLevel = $principal.RunLevel.ToString()
+      Triggers = @($triggerNames)
+      StartWhenAvailable = [bool]$settings.StartWhenAvailable
     }
   }
   ConvertTo-Json -InputObject @($results) -Depth 4

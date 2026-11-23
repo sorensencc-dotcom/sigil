@@ -202,15 +202,26 @@ test('connector-only service config plans only the KB-Sync MCP component', () =>
   assert.equal(connector.supervisor_target.task_name, 'SigilStack_connector-kb-sync');
 });
 
-test('connector validation rejects unsupported providers and connector-only profiles without relay URLs', () => {
+test('connector validation rejects unsupported providers and empty relay_url, but allows none', () => {
   const invalid = validateServiceConfig({
-    connectors: [{ name: 'kb-sync', provider: 'unknown', port: 4411, identity: 'identity.json' }],
+    connectors: [{ name: 'kb-sync', provider: 'unknown', port: 4411, identity: 'identity.json', relay_url: '' }],
   });
   assert.ok(invalid.issues.some((issue) => issue.code === 'CONNECTOR_PROVIDER_UNSUPPORTED'));
-  assert.ok(invalid.issues.some((issue) => issue.code === 'CONNECTOR_RELAY_URL_REQUIRED'));
+  assert.ok(invalid.issues.some((issue) => issue.code === 'CONNECTOR_RELAY_URL_INVALID'));
+  assert.ok(!invalid.issues.some((issue) => issue.code === 'CONNECTOR_RELAY_URL_REQUIRED'));
 
   const roomConfig = validateServiceConfig({ agents: [] });
   assert.ok(roomConfig.issues.some((issue) => issue.code === 'RELAY_REQUIRED'));
+});
+
+test('memory-only connector without relay_url validates and plans no --relay-url', () => {
+  const config = { connectors: [{ name: 'kb-sync', provider: 'kb-sync', port: 4412, identity: 'id.json' }] };
+  const validation = validateServiceConfig(config);
+  assert.equal(validation.ok, true, JSON.stringify(validation.issues));
+  const [connector] = buildServicePlan(config, { platform: 'win32', nodePath: 'node.exe', basePath: os.tmpdir() }).components;
+  assert.deepEqual(connector.command, ['node.exe', 'sigil/cli/connector-daemon.mjs', '--port', '4412', '--identity', 'id.json']);
+  assert.deepEqual(connector.ports, [4412]);
+  assert.deepEqual(connector.depends_on_ports, []);
 });
 
 test('loadServiceConfigFile loads valid json and throws on missing file or syntax error', () => {
@@ -277,7 +288,7 @@ test('buildServicePlan gives every component a task that runs the service runner
     supervisor: { logon_type: 's4u', run_level: 'highest' },
   }, { platform: 'win32', basePath, configPath, nodePath: 'C:\Program Files\nodejs\node.exe' });
 
-  assert.deepEqual(plan.supervisor, { logon_type: 's4u', run_level: 'highest' });
+  assert.deepEqual(plan.supervisor, { logon_type: 's4u', run_level: 'highest', start_at_startup: false, start_when_available: false });
   for (const comp of plan.components) {
     assert.equal(comp.task.execute, 'C:\Program Files\nodejs\node.exe');
     assert.equal(comp.task.working_directory, basePath);
@@ -294,5 +305,17 @@ test('buildServicePlan gives every component a task that runs the service runner
 
 test('buildServicePlan defaults the supervisor to an interactive, limited task', () => {
   const plan = buildServicePlan({ relay: { port: 8791 } }, { platform: 'win32', basePath: os.tmpdir() });
-  assert.deepEqual(plan.supervisor, { logon_type: 'interactive', run_level: 'limited' });
+  assert.deepEqual(plan.supervisor, { logon_type: 'interactive', run_level: 'limited', start_at_startup: false, start_when_available: false });
+});
+
+test('supervisor start_at_startup and start_when_available are opt-in booleans', () => {
+  const supervisor = { logon_type: 's4u', run_level: 'highest', start_at_startup: true, start_when_available: true };
+  const config = { relay: { port: 8791 }, supervisor };
+  assert.equal(validateServiceConfig(config).ok, true);
+  assert.deepEqual(buildServicePlan(config, { platform: 'win32', basePath: os.tmpdir() }).supervisor, supervisor);
+
+  for (const key of ['start_at_startup', 'start_when_available']) {
+    const bad = validateServiceConfig({ relay: { port: 8791 }, supervisor: { [key]: 'true' } });
+    assert.ok(bad.issues.some((i) => i.code === 'SUPERVISOR_FLAG_INVALID' && i.path === `supervisor.${key}`), key);
+  }
 });

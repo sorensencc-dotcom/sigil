@@ -141,6 +141,22 @@ test('executeWindowsSupervisor throws on non-zero exit', () => {
   assert.throws(() => executeWindowsSupervisor('Install', mockPlan, { execFn: mockExec }), /Access denied/);
 });
 
+test('Install passes the opt-in startup flags through the plan and the script honors them', () => {
+  const calls = [];
+  const plan = { ...mockPlan, supervisor: { logon_type: 's4u', run_level: 'highest', start_at_startup: true, start_when_available: true } };
+  installWindowsService(plan, { execFn: (cmd, args) => { calls.push(args); return { status: 0, stdout: '[]' }; } });
+  const encoded = calls[0][calls[0].indexOf('-PlanBase64') + 1];
+  const sent = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+  assert.equal(sent.supervisor.start_at_startup, true);
+  assert.equal(sent.supervisor.start_when_available, true);
+
+  // Static check (no Windows needed): AtLogOn is unconditional, AtStartup and StartWhenAvailable are gated.
+  const ps1 = fs.readFileSync(path.resolve(import.meta.dirname, 'windows-supervisor.ps1'), 'utf8');
+  assert.match(ps1, /\$trigger = @\(New-ScheduledTaskTrigger -AtLogOn -User \$user\)/);
+  assert.match(ps1, /if \(\$startAtStartup\) \{[^}]*New-ScheduledTaskTrigger -AtStartup/);
+  assert.match(ps1, /if \(\$startWhenAvailable\) \{ \$settings\.StartWhenAvailable = \$true \}/);
+});
+
 const realPs1 = process.platform === 'win32' ? test : test.skip;
 
 function realPlan() {
@@ -173,6 +189,18 @@ realPs1('windows-supervisor.ps1 Install -WhatIf builds the task with working dir
   assert.equal(results[0].WorkingDirectory, 'C:\\repo dir');
   assert.equal(results[0].LogonType, 'Interactive');
   assert.equal(results[0].RunLevel, 'Limited');
+});
+
+realPs1('windows-supervisor.ps1 Install -WhatIf adds AtStartup and StartWhenAvailable only when opted in', () => {
+  const defaults = executeWindowsSupervisor('Install', realPlan(), { dryRun: true });
+  assert.deepEqual(defaults[0].Triggers, ['AtLogOn']);
+  assert.equal(defaults[0].StartWhenAvailable, false);
+
+  const plan = realPlan();
+  plan.supervisor = { ...plan.supervisor, start_at_startup: true, start_when_available: true };
+  const opted = executeWindowsSupervisor('Install', plan, { dryRun: true });
+  assert.deepEqual(opted[0].Triggers, ['AtLogOn', 'AtStartup']);
+  assert.equal(opted[0].StartWhenAvailable, true);
 });
 
 realPs1('windows-supervisor.ps1 Status reports a not-installed portless component as unhealthy', () => {

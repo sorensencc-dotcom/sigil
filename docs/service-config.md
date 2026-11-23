@@ -84,7 +84,7 @@ Store configuration at `.sigil/service.json` by default. Override the path by pa
    - `provider` (string, required): Built-in adapter name. `kb-sync` is currently supported.
    - `port` (integer, 1-65535, required): Loopback MCP HTTP listener port.
    - `identity` (string, required): Path to the Sigil connector identity file.
-   - `relay_url` (string, required when `relay` is omitted): Relay endpoint. Defaults to the configured relay when omitted.
+   - `relay_url` (string, optional): Relay endpoint. With a `relay` block it defaults to that relay. With no `relay` block and no `relay_url` the connector runs memory-only: the plan passes no `--relay-url`, `/mcp/memory` is served, and relay-backed `/v1/*` routes fail closed. A present `relay_url` must be a non-empty string.
 4. **`agents`** (array of objects, optional):
    - `name` (string, required): Distinct agent name.
    - `identity` (string, required): Path to the agent identity file.
@@ -103,6 +103,8 @@ Store configuration at `.sigil/service.json` by default. Override the path by pa
 7. **`supervisor`** (object, optional): How Windows registers each scheduled task.
    - `logon_type` (`interactive` or `s4u`): Default `interactive`, which runs only while you are logged on. `s4u` runs whether or not you are logged on and needs an elevated shell to install.
    - `run_level` (`limited` or `highest`): Default `limited`.
+   - `start_at_startup` (boolean): Default `false`. When `true`, each task also gets an AtStartup trigger, in addition to the AtLogOn trigger (which is never dropped).
+   - `start_when_available` (boolean): Default `false`. When `true`, the task setting StartWhenAvailable is set so a missed start runs once the machine is available. Non-booleans are rejected.
 
 The top-level `secrets` block lists where values come from. `relay.secrets` names the variables the relay reads; it does not load anything.
 
@@ -127,7 +129,7 @@ All ports defined across `relay`, `relay.stream_port`, `relay.ingress_port`, `re
 
 Use a separate service config when the KB-Sync MCP connector should have its own lifecycle. Service commands apply only to components present in the selected config, so this file installs and controls the connector task without stopping or restarting the room stack.
 
-Save this as `.sigil/kb-sync-service.json` and adjust the relay URL and identity path for the host:
+Save this as `.sigil/kb-sync-service.json` and adjust the identity path for the host. `relay_url` is optional: leave it out for a memory-only connector that serves `/mcp/memory` without a live relay.
 
 ```json
 {
@@ -137,10 +139,10 @@ Save this as `.sigil/kb-sync-service.json` and adjust the relay URL and identity
       "name": "kb-sync",
       "provider": "kb-sync",
       "port": 4411,
-      "relay_url": "http://127.0.0.1:8791",
       "identity": ".sigil/grokbot.identity.json"
     }
-  ]
+  ],
+  "supervisor": { "logon_type": "s4u", "run_level": "highest", "start_at_startup": true, "start_when_available": true }
 }
 ```
 
@@ -151,6 +153,8 @@ sigil service install --service-config .sigil/kb-sync-service.json
 sigil service start --service-config .sigil/kb-sync-service.json
 sigil service status --service-config .sigil/kb-sync-service.json
 ```
+
+To check the port and start only this config's components when it is down, run `node sigil/cli/connector-health.mjs --service-config .sigil/kb-sync-service.json`. It refuses any config that has `relay`, `rooms_web`, or `agents`.
 
 The connector provider must be one of Sigil's built-in adapters. The service config does not accept arbitrary commands or arguments.
 

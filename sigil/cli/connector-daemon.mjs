@@ -13,7 +13,7 @@ import { loadIdentity } from './identity.mjs';
 
 const options = {
   port: { type: 'string', default: '4411' },
-  'relay-url': { type: 'string', default: 'http://127.0.0.1:3000' },
+  'relay-url': { type: 'string' },
   identity: { type: 'string', default: '.sigil/grokbot.identity.json' },
   token: { type: 'string', default: 'token_local_dev' }
 };
@@ -32,10 +32,16 @@ if (!fs.existsSync(identityPath)) {
 const identity = loadIdentity(identityPath);
 const privateKey = crypto.createPrivateKey(identity.private_key_pem ?? identity.private_key);
 
-const relay = new RelayClient({
-  baseUrl: relayUrl,
-  token: identity.relay_token ?? identity.auth_token ?? identity.bearer_token ?? 'test_token'
-});
+// Memory-only mode (no --relay-url): /mcp/memory works, relay-backed routes fail closed.
+const noRelay = async () => {
+  throw Object.assign(new Error('No relay configured for this connector'), { code: 'RELAY_NOT_CONFIGURED' });
+};
+const relay = relayUrl
+  ? new RelayClient({
+    baseUrl: relayUrl,
+    token: identity.relay_token ?? identity.auth_token ?? identity.bearer_token ?? 'test_token'
+  })
+  : { sendEnvelope: noRelay, reconcileInbox: noRelay };
 
 const outbox = new LocalOutbox({
   privateKey,
@@ -62,5 +68,5 @@ const connectorApp = createConnectorServer({
 
 connectorApp.server.listen(port, '127.0.0.1', () => {
   console.log(`Sigil Connector HTTP Daemon listening on http://127.0.0.1:${port}`);
-  console.log(`Forwarding tasks to Relay: ${relayUrl}`);
+  console.log(relayUrl ? `Forwarding tasks to Relay: ${relayUrl}` : 'No relay configured: memory-only mode');
 });
