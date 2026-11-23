@@ -26,9 +26,11 @@ export function StatusLine({ roomId, onGone }: { roomId: string; onGone: () => v
   });
   const working = (invocations.data ?? []).filter((row) => row.status === 'queued' || row.status === 'running');
   const memberList = members.data ?? [];
-  const canStop = session?.human_id != null && working.some((row) =>
-    row.subject_human_id === session.human_id || memberList.some((member) => member.endpoint_id === row.endpoint_id && member.owner_id === session.human_id),
-  );
+  const canStop = mode === 'token'
+    ? working.length > 0
+    : session?.human_id != null && working.some((row) =>
+      row.subject_human_id === session.human_id || memberList.some((member) => member.endpoint_id === row.endpoint_id && member.owner_id === session.human_id),
+    );
   if (working.length === 0 && !invocations.error && !stop.error && !invocations.isPending) return null;
   const stopLabel = mode === 'cookie' ? 'Stop my runs' : 'Stop';
   return (
