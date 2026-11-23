@@ -72,16 +72,28 @@ describe('Timeline', () => {
   });
 
   it('opens at this browser’s saved new-message divider and can jump to latest', async () => {
+    const offsetTop = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetTop');
+    Object.defineProperty(HTMLElement.prototype, 'offsetTop', { configurable: true, get() {
+      if (this.classList.contains('timeline-divider')) return 220;
+      if (this.classList.contains('timeline')) return 20;
+      return 0;
+    } });
     localStorage.setItem('sigil.room:room_1:watermark', '1');
     const history = vi.fn(async () => ({ code: 'OK', items: [msg(1, 'm1', 'seen'), msg(2, 'm2', 'new')], next_after_seq: '2' }));
-    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { history });
+    try {
+      renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { history });
 
-    expect(await screen.findByText('New messages · this browser')).toBeInTheDocument();
-    const scroller = screen.getByRole('region', { name: 'Messages' });
-    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 600 });
-    expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Jump to latest' }));
-    expect(scroller.scrollTop).toBe(600);
+      expect(await screen.findByText('New messages · this browser')).toBeInTheDocument();
+      const scroller = screen.getByRole('region', { name: 'Messages' });
+      Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 600 });
+      await waitFor(() => expect(scroller.scrollTop).toBe(200));
+      expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Jump to latest' }));
+      expect(scroller.scrollTop).toBe(600);
+    } finally {
+      if (offsetTop) Object.defineProperty(HTMLElement.prototype, 'offsetTop', offsetTop);
+      else Reflect.deleteProperty(HTMLElement.prototype, 'offsetTop');
+    }
   });
 
   it('separates history rows by their calendar day', async () => {
@@ -92,8 +104,95 @@ describe('Timeline', () => {
     renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { history });
 
     await screen.findByText('today');
-    expect(screen.getByText('Sunday, November 22, 2026')).toBeInTheDocument();
-    expect(screen.getByText('Monday, November 23, 2026')).toBeInTheDocument();
+    const options: Intl.DateTimeFormatOptions = { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' };
+    const yesterdayLabel = new Date('2026-11-22T12:00:00.000Z').toLocaleDateString(undefined, options);
+    const todayLabel = new Date('2026-11-23T12:00:00.000Z').toLocaleDateString(undefined, options);
+    const timeline = screen.getByRole('region', { name: 'Messages' });
+    const labels = Array.from(timeline.querySelectorAll('.timeline-day')).map((item) => item.textContent);
+    const items = Array.from(timeline.querySelectorAll(':scope > ul > li')).map((item) => item.textContent ?? '');
+    const yesterdayIndex = items.findIndex((item) => item.includes('yesterday'));
+    const todayIndex = items.findIndex((item) => item.includes('today'));
+
+    expect(labels).toEqual([yesterdayLabel, todayLabel]);
+    expect(items.findIndex((item) => item.includes(yesterdayLabel))).toBeLessThan(yesterdayIndex);
+    expect(yesterdayIndex).toBeLessThan(items.findIndex((item) => item.includes(todayLabel)));
+    expect(items.findIndex((item) => item.includes(todayLabel))).toBeLessThan(todayIndex);
+  });
+
+  it('does not advance an incomplete history window past unloaded rows', async () => {
+    const onVisibleSeq = vi.fn();
+    const historyBefore = vi.fn(async () => ({
+      code: 'OK', items: Array.from({ length: 100 }, (_, i) => msg(i + 201, `m${i + 201}`, `t${i + 201}`)), next_after_seq: '300', has_older: true,
+    }));
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={onVisibleSeq} onGone={() => {}} />, { historyBefore });
+
+    expect(await screen.findByText('t300')).toBeInTheDocument();
+    expect(localStorage.getItem('sigil.room:room_1:watermark')).toBeNull();
+    expect(onVisibleSeq).not.toHaveBeenCalled();
+  });
+
+  it('keeps a higher saved watermark when the loaded window computes a lower one', async () => {
+    localStorage.setItem('sigil.room:room_1:watermark', '300');
+    const historyBefore = vi.fn(async () => ({
+      code: 'OK', items: Array.from({ length: 100 }, (_, i) => msg(i + 101, `m${i + 101}`, `t${i + 101}`)), next_after_seq: '200', has_older: true,
+    }));
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { historyBefore });
+
+    expect(await screen.findByText('t200')).toBeInTheDocument();
+    await waitFor(() => expect(localStorage.getItem('sigil.room:room_1:watermark')).toBe('300'));
+  });
+
+  it('does not acknowledge or persist while hidden, then resumes when visible', async () => {
+    const original = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    const onVisibleSeq = vi.fn();
+    const history = vi.fn(async () => ({ code: 'OK', items: [msg(1, 'm1', 'one'), msg(2, 'm2', 'two')], next_after_seq: '2' }));
+    try {
+      renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={onVisibleSeq} onGone={() => {}} />, { history });
+      expect(await screen.findByText('two')).toBeInTheDocument();
+      expect(localStorage.getItem('sigil.room:room_1:watermark')).toBeNull();
+      expect(onVisibleSeq).not.toHaveBeenCalled();
+
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+      document.dispatchEvent(new Event('visibilitychange'));
+      await waitFor(() => expect(localStorage.getItem('sigil.room:room_1:watermark')).toBe('2'));
+      expect(onVisibleSeq).toHaveBeenCalledWith('2');
+    } finally {
+      if (original) Object.defineProperty(document, 'visibilityState', original);
+      else Reflect.deleteProperty(document, 'visibilityState');
+    }
+  });
+
+  it('loads around a saved watermark before opening its divider', async () => {
+    localStorage.setItem('sigil.room:room_1:watermark', '100');
+    const latest = Array.from({ length: 100 }, (_, i) => msg(i + 201, `m${i + 201}`, `t${i + 201}`));
+    const around = Array.from({ length: 50 }, (_, i) => msg(i + 51, `m${i + 51}`, `t${i + 51}`));
+    const newer = Array.from({ length: 50 }, (_, i) => msg(i + 101, `m${i + 101}`, `t${i + 101}`));
+    const historyBefore = vi.fn(async (_room: string, before: string) => before === 'latest'
+      ? { code: 'OK', items: latest, next_after_seq: '300', has_older: true }
+      : { code: 'OK', items: around, next_after_seq: '100', has_older: true });
+    const history = vi.fn(async (_room: string, after: string) => after === '100'
+      ? { code: 'OK', items: newer, next_after_seq: '150', has_more: true }
+      : { code: 'OK', items: [], next_after_seq: after, has_more: false });
+    const offsetTop = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetTop');
+    Object.defineProperty(HTMLElement.prototype, 'offsetTop', { configurable: true, get() {
+      if (this.classList.contains('timeline-divider')) return 220;
+      if (this.classList.contains('timeline')) return 20;
+      return 0;
+    } });
+    try {
+      renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { historyBefore, history });
+      expect(await screen.findByText('New messages · this browser')).toBeInTheDocument();
+      const scroller = screen.getByRole('region', { name: 'Messages' });
+      await waitFor(() => expect(scroller.scrollTop).toBe(200));
+      expect(historyBefore.mock.calls.map((call) => call[1])).toEqual(['latest', '101']);
+      expect(history).toHaveBeenCalledWith('room_1', '100', 50);
+      expect(screen.getByText('t101')).toBeInTheDocument();
+      expect(screen.queryByText('t201')).toBeNull();
+    } finally {
+      if (offsetTop) Object.defineProperty(HTMLElement.prototype, 'offsetTop', offsetTop);
+      else Reflect.deleteProperty(HTMLElement.prototype, 'offsetTop');
+    }
   });
 
   it('shows pending and failed rows', async () => {
