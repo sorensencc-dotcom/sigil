@@ -1,4 +1,4 @@
-import type { AckResult, Contact, Session, HistoryPage, Invocation, InvokableBy, Member, ResponseMode, Room, RoomSearchPage, SendResult, StopResult, TicketResult } from './types';
+import type { AckResult, Contact, Session, HistoryPage, Invocation, InvokableBy, Member, Mention, ResponseMode, Room, RoomSearchPage, SendResult, StopResult, TicketResult } from './types';
 
 export class ApiError extends Error {
   readonly code: string;
@@ -37,6 +37,7 @@ export interface ApiClient {
   setInvokableBy(roomId: string, endpointId: string, mode: InvokableBy): Promise<Member>;
   stopRoom(roomId: string): Promise<StopResult>;
   ack(roomId: string, upToRoomSeq: string): Promise<AckResult>;
+  listMentions(): Promise<Mention[]>;
   wsTicket(): Promise<TicketResult>;
   me(): Promise<Session>;
   listContacts(): Promise<Contact[]>;
@@ -153,6 +154,9 @@ export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized
     },
     ack(roomId, upToRoomSeq) {
       return request<AckResult>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/ack`, { up_to_room_seq: upToRoomSeq });
+    },
+    async listMentions() {
+      return (await request<{ items: Mention[] }>('GET', '/v1/mentions')).items;
     },
     wsTicket() {
       return request<TicketResult>('POST', '/v1/rooms/ws-ticket');

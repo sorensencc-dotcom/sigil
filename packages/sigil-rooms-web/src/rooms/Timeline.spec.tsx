@@ -58,6 +58,22 @@ describe('Timeline', () => {
     expect(historyBefore).toHaveBeenCalledWith('room_1', '2', 50);
   });
 
+  it('opens an older mention outside the currently loaded history window', async () => {
+    const target = msg(50, 'mentioned', 'older mention');
+    const historyBefore = vi.fn(async (_room: string, before: string) => before === 'latest'
+      ? { code: 'OK', items: [msg(200, 'latest', 'latest')], next_after_seq: '200', has_older: true }
+      : { code: 'OK', items: [target], next_after_seq: '50', has_older: true });
+    const history = vi.fn(async () => ({ code: 'OK', items: [], next_after_seq: '50', has_more: false }));
+    renderWithClient(
+      <Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} focus={{ message_id: 'mentioned', room_seq: '50' }} />,
+      { historyBefore, history },
+    );
+
+    const row = await screen.findByRole('listitem', { current: 'true' });
+    expect(row).toHaveTextContent('older mention');
+    expect(historyBefore).toHaveBeenCalledWith('room_1', '51', 50);
+  });
+
   it('renders a room.event row as a system line', async () => {
     const history = vi.fn(async () => ({ code: 'OK', items: [msg(1, 'e1', 'stopped by user', 'room.event')], next_after_seq: '1' }));
     renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { history });
@@ -312,5 +328,26 @@ describe('Timeline threads', () => {
     renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={onVisibleSeq} onGone={() => {}} />, { history: orphanHistory });
     expect(await screen.findByText('orphan reply')).toBeInTheDocument();
     await waitFor(() => expect(onVisibleSeq).toHaveBeenLastCalledWith('3'));
+  });
+
+  it('marks the message opened from Mentions and scrolls it into view', async () => {
+    const scrolled = vi.fn();
+    Element.prototype.scrollIntoView = scrolled;
+    const history = vi.fn(async () => ({ code: 'OK', items: [msg(1, 'm1', 'first'), msg(2, 'm2', 'hey @ep_web'), msg(3, 'm3', 'last')], next_after_seq: '3' }));
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} focusMessageId="m2" />, { history });
+    const row = (await screen.findByText('hey @ep_web')).closest('li');
+    expect(row).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByText('first').closest('li')).not.toHaveAttribute('aria-current');
+    await waitFor(() => expect(scrolled).toHaveBeenCalledTimes(1));
+    expect(scrolled.mock.contexts[0]).toBe(row);
+    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+  });
+
+  it('opens the thread when the message opened from Mentions is a reply', async () => {
+    const onOpenThread = vi.fn();
+    const history = vi.fn(async () => ({ code: 'OK', items: [msg(1, 'm1', 'root'), reply(2, 'r2', 'hey @ep_web', 'm1')], next_after_seq: '2' }));
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} onOpenThread={onOpenThread} focusMessageId="r2" />, { history });
+    await waitFor(() => expect(onOpenThread).toHaveBeenCalledWith('m1'));
+    expect(onOpenThread).toHaveBeenCalledTimes(1);
   });
 });

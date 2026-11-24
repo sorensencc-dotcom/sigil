@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
@@ -107,5 +107,33 @@ describe('App', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Back to rooms' }));
     expect(await screen.findByText('No rooms yet.')).toBeInTheDocument();
     expect(window.location.pathname).toBe('/');
+  });
+
+  it('opens a room from Mentions at the message that mentions the user', async () => {
+    const room = { conversation_id: 'room_1', workspace_id: 'w', name: 'build', description: null, created_at: 't', max_agent_turns: 8 };
+    const message = {
+      room_seq: '1', message_id: 'm1', canonical_bytes: 'b',
+      envelope: { message_id: 'm1', message_type: 'room.message', sender: { endpoint_id: 'ep_claude', owner_id: 'u' }, body: { text: 'look @ep' }, created_at: 't' },
+    };
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+      if (url === '/config.json') return json({ authMode: 'cookie' });
+      if (url === '/v1/auth/me') return json({ human_id: 'h', endpoint_id: 'ep', display_name: 'Ada', is_operator: false });
+      if (url === '/v1/rooms') return json({ items: [room] });
+      if (url === '/v1/mentions') return json({ code: 'OK', items: [{ conversation_id: 'room_1', message_id: 'm1', room_seq: '1', sender_endpoint_id: 'ep_claude', text: 'look @ep' }] });
+      if (url.includes('/v1/rooms/room_1/invocations?status=')) return json({ items: [] });
+      if (url.startsWith('/v1/rooms/room_1/messages')) return json({ code: 'OK', items: [message], next_after_seq: '1' });
+      if (url === '/v1/rooms/room_1/members' || url === '/v1/me/contacts') return json({ items: [] });
+      return json({});
+    }));
+    render(<App />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Mentions' }));
+    expect(window.location.pathname).toBe('/mentions');
+    expect(screen.getByRole('button', { name: 'Mentions' })).toHaveAttribute('aria-current', 'page');
+    expect(within(screen.getByRole('navigation', { name: 'Main navigation' })).getByRole('button', { name: 'Rooms' })).not.toHaveAttribute('aria-current');
+    await userEvent.click(await screen.findByRole('button', { name: 'Open in build' }));
+    expect(window.location.pathname).toBe('/');
+    const row = (await screen.findByText('look @ep')).closest('li');
+    expect(row).toHaveAttribute('aria-current', 'true');
   });
 });

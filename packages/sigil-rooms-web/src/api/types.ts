@@ -26,6 +26,15 @@ export interface HistoryItem {
   envelope: RoomEnvelope;
 }
 
+// One row of GET /v1/mentions: a room.message whose mentions list names the caller.
+export interface Mention {
+  conversation_id: string;
+  message_id: string;
+  room_seq: string;
+  sender_endpoint_id: string;
+  text: string | null;
+}
+
 export interface HistoryPage {
   code: string;
   items: HistoryItem[];
