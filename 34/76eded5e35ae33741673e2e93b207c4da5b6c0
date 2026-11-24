@@ -1,0 +1,180 @@
+packages/sigil-rooms-web/src/api/client.ts
+  s_d2933cd8c50642::t_4766e93168af48 1
+  s_d2933cd8c50642::t_f09245df476edb 27,29-30,37,43,54,56,67,77,80,98-99,104-110,139-154,171-174
+.claude/skills/verify-ag-ui-approval/SKILL.md
+  s_d2933cd8c50642::t_3f76fd782101b0 1-16
+.trail/learnings/2026-11-24-opening-a-room-message-from-another-chris.md
+  s_d2933cd8c50642::t_7eaafc17dc9274 1-34
+CLAUDE.md
+  s_d2933cd8c50642::t_98e6cbd458ff8f 72
+bin/sigil.mjs
+  s_d2933cd8c50642::t_b4d1e0b5128d5d 36
+docs/superpowers/competition/2026-11-23-sigil-space-weekly.md
+  s_d2933cd8c50642::t_0e751bdecd3caa 1-227
+docs/superpowers/specs/2026-10-05-sigil-delivery-receipts-design.md
+  s_d2933cd8c50642::t_6f2f67a405203c 54-66
+docs/superpowers/specs/2026-10-16-sigil-hybrid-dm-decisions.md
+  s_d2933cd8c50642::t_8e044c1904887d 55-72
+docs/superpowers/specs/2026-10-16-sigil-hybrid-rooms-direct-messages-design.md
+  s_d2933cd8c50642::t_98710e9ef5973b 18,120,139-140,281-282,295-297,299,303-339,431,436-465,582-585,605,611-613,674-680
+packages/relay-jobs-verification/pg-harness.mjs
+  s_d2933cd8c50642::t_e058179d44f178 50-51
+packages/sigil-rooms-web/e2e/rooms.e2e.ts
+  s_d2933cd8c50642::t_7a0d049107a884 68-69,125
+packages/sigil-rooms-web/src/App.spec.tsx
+  s_d2933cd8c50642::t_68704c868540cf 1,6,12-15,44-66,111-174
+packages/sigil-rooms-web/src/App.tsx
+  s_d2933cd8c50642::t_e74985537ff8fa 4,13,15,17,20,31,37-38,43-47,51,61-62,65,76,91-92,95-99,108-110,115-119,125,128-132,174-175,184-185,193
+packages/sigil-rooms-web/src/api/client.cookie.spec.ts
+  s_d2933cd8c50642::t_a7888940e2e88a 1,13-14,30,36-43,75-126
+packages/sigil-rooms-web/src/api/client.spec.ts
+  s_d2933cd8c50642::t_65817d2c0d7744 13-28,114-128
+packages/sigil-rooms-web/src/api/types.ts
+  s_d2933cd8c50642::t_677ca92dc724bc 18-24,30,36-49,54-73,132-138
+packages/sigil-rooms-web/src/live/useLive.spec.tsx
+  s_d2933cd8c50642::t_b96b47193c6b6a 43,52-53
+packages/sigil-rooms-web/src/live/useLive.ts
+  s_d2933cd8c50642::t_b0b10c3165e431 25
+packages/sigil-rooms-web/src/pages/MentionsView.spec.tsx
+  s_d2933cd8c50642::t_641dd3bb195756 1-75
+packages/sigil-rooms-web/src/pages/MentionsView.tsx
+  s_d2933cd8c50642::t_92f8d6311216ce 1-64
+packages/sigil-rooms-web/src/rooms/Composer.spec.tsx
+  s_d2933cd8c50642::t_9acaca237aa6e4 68-69,72,124-125,127,186-233
+packages/sigil-rooms-web/src/rooms/Composer.tsx
+  s_d2933cd8c50642::t_7e51c1b993680b 3-4,19-51,59,67-68,74-75,132-138
+packages/sigil-rooms-web/src/rooms/EnvelopeInspector.spec.tsx
+  s_d2933cd8c50642::t_9dead07e86f181 1-86
+packages/sigil-rooms-web/src/rooms/EnvelopeInspector.tsx
+  s_d2933cd8c50642::t_7292aed83e1514 1-41
+packages/sigil-rooms-web/src/rooms/NewRoomForm.spec.tsx
+  s_d2933cd8c50642::t_40ced45a83155a 17,20,23-31
+packages/sigil-rooms-web/src/rooms/NewRoomForm.tsx
+  s_d2933cd8c50642::t_4106323a38d88d 10,12,15,27-28,32
+packages/sigil-rooms-web/src/rooms/RoomHeader.spec.tsx
+  s_d2933cd8c50642::t_13a9c6dea900a8 15-17,20,23-24,30-47
+packages/sigil-rooms-web/src/rooms/RoomHeader.tsx
+  s_d2933cd8c50642::t_1b71ff7465b025 4,8,10,14-17,19-20,22-23
+packages/sigil-rooms-web/src/rooms/RoomList.spec.tsx
+  s_d2933cd8c50642::t_d91acd2576cc43 17,19,40
+packages/sigil-rooms-web/src/rooms/RoomList.tsx
+  s_d2933cd8c50642::t_350e86961ddc36 25-26
+packages/sigil-rooms-web/src/rooms/RosterPanel.spec.tsx
+  s_d2933cd8c50642::t_8dc178b0d4d384 19,26,64,73,82,120,126-127,129,134
+packages/sigil-rooms-web/src/rooms/RosterPanel.tsx
+  s_d2933cd8c50642::t_96bde7fa23dedc 12-17,20,65,72,74,79,82
+packages/sigil-rooms-web/src/rooms/RowView.continue.spec.tsx
+  s_d2933cd8c50642::t_850990bba0e430 47
+packages/sigil-rooms-web/src/rooms/RowView.spec.tsx
+  s_d2933cd8c50642::t_59ae316ca04de4 1,40-55
+packages/sigil-rooms-web/src/rooms/RowView.tsx
+  s_d2933cd8c50642::t_f7202559e7bffb 8-23,39-40,43-45,48,56-57,60-61,71-76,80,82-83,85-87,93-99,104,114,130-140
+packages/sigil-rooms-web/src/rooms/SenderChip.spec.tsx
+  s_d2933cd8c50642::t_ccc33e1f724040 4,39-49,77-78,86,93
+packages/sigil-rooms-web/src/rooms/SenderChip.tsx
+  s_d2933cd8c50642::t_7600e88f382382 7-18,80-87
+packages/sigil-rooms-web/src/rooms/StatusLine.spec.tsx
+  s_d2933cd8c50642::t_66aec52d0c504e 1-169
+packages/sigil-rooms-web/src/rooms/StatusLine.tsx
+  s_d2933cd8c50642::t_8b63e8717b3f7c 1-50
+packages/sigil-rooms-web/src/rooms/ThreadPanel.spec.tsx
+  s_d2933cd8c50642::t_ed26b0b08adc1a 31-37
+packages/sigil-rooms-web/src/rooms/ThreadPanel.tsx
+  s_d2933cd8c50642::t_d0e4581cd2aaa4 2,24-25,37-38,72-76,81,84
+packages/sigil-rooms-web/src/rooms/Timeline.spec.tsx
+  s_d2933cd8c50642::t_1632b0381433dc 3,9,12,17-18,27-74,90-213,332-352
+packages/sigil-rooms-web/src/rooms/Timeline.tsx
+  s_d2933cd8c50642::t_0f7e2438804a17 2,4,7,15-27,40-42,54-56,58-59,79-80,83-107,110-129,131-167,169-193,196-211,219-286,288-298,300-328,330-334,336-338,344-348,350-351
+packages/sigil-rooms-web/src/rooms/TrustSummary.tsx
+  s_d2933cd8c50642::t_c077161bd6aee8 1-21
+packages/sigil-rooms-web/src/rooms/cookieMode.spec.tsx
+  s_d2933cd8c50642::t_3bbbe738c0b6fe 12,42,44-45,47,50-52,60,64
+packages/sigil-rooms-web/src/rooms/historyQuery.ts
+  s_d2933cd8c50642::t_06111fa16b6912 6-14,20,22-86
+packages/sigil-rooms-web/src/rooms/recipientPreview.spec.ts
+  s_d2933cd8c50642::t_3bff4c55c06e05 1-105
+packages/sigil-rooms-web/src/rooms/recipientPreview.ts
+  s_d2933cd8c50642::t_84523677134cdb 1-74
+packages/sigil-rooms-web/src/rooms/useHistory.ts
+  s_d2933cd8c50642::t_c25945d9678e09 3,9-22
+packages/sigil-rooms-web/src/rooms/useSend.ts
+  s_d2933cd8c50642::t_a4e2a5a4bc9b2a 4,7,109,115
+packages/sigil-rooms-web/src/styles.css
+  s_d2933cd8c50642::t_1e3b2749c6fa09 23-24,45-46,80-82,129-131,165,173-174,182-186,193-203,205-208,214-216,225-234,246-248,252-259,282-283,293-294,312
+packages/sigil-rooms-web/src/testUtils.tsx
+  s_d2933cd8c50642::t_ae6fd7faa369bb 9-17,20
+sigil/cli/memory-repository.mjs
+  s_d2933cd8c50642::t_7f9c7c5b8e491a 543-574,577,584-594,596-602,608-609,973-981
+sigil/cli/memory-repository.test.mjs
+  s_d2933cd8c50642::t_4e6afdd105bfde 294-300
+sigil/cli/sigil.mjs
+  s_d2933cd8c50642::t_7ca2a86a41c71c 55,111-112,2199-2206
+sigil/cli/transcript-commands.mjs
+  s_d2933cd8c50642::t_7649eeebb3d71d 1-139
+sigil/cli/transcript-commands.test.mjs
+  s_d2933cd8c50642::t_14da0e7cdde619 1-106
+sigil/contracts/v1/relay-api.json
+  s_d2933cd8c50642::t_984f6d15188b60 13
+sigil/contracts/v1/transcript-fixture.mjs
+  s_d2933cd8c50642::t_3cf348520065f9 1-35
+sigil/contracts/v1/transcript-verify.mjs
+  s_d2933cd8c50642::t_48d2da71a50018 1-273
+sigil/contracts/v1/transcript-verify.test.mjs
+  s_d2933cd8c50642::t_76f4b86b08a51d 1-123
+sigil/migrations/043_room_message_search.sql
+  s_d2933cd8c50642::t_8f020ddb59df37 1-7
+sigil/migrations/043_room_message_search.test.mjs
+  s_d2933cd8c50642::t_a9e83daaa8213f 1-28
+sigil/relay/v1/ag-ui-projection.mjs
+  s_d2933cd8c50642::t_59cd6e78fe5452 20-46,48-49
+sigil/relay/v1/ag-ui-projection.test.mjs
+  s_d2933cd8c50642::t_209117c41a13f9 230-243
+sigil/relay/v1/ag-ui-runs.pg.test.mjs
+  s_d2933cd8c50642::t_df6014b191128e 1-174
+sigil/relay/v1/ag-ui-runs.test.mjs
+  s_d2933cd8c50642::t_74799b6806ea93 45-64,121,124-125,158-231
+sigil/relay/v1/http-server.mjs
+  s_d2933cd8c50642::t_1c67303e0505e8 113,399,402-403,411-460,465-506,510,513-516,528-555,557,560,565,578-583,594-595,598-599,609-613
+sigil/relay/v1/postgres-repository.mentions.test.mjs
+  s_d2933cd8c50642::t_6e7e94ca954abe 1-25
+sigil/relay/v1/postgres-repository.mjs
+  s_d2933cd8c50642::t_13d1c9f582f534 159,490-505,2411,2424-2468,2523,2525-2532,2539-2542,2544
+sigil/relay/v1/postgres-repository.room-history.test.mjs
+  s_d2933cd8c50642::t_61da99e669a2b0 1-29
+sigil/relay/v1/room-dispatch.test.mjs
+  s_d2933cd8c50642::t_723252c8fb6ad5 60-85
+sigil/relay/v1/room-routes.mjs
+  s_d2933cd8c50642::t_14ad6d7c504016 20-23,27-54,161-165,454-489,491-508,514-517
+sigil/relay/v1/room-routes.test.mjs
+  s_d2933cd8c50642::t_c7207494c25dfb 47,56,61,63-82,203-240
+verify/ag-ui-approval/AgUiApproval.tla
+  s_d2933cd8c50642::t_10b63321d5d8ab 3-4,12,25-27,29-31,33-34,42-49,158,164-227,241-246
+verify/ag-ui-approval/MC.cfg
+  s_d2933cd8c50642::t_f1f576e2e1123f 3-4,15-20
+verify/ag-ui-approval/MC_current.cfg
+  s_d2933cd8c50642::t_8a2add8702c6e4 3-4,15-20
+verify/ag-ui-approval/check.mjs
+  s_d2933cd8c50642::t_16b03c414bee88 3,26,29-30,39-65
+verify/ag-ui-approval/covered-files.txt
+  s_d2933cd8c50642::t_050378e6d402f2 1-6
+verify/ag-ui-approval/drift.sh
+  s_d2933cd8c50642::t_94d10cc1a3a45b 1-16
+verify/ag-ui-approval/expected.md
+  s_d2933cd8c50642::t_0d775ed165e15e 3-5,9,12-14,18,26-42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3476eded5e35ae33741673e2e93b207c4da5b6c0",
+  "prompts": {},
+  "sessions": {
+    "s_d2933cd8c50642": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20dba-fd60-7c71-9189-6c9c3efaf671",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
