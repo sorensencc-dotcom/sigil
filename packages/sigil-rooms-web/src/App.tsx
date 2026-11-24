@@ -60,7 +60,7 @@ function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
               ))}
             <ErrorBanner error={sendError && !disabledReason ? sendError : null} />
           </div>
-          <Composer send={(text) => send(text)} disabledReason={disabledReason} members={membersQuery.data ?? []} nameFor={nameFor} loginFor={loginFor} />
+          <Composer send={(text) => send(text)} disabledReason={disabledReason} members={membersQuery.data ?? []} nameFor={nameFor} loginFor={loginFor} viewer={sender} />
         </div>
         {openThread ? (
           <ThreadPanel

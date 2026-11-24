@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import type { Member } from '../api/types';
-import { roomMemberName } from './resolveMentions';
+import { previewRecipients, type AgentPreview, type RecipientPreview, type WontWakeReason } from './recipientPreview';
+import { normalizeMentions, roomMemberName } from './resolveMentions';
 import type { LoginFor, NameFor } from './useContacts';
 
 interface MentionRange {
@@ -15,6 +16,36 @@ function activeMention(value: string, cursor: number): MentionRange | null {
   return { start, cursor, query: value.slice(start + 1, cursor) };
 }
 
+const WONT_WAKE: Record<WontWakeReason, string> = {
+  not_mentioned: 'not mentioned',
+  report_only: 'posts reports only',
+  not_allowed: 'only its owner can wake it',
+  no_router: 'no router picks for you',
+};
+
+function Recipients({ preview, name }: { preview: RecipientPreview; name: (endpointId: string) => string }) {
+  const list = (status: AgentPreview['status']) => preview.agents.filter((agent) => agent.status === status).map((agent) => name(agent.endpointId));
+  const wakes = list('wakes');
+  const unknown = list('unknown');
+  const candidates = [...list('router_candidate'), ...unknown];
+  const wontWake = preview.agents.flatMap((agent) => (agent.status === 'wont_wake' ? [`${name(agent.endpointId)} (${WONT_WAKE[agent.reason]})`] : []));
+  return (
+    <div className="recipients" aria-label="Who this message wakes">
+      {preview.mode === 'router' ? (
+        // A prediction: the router reads the message and picks, or picks no one.
+        <p>The router decides. It may wake {candidates.join(', ')}.</p>
+      ) : (
+        <>
+          {wakes.length > 0 ? <p>Will wake: {wakes.join(', ')}</p> : null}
+          {unknown.length > 0 ? <p>Wakes only if you own it: {unknown.join(', ')}</p> : null}
+          {wakes.length === 0 && unknown.length === 0 ? <p>Wakes no agent.</p> : null}
+        </>
+      )}
+      {wontWake.length > 0 ? <p>Won't wake: {wontWake.join(', ')}</p> : null}
+    </div>
+  );
+}
+
 export function Composer({
   send,
   disabledReason,
@@ -22,6 +53,7 @@ export function Composer({
   members = [],
   nameFor,
   loginFor,
+  viewer = null,
 }: {
   send: (text: string) => void;
   disabledReason: string | null;
@@ -29,11 +61,15 @@ export function Composer({
   members?: Member[];
   nameFor?: NameFor;
   loginFor?: LoginFor;
+  /** This browser's endpoint ID, so owner-only agents can be judged. */
+  viewer?: string | null;
 }) {
   const [text, setText] = useState('');
   const [mention, setMention] = useState<MentionRange | null>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const disabled = disabledReason !== null;
+  // The same resolution useSend applies, so the preview and the sent mentions agree.
+  const preview = disabled || !text.trim() ? null : previewRecipients(normalizeMentions(text, members, nameFor, loginFor).mentions, members, viewer);
   const suggestions = mention && !disabled
     ? members.filter((member) => roomMemberName(member, members, nameFor, loginFor).toLowerCase().includes(mention.query.toLowerCase()))
     : [];
@@ -90,6 +126,13 @@ export function Composer({
         </ul>
       ) : null}
       <button type="submit" disabled={disabled}>Send</button>
+      {preview ? (
+        <Recipients
+          preview={preview}
+          // An empty display name makes roomMemberName read the member row's.
+          name={(endpointId) => roomMemberName({ endpoint_id: endpointId, display_name: '' }, members, nameFor, loginFor)}
+        />
+      ) : null}
     </form>
   );
 }
