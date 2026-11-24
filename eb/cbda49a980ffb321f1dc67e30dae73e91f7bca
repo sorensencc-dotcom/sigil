@@ -23,6 +23,7 @@ packages/sigil-rooms-web/src/rooms/EnvelopeInspector.spec.tsx
 packages/sigil-rooms-web/src/rooms/ThreadPanel.tsx
   s_a2a6467b291efe::t_b30d70b555c5a1 2
   s_a2a6467b291efe::t_a5b06bee2ca6f4 24-25,37-38,72-76
+  s_a2a6467b291efe::t_ee6578a662695b 81
 packages/sigil-rooms-web/src/rooms/RowView.tsx
   s_a2a6467b291efe::t_a5b06bee2ca6f4 39-40,55-56,71-74
 packages/sigil-rooms-web/src/rooms/EnvelopeInspector.tsx
