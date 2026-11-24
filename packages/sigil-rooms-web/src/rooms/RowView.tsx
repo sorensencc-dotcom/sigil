@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import type { HistoryItem, Member } from '../api/types';
+import { EnvelopeInspector } from './EnvelopeInspector';
 import type { Row } from './mergeRows';
 import { formatMentionText } from './resolveMentions';
 import { SenderChip, senderName } from './SenderChip';
@@ -56,6 +58,7 @@ export function RowView({
   highlighted?: boolean;
   focused?: boolean;
 }) {
+  const [inspecting, setInspecting] = useState(false);
   if (row.pending) {
     return (
       <li data-mine="true" data-pending={row.pending.status}>
@@ -64,17 +67,24 @@ export function RowView({
       </li>
     );
   }
-  const envelope = row.item!.envelope;
+  const item = row.item!;
+  const envelope = item.envelope;
+  const inspect = (
+    <button type="button" className="ghost" aria-expanded={inspecting} onClick={() => setInspecting((open) => !open)}>Envelope</button>
+  );
+  const inspector = inspecting ? <EnvelopeInspector item={item} /> : null;
   if (envelope.message_type === 'room.event') {
     const { kind, reason, thread_root_id: threadRootId } = envelope.body;
     return (
       <li data-kind="event" data-room-seq={row.item!.room_seq} data-search-match={highlighted || undefined}>
         <em>{kind}{reason ? `: ${reason}` : ''}</em>
-        {kind === 'agent_cap_reached' && onContinue && threadRootId ? (
-          <div className="row-actions">
+        <div className="row-actions">
+          {kind === 'agent_cap_reached' && onContinue && threadRootId ? (
             <button type="button" className="ghost" onClick={() => onContinue(threadRootId)}>Continue</button>
-          </div>
-        ) : null}
+          ) : null}
+          {inspect}
+        </div>
+        {inspector}
       </li>
     );
   }
@@ -91,7 +101,7 @@ export function RowView({
         <SenderChip
           endpointId={envelope.sender.endpoint_id}
           ownerId={envelope.sender.owner_id}
-          name={senderName(envelope.sender.endpoint_id, row.item!.display_name, members, nameFor, loginFor)}
+          name={senderName(envelope.sender.endpoint_id, item.display_name, members, nameFor, loginFor)}
           members={members}
           viewer={sender}
           ownerNameFor={ownerNameFor}
@@ -117,14 +127,18 @@ export function RowView({
           ))}
         </button>
       ) : null}
-      {onReply ? (
-        <div className="row-actions">
-          <button type="button" className="ghost" onClick={onReply}>Reply</button>
-          {replies > 0 ? (
-            <button type="button" className="ghost" onClick={onReply}>{replies} {replies === 1 ? 'reply' : 'replies'}</button>
-          ) : null}
-        </div>
-      ) : null}
+      <div className="row-actions">
+        {onReply ? (
+          <>
+            <button type="button" className="ghost" onClick={onReply}>Reply</button>
+            {replies > 0 ? (
+              <button type="button" className="ghost" onClick={onReply}>{replies} {replies === 1 ? 'reply' : 'replies'}</button>
+            ) : null}
+          </>
+        ) : null}
+        {inspect}
+      </div>
+      {inspector}
     </li>
   );
 }

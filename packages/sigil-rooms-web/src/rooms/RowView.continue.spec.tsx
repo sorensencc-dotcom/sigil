@@ -44,6 +44,6 @@ describe('RowView cap row', () => {
   it('leaves other event kinds unchanged', () => {
     render(<ul><RowView row={eventRow('invocation_refused', { thread_root_id: 'msg_root', reason: 'hop_budget' })} sender={null} onContinue={vi.fn()} /></ul>);
     expect(screen.getByText('invocation_refused: hop_budget')).toBeInTheDocument();
-    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull();
   });
 });

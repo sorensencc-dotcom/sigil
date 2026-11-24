@@ -249,6 +249,14 @@ li[data-pending='failed'] .status { color: var(--color-bad); }
 li[data-kind='event'] .row-actions { margin: 0; }
 li[data-kind='event'] .ghost { background: var(--color-paper-2); border-color: var(--color-rule-2); color: var(--color-ink); }
 
+/* Envelope inspector: machine facts in mono; attested is cool blue, never the verified green */
+.envelope-inspector { margin-top: var(--space-xs); padding: var(--space-xs) var(--space-sm); border-left: var(--rule-hair) solid var(--color-cool); background: var(--color-cool-soft); font-size: var(--text-sm); }
+.envelope-inspector .trust-label { margin: 0 0 var(--space-xs); color: var(--color-cool); font-weight: 500; }
+.envelope-inspector dl { display: grid; gap: var(--space-3xs); margin: 0; }
+.envelope-inspector dt { color: var(--color-muted); font-size: var(--text-xs); }
+.envelope-inspector dd { margin: 0 0 var(--space-2xs); font-family: var(--font-outlier); overflow-wrap: anywhere; }
+.envelope-inspector pre { margin: 0; font-family: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* Reply preview: a hairline under the message, never a card inside the card */
 .reply-preview { display: grid; gap: var(--space-xs); width: 100%; min-height: 44px; margin-top: var(--space-2xs); padding: var(--space-xs) 0 0; justify-content: stretch; text-align: left; background: transparent; border: 0; border-top: var(--rule-hair) solid var(--color-rule); border-radius: 0; color: var(--color-ink-2); font-size: var(--text-sm); font-weight: 400; }
 .reply-preview:hover:not(:disabled) { background: transparent; color: var(--color-ink); text-decoration: underline; text-decoration-color: var(--color-rule-2); text-underline-offset: 0.16em; }
