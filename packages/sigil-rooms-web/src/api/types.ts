@@ -27,7 +27,6 @@ export interface EnvelopeSignature {
 export interface HistoryItem {
   room_seq: string | number;
   message_id: string;
-  // The signed bytes the relay stored, base64url; null when the relay kept none.
   canonical_bytes: string | null;
   // Sender label from endpoints.display_name; absent on older relays.
   display_name?: string;

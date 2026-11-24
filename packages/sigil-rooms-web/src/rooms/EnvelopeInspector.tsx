@@ -2,7 +2,6 @@ import type { HistoryItem } from '../api/types';
 
 const MISSING = 'Not provided by relay';
 
-// Shows the bytes exactly as signed; never re-serialize them, or they stop being the signed bytes.
 function decodeUtf8(base64url: string): string | null {
   try {
     const binary = atob(base64url.replace(/-/g, '+').replace(/_/g, '/'));
@@ -12,12 +11,15 @@ function decodeUtf8(base64url: string): string | null {
   }
 }
 
-export function EnvelopeInspector({ item }: { item: HistoryItem }) {
+export function EnvelopeInspector({ item, onClose }: { item: HistoryItem; onClose: () => void }) {
   const signature = item.envelope.signature;
   const text = item.canonical_bytes === null ? null : decodeUtf8(item.canonical_bytes);
   return (
     <section className="envelope-inspector" aria-label="Envelope" data-trust="attested">
-      <p className="trust-label">Relay-attested, not verified in this browser</p>
+      <header className="envelope-inspector-head">
+        <p className="trust-label">Relay-attested, not verified in this browser</p>
+        <button type="button" className="ghost" aria-label="Close envelope" onClick={onClose}>Close</button>
+      </header>
       <dl>
         <dt>Algorithm</dt>
         <dd>{signature?.algorithm ?? MISSING}</dd>

@@ -1,6 +1,4 @@
-import { useState } from 'react';
 import type { HistoryItem, Member } from '../api/types';
-import { EnvelopeInspector } from './EnvelopeInspector';
 import type { Row } from './mergeRows';
 import { formatMentionText } from './resolveMentions';
 import { SenderChip, senderName } from './SenderChip';
@@ -38,6 +36,8 @@ export function RowView({
   members = [],
   replies = 0,
   latestReplies = [],
+  inspectingId = null,
+  onInspect,
   onReply,
   onContinue,
   roomId,
@@ -53,12 +53,13 @@ export function RowView({
   members?: Member[];
   replies?: number;
   latestReplies?: HistoryItem[];
+  inspectingId?: string | null;
+  onInspect?: (item: HistoryItem) => void;
   onReply?: () => void;
   onContinue?: (threadRootId: string) => void;
   highlighted?: boolean;
   focused?: boolean;
 }) {
-  const [inspecting, setInspecting] = useState(false);
   if (row.pending) {
     return (
       <li data-mine="true" data-pending={row.pending.status}>
@@ -69,10 +70,10 @@ export function RowView({
   }
   const item = row.item!;
   const envelope = item.envelope;
-  const inspect = (
-    <button type="button" className="ghost" aria-expanded={inspecting} onClick={() => setInspecting((open) => !open)}>Envelope</button>
-  );
-  const inspector = inspecting ? <EnvelopeInspector item={item} /> : null;
+  const inspecting = inspectingId === item.message_id;
+  const inspect = onInspect ? (
+    <button type="button" className="ghost" aria-expanded={inspecting} aria-controls={inspecting ? 'envelope-drawer' : undefined} onClick={() => onInspect(item)}>Envelope</button>
+  ) : null;
   if (envelope.message_type === 'room.event') {
     const { kind, reason, thread_root_id: threadRootId } = envelope.body;
     return (
@@ -84,7 +85,6 @@ export function RowView({
           ) : null}
           {inspect}
         </div>
-        {inspector}
       </li>
     );
   }
@@ -138,7 +138,6 @@ export function RowView({
         ) : null}
         {inspect}
       </div>
-      {inspector}
     </li>
   );
 }

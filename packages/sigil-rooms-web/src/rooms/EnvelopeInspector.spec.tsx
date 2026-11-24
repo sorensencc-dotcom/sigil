@@ -1,11 +1,12 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { HistoryItem } from '../api/types';
 import type { Row } from './mergeRows';
+import { EnvelopeInspector } from './EnvelopeInspector';
 import { RowView } from './RowView';
 
-const SIGNED = '{"body":{"text":"hi"},"message_id":"m1"}';
+const SIGNED = '{ "body": { "text": "hi" }, "message_id": "m1" }';
 
 function rowOf(overrides: Partial<HistoryItem> = {}, messageType = 'room.message'): Row {
   return {
@@ -28,19 +29,10 @@ function rowOf(overrides: Partial<HistoryItem> = {}, messageType = 'room.message
   };
 }
 
-async function openEnvelope() {
-  const toggle = screen.getByRole('button', { name: 'Envelope' });
-  expect(toggle).toHaveAttribute('aria-expanded', 'false');
-  expect(screen.queryByRole('region', { name: 'Envelope' })).toBeNull();
-  await userEvent.click(toggle);
-  expect(toggle).toHaveAttribute('aria-expanded', 'true');
-  return screen.getByRole('region', { name: 'Envelope' });
-}
-
 describe('EnvelopeInspector', () => {
-  it('shows the signed bytes and signature fields, labeled relay-attested', async () => {
-    render(<ul><RowView row={rowOf()} sender={null} onReply={() => {}} /></ul>);
-    const panel = within(await openEnvelope());
+  it('shows the signed bytes and signature fields, labeled relay-attested', () => {
+    render(<EnvelopeInspector item={rowOf().item!} onClose={() => {}} />);
+    const panel = within(screen.getByRole('region', { name: 'Envelope' }));
     expect(panel.getByText('Relay-attested, not verified in this browser')).toBeInTheDocument();
     expect(panel.getByText('ed25519')).toBeInTheDocument();
     expect(panel.getByText('key_ada_1')).toBeInTheDocument();
@@ -49,38 +41,46 @@ describe('EnvelopeInspector', () => {
     expect(panel.getByText(SIGNED)).toBeInTheDocument();
   });
 
-  it('never claims a verified state', async () => {
-    render(<ul><RowView row={rowOf()} sender={null} /></ul>);
-    const panel = await openEnvelope();
+  it('never claims a verified state', () => {
+    render(<EnvelopeInspector item={rowOf().item!} onClose={() => {}} />);
+    const panel = screen.getByRole('region', { name: 'Envelope' });
     expect(panel).toHaveAttribute('data-trust', 'attested');
     expect(document.querySelector('[data-trust="verified"]')).toBeNull();
   });
 
-  it('is offered on thread replies, which have no Reply action', async () => {
-    render(<ul><RowView row={rowOf()} sender={null} /></ul>);
-    expect(screen.queryByRole('button', { name: 'Reply' })).toBeNull();
-    await openEnvelope();
+  it('lets a room row open its envelope in the shared drawer', async () => {
+    const row = rowOf();
+    const onInspect = vi.fn();
+    render(<ul><RowView row={row} sender={null} inspectingId="m1" onInspect={onInspect} /></ul>);
+    const toggle = screen.getByRole('button', { name: 'Envelope' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle).toHaveAttribute('aria-controls', 'envelope-drawer');
+    await userEvent.click(toggle);
+    expect(onInspect).toHaveBeenCalledWith(row.item);
   });
 
-  it('is offered on room event rows', async () => {
-    render(<ul><RowView row={rowOf({}, 'room.event')} sender={null} /></ul>);
-    expect(within(await openEnvelope()).getByText('key_ada_1')).toBeInTheDocument();
+  it('lets an event row open its envelope in the shared drawer', async () => {
+    const row = rowOf({}, 'room.event');
+    const onInspect = vi.fn();
+    render(<ul><RowView row={row} sender={null} onInspect={onInspect} /></ul>);
+    await userEvent.click(screen.getByRole('button', { name: 'Envelope' }));
+    expect(onInspect).toHaveBeenCalledWith(row.item);
   });
 
-  it('says so when the relay stored no signed bytes or omitted the signature', async () => {
-    const row = rowOf({ canonical_bytes: null });
-    delete row.item!.envelope.signature;
-    render(<ul><RowView row={row} sender={null} /></ul>);
-    const panel = within(await openEnvelope());
+  it('says so when the relay stored no signed bytes or omitted the signature', () => {
+    const item = rowOf({ canonical_bytes: null }).item!;
+    delete item.envelope.signature;
+    render(<EnvelopeInspector item={item} onClose={() => {}} />);
+    const panel = within(screen.getByRole('region', { name: 'Envelope' }));
     expect(panel.getByText('Relay stored no signed bytes for this row')).toBeInTheDocument();
     expect(panel.getAllByText('Not provided by relay')).toHaveLength(3);
     expect(panel.queryByText('Signed bytes (UTF-8)')).toBeNull();
   });
 
-  it('hides the envelope again on a second click', async () => {
-    render(<ul><RowView row={rowOf()} sender={null} /></ul>);
-    await openEnvelope();
-    await userEvent.click(screen.getByRole('button', { name: 'Envelope' }));
-    expect(screen.queryByRole('region', { name: 'Envelope' })).toBeNull();
+  it('closes the drawer', async () => {
+    const onClose = vi.fn();
+    render(<EnvelopeInspector item={rowOf().item!} onClose={onClose} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Close envelope' }));
+    expect(onClose).toHaveBeenCalledOnce();
   });
 });

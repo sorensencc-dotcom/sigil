@@ -249,9 +249,9 @@ li[data-pending='failed'] .status { color: var(--color-bad); }
 li[data-kind='event'] .row-actions { margin: 0; }
 li[data-kind='event'] .ghost { background: var(--color-paper-2); border-color: var(--color-rule-2); color: var(--color-ink); }
 
-/* Envelope inspector: machine facts in mono; attested is cool blue, never the verified green */
-.envelope-inspector { margin-top: var(--space-xs); padding: var(--space-xs) var(--space-sm); border-left: var(--rule-hair) solid var(--color-cool); background: var(--color-cool-soft); font-size: var(--text-sm); }
-.envelope-inspector .trust-label { margin: 0 0 var(--space-xs); color: var(--color-cool); font-weight: 500; }
+.envelope-inspector[data-trust='attested'] { margin-top: var(--space-xs); padding: var(--space-xs) var(--space-sm); border-left: var(--rule-hair) solid var(--color-cool); background: var(--color-cool-soft); font-size: var(--text-sm); }
+.envelope-inspector[data-trust='attested'] .trust-label { margin: 0; color: var(--color-cool); font-weight: 500; }
+.envelope-inspector-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); }
 .envelope-inspector dl { display: grid; gap: var(--space-3xs); margin: 0; }
 .envelope-inspector dt { color: var(--color-muted); font-size: var(--text-xs); }
 .envelope-inspector dd { margin: 0 0 var(--space-2xs); font-family: var(--font-outlier); overflow-wrap: anywhere; }
@@ -290,6 +290,8 @@ li[data-kind='event'] .ghost { background: var(--color-paper-2); border-color: v
 .thread .composer { padding-inline: var(--space-md); }
 .thread .composer button[type='submit'] { background: var(--color-paper-2); border-color: var(--color-rule-2); color: var(--color-ink); }
 .thread .composer button[type='submit']:hover:not(:disabled) { background: var(--color-paper-3); border-color: var(--color-muted); }
+.envelope-drawer { flex: 0 0 24rem; max-width: 40%; overflow-y: auto; padding: var(--space-md); border-left: var(--rule-hair) solid var(--color-rule); background: var(--color-paper); min-height: 0; }
+.envelope-drawer .envelope-inspector { margin: 0; padding: 0; border: 0; background: transparent; }
 
 /* ── SIGN-IN GATE ───────────────────────────────────────── */
 .gate { width: calc(100% - 2 * var(--space-lg)); max-width: 26.25rem; margin: 15dvh auto 0; padding: var(--space-xl); display: grid; gap: var(--space-lg); background: var(--color-paper-2); border: var(--rule-hair) solid var(--color-rule); border-radius: var(--radius-card); }
@@ -307,6 +309,7 @@ li[data-kind='event'] .ghost { background: var(--color-paper-2); border-color: v
   .room-header { padding-inline: var(--space-md); }
   .new-room { grid-template-columns: minmax(0, 1fr); }
   .thread { position: fixed; right: 0; top: 0; bottom: 0; z-index: 70; width: min(24rem, 100%); max-width: none; }
+  .envelope-drawer { position: fixed; inset: 0 0 0 auto; z-index: 80; width: min(24rem, 100%); max-width: none; padding: var(--space-md); }
 }
 
 @media (max-width: 40rem) {
