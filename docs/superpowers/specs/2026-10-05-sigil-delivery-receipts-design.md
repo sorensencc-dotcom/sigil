@@ -51,6 +51,19 @@ Out of scope, with the reason:
 
 Agent receipts can be missing. `agent-daemon.mjs` reports `processing`, `processed`, and `processing_failed` with `.catch(() => {})`, so a failed report is dropped silently and the delivery stays at `read`. A stuck `read` for an agent means unknown, not working.
 
+## Direct-message states and uncertain outcomes
+
+The [hybrid direct-message design](2026-10-16-sigil-hybrid-rooms-direct-messages-design.md) adds the raw delivery states `held`, `refused`, and `uncertain` for session deliveries. This section states how receipts report them. It changes no shipped behavior for existing states.
+
+- **Legacy fields.** The `state` mapping in the table above is untouched. `mapReceiptState` returns `unknown` for any raw state it does not list, so `state` reads `unknown` for `held`, `refused`, and `uncertain`. `raw_state` carries the real value.
+- **`dm_state`.** Receipt rows and `delivery.receipt` frames for direct messages gain `dm_state` with the values `stored`, `delivered`, `held`, `refused`, and `uncertain`, as the hybrid design's mapping table defines. `uncertain` means the relay handed the message to a session and cannot tell whether the session saw it. `refused` always means a definite refusal.
+- **Frames.** Every move into or out of `uncertain` sends a `delivery.receipt` frame. A missed frame is repaired by the route, as for every other state.
+- **`--wait-for-receipt`.** `uncertain` is not terminal, so the wait continues. A wait that times out while a recipient is `uncertain` exits `8` with the existing "sent, do not resend" line, and the line names the recipient as `uncertain`. The terminal set (`acknowledged`, `processed`, `processing_failed`, `dead_letter`) is unchanged. A `dead_letter` receipt with `dm_state` `uncertain` still exits `7`.
+- **Wake rule (Part 3).** The `(message_id, mapped_state)` pair becomes `(message_id, dm_state)` for rows that carry `dm_state`, and `uncertain` always wakes the host, as `failed` does. The sender needs to act or decide.
+- **Sender never saw the `202`.** This outcome is not a delivery state. The message may not exist, so no row can carry it. `sigil send` reports `uncertain` with the message ID. The proposed exit code is `9` (`SEND_UNCERTAIN`), separate from `1` (rejected before acceptance) and `8` (accepted, receipt pending). The plan confirms `9` is free. The resolution is a resend of the identical signed envelope, or a read of the receipts route: `200` means accepted, and `404` means not accepted. The `404` proves non-acceptance only for local sends, because a forwarded federation send also returns `404` to its sender (Part 1). For a federated send, the sender cannot use the route to settle the question.
+- **Write order.** `sigil send` persists `message_id`, `idempotency_key`, and the signed envelope before it sends, so a resend uses identical bytes. The `sent.jsonl` entry in Part 3 is written at the same point, not after the response.
+- **Tiers.** `uncertain` is not a delivery tier, because tiers are computed before send.
+
 ## Part 1: receipts route and frame
 
 `GET /v1/messages/{message_id}/receipts` returns `{message_id, receipts: [{recipient_endpoint_id, state, raw_state, at}]}`, one row per `deliveries` row for the message, ordered by `queued_at` then `recipient_endpoint_id`. Neither repository defines an order today, so the plan adds the `ORDER BY` and sorts the in-memory result the same way.
