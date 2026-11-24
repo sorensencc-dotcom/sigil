@@ -44,7 +44,7 @@ describe('MentionsView', () => {
     const onOpen = vi.fn();
     renderWithClient(<MentionsView onOpen={onOpen} />, client(async () => ({ items: mentions, next_cursor: null })));
     await userEvent.click(await screen.findByRole('button', { name: 'Open in ops' }));
-    expect(onOpen).toHaveBeenCalledWith('room_ops', 'msg_2');
+    expect(onOpen).toHaveBeenCalledWith(mentions[1]);
   });
 
   it('loads older mentions without replacing the first page', async () => {

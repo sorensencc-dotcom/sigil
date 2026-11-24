@@ -69,7 +69,7 @@ describe('Timeline', () => {
       { historyBefore, history },
     );
 
-    const row = await screen.findByRole('listitem', { current: 'true' });
+    const row = await screen.findByRole('listitem', { current: true });
     expect(row).toHaveTextContent('older mention');
     expect(historyBefore).toHaveBeenCalledWith('room_1', '51', 50);
   });
@@ -334,7 +334,7 @@ describe('Timeline threads', () => {
     const scrolled = vi.fn();
     Element.prototype.scrollIntoView = scrolled;
     const history = vi.fn(async () => ({ code: 'OK', items: [msg(1, 'm1', 'first'), msg(2, 'm2', 'hey @ep_web'), msg(3, 'm3', 'last')], next_after_seq: '3' }));
-    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} focusMessageId="m2" />, { history });
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} focus={{ message_id: 'm2', room_seq: '2' }} />, { history });
     const row = (await screen.findByText('hey @ep_web')).closest('li');
     expect(row).toHaveAttribute('aria-current', 'true');
     expect(screen.getByText('first').closest('li')).not.toHaveAttribute('aria-current');
@@ -346,7 +346,7 @@ describe('Timeline threads', () => {
   it('opens the thread when the message opened from Mentions is a reply', async () => {
     const onOpenThread = vi.fn();
     const history = vi.fn(async () => ({ code: 'OK', items: [msg(1, 'm1', 'root'), reply(2, 'r2', 'hey @ep_web', 'm1')], next_after_seq: '2' }));
-    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} onOpenThread={onOpenThread} focusMessageId="r2" />, { history });
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} onOpenThread={onOpenThread} focus={{ message_id: 'r2', room_seq: '2' }} />, { history });
     await waitFor(() => expect(onOpenThread).toHaveBeenCalledWith('m1'));
     expect(onOpenThread).toHaveBeenCalledTimes(1);
   });
