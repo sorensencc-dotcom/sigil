@@ -27,13 +27,16 @@ function Recipients({ preview, name }: { preview: RecipientPreview; name: (endpo
   const list = (status: AgentPreview['status']) => preview.agents.filter((agent) => agent.status === status).map((agent) => name(agent.endpointId));
   const wakes = list('wakes');
   const unknown = list('unknown');
-  const candidates = [...list('router_candidate'), ...unknown];
+  const candidates = list('router_candidate');
   const wontWake = preview.agents.flatMap((agent) => (agent.status === 'wont_wake' ? [`${name(agent.endpointId)} (${WONT_WAKE[agent.reason]})`] : []));
   return (
     <div className="recipients" aria-label="Who this message wakes">
       {preview.mode === 'router' ? (
         // A prediction: the router reads the message and picks, or picks no one.
-        <p>The router decides. It may wake {candidates.join(', ')}.</p>
+        <>
+          {candidates.length > 0 ? <p>The router decides. It may wake {candidates.join(', ')}.</p> : null}
+          {unknown.length > 0 ? <p>The router may also consider these agents if you own them: {unknown.join(', ')}.</p> : null}
+        </>
       ) : (
         <>
           {wakes.length > 0 ? <p>Will wake: {wakes.join(', ')}</p> : null}

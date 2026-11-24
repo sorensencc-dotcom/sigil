@@ -87,11 +87,17 @@ describe('previewRecipients', () => {
     expect(previewRecipients([], [me, router, bobs, quiet], 'ep_me')?.mode).toBe('none');
   });
 
-  it('marks owner-only agents unknown before the browser knows who the sender is', () => {
+  it('marks a mentioned owner-only agent unknown before the browser knows who the sender is', () => {
     expect(previewRecipients(['ep_mine'], [me, mine], null)?.agents).toEqual([{ endpointId: 'ep_mine', status: 'unknown' }]);
-    const routed = previewRecipients([], [me, router, mine, shared], null);
-    expect(routed?.mode).toBe('router');
-    expect(routed?.agents).toEqual([
+  });
+
+  it('does not predict a router can run when its owner is unknown', () => {
+    expect(previewRecipients([], [me, router, mine, shared], null)).toBeNull();
+  });
+
+  it('keeps owner-only joins agents separate from known router candidates', () => {
+    const sharedRouter = { ...router, invokable_by: 'members' as const };
+    expect(previewRecipients([], [me, sharedRouter, mine, shared], null)?.agents).toEqual([
       { endpointId: 'ep_mine', status: 'unknown' },
       { endpointId: 'ep_shared', status: 'router_candidate' },
     ]);

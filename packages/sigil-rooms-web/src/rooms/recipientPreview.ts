@@ -32,7 +32,7 @@ function allowed(subject: string | null, agent: Member): Allowed {
 /**
  * Predicts which agents a human's room.message wakes.
  * `mentions` are the endpoint IDs the send will carry (normalizeMentions), `viewer` is this browser's endpoint.
- * Returns null when the room lists no agents, so the caller shows nothing rather than a false "wakes no agent".
+ * Returns null when no agents are listed, or when identity is needed to know if its router can run.
  */
 export function previewRecipients(mentions: string[], members: Member[], viewer: string | null): RecipientPreview | null {
   const agents = members.filter((member) => member.response_mode !== null && member.response_mode !== 'router');
@@ -57,7 +57,9 @@ export function previewRecipients(mentions: string[], members: Member[], viewer:
   }
 
   // No mention: a router the sender may invoke picks among joins agents the sender may invoke.
-  const routerRuns = members.some((member) => member.response_mode === 'router' && allowed(subject, member) !== 'no');
+  const routers = members.filter((member) => member.response_mode === 'router');
+  const routerRuns = routers.some((member) => allowed(subject, member) === 'yes');
+  if (!routerRuns && routers.some((member) => allowed(subject, member) === 'unknown')) return null;
   const previews = agents.map((agent): AgentPreview => {
     const endpointId = agent.endpoint_id;
     if (agent.response_mode === 'report_only') return { endpointId, status: 'wont_wake', reason: 'report_only' };

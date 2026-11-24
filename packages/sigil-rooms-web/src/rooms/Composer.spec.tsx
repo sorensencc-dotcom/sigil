@@ -207,6 +207,21 @@ describe('Composer recipient preview', () => {
     expect(screen.queryByText(/will wake/i)).not.toBeInTheDocument();
   });
 
+  it('does not claim an owner-only router will decide before the viewer is known', async () => {
+    renderWithClient(<Composer send={() => {}} disabledReason={null} members={members} />, {});
+    await userEvent.type(screen.getByRole('textbox'), 'who can help?');
+    expect(screen.queryByText(/router decides/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Who this message wakes')).not.toBeInTheDocument();
+  });
+
+  it('labels owner-only joins agents as conditional instead of router candidates', async () => {
+    const sharedRouter = { ...router, invokable_by: 'members' as const };
+    renderWithClient(<Composer send={() => {}} disabledReason={null} members={[me, sharedRouter, ada]} />, {});
+    await userEvent.type(screen.getByRole('textbox'), 'who can help?');
+    expect(screen.getByText('The router may also consider these agents if you own them: Ada.')).toBeInTheDocument();
+    expect(screen.queryByText('The router decides. It may wake Ada.')).not.toBeInTheDocument();
+  });
+
   it('shows nothing before text is typed or while members are unknown', async () => {
     const { unmount } = renderWithClient(<Composer send={() => {}} disabledReason={null} members={members} viewer="ep_me" />, {});
     expect(screen.queryByLabelText('Who this message wakes')).not.toBeInTheDocument();
