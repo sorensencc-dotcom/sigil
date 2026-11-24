@@ -268,6 +268,8 @@ li[data-kind='event'] .ghost { background: var(--color-paper-2); border-color: v
 .composer button[type='submit'], .gate button[type='submit'] { min-height: 44px; background: var(--color-accent); border-color: var(--color-accent); color: var(--color-accent-ink); }
 .composer button[type='submit']:hover:not(:disabled), .gate button[type='submit']:hover:not(:disabled) { background: color-mix(in oklab, var(--color-accent) 86%, var(--color-ink)); border-color: color-mix(in oklab, var(--color-accent) 86%, var(--color-ink)); }
 .reason { flex-basis: 100%; margin: 0; color: var(--color-muted); font-size: var(--text-sm); }
+.recipients { flex-basis: 100%; color: var(--color-muted); font-size: var(--text-sm); }
+.recipients p { margin: 0; }
 
 /* ── THREAD ─────────────────────────────────────────────── */
 .thread { display: flex; flex-direction: column; width: 24rem; max-width: 40%; border-left: var(--rule-hair) solid var(--color-rule); background: var(--color-paper); min-height: 0; }
