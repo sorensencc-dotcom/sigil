@@ -1,0 +1,35 @@
+docs/superpowers/specs/2026-10-05-sigil-delivery-receipts-design.md
+  s_fe3b2a5f970d8f::t_a332dd37844a87 54-66
+docs/superpowers/specs/2026-10-16-sigil-hybrid-rooms-direct-messages-design.md
+  s_fe3b2a5f970d8f::t_c7077922566502 679
+  s_fe3b2a5f970d8f::t_ee2e90ab5da635 674-678,680
+  s_fe3b2a5f970d8f::t_e592b97ca2b8d4 295-297,299
+  s_fe3b2a5f970d8f::t_314b033e280ee4 436-465
+  s_fe3b2a5f970d8f::t_cd6bdaf36b9b76 303-339
+  s_fe3b2a5f970d8f::t_7a69f98851314c 139-140
+  s_fe3b2a5f970d8f::t_d4559541167c94 18
+  s_fe3b2a5f970d8f::t_506b4548a7d911 605
+  s_fe3b2a5f970d8f::t_f10edb6c4d8892 611-613
+  s_fe3b2a5f970d8f::t_fbf239e483862a 582-585
+  s_fe3b2a5f970d8f::t_c502e607af58b2 120
+  s_fe3b2a5f970d8f::t_ea06db1ebf6126 281-282
+  s_fe3b2a5f970d8f::t_9674a3010597a5 431
+docs/superpowers/specs/2026-10-16-sigil-hybrid-dm-decisions.md
+  s_fe3b2a5f970d8f::t_4b16ee5a2eecae 55-72
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7aef53ef9b321cf2ef7db2c15219719e8b7258ba",
+  "prompts": {},
+  "sessions": {
+    "s_fe3b2a5f970d8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0c04077a-d3fa-494a-b221-b9ffd537836d",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
