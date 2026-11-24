@@ -135,7 +135,7 @@ test('rename, thread reply, Stop, and a response-mode change', async ({ page }) 
   });
   expect(added.status).toBe(201);
   await page.getByRole('button', { name: 'Roster' }).click();
-  const select = page.getByLabel(`Response mode for ${harness.agentEndpointId}`);
+  const select = page.getByLabel(`Wake rule for ${harness.agentEndpointId}`);
   await expect(select).toHaveValue('joins');
   await select.selectOption('mentions_only');
   await expect(select).toHaveValue('mentions_only');
