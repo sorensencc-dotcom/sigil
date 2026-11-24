@@ -1,0 +1,27 @@
+#!/bin/sh
+# Tiered pre-push gate. CI runs the full matrix; this runs only what the pushed
+# paths need. Model: verify/pre-push-gate. Override: SIGIL_PREPUSH_FULL=1 runs
+# every local gate. Skip with `git push --no-verify` only with user approval.
+GATES=$(node sigil/scripts/prepush-tier.mjs) || exit 1
+if [ -z "$GATES" ]; then
+  echo "pre-push: no local gates needed for this push."
+  exit 0
+fi
+unset SIGIL_TEST_DATABASE_URL
+for gate in $GATES; do
+  case "$gate" in
+    web)
+      if [ ! -d packages/sigil-rooms-web/node_modules ]; then
+        echo "pre-push: web gate needs deps. Run: npm --prefix packages/sigil-rooms-web ci" >&2
+        exit 1
+      fi
+      npm --prefix packages/sigil-rooms-web run typecheck || exit 1
+      npm --prefix packages/sigil-rooms-web test || exit 1
+      ;;
+    core)
+      node sigil/scripts/prepush-preflight.mjs || exit 1
+      npm run audit:jcs || exit 1
+      npm test || exit 1
+      ;;
+  esac
+done
