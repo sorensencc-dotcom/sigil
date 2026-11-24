@@ -5,7 +5,7 @@ import { TrustSummary } from './TrustSummary';
 import { isManager } from './roles';
 import { useMembers } from './useMembers';
 
-export function RoomHeader({ roomId, name, purpose, sender, onGone }: { roomId: string; name: string; purpose?: string | null; sender: string | null; onGone: () => void }) {
+export function RoomHeader({ roomId, name, purpose, maxAgentTurns, sender, onGone }: { roomId: string; name: string; purpose?: string | null; maxAgentTurns?: number; sender: string | null; onGone: () => void }) {
   const members = useMembers(roomId);
   const [openPanel, setOpenPanel] = useState<'roster' | 'trust' | null>(null);
   const manager = isManager(members.data ?? [], sender);
@@ -19,7 +19,7 @@ export function RoomHeader({ roomId, name, purpose, sender, onGone }: { roomId: 
         <button type="button" className="ghost" aria-expanded={openPanel === 'roster'} onClick={() => setOpenPanel((open) => open === 'roster' ? null : 'roster')}>Roster</button>
         <button type="button" className="ghost" aria-expanded={openPanel === 'trust'} onClick={() => setOpenPanel((open) => open === 'trust' ? null : 'trust')}>Trust</button>
       </div>
-      {openPanel === 'roster' ? <RosterPanel roomId={roomId} members={members.data ?? []} manager={manager} viewer={sender} onGone={onGone} /> : null}
+      {openPanel === 'roster' ? <RosterPanel roomId={roomId} maxAgentTurns={maxAgentTurns} members={members.data ?? []} manager={manager} viewer={sender} onGone={onGone} /> : null}
       {openPanel === 'trust' ? <TrustSummary /> : null}
     </header>
   );

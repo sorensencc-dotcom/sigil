@@ -17,16 +17,17 @@ describe('RoomHeader', () => {
     expect(screen.getByText('the build room')).toBeInTheDocument();
   });
   it('shows rename and editable modes to a manager, and neither before the sender is known', async () => {
-    const first = renderWithClient(<RoomHeader roomId="room_1" name="build" sender="ep_web" onGone={() => {}} />, { listMembers });
+    const first = renderWithClient(<RoomHeader roomId="room_1" name="build" maxAgentTurns={6} sender="ep_web" onGone={() => {}} />, { listMembers });
     expect(await screen.findByRole('button', { name: 'Rename room' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Roster' }));
-    expect(await screen.findByLabelText('Response mode for ep_claude')).toBeInTheDocument();
+    expect(await screen.findByLabelText('Wake rule for ep_claude')).toBeInTheDocument();
+    expect(screen.getByText('Turn cap: 6 agent turns per thread.').tagName).toBe('P');
     first.unmount();
     renderWithClient(<RoomHeader roomId="room_1" name="build" sender={null} onGone={() => {}} />, { listMembers });
     await userEvent.click(screen.getByRole('button', { name: 'Roster' }));
     expect(await screen.findByText('ep_claude')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Rename room' })).toBeNull();
-    expect(screen.queryByLabelText('Response mode for ep_claude')).toBeNull();
+    expect(screen.queryByLabelText('Wake rule for ep_claude')).toBeNull();
   });
 
   it('opens an honest trust summary for any room member', async () => {
