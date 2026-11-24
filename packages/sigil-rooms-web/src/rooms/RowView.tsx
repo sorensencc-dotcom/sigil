@@ -36,6 +36,8 @@ export function RowView({
   members = [],
   replies = 0,
   latestReplies = [],
+  inspectingId = null,
+  onInspect,
   onReply,
   onContinue,
   roomId,
@@ -51,6 +53,8 @@ export function RowView({
   members?: Member[];
   replies?: number;
   latestReplies?: HistoryItem[];
+  inspectingId?: string | null;
+  onInspect?: (item: HistoryItem) => void;
   onReply?: () => void;
   onContinue?: (threadRootId: string) => void;
   highlighted?: boolean;
@@ -64,17 +68,23 @@ export function RowView({
       </li>
     );
   }
-  const envelope = row.item!.envelope;
+  const item = row.item!;
+  const envelope = item.envelope;
+  const inspecting = inspectingId === item.message_id;
+  const inspect = onInspect ? (
+    <button type="button" className="ghost" aria-expanded={inspecting} aria-controls={inspecting ? 'envelope-drawer' : undefined} onClick={() => onInspect(item)}>Envelope</button>
+  ) : null;
   if (envelope.message_type === 'room.event') {
     const { kind, reason, thread_root_id: threadRootId } = envelope.body;
     return (
       <li data-kind="event" data-room-seq={row.item!.room_seq} data-search-match={highlighted || undefined}>
         <em>{kind}{reason ? `: ${reason}` : ''}</em>
-        {kind === 'agent_cap_reached' && onContinue && threadRootId ? (
-          <div className="row-actions">
+        <div className="row-actions">
+          {kind === 'agent_cap_reached' && onContinue && threadRootId ? (
             <button type="button" className="ghost" onClick={() => onContinue(threadRootId)}>Continue</button>
-          </div>
-        ) : null}
+          ) : null}
+          {inspect}
+        </div>
       </li>
     );
   }
@@ -91,7 +101,7 @@ export function RowView({
         <SenderChip
           endpointId={envelope.sender.endpoint_id}
           ownerId={envelope.sender.owner_id}
-          name={senderName(envelope.sender.endpoint_id, row.item!.display_name, members, nameFor, loginFor)}
+          name={senderName(envelope.sender.endpoint_id, item.display_name, members, nameFor, loginFor)}
           members={members}
           viewer={sender}
           ownerNameFor={ownerNameFor}
@@ -117,14 +127,17 @@ export function RowView({
           ))}
         </button>
       ) : null}
-      {onReply ? (
-        <div className="row-actions">
-          <button type="button" className="ghost" onClick={onReply}>Reply</button>
-          {replies > 0 ? (
-            <button type="button" className="ghost" onClick={onReply}>{replies} {replies === 1 ? 'reply' : 'replies'}</button>
-          ) : null}
-        </div>
-      ) : null}
+      <div className="row-actions">
+        {onReply ? (
+          <>
+            <button type="button" className="ghost" onClick={onReply}>Reply</button>
+            {replies > 0 ? (
+              <button type="button" className="ghost" onClick={onReply}>{replies} {replies === 1 ? 'reply' : 'replies'}</button>
+            ) : null}
+          </>
+        ) : null}
+        {inspect}
+      </div>
     </li>
   );
 }

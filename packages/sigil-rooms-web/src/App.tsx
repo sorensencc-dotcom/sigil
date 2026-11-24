@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ApiError } from './api/client';
+import type { HistoryItem } from './api/types';
 import { AuthProvider, useAuth, useSelfEndpoint } from './auth/AuthContext';
 import { Mark, normalizeTheme, ThemeToggle } from './auth/GateHeader';
 import { TokenGate } from './auth/TokenGate';
@@ -13,6 +14,7 @@ import { MentionsView } from './pages/MentionsView';
 import { SettingsPage } from './pages/SettingsPage';
 import type { Mention } from './api/types';
 import { Composer } from './rooms/Composer';
+import { EnvelopeInspector } from './rooms/EnvelopeInspector';
 import { RoomHeader } from './rooms/RoomHeader';
 import { RoomList } from './rooms/RoomList';
 import { StatusLine } from './rooms/StatusLine';
@@ -38,9 +40,15 @@ function RoomView({ roomId, onGone, focus }: { roomId: string; onGone: () => voi
   const reportSeq = useAck(roomId);
   // RoomView is keyed by room, so the open thread resets when the room changes.
   const [openThread, setOpenThread] = useState<string | null>(null);
+  const [inspectingEnvelope, setInspectingEnvelope] = useState<HistoryItem | null>(null);
+  const toggleEnvelope = useCallback((item: HistoryItem) => {
+    setOpenThread(null);
+    setInspectingEnvelope((current) => current?.message_id === item.message_id ? null : item);
+  }, []);
   // Roots of every thread opened in this room: their replies count as read even after the panel closes.
   const [seenRoots, setSeenRoots] = useState<ReadonlySet<string>>(() => new Set());
   const openThreadRoot = useCallback((rootId: string) => {
+    setInspectingEnvelope(null);
     setOpenThread(rootId);
     setSeenRoots((prev) => (prev.has(rootId) ? prev : new Set(prev).add(rootId)));
   }, []);
@@ -54,7 +62,7 @@ function RoomView({ roomId, onGone, focus }: { roomId: string; onGone: () => voi
       <StatusLine roomId={roomId} onGone={onGone} />
       <div className="room-body">
         <div className="room-main">
-          <Timeline roomId={roomId} pending={pending} onVisibleSeq={reportSeq} onGone={onGone} seenThreadRoots={seenRoots} onOpenThread={openThreadRoot} nameFor={nameFor} loginFor={loginFor} ownerNameFor={ownerNameFor} members={membersQuery.data ?? []} focus={focus} />
+          <Timeline roomId={roomId} pending={pending} onVisibleSeq={reportSeq} onGone={onGone} seenThreadRoots={seenRoots} onOpenThread={openThreadRoot} nameFor={nameFor} loginFor={loginFor} ownerNameFor={ownerNameFor} members={membersQuery.data ?? []} focus={focus} inspectingId={inspectingEnvelope?.message_id ?? null} onInspect={toggleEnvelope} />
           <div className="notices">
             {pending
               .filter((row) => row.status === 'failed' && row.retryable !== false)
@@ -80,7 +88,14 @@ function RoomView({ roomId, onGone, focus }: { roomId: string; onGone: () => voi
             nameFor={nameFor}
             loginFor={loginFor}
             ownerNameFor={ownerNameFor}
+            inspectingId={inspectingEnvelope?.message_id ?? null}
+            onInspect={toggleEnvelope}
           />
+        ) : null}
+        {inspectingEnvelope ? (
+          <aside className="envelope-drawer" id="envelope-drawer" aria-label="Envelope inspector">
+            <EnvelopeInspector item={inspectingEnvelope} onClose={() => setInspectingEnvelope(null)} />
+          </aside>
         ) : null}
       </div>
     </div>

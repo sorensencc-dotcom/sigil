@@ -15,12 +15,19 @@ export interface RoomEnvelope {
   sender: { endpoint_id: string; owner_id: string };
   body: { text?: string; kind?: RoomEventKind | (string & {}); reason?: string; endpoint_ids?: string[]; invocation_id?: string; thread_root_id?: string };
   created_at: string;
+  signature?: EnvelopeSignature;
+}
+
+export interface EnvelopeSignature {
+  algorithm: string | null;
+  key_id: string | null;
+  value: string | null;
 }
 
 export interface HistoryItem {
   room_seq: string | number;
   message_id: string;
-  canonical_bytes: string;
+  canonical_bytes: string | null;
   // Sender label from endpoints.display_name; absent on older relays.
   display_name?: string;
   envelope: RoomEnvelope;

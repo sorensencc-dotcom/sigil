@@ -38,6 +38,8 @@ export function Timeline({
   ownerNameFor,
   members = [],
   focus = null,
+  inspectingId = null,
+  onInspect,
 }: {
   roomId: string;
   pending: PendingMessage[];
@@ -50,6 +52,8 @@ export function Timeline({
   ownerNameFor?: OwnerNameFor;
   members?: Member[];
   focus?: Pick<Mention, 'message_id' | 'room_seq'> | null;
+  inspectingId?: string | null;
+  onInspect?: (item: HistoryItem) => void;
 }) {
   const { items, isLoading, error, hasOlder, hasNewer, atLatest, loadOlder, loadNewer, goToLatest, goToSequence } = useHistory(roomId);
   const [focusedSeq, setFocusedSeq] = useState<string | null>(null);
@@ -340,6 +344,8 @@ export function Timeline({
             replies={entry.row.item ? counts.get(entry.row.item.message_id) ?? 0 : 0}
             latestReplies={entry.row.item ? latestByRoot.get(entry.row.item.message_id) ?? [] : []}
             highlighted={entry.row.item != null && String(entry.row.item.room_seq) === focusedSeq}
+            inspectingId={inspectingId}
+            onInspect={onInspect}
             onContinue={(threadRootId) => { if (!resume.isPending) resume.mutate(threadRootId); }}
             onReply={entry.row.item && entry.row.item.envelope.message_type === 'room.message' ? () => onOpenThread(threadRootOf(entry.row.item!, byId)) : undefined}
             focused={!!focus && entry.row.item?.message_id === focus.message_id}
