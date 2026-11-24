@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, type ApiClient } from '../api/client';
 import type { Member, Session } from '../api/types';
 import { TestAuthProvider } from '../auth/AuthContext';
+import { clearToken, setSender } from '../auth/tokenStore';
 import { StatusLine } from './StatusLine';
 
 const members: Member[] = [
@@ -30,7 +31,10 @@ function renderStatusLine(client: Partial<ApiClient>, initialInvocations?: unkno
 }
 
 describe('StatusLine', () => {
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    clearToken();
+  });
 
   it('names the working agent exactly and shows Stop for work on an owned endpoint', async () => {
     const client = {
@@ -59,6 +63,22 @@ describe('StatusLine', () => {
       listInvocations: vi.fn(async () => [startedByMe]),
     });
     expect(await screen.findByRole('button', { name: 'Stop my runs' })).toBeInTheDocument();
+  });
+
+  it('keeps Stop available for token-mode users while work is active', async () => {
+    setSender('ep_web');
+    const client = {
+      listMembers: vi.fn(async () => members),
+      listInvocations: vi.fn(async () => [ownAgentWork]),
+    };
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <TestAuthProvider client={client as unknown as ApiClient} mode="token">
+          <StatusLine roomId="room_1" onGone={() => {}} />
+        </TestAuthProvider>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByRole('button', { name: 'Stop' })).toBeInTheDocument();
   });
 
   it('stays hidden only after the idle invocation query resolves', async () => {
