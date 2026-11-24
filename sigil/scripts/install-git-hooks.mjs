@@ -3,44 +3,34 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
+// Hooks are tracked in .githooks and wired through core.hooksPath, so `npm install`
+// (which runs `prepare`) cannot overwrite a tuned hook. See verify/pre-push-gate.
+const HOOKS_DIR = '.githooks';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '../..');
 
-let gitDir;
-try {
-  gitDir = execFileSync('git', ['rev-parse', '--git-dir'], { cwd: repoRoot, encoding: 'utf8' }).trim();
-} catch {
-  process.exit(0);
+export function installHooks({ git = execFileSync, exists = fs.existsSync, log = console.log } = {}) {
+  if (!exists(path.join(repoRoot, HOOKS_DIR))) return 'skipped: no hooks directory';
+  let current = '';
+  try {
+    git('git', ['rev-parse', '--git-dir'], { cwd: repoRoot, encoding: 'utf8' });
+    try {
+      current = git('git', ['config', '--local', '--get', 'core.hooksPath'], { cwd: repoRoot, encoding: 'utf8' }).trim();
+    } catch {
+      current = '';
+    }
+  } catch {
+    return 'skipped: not a git checkout';
+  }
+  if (current && current !== HOOKS_DIR) {
+    log(`Leaving core.hooksPath=${current} alone. Point it at ${HOOKS_DIR} to use the Sigil hooks.`);
+    return 'skipped: custom hooksPath';
+  }
+  git('git', ['config', '--local', 'core.hooksPath', HOOKS_DIR], { cwd: repoRoot });
+  log(`Git hooks: core.hooksPath=${HOOKS_DIR} (pre-commit secret scan, pre-push tiered gate).`);
+  return 'installed';
 }
 
-const hooksDir = path.resolve(repoRoot, gitDir, 'hooks');
-fs.mkdirSync(hooksDir, { recursive: true });
-
-const hookPath = path.join(hooksDir, 'pre-commit');
-const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
-const nodePath = process.execPath.replaceAll('\\', '/');
-const scanPath = path.relative(repoRoot, path.join(here, 'secret-scan.mjs')).split(path.sep).join('/');
-const hookBody = `#!/bin/sh
-exec ${shellQuote(nodePath)} ${shellQuote(scanPath)}
-`;
-
-fs.writeFileSync(hookPath, hookBody, { mode: 0o755 });
-const docsOnlyScript = 'sigil/scripts/prepush-is-docs-only.mjs';
-const prePushBody = `#!/bin/sh
-# If every file in the pushed range is under docs/ or ends in .md, skip the
-# test suite. If this script is missing (older branch), fall through and run tests.
-if [ -f ${docsOnlyScript} ]; then
-  if ${shellQuote(nodePath)} ${docsOnlyScript}; then
-    echo "pre-push: docs-only push; skipping the test suite."
-    exit 0
-  fi
-fi
-unset SIGIL_TEST_DATABASE_URL
-${shellQuote(nodePath)} sigil/scripts/prepush-preflight.mjs || exit 1
-npm run audit:jcs || exit 1
-unset SIGIL_TEST_DATABASE_URL
-npm test || exit 1
-`;
-fs.writeFileSync(path.join(hooksDir, 'pre-push'), prePushBody, { mode: 0o755 });
-console.log('Installed pre-commit secret-scan hook.');
-console.log('Installed pre-push preflight hook.');
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  installHooks();
+}

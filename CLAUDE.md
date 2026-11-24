@@ -44,7 +44,8 @@ There is no build step for the main package. All scripts below exist in `package
 - `npm run pack:check`: `npm pack --dry-run`.
 - `npm run release:check`: audits, tests and pack dry-run.
 - `npm run wiki:sync`, `wiki:audit`, `wiki:verify-diagrams`, `wiki:record-diagrams`: maintain `docs/wiki/`.
-- `npm run prepare`: installs git hooks. It runs automatically on `npm install`.
+- `npm run prepare`: sets `core.hooksPath` to the tracked `.githooks/` directory. It runs automatically on `npm install`.
+- Pre-push is tiered by changed paths (`sigil/scripts/prepush-tier.mjs`): docs-only runs nothing, `packages/sigil-rooms-web/**` runs the web typecheck and vitest, everything else (and an unknown range) runs the RAM preflight, `audit:jcs` and `npm test`. A mixed push runs both. Live Postgres, Windows, and TLC stay in CI; run `npm run test:live:local` yourself for database-layer changes. `SIGIL_PREPUSH_FULL=1` forces every local gate. Model: `verify/pre-push-gate`.
 
 Run a single test file with `node --test path/to/file.test.mjs`.
 
