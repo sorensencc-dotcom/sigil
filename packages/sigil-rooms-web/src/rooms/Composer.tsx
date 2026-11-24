@@ -1,5 +1,7 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { Member } from '../api/types';
+import { useAuth, useSelfEndpoint } from '../auth/AuthContext';
+import { previewRecipients, type RecipientPreview } from './recipientPreview';
 import { roomMemberName } from './resolveMentions';
 import type { LoginFor, NameFor } from './useContacts';
 
@@ -33,6 +35,16 @@ export function Composer({
   const [text, setText] = useState('');
   const [mention, setMention] = useState<MentionRange | null>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const { session } = useAuth();
+  const selfEndpoint = useSelfEndpoint();
+  // The human whose authority the send runs under: the cookie session's, else the owner on this browser's member row.
+  const subjectHumanId = session?.human_id ?? members.find((member) => member.endpoint_id === selfEndpoint)?.owner_id ?? null;
+  const preview = useMemo(
+    () => (text.trim() && members.some((member) => member.response_mode != null)
+      ? previewRecipients(text, members, subjectHumanId, nameFor ?? ((id, fallback) => fallback || id), loginFor ?? (() => null))
+      : null),
+    [text, members, subjectHumanId, nameFor, loginFor],
+  );
   const disabled = disabledReason !== null;
   const suggestions = mention && !disabled
     ? members.filter((member) => roomMemberName(member, members, nameFor, loginFor).toLowerCase().includes(mention.query.toLowerCase()))
@@ -89,7 +101,22 @@ export function Composer({
           })}
         </ul>
       ) : null}
+      {preview ? <RecipientPreviewView preview={preview} /> : null}
       <button type="submit" disabled={disabled}>Send</button>
     </form>
+  );
+}
+
+function RecipientPreviewView({ preview }: { preview: RecipientPreview }) {
+  const names = (items: { name: string }[]) => items.map((item) => item.name).join(', ');
+  return (
+    <div className="recipient-preview" role="group" aria-label="Recipient preview">
+      {preview.willWake.length > 0 ? <p>Will wake: {names(preview.willWake)}</p> : null}
+      {preview.routerPicksFrom ? <p>The router decides who answers. It may pick from {names(preview.routerPicksFrom)}.</p> : null}
+      {preview.wakesNobody ? <p>No agent will be woken. Mention one with @ to wake it.</p> : null}
+      {preview.wontWake.length > 0 ? (
+        <p>Won&apos;t wake: {preview.wontWake.map((item) => `${item.name} (${item.reason})`).join('; ')}</p>
+      ) : null}
+    </div>
   );
 }
