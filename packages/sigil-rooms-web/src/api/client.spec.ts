@@ -162,4 +162,23 @@ describe('api client: room management', () => {
     expect(JSON.parse(String(calls[1]![1].body))).toEqual({ text: 'plain', idempotency_key: 'key-plain' });
     expect(JSON.parse(String(calls[2]![1].body))).toEqual({ text: 'plain2', idempotency_key: 'key-plain2' });
   });
+
+  it('lists, creates, and revokes endpoint-bound agent invites', async () => {
+    const calls: Array<[string, RequestInit]> = [];
+    const invite = { invite_id: 'arinv_1', endpoint_id: 'ep_other', created_at: 't', expires_at: 'later', state: 'pending' as const };
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push([url, init]);
+      return jsonResponse(200, { code: 'OK', items: [invite], invite, invite_code: 'opaque-code' });
+    });
+    const { client } = make(fetchImpl as unknown as typeof fetch);
+    await expect(client.listAgentRoomInvites('room_1')).resolves.toEqual([invite]);
+    await expect(client.createAgentRoomInvite('room_1', 'ep_other')).resolves.toEqual({ invite, invite_code: 'opaque-code' });
+    await expect(client.revokeAgentRoomInvite('room_1', 'arinv_1')).resolves.toBeUndefined();
+    expect(calls.map(([url, init]) => [url, init.method])).toEqual([
+      ['http://relay.test/v1/rooms/room_1/agent-invites', 'GET'],
+      ['http://relay.test/v1/rooms/room_1/agent-invites', 'POST'],
+      ['http://relay.test/v1/rooms/room_1/agent-invites/arinv_1/revoke', 'POST'],
+    ]);
+    expect(JSON.parse(String(calls[1]![1].body))).toEqual({ endpoint_id: 'ep_other' });
+  });
 });

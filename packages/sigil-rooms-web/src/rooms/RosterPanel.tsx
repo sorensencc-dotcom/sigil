@@ -1,4 +1,5 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import { ApiError } from '../api/client';
 import type { InvokableBy, Member, ResponseMode } from '../api/types';
@@ -14,6 +15,28 @@ export function RosterPanel({ roomId, members, manager, viewer = null, onGone }:
   const { client } = useAuth();
   const { nameFor, loginFor } = useContacts();
   const queryClient = useQueryClient();
+  const [inviteEndpoint, setInviteEndpoint] = useState('');
+  const [createdCode, setCreatedCode] = useState<string | null>(null);
+  const agentInvites = useQuery({
+    queryKey: ['room', roomId, 'agent-invites'],
+    queryFn: () => client.listAgentRoomInvites(roomId),
+    enabled: manager && typeof client.listAgentRoomInvites === 'function',
+    refetchInterval: (query) => manager && (query.state.data ?? []).some((invite) => invite.state === 'pending') ? 5000 : false,
+  });
+  const createInvite = useMutation({
+    mutationFn: () => client.createAgentRoomInvite(roomId, inviteEndpoint.trim()),
+    onSuccess: ({ invite_code }) => {
+      setCreatedCode(invite_code);
+      setInviteEndpoint('');
+      queryClient.invalidateQueries({ queryKey: ['room', roomId, 'agent-invites'] });
+    },
+    onError: (error) => { if (error instanceof ApiError && error.code === 'ROOM_NOT_FOUND') onGone(); },
+  });
+  const revokeInvite = useMutation({
+    mutationFn: (inviteId: string) => client.revokeAgentRoomInvite(roomId, inviteId),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['room', roomId, 'agent-invites'] }),
+    onError: (error) => { if (error instanceof ApiError && error.code === 'ROOM_NOT_FOUND') onGone(); },
+  });
   const setMode = useMutation({
     mutationFn: ({ endpointId, mode }: { endpointId: string; mode: ResponseMode }) => client.setResponseMode(roomId, endpointId, mode),
     onError: (error) => {
@@ -72,7 +95,36 @@ export function RosterPanel({ roomId, members, manager, viewer = null, onGone }:
           </li>
         ))}
       </ul>
-      <ErrorBanner error={setMode.error ?? setInvokable.error} />
+      {manager ? (
+        <section aria-label="Agent invites">
+          <h3>Bring an agent</h3>
+          <form onSubmit={(event) => { event.preventDefault(); createInvite.mutate(); }}>
+            <label>
+              Active agent endpoint ID
+              <input value={inviteEndpoint} onChange={(event) => setInviteEndpoint(event.target.value)} maxLength={256} required />
+            </label>
+            <button type="submit" disabled={createInvite.isPending}>Create invite</button>
+          </form>
+          <p>Only the named agent can redeem this code. It expires in 15 minutes.</p>
+          <p>The agent owner runs <code>sigil room join &lt;code&gt; --identity &lt;agent.identity.json&gt; --relay-url &lt;relay-origin&gt;</code>.</p>
+          {createdCode ? (
+            <p>
+              <label>One-time invite code <input readOnly value={createdCode} /></label>
+              <button type="button" onClick={() => { void navigator.clipboard?.writeText(createdCode); }}>Copy code</button>
+            </p>
+          ) : null}
+          <ul>
+            {(agentInvites.data ?? []).filter((invite) => invite.state === 'pending' || invite.state === 'connected').map((invite) => (
+              <li key={invite.invite_id}>
+                <span>{invite.endpoint_id}</span>
+                <span className="badge">{invite.state}</span>
+                {invite.state === 'pending' ? <button type="button" disabled={revokeInvite.isPending} onClick={() => revokeInvite.mutate(invite.invite_id)}>Revoke</button> : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      <ErrorBanner error={setMode.error ?? setInvokable.error ?? createInvite.error ?? revokeInvite.error ?? agentInvites.error} />
     </section>
   );
 }
