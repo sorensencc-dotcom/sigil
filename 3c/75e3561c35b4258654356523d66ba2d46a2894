@@ -1,0 +1,27 @@
+packages/sigil-rooms-web/src/rooms/RosterPanel.tsx
+  s_9623a21c6f2a03::t_06da939b7b30b5 12-13
+  s_9623a21c6f2a03::t_ac5f08757474cf 11,14-16,19,42,49,51,56,59
+packages/sigil-rooms-web/src/App.tsx
+  s_9623a21c6f2a03::t_ac5f08757474cf 35
+packages/sigil-rooms-web/src/rooms/RoomHeader.spec.tsx
+  s_9623a21c6f2a03::t_ac5f08757474cf 20,23-24,30
+packages/sigil-rooms-web/src/rooms/RosterPanel.spec.tsx
+  s_9623a21c6f2a03::t_06da939b7b30b5 19,33
+  s_9623a21c6f2a03::t_ac5f08757474cf 26,42,51,89,95-96,98,103
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3c75e3561c35b4258654356523d66ba2d46a2894",
+  "prompts": {},
+  "sessions": {
+    "s_9623a21c6f2a03": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20c01-10e0-71e2-8241-f3ee31aeb2ef",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
