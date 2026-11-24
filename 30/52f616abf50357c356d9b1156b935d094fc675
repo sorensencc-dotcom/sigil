@@ -1,0 +1,29 @@
+packages/sigil-rooms-web/src/rooms/Composer.tsx
+  s_a2a6467b291efe::t_895ca377070ad9 30,36-37,39
+  s_a2a6467b291efe::t_fd5976beeb3760 38
+packages/sigil-rooms-web/src/rooms/recipientPreview.spec.ts
+  s_a2a6467b291efe::t_895ca377070ad9 97-100
+  s_a2a6467b291efe::t_171c81113d6bc6 90,92-96
+packages/sigil-rooms-web/src/rooms/Composer.spec.tsx
+  s_a2a6467b291efe::t_895ca377070ad9 217-220,222-224
+  s_a2a6467b291efe::t_fd5976beeb3760 221
+  s_a2a6467b291efe::t_171c81113d6bc6 210-216
+packages/sigil-rooms-web/src/rooms/recipientPreview.ts
+  s_a2a6467b291efe::t_895ca377070ad9 35,60-62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3052f616abf50357c356d9b1156b935d094fc675",
+  "prompts": {},
+  "sessions": {
+    "s_a2a6467b291efe": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20ad0-d3af-77c1-b3f6-97fdf1a392bc",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
