@@ -1,0 +1,29 @@
+packages/sigil-rooms-web/src/rooms/EnvelopeInspector.tsx
+  s_8cdca1156a5bbc::t_8d074ba8e2aba5 1-39
+packages/sigil-rooms-web/src/rooms/RowView.tsx
+  s_8cdca1156a5bbc::t_1b4a947011da1e 1,3,59,68-73,79-80,82-85,101,127-138
+packages/sigil-rooms-web/src/styles.css
+  s_8cdca1156a5bbc::t_14cf0bbcf683e6 249-256
+packages/sigil-rooms-web/src/rooms/EnvelopeInspector.spec.tsx
+  s_8cdca1156a5bbc::t_4cb4e0b0d676e5 1-86
+packages/sigil-rooms-web/src/rooms/RowView.continue.spec.tsx
+  s_8cdca1156a5bbc::t_204cb3a64b5b53 47
+packages/sigil-rooms-web/src/api/types.ts
+  s_8cdca1156a5bbc::t_2b89ff24c3b4f8 18-24,30-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "eb7ccd4a010b006e06f7e060ecc28e6a43713739",
+  "prompts": {},
+  "sessions": {
+    "s_8cdca1156a5bbc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "be3739fb-e551-4bf7-b454-05a4a0860f85",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
