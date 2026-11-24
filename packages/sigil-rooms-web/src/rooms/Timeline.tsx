@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ApiError } from '../api/client';
-import type { HistoryItem, Member, RoomSearchItem } from '../api/types';
+import type { HistoryItem, Member, Mention, RoomSearchItem } from '../api/types';
 import { ErrorBanner } from '../errors/ErrorBanner';
 import { useAuth, useSelfEndpoint } from '../auth/AuthContext';
 import { mergeRows, type PendingMessage, type Row } from './mergeRows';
@@ -37,6 +37,7 @@ export function Timeline({
   loginFor,
   ownerNameFor,
   members = [],
+  focus = null,
 }: {
   roomId: string;
   pending: PendingMessage[];
@@ -48,6 +49,7 @@ export function Timeline({
   loginFor?: LoginFor;
   ownerNameFor?: OwnerNameFor;
   members?: Member[];
+  focus?: Pick<Mention, 'message_id' | 'room_seq'> | null;
 }) {
   const { items, isLoading, error, hasOlder, hasNewer, atLatest, loadOlder, loadNewer, goToLatest, goToSequence } = useHistory(roomId);
   const [focusedSeq, setFocusedSeq] = useState<string | null>(null);
@@ -117,6 +119,33 @@ export function Timeline({
   const [searchHasMore, setSearchHasMore] = useState(false);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<unknown>(null);
+
+  // Keep the mention target while the paged history window is moved around it.
+  const requestedFocus = useRef<string | null>(null);
+  const focusedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focus) {
+      requestedFocus.current = null;
+      focusedFor.current = null;
+      return;
+    }
+    if (isLoading || byId.has(focus.message_id) || requestedFocus.current === focus.message_id) return;
+    requestedFocus.current = focus.message_id;
+    void goToSequence(focus.room_seq).catch((caught: unknown) => setSearchError(caught));
+  }, [byId, focus, goToSequence, isLoading]);
+  useEffect(() => {
+    if (!focus || focusedFor.current === focus.message_id) return;
+    const item = byId.get(focus.message_id);
+    if (!item) return;
+    focusedFor.current = focus.message_id;
+    if (isTopLevel(item, byId)) {
+      const seq = String(item.room_seq);
+      setFocusedSeq(seq);
+      pendingScrollSeq.current = seq;
+      stickToBottom.current = false;
+    }
+    else onOpenThread(threadRootOf(item, byId));
+  }, [focus, byId, onOpenThread]);
 
   useEffect(() => {
     if (isLoading || items.length === 0 || initialHistoryRoom === roomId || initialHistoryLoadRoom.current === roomId) return;
@@ -313,6 +342,7 @@ export function Timeline({
             highlighted={entry.row.item != null && String(entry.row.item.room_seq) === focusedSeq}
             onContinue={(threadRootId) => { if (!resume.isPending) resume.mutate(threadRootId); }}
             onReply={entry.row.item && entry.row.item.envelope.message_type === 'room.message' ? () => onOpenThread(threadRootOf(entry.row.item!, byId)) : undefined}
+            focused={!!focus && entry.row.item?.message_id === focus.message_id}
           />
         ))}
       </ul>

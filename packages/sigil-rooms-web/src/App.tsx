@@ -9,7 +9,9 @@ import { describeError, ErrorBanner } from './errors/ErrorBanner';
 import { useLive } from './live/useLive';
 import { captureInviteFragment, InvitePage } from './pages/InvitePage';
 import { LoginPage } from './pages/LoginPage';
+import { MentionsView } from './pages/MentionsView';
 import { SettingsPage } from './pages/SettingsPage';
+import type { Mention } from './api/types';
 import { Composer } from './rooms/Composer';
 import { RoomHeader } from './rooms/RoomHeader';
 import { RoomList } from './rooms/RoomList';
@@ -24,7 +26,7 @@ import { useSend } from './rooms/useSend';
 const THEME_KEY = 'sigil.theme';
 const DEFAULT_THEME = 'dark';
 
-function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
+function RoomView({ roomId, onGone, focus }: { roomId: string; onGone: () => void; focus: Pick<Mention, 'message_id' | 'room_seq'> | null }) {
   const { client } = useAuth();
   const sender = useSelfEndpoint();
   const membersQuery = useMembers(roomId);
@@ -52,7 +54,7 @@ function RoomView({ roomId, onGone }: { roomId: string; onGone: () => void }) {
       <StatusLine roomId={roomId} onGone={onGone} />
       <div className="room-body">
         <div className="room-main">
-          <Timeline roomId={roomId} pending={pending} onVisibleSeq={reportSeq} onGone={onGone} seenThreadRoots={seenRoots} onOpenThread={openThreadRoot} nameFor={nameFor} loginFor={loginFor} ownerNameFor={ownerNameFor} members={membersQuery.data ?? []} />
+          <Timeline roomId={roomId} pending={pending} onVisibleSeq={reportSeq} onGone={onGone} seenThreadRoots={seenRoots} onOpenThread={openThreadRoot} nameFor={nameFor} loginFor={loginFor} ownerNameFor={ownerNameFor} members={membersQuery.data ?? []} focus={focus} />
           <div className="notices">
             {pending
               .filter((row) => row.status === 'failed' && row.retryable !== false)
@@ -89,6 +91,8 @@ function Shell({ theme, onThemeChange }: { theme: string; onThemeChange: (next: 
   const { mode, isLoggedIn, loading, login, signOut, rejected } = useAuth();
   const [pathname, setPathname] = useState(() => window.location.pathname);
   const [roomId, setRoomId] = useState<string | null>(() => new URLSearchParams(window.location.search).get('room'));
+  // The message to bring into view when a room opens from Mentions.
+  const [focus, setFocus] = useState<Pick<Mention, 'message_id' | 'room_seq'> | null>(null);
   // On a phone the room list is a drawer; choosing a room closes it.
   const [drawerOpen, setDrawerOpen] = useState(false);
   const selectRoom = useCallback((id: string) => {
@@ -97,13 +101,20 @@ function Shell({ theme, onThemeChange }: { theme: string; onThemeChange: (next: 
     url.searchParams.set('room', id);
     url.hash = '';
     window.history.replaceState(null, '', url);
+    setFocus(null);
     setDrawerOpen(false);
   }, []);
   const navigate = useCallback((path: string) => {
     window.history.pushState(null, '', path);
     setPathname(path);
+    setFocus(null);
     setDrawerOpen(false);
   }, []);
+  const openMention = useCallback((mention: Mention) => {
+    navigate('/');
+    setRoomId(mention.conversation_id);
+    setFocus({ message_id: mention.message_id, room_seq: mention.room_seq });
+  }, [navigate]);
   useEffect(() => {
     const syncPathname = () => setPathname(window.location.pathname);
     window.addEventListener('popstate', syncPathname);
@@ -145,7 +156,8 @@ function Shell({ theme, onThemeChange }: { theme: string; onThemeChange: (next: 
           </span>
         </strong>
         <nav className="top-nav" aria-label="Main navigation">
-          <button type="button" className="ghost" aria-current={pathname !== '/settings' ? 'page' : undefined} onClick={() => navigate('/')}>Rooms</button>
+          <button type="button" className="ghost" aria-current={pathname !== '/settings' && pathname !== '/mentions' ? 'page' : undefined} onClick={() => navigate('/')}>Rooms</button>
+          <button type="button" className="ghost" aria-current={pathname === '/mentions' ? 'page' : undefined} onClick={() => navigate('/mentions')}>Mentions</button>
           <button type="button" className="ghost" aria-current={pathname === '/settings' ? 'page' : undefined} onClick={() => navigate('/settings')}>Settings</button>
         </nav>
         <span className="chip" data-live={live === 'live' ? 'true' : 'false'}>{live === 'live' ? 'Live' : 'Live: off'}</span>
@@ -154,6 +166,8 @@ function Shell({ theme, onThemeChange }: { theme: string; onThemeChange: (next: 
       </header>
       {pathname === '/settings' ? (
         <SettingsPage onBackToRooms={() => navigate('/')} />
+      ) : pathname === '/mentions' ? (
+        <MentionsView onOpen={openMention} />
       ) : (
         <div className="body">
           <aside className="sidebar" id="rooms-drawer">
@@ -161,7 +175,7 @@ function Shell({ theme, onThemeChange }: { theme: string; onThemeChange: (next: 
           </aside>
           {drawerOpen ? <button type="button" className="scrim" aria-label="Close rooms" onClick={() => setDrawerOpen(false)} /> : null}
           <section className="pane">
-            {roomId ? <RoomView key={roomId} roomId={roomId} onGone={onGone} /> : <p className="empty">Pick a room.</p>}
+            {roomId ? <RoomView key={roomId} roomId={roomId} onGone={onGone} focus={focus} /> : <p className="empty">Pick a room.</p>}
           </section>
         </div>
       )}

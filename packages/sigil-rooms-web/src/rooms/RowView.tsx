@@ -40,6 +40,7 @@ export function RowView({
   onContinue,
   roomId,
   highlighted = false,
+  focused = false,
 }: {
   row: Row;
   roomId?: string;
@@ -53,6 +54,7 @@ export function RowView({
   onReply?: () => void;
   onContinue?: (threadRootId: string) => void;
   highlighted?: boolean;
+  focused?: boolean;
 }) {
   if (row.pending) {
     return (
@@ -83,6 +85,7 @@ export function RowView({
   data-mine={mine ? 'true' : undefined}
   data-room-seq={row.item!.room_seq}
   data-search-match={highlighted || undefined}
+  aria-current={focused ? 'true' : undefined}
 >
       <div className="meta">
         <SenderChip

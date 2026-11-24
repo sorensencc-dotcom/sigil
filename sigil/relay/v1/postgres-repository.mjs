@@ -2461,19 +2461,28 @@ export class PostgresRepository {
     return result.rowCount > 0;
   }
 
-  async listMentionsForEndpoint(endpointId, limit = 50, client = this.pool) {
+  async listMentionsForEndpoint(endpointId, limit = 50, cursor = null, client = this.pool) {
     const cap = Math.min(Math.max(Number(limit) || 50, 1), 100);
+    const cursorWhere = cursor
+      ? `AND (e.room_seq < $2::bigint
+          OR (e.room_seq = $2::bigint AND e.conversation_id COLLATE "C" < $3::text COLLATE "C")
+          OR (e.room_seq = $2::bigint AND e.conversation_id COLLATE "C" = $3::text COLLATE "C" AND e.message_id COLLATE "C" < $4::text COLLATE "C"))`
+      : '';
+    const values = cursor
+      ? [endpointId, cursor.room_seq, cursor.conversation_id, cursor.message_id, cap + 1]
+      : [endpointId, cap + 1];
     const result = await client.query(
       `SELECT e.conversation_id, e.message_id, e.room_seq::text AS room_seq, e.sender_endpoint_id, e.body->>'text' AS text
          FROM envelopes e
          JOIN conversation_members m
            ON m.conversation_id = e.conversation_id AND m.endpoint_id = $1 AND m.removed_at IS NULL
         WHERE e.envelope_status = 'accepted' AND e.message_type = 'room.message' AND e.body->'mentions' ? $1
-        ORDER BY e.room_seq DESC
-        LIMIT $2`,
-      [endpointId, cap],
+          ${cursorWhere}
+        ORDER BY e.room_seq DESC, e.conversation_id COLLATE "C" DESC, e.message_id COLLATE "C" DESC
+        LIMIT $${values.length}`,
+      values,
     );
-    return result.rows;
+    return { items: result.rows.slice(0, cap), hasMore: result.rows.length > cap };
   }
   async lookupRoomMessage(conversationId, messageId, client = this.pool) {
     const result = await client.query(

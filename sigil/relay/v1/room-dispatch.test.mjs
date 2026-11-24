@@ -57,8 +57,32 @@ test('a human message reaches humans only; a mention starts a running invocation
   assert.equal(inv.thread_root_id, root.message_id);
   assert.equal((await w.repository.listInbox('ep_codex')).length, 0);
   const mentions = await w.repository.listMentionsForEndpoint('ep_claude');
-  assert.deepEqual(mentions.map((item) => item.message_id), [root.message_id]);
-  assert.deepEqual(await w.repository.listMentionsForEndpoint('ep_codex'), []);
+  assert.deepEqual(mentions.items.map((item) => item.message_id), [root.message_id]);
+  assert.deepEqual((await w.repository.listMentionsForEndpoint('ep_codex')).items, []);
+});
+
+test('mention pages cover tied room sequences without duplicates or gaps', async () => {
+  const w = world();
+  await room(w.repository);
+  await w.repository.createRoom({ conversationId: 'room_2', workspaceId: 'ws_usr_chris', name: 'ops', createdByHumanId: 'usr_chris', ownerEndpointId: 'ep_web', now: NOW });
+  await w.repository.addRoomMember({ conversationId: 'room_2', endpointId: 'ep_claude', role: 'member', responseMode: 'joins', addedByHumanId: 'usr_chris', now: NOW });
+  const roomOne = (messageId) => post(w, 'ep_web', { text: messageId, mentions: ['ep_claude'] }, { message_id: messageId });
+  const roomTwo = (messageId) => post(w, 'ep_web', { text: messageId, mentions: ['ep_claude'] }, {
+    message_id: messageId, conversation_id: 'room_2', broadcast_scope: { conversation_id: 'room_2' },
+  });
+  await accept(w, roomOne('msg_room_1_1'));
+  await accept(w, roomTwo('msg_room_2_1'));
+  await accept(w, roomOne('msg_room_1_2'));
+
+  const first = await w.repository.listMentionsForEndpoint('ep_claude', 2);
+  assert.deepEqual(first.items.map((item) => item.message_id), ['msg_room_1_2', 'msg_room_2_1']);
+  assert.equal(first.hasMore, true);
+  const last = first.items.at(-1);
+  const second = await w.repository.listMentionsForEndpoint('ep_claude', 2, {
+    room_seq: last.room_seq, conversation_id: last.conversation_id, message_id: last.message_id,
+  });
+  assert.deepEqual(second.items.map((item) => item.message_id), ['msg_room_1_1']);
+  assert.equal(second.hasMore, false);
 });
 
 test('a room task.request names an assignee and only that assignee can file the result', async () => {
