@@ -155,6 +155,7 @@ describe('App', () => {
       if (url === '/v1/rooms') return new Response(JSON.stringify({ items: [{ conversation_id: 'room_1', workspace_id: 'w', name: 'Room 1', description: null, created_at: 't', max_agent_turns: 5 }] }), { status: 200 });
       if (url === '/v1/me/contacts') return new Response(JSON.stringify({ items: [] }), { status: 200 });
       if (url === '/v1/rooms/room_1/members') return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      if (url.includes('/invocations?status=')) return new Response(JSON.stringify({ items: [] }), { status: 200 });
       if (url.startsWith('/v1/rooms/room_1/messages')) return new Response(JSON.stringify({ code: 'OK', items: [root, reply], next_after_seq: '2' }), { status: 200 });
       return new Response('{}', { status: 200 });
     }));
