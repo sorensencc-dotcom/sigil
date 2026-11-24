@@ -1,4 +1,4 @@
-import type { AckResult, Contact, Session, HistoryPage, Invocation, InvokableBy, Member, MentionPage, ResponseMode, Room, RoomSearchPage, SendResult, StopResult, TicketResult } from './types';
+import type { AckResult, AgentRoomInvite, Contact, CreatedAgentRoomInvite, Session, HistoryPage, Invocation, InvokableBy, Member, MentionPage, ResponseMode, Room, RoomSearchPage, SendResult, StopResult, TicketResult } from './types';
 
 export class ApiError extends Error {
   readonly code: string;
@@ -31,6 +31,9 @@ export interface ApiClient {
   sendMessage(roomId: string, text: string, idempotencyKey: string, threadRootId?: string, mentions?: string[]): Promise<SendResult>;
   continueThread(roomId: string, threadRootId: string): Promise<SendResult>;
   listMembers(roomId: string): Promise<Member[]>;
+  listAgentRoomInvites(roomId: string): Promise<AgentRoomInvite[]>;
+  createAgentRoomInvite(roomId: string, endpointId: string): Promise<CreatedAgentRoomInvite>;
+  revokeAgentRoomInvite(roomId: string, inviteId: string): Promise<void>;
   listInvocations(roomId: string): Promise<Invocation[]>;
   renameRoom(roomId: string, name: string): Promise<Room>;
   setResponseMode(roomId: string, endpointId: string, mode: ResponseMode): Promise<Member>;
@@ -122,6 +125,16 @@ export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized
     },
     async listMembers(roomId) {
       return (await request<{ items: Member[] }>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/members`)).items;
+    },
+    async listAgentRoomInvites(roomId) {
+      return (await request<{ items: AgentRoomInvite[] }>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/agent-invites`)).items;
+    },
+    async createAgentRoomInvite(roomId, endpointId) {
+      const { invite, invite_code } = await request<CreatedAgentRoomInvite>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/agent-invites`, { endpoint_id: endpointId });
+      return { invite, invite_code };
+    },
+    async revokeAgentRoomInvite(roomId, inviteId) {
+      await request<unknown>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/agent-invites/${encodeURIComponent(inviteId)}/revoke`);
     },
     async listInvocations(roomId) {
       const controller = new AbortController();

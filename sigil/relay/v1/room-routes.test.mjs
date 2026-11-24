@@ -11,6 +11,7 @@ const principals = {
   'Bearer chris-web': { endpoint_id: 'ep_web', owner_id: 'usr_chris', human_id: 'usr_chris' },
   'Bearer claude': { endpoint_id: 'ep_claude', owner_id: 'usr_chris', human_id: 'usr_chris' },
   'Bearer codex': { endpoint_id: 'ep_codex', owner_id: 'usr_chris', human_id: 'usr_chris' },
+  'Bearer other-agent': { endpoint_id: 'ep_other_agent', owner_id: 'usr_other' },
   'Bearer stranger': { endpoint_id: 'ep_stranger', owner_id: 'usr_other', human_id: 'usr_other' },
 };
 const registry = new Map([
@@ -36,9 +37,9 @@ function call(port, method, path, authorization, body) {
   });
 }
 
-async function withServer(fn) {
+async function withServer(fn, serverOptions = {}) {
   const repository = createMemoryRepository({ registry });
-  const server = createRelayServer({ registry, repository, humanSigner, authenticate: async (request) => principals[request.headers.authorization] ?? null });
+  const server = createRelayServer({ ...serverOptions, registry, repository, humanSigner, authenticate: async (request) => principals[request.headers.authorization] ?? null });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try { await fn(server.address().port, repository); } finally { await new Promise((resolve) => server.close(resolve)); }
 }
@@ -108,6 +109,46 @@ test('create, list, add member, read history, remove member', async () => {
     assert.equal(removed.status, 200);
     assert.equal((await call(port, 'GET', `/v1/rooms/${roomId}/messages`, 'Bearer claude')).status, 404);
   });
+});
+
+test('agent invites are room-manager-created, endpoint-bound, revocable, short-lived, and single-use', async () => {
+  let clock = new Date('2026-11-24T12:00:00.000Z');
+  await withServer(async (port, repository) => {
+    const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'agent-invites' })).body.room.conversation_id;
+    await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_claude', response_mode: 'mentions_only' });
+    assert.equal((await call(port, 'POST', `/v1/rooms/${roomId}/agent-invites`, 'Bearer claude', { endpoint_id: 'ep_codex' })).status, 403);
+    assert.equal((await call(port, 'GET', `/v1/rooms/${roomId}/agent-invites`, 'Bearer stranger')).status, 404);
+
+    const created = await call(port, 'POST', `/v1/rooms/${roomId}/agent-invites`, 'Bearer chris-web', { endpoint_id: 'ep_other_agent' });
+    assert.equal(created.status, 201);
+    assert.equal(created.body.invite.state, 'pending');
+    assert.equal(created.body.invite.endpoint_id, 'ep_other_agent');
+    assert.match(created.body.invite_code, /^[A-Za-z0-9_-]{32}$/);
+    assert.equal(created.body.url, undefined);
+    const code = created.body.invite_code;
+    const pending = await call(port, 'GET', `/v1/rooms/${roomId}/agent-invites`, 'Bearer chris-web');
+    assert.deepEqual(pending.body.items.map(({ endpoint_id, state }) => ({ endpoint_id, state })), [{ endpoint_id: 'ep_other_agent', state: 'pending' }]);
+    assert.equal(JSON.stringify(pending.body).includes(code), false);
+
+    assert.equal((await call(port, 'POST', '/v1/room-agent-invites/redeem', 'Bearer claude', { code })).status, 404, 'another active agent cannot use the code');
+    assert.equal((await call(port, 'POST', '/v1/room-agent-invites/redeem', 'Bearer other-agent', { code })).status, 200);
+    const connected = await call(port, 'GET', `/v1/rooms/${roomId}/agent-invites`, 'Bearer chris-web');
+    assert.deepEqual(connected.body.items.map(({ endpoint_id, state }) => ({ endpoint_id, state })), [{ endpoint_id: 'ep_other_agent', state: 'connected' }]);
+    const joined = await repository.lookupRoomMember(roomId, 'ep_other_agent');
+    assert.deepEqual([joined.role, joined.response_mode], ['member', 'mentions_only']);
+    assert.equal((await call(port, 'POST', '/v1/room-agent-invites/redeem', 'Bearer other-agent', { code })).status, 404, 'a second redemption is rejected');
+
+    const revoked = await call(port, 'POST', `/v1/rooms/${roomId}/agent-invites`, 'Bearer chris-web', { endpoint_id: 'ep_codex' });
+    const revokeResult = await call(port, 'POST', `/v1/rooms/${roomId}/agent-invites/${revoked.body.invite.invite_id}/revoke`, 'Bearer chris-web');
+    assert.equal(revokeResult.body.state, 'revoked');
+    assert.equal((await call(port, 'POST', '/v1/room-agent-invites/redeem', 'Bearer codex', { code: revoked.body.invite_code })).status, 404);
+
+    const expiring = await call(port, 'POST', `/v1/rooms/${roomId}/agent-invites`, 'Bearer chris-web', { endpoint_id: 'ep_router' });
+    clock = new Date(clock.getTime() + 15 * 60_000);
+    assert.equal((await call(port, 'POST', '/v1/room-agent-invites/redeem', 'Bearer claude', { code: expiring.body.invite_code })).status, 404);
+    const expired = await call(port, 'GET', `/v1/rooms/${roomId}/agent-invites`, 'Bearer chris-web');
+    assert.equal(expired.body.items.find((row) => row.endpoint_id === 'ep_router')?.state, 'expired');
+  }, { now: () => clock });
 });
 
 test('authorization rules', async () => {

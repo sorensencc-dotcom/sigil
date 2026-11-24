@@ -73,6 +73,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
   const workspaces = new Map(); // workspace_id -> row (migration 027)
   const rooms = new Map(); // conversation_id -> room row (migration 027)
   const roomMembers = new Map(); // conversation_id -> Map(endpoint_id -> member row incl. removed_at)
+  const roomAgentInvites = new Map(); // invite_id -> room-scoped, endpoint-bound invite
   const floorWardenBots = new Map(); // bot_id -> row (migration 035)
   const replyTokens = new Map(); // token_id -> row (migration 039)
   const botSigningKeys = new Map(); // key_id -> { wrapped, created_at } (migration 035)
@@ -411,6 +412,46 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       return [...rooms.keys()]
         .filter((conversationId) => roomMembers.get(conversationId)?.get(endpointId)?.removed_at === null)
         .map((conversationId) => { const { next_room_seq: _seq, archived_at: _archived, ...visible } = rooms.get(conversationId); return visible; });
+    },
+    async createRoomAgentInvite(row) {
+      for (const invite of roomAgentInvites.values()) {
+        if (invite.room_id === row.roomId && invite.endpoint_id === row.endpointId && !invite.consumed_at && !invite.revoked_at && new Date(invite.expires_at) > new Date(row.now)) {
+          throw Object.assign(new Error('An invite is already pending for this endpoint'), { code: 'ROOM_AGENT_INVITE_EXISTS' });
+        }
+      }
+      const invite = {
+        invite_id: row.inviteId, room_id: row.roomId, endpoint_id: row.endpointId, owner_id: row.ownerId,
+        token_hash: row.tokenHash, created_by_human_id: row.createdByHumanId,
+        created_at: new Date(row.now).toISOString(), expires_at: new Date(row.expiresAt).toISOString(),
+        consumed_at: null, revoked_at: null,
+      };
+      undoMapSet(roomAgentInvites, invite.invite_id);
+      roomAgentInvites.set(invite.invite_id, invite);
+      return { invite_id: invite.invite_id, endpoint_id: invite.endpoint_id, created_at: invite.created_at, expires_at: invite.expires_at, state: 'pending' };
+    },
+    async listRoomAgentInvites(roomId, now = new Date()) {
+      return [...roomAgentInvites.values()].filter((invite) => invite.room_id === roomId).map((invite) => ({
+        invite_id: invite.invite_id, endpoint_id: invite.endpoint_id, created_at: invite.created_at, expires_at: invite.expires_at,
+        state: invite.consumed_at ? 'connected' : new Date(invite.expires_at) <= new Date(now) ? 'expired' : invite.revoked_at ? 'revoked' : 'pending',
+      })).sort((a, b) => b.created_at.localeCompare(a.created_at));
+    },
+    async lockRoomAgentInvite(tokenHash, now = new Date()) {
+      const invite = [...roomAgentInvites.values()].find((row) => row.token_hash === tokenHash && !row.consumed_at && !row.revoked_at && new Date(row.expires_at) > new Date(now));
+      return invite ? { ...invite } : null;
+    },
+    async consumeRoomAgentInvite(inviteId, now = new Date()) {
+      const invite = roomAgentInvites.get(inviteId);
+      if (!invite || invite.consumed_at || invite.revoked_at) return false;
+      undoMapSet(roomAgentInvites, inviteId);
+      invite.consumed_at = new Date(now).toISOString();
+      return true;
+    },
+    async revokeRoomAgentInvite(roomId, inviteId, now = new Date()) {
+      const invite = roomAgentInvites.get(inviteId);
+      if (!invite || invite.room_id !== roomId || invite.consumed_at || invite.revoked_at || new Date(invite.expires_at) <= new Date(now)) return false;
+      undoMapSet(roomAgentInvites, inviteId);
+      invite.revoked_at = new Date(now).toISOString();
+      return true;
     },
     async addRoomMember({ conversationId, endpointId, role, responseMode = null, addedByHumanId, now = new Date() }) {
       const members = roomMembers.get(conversationId);

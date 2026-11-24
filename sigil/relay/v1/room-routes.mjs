@@ -15,6 +15,7 @@ const MANAGER_ROLES = new Set(['owner', 'room_manager']);
 const GRANTABLE_ROLES = new Set(['room_manager', 'member']);
 const RESPONSE_MODES = new Set(['joins', 'mentions_only', 'router', 'report_only']);
 const INVOKABLE_MODES = new Set(['owner', 'members']);
+const AGENT_INVITE_TTL_MS = 15 * 60_000;
 const ROOM_METHODS = ['createRoom', 'lookupRoom', 'listRoomsForEndpoint', 'addRoomMember', 'removeRoomMember', 'lookupRoomMember', 'listRoomMembers', 'listRoomMessages', 'listRoomInvocations', 'lookupRunningInvocation', 'finishInvocation', 'cancelRoomInvocations', 'nextQueuedInvocation', 'startInvocation', 'createRoomDelivery', 'lookupRouterDecision', 'lookupRoomMessage', 'lookupRoomEventByKey', 'lockRoom', 'createRoomInvocation', 'reserveAgentTurn', 'withTransaction', 'acknowledgeRoomDeliveries', 'renameRoom', 'setRoomMemberResponseMode'];
 const ROOM_HISTORY_LIMIT_MAX = 100;
 const ROOM_SEARCH_QUERY_MIN = 3;
@@ -163,6 +164,37 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     const last = page.hasMore ? page.items.at(-1) : null;
     return send(response, requestId, 200, { code: 'OK', items: page.items, next_cursor: last ? encodeMentionCursor(last) : null });
   }
+  if (request.method === 'POST' && path === '/v1/room-agent-invites/redeem') {
+    if (!principal?.endpoint_id || !(await isAgentCaller(repository, registry, principal))) return fail(response, requestId, 403, 'AGENT_IDENTITY_REQUIRED', 'An authenticated agent endpoint is required');
+    if (['lockRoomAgentInvite', 'consumeRoomAgentInvite', 'withTransaction', 'lookupRoom', 'addRoomMember'].some((method) => typeof repository?.[method] !== 'function')) return fail(response, requestId, 503, 'DATABASE_UNAVAILABLE', 'Agent invites are unavailable');
+    const body = await readJson(request, readBody);
+    const code = body?.code;
+    if (typeof code !== 'string' || !/^[A-Za-z0-9_-]{32}$/.test(code)) return fail(response, requestId, 404, 'INVITE_UNAVAILABLE', 'Invite is invalid, expired, revoked, or already used');
+    const endpoint = await lookupTrustedEntry(repository, registry, principal.endpoint_id);
+    if (!endpoint || endpoint.kind !== 'agent' || endpoint.status !== 'active' || !endpoint.owner_id || endpoint.owner_id !== principal.owner_id) return fail(response, requestId, 403, 'AGENT_IDENTITY_REQUIRED', 'An active agent endpoint identity is required');
+    let member;
+    try {
+      member = await repository.withTransaction(async (client) => {
+        const invite = await repository.lockRoomAgentInvite(crypto.createHash('sha256').update(code).digest('hex'), now, client);
+        if (!invite || invite.endpoint_id !== principal.endpoint_id || invite.owner_id !== principal.owner_id) return null;
+        const room = await repository.lookupRoom(invite.room_id, client);
+        if (!room) return null;
+        const joined = await repository.addRoomMember({
+          conversationId: invite.room_id, endpointId: principal.endpoint_id, role: 'member', responseMode: 'mentions_only',
+          addedByHumanId: invite.created_by_human_id, now,
+        }, client);
+        if (!await repository.consumeRoomAgentInvite(invite.invite_id, now, client)) throw Object.assign(new Error('Invite is no longer available'), { code: 'INVITE_UNAVAILABLE' });
+        return { roomId: invite.room_id, member: joined };
+      });
+    } catch (error) {
+      if (error.code === 'ROOM_MEMBER_EXISTS') return fail(response, requestId, 409, 'ROOM_MEMBER_EXISTS', 'Agent is already connected to this room');
+      if (error.code === 'INVITE_UNAVAILABLE') return fail(response, requestId, 404, 'INVITE_UNAVAILABLE', 'Invite is invalid, expired, revoked, or already used');
+      throw error;
+    }
+    if (!member) return fail(response, requestId, 404, 'INVITE_UNAVAILABLE', 'Invite is invalid, expired, revoked, or already used');
+    await notifyRoomChange(member.roomId, 'members');
+    return send(response, requestId, 200, { code: 'OK', room_id: member.roomId, member: member.member });
+  }
   if (path !== '/v1/rooms' && !path.startsWith('/v1/rooms/')) return false;
   if (request.method === 'POST' && path === '/v1/rooms/ws-ticket') {
     if ((await isAgentCaller(repository, registry, principal)) || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'An authenticated human context is required');
@@ -207,7 +239,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     return send(response, requestId, 200, { code: 'OK', items: await repository.listRoomsForEndpoint(principal.endpoint_id) });
   }
 
-  const match = path.match(/^\/v1\/rooms\/([^/]+)\/(members|messages|invocations|stop|ack|rename|continue)(?:\/([^/]+)(?:\/(remove|response-mode|invokable-by))?)?$/);
+  const match = path.match(/^\/v1\/rooms\/([^/]+)\/(members|messages|invocations|stop|ack|rename|continue|agent-invites)(?:\/([^/]+)(?:\/(remove|response-mode|invokable-by|revoke))?)?$/);
   if (!match) return false;
   const [, roomId, resource, segment, removeAction] = match;
   // Browsers percent-encode '@' in endpoint IDs (ep_claude%40local); the pathname arrives undecoded.
@@ -218,6 +250,49 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
   const action = removeAction;
   const access = await membership(repository, roomId, principal);
   if (!access) return fail(response, requestId, 404, 'ROOM_NOT_FOUND', 'Room not found');
+
+  if (resource === 'agent-invites') {
+    if ((await isAgentCaller(repository, registry, principal)) || !principal?.human_id || !MANAGER_ROLES.has(access.member.role)) return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', 'Only room managers can manage agent invites');
+    if (typeof repository?.listRoomAgentInvites !== 'function') return fail(response, requestId, 503, 'DATABASE_UNAVAILABLE', 'Agent invites are unavailable');
+    if (request.method === 'GET' && !segment) {
+      return send(response, requestId, 200, { code: 'OK', items: await repository.listRoomAgentInvites(roomId, now) });
+    }
+    if (request.method === 'POST' && !segment) {
+      if (typeof repository?.createRoomAgentInvite !== 'function') return fail(response, requestId, 503, 'DATABASE_UNAVAILABLE', 'Agent invites are unavailable');
+      const body = await readJson(request, readBody);
+      const endpointId = body?.endpoint_id;
+      if (typeof endpointId !== 'string' || !endpointId || endpointId.length > 256) return fail(response, requestId, 400, 'INVALID_REQUEST', 'endpoint_id is required');
+      const endpoint = await lookupTrustedEntry(repository, registry, endpointId);
+      if (!endpoint || endpoint.kind !== 'agent' || endpoint.status !== 'active' || !endpoint.owner_id) return fail(response, requestId, 400, 'INVALID_TARGET', 'Invite target must be an active agent endpoint');
+      if (await repository.lookupRoomMember(roomId, endpointId)) return fail(response, requestId, 409, 'ROOM_MEMBER_EXISTS', 'Agent is already connected to this room');
+      const code = crypto.randomBytes(24).toString('base64url');
+      const expiresAt = new Date(new Date(now).getTime() + AGENT_INVITE_TTL_MS);
+      try {
+        const invite = await repository.withTransaction(async (client) => {
+          await repository.lockRoom(client, roomId);
+          if (await repository.lookupRoomMember(roomId, endpointId, client)) throw Object.assign(new Error('Agent is already connected to this room'), { code: 'ROOM_MEMBER_EXISTS' });
+          return repository.createRoomAgentInvite({
+            inviteId: `arinv_${crypto.randomBytes(12).toString('hex')}`, roomId, endpointId, ownerId: endpoint.owner_id,
+            tokenHash: crypto.createHash('sha256').update(code).digest('hex'), createdByHumanId: principal.human_id,
+            now: new Date(now), expiresAt,
+          }, client);
+        });
+        response.setHeader('cache-control', 'no-store');
+        return send(response, requestId, 201, { code: 'OK', invite, invite_code: code });
+      } catch (error) {
+        if (error.code === 'ROOM_MEMBER_EXISTS') return fail(response, requestId, 409, 'ROOM_MEMBER_EXISTS', error.message);
+        if (error.code === 'ROOM_AGENT_INVITE_EXISTS') return fail(response, requestId, 409, 'ROOM_AGENT_INVITE_EXISTS', error.message);
+        throw error;
+      }
+    }
+    if (request.method === 'POST' && segment && action === 'revoke') {
+      if (typeof repository?.revokeRoomAgentInvite !== 'function') return fail(response, requestId, 503, 'DATABASE_UNAVAILABLE', 'Agent invites are unavailable');
+      const revoked = await repository.revokeRoomAgentInvite(roomId, segment, now);
+      if (!revoked) return fail(response, requestId, 404, 'INVITE_NOT_FOUND', 'Pending invite not found');
+      return send(response, requestId, 200, { code: 'OK', invite_id: segment, state: 'revoked' });
+    }
+    return false;
+  }
 
   if (request.method === 'POST' && resource === 'ack' && !segment) {
     const body = await readJson(request, readBody);

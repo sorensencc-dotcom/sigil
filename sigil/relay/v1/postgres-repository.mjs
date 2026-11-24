@@ -2108,6 +2108,65 @@ export class PostgresRepository {
     );
     return result.rows.map(roomRow);
   }
+  async createRoomAgentInvite(row, client = this.pool) {
+    const createdAt = new Date(row.now).toISOString();
+    const expiresAt = new Date(row.expiresAt).toISOString();
+    await client.query(
+      `UPDATE room_agent_invites SET revoked_at = $3
+        WHERE room_id = $1 AND endpoint_id = $2 AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at <= $3`,
+      [row.roomId, row.endpointId, createdAt],
+    );
+    try {
+      const result = await client.query(
+        `INSERT INTO room_agent_invites
+           (invite_id, room_id, endpoint_id, owner_id, token_hash, created_by_human_id, created_at, expires_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         RETURNING invite_id, endpoint_id, created_at, expires_at`,
+        [row.inviteId, row.roomId, row.endpointId, row.ownerId, row.tokenHash, row.createdByHumanId, createdAt, expiresAt],
+      );
+      return { ...result.rows[0], state: 'pending' };
+    } catch (error) {
+      if (error.code === '23505') throw Object.assign(new Error('An invite is already pending for this endpoint'), { code: 'ROOM_AGENT_INVITE_EXISTS' });
+      throw error;
+    }
+  }
+  async listRoomAgentInvites(roomId, now = new Date(), client = this.pool) {
+    const result = await client.query(
+      `SELECT invite_id, endpoint_id, created_at, expires_at,
+              CASE WHEN consumed_at IS NOT NULL THEN 'connected'
+                   WHEN expires_at <= $2 THEN 'expired'
+                   WHEN revoked_at IS NOT NULL THEN 'revoked' ELSE 'pending' END AS state
+         FROM room_agent_invites WHERE room_id = $1 ORDER BY created_at DESC`,
+      [roomId, new Date(now).toISOString()],
+    );
+    return result.rows;
+  }
+  async lockRoomAgentInvite(tokenHash, now = new Date(), client = this.pool) {
+    const result = await client.query(
+      `SELECT invite_id, room_id, endpoint_id, owner_id, created_by_human_id
+         FROM room_agent_invites
+        WHERE token_hash = $1 AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > $2
+        FOR UPDATE`,
+      [tokenHash, new Date(now).toISOString()],
+    );
+    return result.rows[0] ?? null;
+  }
+  async consumeRoomAgentInvite(inviteId, now = new Date(), client = this.pool) {
+    const result = await client.query(
+      `UPDATE room_agent_invites SET consumed_at = $2
+        WHERE invite_id = $1 AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > $2`,
+      [inviteId, new Date(now).toISOString()],
+    );
+    return result.rowCount === 1;
+  }
+  async revokeRoomAgentInvite(roomId, inviteId, now = new Date(), client = this.pool) {
+    const result = await client.query(
+      `UPDATE room_agent_invites SET revoked_at = $3
+        WHERE room_id = $1 AND invite_id = $2 AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > $3`,
+      [roomId, inviteId, new Date(now).toISOString()],
+    );
+    return result.rowCount === 1;
+  }
   async addRoomMember({ conversationId, endpointId, role, responseMode = null, addedByHumanId, now = new Date() }, client = this.pool) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     const result = await client.query(

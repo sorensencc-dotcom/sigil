@@ -26,6 +26,37 @@ describe('RosterPanel', () => {
     expect(screen.getByLabelText('Wake rule for ep_claude')).toHaveValue('joins');
   });
 
+  it('creates a one-time code and shows the agent invite pending', async () => {
+    const createAgentRoomInvite = vi.fn(async () => ({
+      invite: { invite_id: 'arinv_1', endpoint_id: 'ep_other', created_at: 't', expires_at: 'later', state: 'pending' as const },
+      invite_code: 'opaque-code',
+    }));
+    renderWithClient(<RosterPanel roomId="room_1" members={members} manager onGone={() => {}} />, {
+      listAgentRoomInvites: async () => [],
+      createAgentRoomInvite,
+    });
+    await userEvent.type(screen.getByLabelText('Active agent endpoint ID'), 'ep_other');
+    await userEvent.click(screen.getByRole('button', { name: 'Create invite' }));
+    expect(await screen.findByLabelText('One-time invite code')).toHaveValue('opaque-code');
+    expect(createAgentRoomInvite).toHaveBeenCalledWith('room_1', 'ep_other');
+    expect(await screen.findByText('Only the named agent can redeem this code. It expires in 15 minutes.')).toBeInTheDocument();
+  });
+
+  it('shows pending and connected invite states and lets managers revoke pending invites', async () => {
+    const revokeAgentRoomInvite = vi.fn(async () => {});
+    renderWithClient(<RosterPanel roomId="room_1" members={members} manager onGone={() => {}} />, {
+      listAgentRoomInvites: async () => [
+        { invite_id: 'arinv_pending', endpoint_id: 'ep_pending', created_at: 't', expires_at: 'later', state: 'pending' },
+        { invite_id: 'arinv_connected', endpoint_id: 'ep_connected', created_at: 't', expires_at: 'later', state: 'connected' },
+      ],
+      revokeAgentRoomInvite,
+    });
+    expect(await screen.findByText('ep_pending')).toBeInTheDocument();
+    expect(screen.getByText('ep_connected')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke' }));
+    expect(revokeAgentRoomInvite).toHaveBeenCalledWith('room_1', 'arinv_pending');
+  });
+
   it('changes the mode and refetches the roster', async () => {
     const setResponseMode = vi.fn(async () => ({ ...members[1]!, response_mode: 'mentions_only' as const }));
     const { queryClient } = renderWithClient(<RosterPanel roomId="room_1" members={members} manager onGone={() => {}} />, { setResponseMode });

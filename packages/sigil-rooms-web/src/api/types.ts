@@ -111,6 +111,19 @@ export interface Member {
   display_name: string;
 }
 
+export interface AgentRoomInvite {
+  invite_id: string;
+  endpoint_id: string;
+  created_at: string;
+  expires_at: string;
+  state: 'pending' | 'connected' | 'revoked' | 'expired';
+}
+
+export interface CreatedAgentRoomInvite {
+  invite: AgentRoomInvite;
+  invite_code: string;
+}
+
 export interface StopResult {
   code: string;
   cancelled: number;

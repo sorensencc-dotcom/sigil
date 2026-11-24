@@ -51,6 +51,7 @@ import { cmdBotAdd, cmdBotDisable, cmdBotToken } from './bot-commands.mjs';
 import { cmdIngressDoctor, cmdIngressStatus } from './ingress-commands.mjs';
 import { cmdAgentSetInvokable, cmdHumanAdd, cmdHumanAddToRoom, cmdHumanSuspend, cmdHumanUnsuspend } from './human-commands.mjs';
 import { runRoomReport } from './room-report-command.mjs';
+import { runRoomJoin } from './room-agent-invite-command.mjs';
 import { runRoomExport, runVerify } from './transcript-commands.mjs';
 import { cmdIdentityRevoke, cmdInviteCreate, cmdInviteList, cmdInviteRevoke } from './oauth-commands.mjs';
 import { provisionIngressEndpoint } from './agentmail-provision.mjs';
@@ -104,6 +105,7 @@ Commands:
   ingress doctor --origin <url> [--access-client-id-env name --access-client-secret-env name] [--relay-port N --stream-port N --public-port N --ingress-port N]
                                                             Check the reply ingress through its public origin
   agent set-invokable --room <room_id> --agent <endpoint_id> --mode owner|members [--identity path] [--database-url url]   Set who may invoke an agent in a room; only the agent's owner (--identity) may change it
+  room join <invite-code> --identity <agent.identity.json> --relay-url <url>   Redeem a room invite as the authenticated agent endpoint
   room report --identity path --relay-url url --room id (--bot id --status s --summary text [--alert t]... | --from-report json) [--state path] [--report-at iso] [--drop-pending] [--resend-as-new]
                                                             Post an Ironbots report as a signed room.message. Exit 0: posted, reconciled, policy skip, already_posted, or operator --drop-pending/--break-lock/--break-state-lock. Exit 1: usage. Exit 2: permanent refusal (report_refused). Exit 3: transient, pending unresolved, or lock_timeout. Also: --state path --break-lock <bot> | --break-state-lock
   room export --room id --out path [--database-url url]    Export a room transcript (envelopes plus sender public keys) as JSON
@@ -2193,6 +2195,7 @@ export async function main() {
     else if (command === 'bot' && sub === 'token') await cmdBotToken(rest);
     else if (command === 'ingress' && sub === 'status') await cmdIngressStatus(rest);
     else if (command === 'ingress' && sub === 'doctor') await cmdIngressDoctor(rest);
+    else if (command === 'room' && sub === 'join') await runRoomJoin(rest);
     else if (command === 'verify') {
       const code = await runVerify(process.argv.slice(3));
       if (code) process.exitCode = code;
