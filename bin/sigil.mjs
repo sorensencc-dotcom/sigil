@@ -33,7 +33,7 @@ if (command === '--help' || command === '-h' || !command) {
   process.exit(command ? 0 : 1);
 }
 
-if (['relay', 'send', 'inbox', 'agent', 'service', 'secret', 'doctor', 'peer', 'oidc-issuer', 'human', 'bot', 'ingress', 'room', 'agentmail', 'resend', 'federation', 'route', 'endpoint', 'sign-contract', 'verify-contract', 'schema', 'template'].includes(command) || (command === 'init' && process.argv[3] !== 'codex')) {
+if (['relay', 'send', 'inbox', 'agent', 'service', 'secret', 'doctor', 'peer', 'oidc-issuer', 'human', 'bot', 'ingress', 'room', 'agentmail', 'resend', 'federation', 'route', 'endpoint', 'sign-contract', 'verify-contract', 'verify', 'schema', 'template'].includes(command) || (command === 'init' && process.argv[3] !== 'codex')) {
   const cli = await import('../sigil/cli/sigil.mjs');
   await cli.main?.();
 } else if (command === 'configure') {
