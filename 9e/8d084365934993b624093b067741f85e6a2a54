@@ -1,0 +1,41 @@
+packages/sigil-rooms-web/src/pages/MentionsView.tsx
+  s_bb430532dff8a2::t_bea2295dbab503 1-2,4-18,20-42,44-53
+packages/sigil-rooms-web/src/rooms/RowView.tsx
+  s_bb430532dff8a2::t_09bb1ffd8e432a 43,57
+packages/sigil-rooms-web/src/api/types.ts
+  s_bb430532dff8a2::t_a365900446ef00 29-37
+packages/sigil-rooms-web/src/rooms/Timeline.tsx
+  s_bb430532dff8a2::t_e494b5d098fd1a 125-126,139,147,190
+packages/sigil-rooms-web/src/api/client.ts
+  s_bb430532dff8a2::t_573f47095148cb 158-160
+  s_bb430532dff8a2::t_fe9aba351fb996 40
+packages/sigil-rooms-web/src/App.tsx
+  s_bb430532dff8a2::t_efb73870118541 12,94,115-116,158-159,168-169
+packages/sigil-rooms-web/src/styles.css
+  s_bb430532dff8a2::t_efb73870118541 214-216
+packages/sigil-rooms-web/src/rooms/Timeline.spec.tsx
+  s_bb430532dff8a2::t_c16503cfd8e755 343
+  s_bb430532dff8a2::t_b9fc5b9a60d50c 332-342,344-352
+packages/sigil-rooms-web/src/pages/MentionsView.spec.tsx
+  s_bb430532dff8a2::t_4df7a92110aa83 24-25
+  s_bb430532dff8a2::t_6cd73f5e0d5e63 1-23,26-62
+packages/sigil-rooms-web/src/App.spec.tsx
+  s_bb430532dff8a2::t_558cc0624237e9 1,133
+  s_bb430532dff8a2::t_c16503cfd8e755 111-123,125-132,134-138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9e8d084365934993b624093b067741f85e6a2a54",
+  "prompts": {},
+  "sessions": {
+    "s_bb430532dff8a2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "864bdcc1-0d96-46ff-aa61-e768b8999402",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+.trail/learnings/2026-11-24-opening-a-room-message-from-another-chris.md
+  s_bb430532dff8a2::t_56af6f1c19b94f 1-34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "807cee53c2c6b476c9cf023b025984008bf89aec",
+  "prompts": {},
+  "sessions": {
+    "s_bb430532dff8a2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "864bdcc1-0d96-46ff-aa61-e768b8999402",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

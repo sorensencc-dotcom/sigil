@@ -1,0 +1,21 @@
+packages/sigil-rooms-web/src/App.tsx
+  s_bb430532dff8a2::t_7b4286307f2eb3 114
+packages/sigil-rooms-web/src/App.spec.tsx
+  s_bb430532dff8a2::t_61596f52ce1e99 138-140
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3e4ec9d879a66b143f59fb010259dc8c49606f30",
+  "prompts": {},
+  "sessions": {
+    "s_bb430532dff8a2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "864bdcc1-0d96-46ff-aa61-e768b8999402",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
