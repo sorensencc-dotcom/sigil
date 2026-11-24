@@ -10,6 +10,22 @@ function make(fetchImpl: typeof fetch, token: string | null = 'tok', onUnauthori
 }
 
 describe('api client', () => {
+  it('lists mention pages and URL-encodes the continuation cursor', async () => {
+    const calls: string[] = [];
+    const page = { items: [], next_cursor: 'next+/=' };
+    const fetchImpl = vi.fn(async (url: string) => {
+      calls.push(url);
+      return jsonResponse(200, page);
+    });
+    const { client } = make(fetchImpl as unknown as typeof fetch);
+    await expect(client.listMentions()).resolves.toEqual(page);
+    await expect(client.listMentions('next+/=')).resolves.toEqual(page);
+    expect(calls).toEqual([
+      'http://relay.test/v1/mentions',
+      'http://relay.test/v1/mentions?cursor=next%2B%2F%3D',
+    ]);
+  });
+
   it('sends only authorization and content-type headers', async () => {
     const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse(200, { code: 'OK', items: [] }));
     const { client } = make(fetchImpl as unknown as typeof fetch);

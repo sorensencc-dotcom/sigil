@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { ApiError } from '../api/client';
 import type { Mention } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
@@ -19,7 +19,13 @@ function MentionsError({ error }: { error: unknown }) {
 export function MentionsView({ onOpen }: { onOpen: (mention: Mention) => void }) {
   const { client } = useAuth();
   const { nameFor } = useContacts();
-  const mentions = useQuery({ queryKey: mentionsKey, queryFn: () => client.listMentions() });
+  const mentions = useInfiniteQuery({
+    queryKey: mentionsKey,
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => client.listMentions(pageParam ?? undefined),
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+  });
+  const items = mentions.data?.pages.flatMap((page) => page.items) ?? [];
   const rooms = useQuery({ queryKey: ['rooms'], queryFn: () => client.listRooms() });
   const roomName = (roomId: string) => rooms.data?.find((room) => room.conversation_id === roomId)?.name ?? roomId;
   return (
@@ -29,10 +35,10 @@ export function MentionsView({ onOpen }: { onOpen: (mention: Mention) => void })
       </header>
       {mentions.error ? <MentionsError error={mentions.error} /> : null}
       {mentions.isLoading ? <p>Loading mentions…</p> : null}
-      {mentions.data && mentions.data.length === 0 ? <p className="empty">No one has mentioned you yet.</p> : null}
-      {mentions.data && mentions.data.length > 0 ? (
+      {mentions.data && items.length === 0 ? <p className="empty">No one has mentioned you yet.</p> : null}
+      {items.length > 0 ? (
         <ul className="mention-list" aria-label="Messages that mention you">
-          {mentions.data.map((mention) => (
+          {items.map((mention) => (
             <li key={`${mention.conversation_id}:${mention.message_id}`}>
               <div className="meta">
                 <span className="sender">{nameFor(mention.sender_endpoint_id)}</span>
@@ -47,6 +53,11 @@ export function MentionsView({ onOpen }: { onOpen: (mention: Mention) => void })
             </li>
           ))}
         </ul>
+      ) : null}
+      {mentions.hasNextPage ? (
+        <button type="button" className="ghost" disabled={mentions.isFetchingNextPage} onClick={() => { void mentions.fetchNextPage(); }}>
+          {mentions.isFetchingNextPage ? 'Loading mentions…' : 'Load older mentions'}
+        </button>
       ) : null}
     </section>
   );

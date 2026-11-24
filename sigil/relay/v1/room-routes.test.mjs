@@ -43,7 +43,7 @@ async function withServer(fn) {
   try { await fn(server.address().port, repository); } finally { await new Promise((resolve) => server.close(resolve)); }
 }
 
-test('GET /v1/mentions lists mentions of the caller', async () => {
+test('GET /v1/mentions returns a cursor for the next mention page', async () => {
   const items = [{ conversation_id: 'room_1', message_id: 'msg_1', room_seq: '1', sender_endpoint_id: 'ep_web', text: 'hi' }];
   let seen = null;
   const response = { status: 0, payload: null, setHeader() {}, writeHead(status) { this.status = status; }, end(text) { this.payload = text ? JSON.parse(text) : null; } };
@@ -52,13 +52,33 @@ test('GET /v1/mentions lists mentions of the caller', async () => {
     response,
     parsedUrl: new URL('http://relay.test/v1/mentions?limit=10'),
     principal: { endpoint_id: 'ep_claude' },
-    repository: { async listMentionsForEndpoint(endpointId, limit) { seen = { endpointId, limit }; return items; } },
+    repository: { async listMentionsForEndpoint(endpointId, limit, cursor) { seen = { endpointId, limit, cursor }; return { items, hasMore: true }; } },
     requestId: 'req_mentions',
   });
   assert.equal(handled, true);
   assert.equal(response.status, 200);
-  assert.deepEqual(seen, { endpointId: 'ep_claude', limit: 10 });
+  assert.deepEqual(seen, { endpointId: 'ep_claude', limit: 10, cursor: null });
   assert.deepEqual(response.payload.items, items);
+  assert.deepEqual(JSON.parse(Buffer.from(response.payload.next_cursor, 'base64url').toString()), {
+    room_seq: '1', conversation_id: 'room_1', message_id: 'msg_1',
+  });
+});
+
+test('GET /v1/mentions rejects a malformed cursor before querying the repository', async () => {
+  let queried = false;
+  const response = { status: 0, payload: null, setHeader() {}, writeHead(status) { this.status = status; }, end(text) { this.payload = text ? JSON.parse(text) : null; } };
+  const handled = await handleRoomRoute({
+    request: { method: 'GET' },
+    response,
+    parsedUrl: new URL('http://relay.test/v1/mentions?cursor=not-a-cursor!'),
+    principal: { endpoint_id: 'ep_claude' },
+    repository: { async listMentionsForEndpoint() { queried = true; return { items: [], hasMore: false }; } },
+    requestId: 'req_mentions',
+  });
+  assert.equal(handled, true);
+  assert.equal(response.status, 400);
+  assert.equal(response.payload.code, 'INVALID_REQUEST');
+  assert.equal(queried, false);
 });
 
 test('create, list, add member, read history, remove member', async () => {

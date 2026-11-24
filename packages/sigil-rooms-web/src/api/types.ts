@@ -35,6 +35,11 @@ export interface Mention {
   text: string | null;
 }
 
+export interface MentionPage {
+  items: Mention[];
+  next_cursor: string | null;
+}
+
 export interface HistoryPage {
   code: string;
   items: HistoryItem[];

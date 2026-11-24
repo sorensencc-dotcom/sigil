@@ -2,7 +2,7 @@ import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../api/client';
-import type { Mention, Room } from '../api/types';
+import type { Mention, MentionPage, Room } from '../api/types';
 import { renderWithClient } from '../testUtils';
 import { MentionsView } from './MentionsView';
 
@@ -16,7 +16,7 @@ const mentions: Mention[] = [
   { conversation_id: 'room_ops', message_id: 'msg_2', room_seq: '3', sender_endpoint_id: 'ep_codex', text: '@ep_web deploy is green' },
 ];
 
-function client(listMentions: () => Promise<Mention[]>) {
+function client(listMentions: (cursor?: string) => Promise<MentionPage>) {
   return {
     listMentions,
     listRooms: async () => rooms,
@@ -29,7 +29,7 @@ function client(listMentions: () => Promise<Mention[]>) {
 
 describe('MentionsView', () => {
   it('lists each mention with its sender, room, and text across rooms', async () => {
-    renderWithClient(<MentionsView onOpen={() => {}} />, client(async () => mentions));
+    renderWithClient(<MentionsView onOpen={() => {}} />, client(async () => ({ items: mentions, next_cursor: null })));
     const list = await screen.findByRole('list', { name: 'Messages that mention you' });
     const items = list.querySelectorAll('li');
     expect(items).toHaveLength(2);
@@ -42,13 +42,26 @@ describe('MentionsView', () => {
 
   it('opens the room and message the user picks', async () => {
     const onOpen = vi.fn();
-    renderWithClient(<MentionsView onOpen={onOpen} />, client(async () => mentions));
+    renderWithClient(<MentionsView onOpen={onOpen} />, client(async () => ({ items: mentions, next_cursor: null })));
     await userEvent.click(await screen.findByRole('button', { name: 'Open in ops' }));
     expect(onOpen).toHaveBeenCalledWith('room_ops', 'msg_2');
   });
 
+  it('loads older mentions without replacing the first page', async () => {
+    const listMentions = vi.fn(async (cursor?: string) => cursor
+      ? { items: [mentions[1]!], next_cursor: null }
+      : { items: [mentions[0]!], next_cursor: 'cursor-older' });
+    renderWithClient(<MentionsView onOpen={() => {}} />, client(listMentions));
+    expect(await screen.findByText('review this @Chris')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Load older mentions' }));
+    expect(await screen.findByText('@Chris deploy is green')).toBeInTheDocument();
+    expect(screen.getByText('review this @Chris')).toBeInTheDocument();
+    expect(listMentions).toHaveBeenNthCalledWith(2, 'cursor-older');
+    expect(screen.queryByRole('button', { name: 'Load older mentions' })).toBeNull();
+  });
+
   it('says so when nobody has mentioned the user', async () => {
-    renderWithClient(<MentionsView onOpen={() => {}} />, client(async () => []));
+    renderWithClient(<MentionsView onOpen={() => {}} />, client(async () => ({ items: [], next_cursor: null })));
     expect(await screen.findByText('No one has mentioned you yet.')).toBeInTheDocument();
   });
 

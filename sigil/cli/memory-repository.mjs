@@ -533,24 +533,39 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
         .slice(0, limit)
         .map((row) => ({ room_seq: String(row.roomSeq), message_id: row.message_id, display_name: registry.get(row.envelope.sender.endpoint_id)?.display_name || row.envelope.sender.endpoint_id, canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'), envelope: row.envelope }));
     },
-    async listMentionsForEndpoint(endpointId, limit = 50) {
+    async listMentionsForEndpoint(endpointId, limit = 50, cursor = null) {
       const cap = Math.min(Math.max(Number(limit) || 50, 1), 100);
       const memberOf = new Set();
       for (const [conversationId, members] of roomMembers) {
         const member = members.get(endpointId);
         if (member && member.removed_at === null) memberOf.add(conversationId);
       }
-      return [...envelopes.values()]
+      const compare = (a, b) => {
+        const aSeq = BigInt(a.roomSeq);
+        const bSeq = BigInt(b.roomSeq);
+        if (aSeq !== bSeq) return aSeq > bSeq ? -1 : 1;
+        const aRoom = a.envelope.conversation_id;
+        const bRoom = b.envelope.conversation_id;
+        if (aRoom !== bRoom) return aRoom > bRoom ? -1 : 1;
+        return a.message_id === b.message_id ? 0 : a.message_id > b.message_id ? -1 : 1;
+      };
+      const boundary = cursor ? { roomSeq: BigInt(cursor.room_seq), envelope: { conversation_id: cursor.conversation_id }, message_id: cursor.message_id } : null;
+      const selected = [...envelopes.values()]
         .filter((row) => memberOf.has(row.envelope.conversation_id) && row.envelope.message_type === 'room.message' && Array.isArray(row.envelope.body?.mentions) && row.envelope.body.mentions.includes(endpointId))
-        .sort((a, b) => (a.roomSeq > b.roomSeq ? -1 : a.roomSeq < b.roomSeq ? 1 : 0))
-        .slice(0, cap)
-        .map((row) => ({
+        .filter((row) => !boundary || compare(row, boundary) > 0)
+        .sort(compare)
+        .slice(0, cap + 1);
+      const hasMore = selected.length > cap;
+      return {
+        hasMore,
+        items: selected.slice(0, cap).map((row) => ({
           conversation_id: row.envelope.conversation_id,
           message_id: row.message_id,
           room_seq: row.roomSeq == null ? null : String(row.roomSeq),
           sender_endpoint_id: row.envelope.sender.endpoint_id,
           text: row.envelope.body.text,
-        }));
+        })),
+      };
     },
     // Serialization is a Postgres concern; the memory repo has no concurrent transactions.
     async lockRoom() {},

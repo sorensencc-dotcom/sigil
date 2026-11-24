@@ -23,6 +23,34 @@ const ROOM_SEARCH_LIMIT_MAX = 50;
 const NAME_MAX = 80;
 const HISTORY_LIMIT_MAX = 500;
 const ROOM_SEQ_MAX = 9223372036854775807n; // envelopes.room_seq is int8
+const MENTIONS_LIMIT_MAX = 100;
+
+function decodeMentionCursor(value) {
+  if (value == null) return null;
+  if (!/^[A-Za-z0-9_-]{1,1024}$/.test(value)) return undefined;
+  try {
+    const json = Buffer.from(value, 'base64url').toString('utf8');
+    if (Buffer.from(json).toString('base64url') !== value) return undefined;
+    const cursor = JSON.parse(json);
+    if (!cursor || typeof cursor !== 'object' || Array.isArray(cursor)
+      || Object.keys(cursor).length !== 3
+      || typeof cursor.room_seq !== 'string' || !/^(0|[1-9]\d*)$/.test(cursor.room_seq)
+      || typeof cursor.conversation_id !== 'string' || !cursor.conversation_id || cursor.conversation_id.length > 200
+      || typeof cursor.message_id !== 'string' || !cursor.message_id || cursor.message_id.length > 200) return undefined;
+    if (BigInt(cursor.room_seq) > ROOM_SEQ_MAX) return undefined;
+    return cursor;
+  } catch {
+    return undefined;
+  }
+}
+
+function encodeMentionCursor(item) {
+  return Buffer.from(JSON.stringify({
+    room_seq: item.room_seq,
+    conversation_id: item.conversation_id,
+    message_id: item.message_id,
+  })).toString('base64url');
+}
 
 function send(response, requestId, status, body) {
   response.writeHead(status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
@@ -129,8 +157,11 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     if (typeof repository?.listMentionsForEndpoint !== 'function') return fail(response, requestId, 503, 'DATABASE_UNAVAILABLE', 'Mentions are unavailable');
     const requested = Number(parsedUrl.searchParams.get('limit') ?? 50);
     const limit = Number.isFinite(requested) ? requested : 50;
-    const items = await repository.listMentionsForEndpoint(principal.endpoint_id, limit);
-    return send(response, requestId, 200, { code: 'OK', items });
+    const cursor = decodeMentionCursor(parsedUrl.searchParams.get('cursor'));
+    if (cursor === undefined) return fail(response, requestId, 400, 'INVALID_REQUEST', 'cursor is invalid');
+    const page = await repository.listMentionsForEndpoint(principal.endpoint_id, Math.min(limit, MENTIONS_LIMIT_MAX), cursor);
+    const last = page.hasMore ? page.items.at(-1) : null;
+    return send(response, requestId, 200, { code: 'OK', items: page.items, next_cursor: last ? encodeMentionCursor(last) : null });
   }
   if (path !== '/v1/rooms' && !path.startsWith('/v1/rooms/')) return false;
   if (request.method === 'POST' && path === '/v1/rooms/ws-ticket') {
