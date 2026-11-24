@@ -540,26 +540,73 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
         .filter((row) => row.envelope.conversation_id === conversationId && row.roomSeq != null && row.roomSeq > BigInt(afterSeq))
         .sort((a, b) => (a.roomSeq < b.roomSeq ? -1 : a.roomSeq > b.roomSeq ? 1 : 0))
         .slice(0, limit)
+        .map((row) => ({ room_seq: String(row.roomSeq), stream_seq: row.streamSeq == null ? null : String(row.streamSeq), message_id: row.message_id, display_name: registry.get(row.envelope.sender.endpoint_id)?.display_name || row.envelope.sender.endpoint_id, canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'), envelope: row.envelope }));
+    },
+    async getRoomMessage(conversationId, messageId) {
+      const row = envelopes.get(messageId);
+      if (!row || row.envelope.conversation_id !== conversationId || row.roomSeq == null) return null;
+      return {
+        room_seq: String(row.roomSeq), stream_seq: row.streamSeq == null ? null : String(row.streamSeq),
+        message_id: row.message_id, display_name: registry.get(row.envelope.sender.endpoint_id)?.display_name || row.envelope.sender.endpoint_id,
+        canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'), envelope: row.envelope,
+      };
+    },
+    async listRoomMessagesBefore(conversationId, beforeSeq = null, limit = 100) {
+      const cursor = beforeSeq == null ? null : BigInt(beforeSeq);
+      return [...envelopes.values()]
+        .filter((row) => row.envelope.conversation_id === conversationId && row.roomSeq != null && (cursor === null || row.roomSeq < cursor))
+        .sort((a, b) => (a.roomSeq < b.roomSeq ? 1 : a.roomSeq > b.roomSeq ? -1 : 0))
+        .slice(0, limit)
+        .reverse()
         .map((row) => ({ room_seq: String(row.roomSeq), message_id: row.message_id, display_name: registry.get(row.envelope.sender.endpoint_id)?.display_name || row.envelope.sender.endpoint_id, canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'), envelope: row.envelope }));
     },
-    async listMentionsForEndpoint(endpointId, limit = 50) {
+    async searchRoomMessages(conversationId, query, beforeSeq = null, limit = 50) {
+      const needle = query.toLocaleLowerCase('en-US');
+      const cursor = beforeSeq == null ? null : BigInt(beforeSeq);
+      return [...envelopes.values()]
+        .filter((row) => row.envelope.conversation_id === conversationId
+          && row.roomSeq != null
+          && row.envelope.message_type === 'room.message'
+          && (cursor === null || row.roomSeq < cursor)
+          && typeof row.envelope.body?.text === 'string'
+          && row.envelope.body.text.toLocaleLowerCase('en-US').includes(needle))
+        .sort((a, b) => (a.roomSeq > b.roomSeq ? -1 : a.roomSeq < b.roomSeq ? 1 : 0))
+        .slice(0, limit)
+        .map((row) => ({ room_seq: String(row.roomSeq), message_id: row.message_id, display_name: registry.get(row.envelope.sender.endpoint_id)?.display_name || row.envelope.sender.endpoint_id, canonical_bytes: row.canonical_bytes == null ? null : Buffer.from(row.canonical_bytes).toString('base64url'), envelope: row.envelope }));
+    },
+    async listMentionsForEndpoint(endpointId, limit = 50, cursor = null) {
       const cap = Math.min(Math.max(Number(limit) || 50, 1), 100);
       const memberOf = new Set();
       for (const [conversationId, members] of roomMembers) {
         const member = members.get(endpointId);
         if (member && member.removed_at === null) memberOf.add(conversationId);
       }
-      return [...envelopes.values()]
+      const compare = (a, b) => {
+        const aSeq = BigInt(a.roomSeq);
+        const bSeq = BigInt(b.roomSeq);
+        if (aSeq !== bSeq) return aSeq > bSeq ? -1 : 1;
+        const aRoom = a.envelope.conversation_id;
+        const bRoom = b.envelope.conversation_id;
+        if (aRoom !== bRoom) return aRoom > bRoom ? -1 : 1;
+        return a.message_id === b.message_id ? 0 : a.message_id > b.message_id ? -1 : 1;
+      };
+      const boundary = cursor ? { roomSeq: BigInt(cursor.room_seq), envelope: { conversation_id: cursor.conversation_id }, message_id: cursor.message_id } : null;
+      const selected = [...envelopes.values()]
         .filter((row) => memberOf.has(row.envelope.conversation_id) && row.envelope.message_type === 'room.message' && Array.isArray(row.envelope.body?.mentions) && row.envelope.body.mentions.includes(endpointId))
-        .sort((a, b) => (a.roomSeq > b.roomSeq ? -1 : a.roomSeq < b.roomSeq ? 1 : 0))
-        .slice(0, cap)
-        .map((row) => ({
+        .filter((row) => !boundary || compare(row, boundary) > 0)
+        .sort(compare)
+        .slice(0, cap + 1);
+      const hasMore = selected.length > cap;
+      return {
+        hasMore,
+        items: selected.slice(0, cap).map((row) => ({
           conversation_id: row.envelope.conversation_id,
           message_id: row.message_id,
           room_seq: row.roomSeq == null ? null : String(row.roomSeq),
           sender_endpoint_id: row.envelope.sender.endpoint_id,
           text: row.envelope.body.text,
-        }));
+        })),
+      };
     },
     // Serialization is a Postgres concern; the memory repo has no concurrent transactions.
     async lockRoom() {},
@@ -923,7 +970,15 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       } : null;
     },
     async listApprovalChallengesForConversation(conversationId) {
-      return [...approvalChallenges.values()].filter((row) => row.conversation_id === conversationId && row.envelope).map((row) => ({ id: row.challenge_id, endpointId: row.endpoint_id, actionHash: row.action_hash, expiresAt: row.expires_at, capabilities: row.capabilities, envelope: row.envelope }));
+      return [...approvalChallenges.values()].filter((row) => row.conversation_id === conversationId && row.envelope).map((row) => {
+        const decision = [...approvalDecisions.values()].find((item) => item.nonce === row.challenge_id);
+        return {
+          id: row.challenge_id, endpointId: row.endpoint_id, actionHash: row.action_hash,
+          expiresAt: row.expires_at, capabilities: row.capabilities, envelope: row.envelope,
+          status: row.status, decisionStatus: decision?.status ?? null,
+          decisionExpiresAt: decision?.expires_at ?? null, createdAt: row.created_at,
+        };
+      });
     },
     async getApprovalChallengeForMessage(conversationId, messageId) {
       const row = [...approvalChallenges.values()].find((item) => item.conversation_id === conversationId && item.message_id === messageId && item.envelope);

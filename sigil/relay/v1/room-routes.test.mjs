@@ -44,7 +44,7 @@ async function withServer(fn, serverOptions = {}) {
   try { await fn(server.address().port, repository); } finally { await new Promise((resolve) => server.close(resolve)); }
 }
 
-test('GET /v1/mentions lists mentions of the caller', async () => {
+test('GET /v1/mentions returns a cursor for the next mention page', async () => {
   const items = [{ conversation_id: 'room_1', message_id: 'msg_1', room_seq: '1', sender_endpoint_id: 'ep_web', text: 'hi' }];
   let seen = null;
   const response = { status: 0, payload: null, setHeader() {}, writeHead(status) { this.status = status; }, end(text) { this.payload = text ? JSON.parse(text) : null; } };
@@ -53,13 +53,33 @@ test('GET /v1/mentions lists mentions of the caller', async () => {
     response,
     parsedUrl: new URL('http://relay.test/v1/mentions?limit=10'),
     principal: { endpoint_id: 'ep_claude' },
-    repository: { async listMentionsForEndpoint(endpointId, limit) { seen = { endpointId, limit }; return items; } },
+    repository: { async listMentionsForEndpoint(endpointId, limit, cursor) { seen = { endpointId, limit, cursor }; return { items, hasMore: true }; } },
     requestId: 'req_mentions',
   });
   assert.equal(handled, true);
   assert.equal(response.status, 200);
-  assert.deepEqual(seen, { endpointId: 'ep_claude', limit: 10 });
+  assert.deepEqual(seen, { endpointId: 'ep_claude', limit: 10, cursor: null });
   assert.deepEqual(response.payload.items, items);
+  assert.deepEqual(JSON.parse(Buffer.from(response.payload.next_cursor, 'base64url').toString()), {
+    room_seq: '1', conversation_id: 'room_1', message_id: 'msg_1',
+  });
+});
+
+test('GET /v1/mentions rejects a malformed cursor before querying the repository', async () => {
+  let queried = false;
+  const response = { status: 0, payload: null, setHeader() {}, writeHead(status) { this.status = status; }, end(text) { this.payload = text ? JSON.parse(text) : null; } };
+  const handled = await handleRoomRoute({
+    request: { method: 'GET' },
+    response,
+    parsedUrl: new URL('http://relay.test/v1/mentions?cursor=not-a-cursor!'),
+    principal: { endpoint_id: 'ep_claude' },
+    repository: { async listMentionsForEndpoint() { queried = true; return { items: [], hasMore: false }; } },
+    requestId: 'req_mentions',
+  });
+  assert.equal(handled, true);
+  assert.equal(response.status, 400);
+  assert.equal(response.payload.code, 'INVALID_REQUEST');
+  assert.equal(queried, false);
 });
 
 test('create, list, add member, read history, remove member', async () => {
@@ -177,6 +197,44 @@ test('history items carry canonical_bytes unchanged from the repository', async 
     assert.equal(history.body.items.length, 1);
     assert.equal(history.body.items[0].canonical_bytes, Buffer.from('stored-signed-bytes').toString('base64url'));
     assert.deepEqual(history.body.items, JSON.parse(JSON.stringify(await repository.listRoomMessages(roomId, 0n, 100))));
+  });
+});
+
+test('bounded history and search pages are room-scoped and use exclusive cursors', async () => {
+  await withServer(async (port, repository) => {
+    const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'searchable' })).body.room.conversation_id;
+    const addMessage = async (seq, text) => {
+      const messageId = `msg_search_${seq}`;
+      const envelope = {
+        message_id: messageId, conversation_id: roomId, message_type: 'room.message',
+        sender: { endpoint_id: 'ep_web', owner_id: 'usr_chris' }, broadcast_scope: { conversation_id: roomId },
+        body: { text }, idempotency_key: `idem_search_${seq}`, created_at: `2026-10-02T12:00:0${seq}.000Z`, expires_at: '2026-10-02T13:00:00.000Z',
+      };
+      await repository.persistAcceptedEnvelope({ envelope, message_id: messageId, canonical_hash: `hash_${seq}`, canonical_bytes: Buffer.from(`signed_${seq}`), roomSeq: BigInt(seq), roomFanout: [] });
+    };
+    await addMessage(1, 'Deploy failed on node 7');
+    await addMessage(2, 'A build completed');
+    await addMessage(3, 'Deploy contains literal 100%_complete');
+
+    const latest = await call(port, 'GET', `/v1/rooms/${roomId}/messages?before_seq=latest&limit=2`, 'Bearer chris-web');
+    assert.deepEqual(latest.body.items.map((item) => item.room_seq), ['2', '3']);
+    assert.equal(latest.body.has_older, true);
+    assert.equal(latest.body.next_before_seq, '2');
+    const older = await call(port, 'GET', `/v1/rooms/${roomId}/messages?before_seq=2&limit=2`, 'Bearer chris-web');
+    assert.deepEqual(older.body.items.map((item) => item.room_seq), ['1']);
+    assert.equal(older.body.has_older, false);
+
+    const first = await call(port, 'GET', `/v1/rooms/${roomId}/messages/search?q=deploy&limit=1`, 'Bearer chris-web');
+    assert.deepEqual(first.body.items.map((item) => item.room_seq), ['3']);
+    assert.equal(first.body.items[0].snippet, 'Deploy contains literal 100%_complete');
+    assert.equal('envelope' in first.body.items[0], false, 'search returns only the bounded display projection');
+    assert.equal(first.body.has_more, true);
+    const second = await call(port, 'GET', `/v1/rooms/${roomId}/messages/search?q=deploy&before_seq=${first.body.next_before_seq}&limit=1`, 'Bearer chris-web');
+    assert.deepEqual(second.body.items.map((item) => item.room_seq), ['1']);
+    const literal = await call(port, 'GET', `/v1/rooms/${roomId}/messages/search?q=${encodeURIComponent('100%_')}`, 'Bearer chris-web');
+    assert.deepEqual(literal.body.items.map((item) => item.room_seq), ['3']);
+    assert.equal((await call(port, 'GET', `/v1/rooms/${roomId}/messages/search?q=ab`, 'Bearer chris-web')).status, 400);
+    assert.equal((await call(port, 'GET', `/v1/rooms/${roomId}/messages/search?q=deploy`, 'Bearer stranger')).status, 404);
   });
 });
 

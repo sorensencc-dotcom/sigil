@@ -15,21 +15,62 @@ export interface RoomEnvelope {
   sender: { endpoint_id: string; owner_id: string };
   body: { text?: string; kind?: RoomEventKind | (string & {}); reason?: string; endpoint_ids?: string[]; invocation_id?: string; thread_root_id?: string };
   created_at: string;
+  signature?: EnvelopeSignature;
+}
+
+export interface EnvelopeSignature {
+  algorithm: string | null;
+  key_id: string | null;
+  value: string | null;
 }
 
 export interface HistoryItem {
   room_seq: string | number;
   message_id: string;
-  canonical_bytes: string;
+  canonical_bytes: string | null;
   // Sender label from endpoints.display_name; absent on older relays.
   display_name?: string;
   envelope: RoomEnvelope;
+}
+
+// One row of GET /v1/mentions: a room.message whose mentions list names the caller.
+export interface Mention {
+  conversation_id: string;
+  message_id: string;
+  room_seq: string;
+  sender_endpoint_id: string;
+  text: string | null;
+}
+
+export interface MentionPage {
+  items: Mention[];
+  next_cursor: string | null;
 }
 
 export interface HistoryPage {
   code: string;
   items: HistoryItem[];
   next_after_seq: string | number;
+  next_before_seq?: string | number | null;
+  has_more?: boolean;
+  has_older?: boolean;
+}
+
+export interface RoomSearchItem {
+  room_seq: string | number;
+  message_id: string;
+  display_name?: string;
+  sender_endpoint_id: string;
+  created_at: string;
+  snippet: string;
+  thread_root_id?: string;
+}
+
+export interface RoomSearchPage {
+  code: string;
+  items: RoomSearchItem[];
+  next_before_seq: string | number | null;
+  has_more: boolean;
 }
 
 export interface SendResult {
@@ -86,6 +127,13 @@ export interface CreatedAgentRoomInvite {
 export interface StopResult {
   code: string;
   cancelled: number;
+}
+
+export interface Invocation {
+  invocation_id: string;
+  endpoint_id: string;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'refused';
+  subject_human_id: string | null;
 }
 
 export interface Session {

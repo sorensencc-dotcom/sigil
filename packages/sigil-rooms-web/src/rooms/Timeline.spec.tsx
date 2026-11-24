@@ -1,19 +1,21 @@
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../api/client';
 import type { HistoryItem } from '../api/types';
 import { renderWithClient } from '../testUtils';
 import { Timeline } from './Timeline';
 
-function msg(seq: number, id: string, text: string, type = 'room.message'): HistoryItem {
+function msg(seq: number, id: string, text: string, type = 'room.message', createdAt = '2026-11-23T12:00:00.000Z'): HistoryItem {
   return {
     room_seq: String(seq), message_id: id, canonical_bytes: 'b',
-    envelope: { message_id: id, message_type: type, sender: { endpoint_id: 'ep_a', owner_id: 'u' }, body: type === 'room.event' ? { kind: 'invocation_stopped', reason: text } : { text }, created_at: 't' },
+    envelope: { message_id: id, message_type: type, sender: { endpoint_id: 'ep_a', owner_id: 'u' }, body: type === 'room.event' ? { kind: 'invocation_stopped', reason: text } : { text }, created_at: createdAt },
   };
 }
 
 describe('Timeline', () => {
+  beforeEach(() => localStorage.clear());
+
   it('renders messages as plain text, never as HTML', async () => {
     const history = vi.fn(async () => ({ code: 'OK', items: [msg(1, 'm1', '<img src=x onerror=alert(1)> **bold**')], next_after_seq: '1' }));
     const { container } = renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { history });
@@ -22,15 +24,54 @@ describe('Timeline', () => {
     expect(container.querySelector('a')).toBeNull();
   });
 
-  it('pages until a page is shorter than the limit', async () => {
-    const full = Array.from({ length: 100 }, (_, i) => msg(i + 1, `m${i + 1}`, `t${i + 1}`));
-    const history = vi.fn(async (_room: string, after: string) =>
-      after === '0'
-        ? { code: 'OK', items: full, next_after_seq: '100' }
-        : { code: 'OK', items: [msg(101, 'm101', 't101')], next_after_seq: '101' });
-    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { history });
-    expect(await screen.findByText('t101')).toBeInTheDocument();
-    expect(history.mock.calls.map((c) => c[1])).toEqual(['0', '100']);
+  it('loads a bounded newest page and requests earlier pages on demand', async () => {
+    const recent = Array.from({ length: 100 }, (_, i) => msg(i + 101, `m${i + 101}`, `t${i + 101}`));
+    const historyBefore = vi.fn(async (_room: string, before: string, limit?: number) => before === 'latest'
+      ? { code: 'OK', items: recent, next_after_seq: '200', has_older: true }
+      : { code: 'OK', items: Array.from({ length: limit ?? 100 }, (_, i) => msg(i + 1, `m${i + 1}`, `t${i + 1}`)), next_after_seq: '100', has_older: false });
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { historyBefore });
+    expect(await screen.findByText('t200')).toBeInTheDocument();
+    expect(screen.queryByText('t1')).toBeNull();
+    expect(historyBefore.mock.calls.map((c) => c[1])).toEqual(['latest']);
+    await userEvent.click(screen.getByRole('button', { name: 'Load older messages' }));
+    expect(await screen.findByText('t1')).toBeInTheDocument();
+    expect(historyBefore.mock.calls.map((c) => c[1])).toEqual(['latest', '101']);
+  });
+
+  it('searches the room and opens a bounded context around a result', async () => {
+    const historyBefore = vi.fn(async (_room: string, before: string) => before === 'latest'
+      ? { code: 'OK', items: [msg(3, 'm3', 'latest')], next_after_seq: '3', has_older: true }
+      : { code: 'OK', items: [msg(1, 'm1', 'Deploy failed on node 7'), msg(2, 'm2', 'middle')], next_after_seq: '2', has_older: false });
+    const history = vi.fn(async (_room: string, after: string) => ({ code: 'OK', items: after === '1' ? [msg(3, 'm3', 'latest')] : [], next_after_seq: '3', has_more: false }));
+    const searchHistory = vi.fn(async () => ({
+      code: 'OK', has_more: false, next_before_seq: null,
+      items: [{ room_seq: '1', message_id: 'm1', sender_endpoint_id: 'ep_a', display_name: 'Ada', created_at: '2026-11-01T12:00:00Z', snippet: 'Deploy failed on node 7' }],
+    }));
+    const { container } = renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { historyBefore, history, searchHistory });
+    await screen.findByText('latest');
+    await userEvent.type(screen.getByRole('textbox', { name: 'Find in room' }), 'deploy');
+    await userEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await userEvent.click(await screen.findByRole('button', { name: /Ada/ }));
+    await waitFor(() => expect(container.querySelector('[data-search-match="true"]')).not.toBeNull());
+    expect(screen.getAllByText('Deploy failed on node 7')).toHaveLength(2);
+    expect(searchHistory).toHaveBeenCalledWith('room_1', 'deploy');
+    expect(historyBefore).toHaveBeenCalledWith('room_1', '2', 50);
+  });
+
+  it('opens an older mention outside the currently loaded history window', async () => {
+    const target = msg(50, 'mentioned', 'older mention');
+    const historyBefore = vi.fn(async (_room: string, before: string) => before === 'latest'
+      ? { code: 'OK', items: [msg(200, 'latest', 'latest')], next_after_seq: '200', has_older: true }
+      : { code: 'OK', items: [target], next_after_seq: '50', has_older: true });
+    const history = vi.fn(async () => ({ code: 'OK', items: [], next_after_seq: '50', has_more: false }));
+    renderWithClient(
+      <Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} focus={{ message_id: 'mentioned', room_seq: '50' }} />,
+      { historyBefore, history },
+    );
+
+    const row = await screen.findByRole('listitem', { current: true });
+    expect(row).toHaveTextContent('older mention');
+    expect(historyBefore).toHaveBeenCalledWith('room_1', '51', 50);
   });
 
   it('renders a room.event row as a system line', async () => {
@@ -44,6 +85,130 @@ describe('Timeline', () => {
     const history = vi.fn(async () => ({ code: 'OK', items: [msg(1, 'm1', 'a'), msg(2, 'm2', 'b')], next_after_seq: '2' }));
     renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={onVisibleSeq} onGone={() => {}} />, { history });
     await waitFor(() => expect(onVisibleSeq).toHaveBeenLastCalledWith('2'));
+  });
+
+  it('opens at this browser’s saved new-message divider and can jump to latest', async () => {
+    const offsetTop = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetTop');
+    Object.defineProperty(HTMLElement.prototype, 'offsetTop', { configurable: true, get() {
+      if (this.classList.contains('timeline-divider')) return 220;
+      if (this.classList.contains('timeline')) return 20;
+      return 0;
+    } });
+    localStorage.setItem('sigil.room:room_1:watermark', '1');
+    const history = vi.fn(async () => ({ code: 'OK', items: [msg(1, 'm1', 'seen'), msg(2, 'm2', 'new')], next_after_seq: '2' }));
+    try {
+      renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { history });
+
+      expect(await screen.findByText('New messages · this browser')).toBeInTheDocument();
+      const scroller = screen.getByRole('region', { name: 'Messages' });
+      Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 600 });
+      await waitFor(() => expect(scroller.scrollTop).toBe(200));
+      expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Jump to latest' }));
+      expect(scroller.scrollTop).toBe(600);
+    } finally {
+      if (offsetTop) Object.defineProperty(HTMLElement.prototype, 'offsetTop', offsetTop);
+      else Reflect.deleteProperty(HTMLElement.prototype, 'offsetTop');
+    }
+  });
+
+  it('separates history rows by their calendar day', async () => {
+    const history = vi.fn(async () => ({ code: 'OK', items: [
+      msg(1, 'm1', 'yesterday', 'room.message', '2026-11-22T12:00:00.000Z'),
+      msg(2, 'm2', 'today', 'room.message', '2026-11-23T12:00:00.000Z'),
+    ], next_after_seq: '2' }));
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { history });
+
+    await screen.findByText('today');
+    const options: Intl.DateTimeFormatOptions = { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' };
+    const yesterdayLabel = new Date('2026-11-22T12:00:00.000Z').toLocaleDateString(undefined, options);
+    const todayLabel = new Date('2026-11-23T12:00:00.000Z').toLocaleDateString(undefined, options);
+    const timeline = screen.getByRole('region', { name: 'Messages' });
+    const labels = Array.from(timeline.querySelectorAll('.timeline-day')).map((item) => item.textContent);
+    const items = Array.from(timeline.querySelectorAll(':scope > ul > li')).map((item) => item.textContent ?? '');
+    const yesterdayIndex = items.findIndex((item) => item.includes('yesterday'));
+    const todayIndex = items.findIndex((item) => item.includes('today'));
+
+    expect(labels).toEqual([yesterdayLabel, todayLabel]);
+    expect(items.findIndex((item) => item.includes(yesterdayLabel))).toBeLessThan(yesterdayIndex);
+    expect(yesterdayIndex).toBeLessThan(items.findIndex((item) => item.includes(todayLabel)));
+    expect(items.findIndex((item) => item.includes(todayLabel))).toBeLessThan(todayIndex);
+  });
+
+  it('does not advance an incomplete history window past unloaded rows', async () => {
+    const onVisibleSeq = vi.fn();
+    const historyBefore = vi.fn(async () => ({
+      code: 'OK', items: Array.from({ length: 100 }, (_, i) => msg(i + 201, `m${i + 201}`, `t${i + 201}`)), next_after_seq: '300', has_older: true,
+    }));
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={onVisibleSeq} onGone={() => {}} />, { historyBefore });
+
+    expect(await screen.findByText('t300')).toBeInTheDocument();
+    expect(localStorage.getItem('sigil.room:room_1:watermark')).toBeNull();
+    expect(onVisibleSeq).not.toHaveBeenCalled();
+  });
+
+  it('keeps a higher saved watermark when the loaded window computes a lower one', async () => {
+    localStorage.setItem('sigil.room:room_1:watermark', '300');
+    const historyBefore = vi.fn(async () => ({
+      code: 'OK', items: Array.from({ length: 100 }, (_, i) => msg(i + 101, `m${i + 101}`, `t${i + 101}`)), next_after_seq: '200', has_older: true,
+    }));
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { historyBefore });
+
+    expect(await screen.findByText('t200')).toBeInTheDocument();
+    await waitFor(() => expect(localStorage.getItem('sigil.room:room_1:watermark')).toBe('300'));
+  });
+
+  it('does not acknowledge or persist while hidden, then resumes when visible', async () => {
+    const original = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    const onVisibleSeq = vi.fn();
+    const history = vi.fn(async () => ({ code: 'OK', items: [msg(1, 'm1', 'one'), msg(2, 'm2', 'two')], next_after_seq: '2' }));
+    try {
+      renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={onVisibleSeq} onGone={() => {}} />, { history });
+      expect(await screen.findByText('two')).toBeInTheDocument();
+      expect(localStorage.getItem('sigil.room:room_1:watermark')).toBeNull();
+      expect(onVisibleSeq).not.toHaveBeenCalled();
+
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+      document.dispatchEvent(new Event('visibilitychange'));
+      await waitFor(() => expect(localStorage.getItem('sigil.room:room_1:watermark')).toBe('2'));
+      expect(onVisibleSeq).toHaveBeenCalledWith('2');
+    } finally {
+      if (original) Object.defineProperty(document, 'visibilityState', original);
+      else Reflect.deleteProperty(document, 'visibilityState');
+    }
+  });
+
+  it('loads around a saved watermark before opening its divider', async () => {
+    localStorage.setItem('sigil.room:room_1:watermark', '100');
+    const latest = Array.from({ length: 100 }, (_, i) => msg(i + 201, `m${i + 201}`, `t${i + 201}`));
+    const around = Array.from({ length: 50 }, (_, i) => msg(i + 51, `m${i + 51}`, `t${i + 51}`));
+    const newer = Array.from({ length: 50 }, (_, i) => msg(i + 101, `m${i + 101}`, `t${i + 101}`));
+    const historyBefore = vi.fn(async (_room: string, before: string) => before === 'latest'
+      ? { code: 'OK', items: latest, next_after_seq: '300', has_older: true }
+      : { code: 'OK', items: around, next_after_seq: '100', has_older: true });
+    const history = vi.fn(async (_room: string, after: string) => after === '100'
+      ? { code: 'OK', items: newer, next_after_seq: '150', has_more: true }
+      : { code: 'OK', items: [], next_after_seq: after, has_more: false });
+    const offsetTop = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetTop');
+    Object.defineProperty(HTMLElement.prototype, 'offsetTop', { configurable: true, get() {
+      if (this.classList.contains('timeline-divider')) return 220;
+      if (this.classList.contains('timeline')) return 20;
+      return 0;
+    } });
+    try {
+      renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { historyBefore, history });
+      expect(await screen.findByText('New messages · this browser')).toBeInTheDocument();
+      const scroller = screen.getByRole('region', { name: 'Messages' });
+      await waitFor(() => expect(scroller.scrollTop).toBe(200));
+      expect(historyBefore.mock.calls.map((call) => call[1])).toEqual(['latest', '101']);
+      expect(history).toHaveBeenCalledWith('room_1', '100', 50);
+      expect(screen.getByText('t101')).toBeInTheDocument();
+      expect(screen.queryByText('t201')).toBeNull();
+    } finally {
+      if (offsetTop) Object.defineProperty(HTMLElement.prototype, 'offsetTop', offsetTop);
+      else Reflect.deleteProperty(HTMLElement.prototype, 'offsetTop');
+    }
   });
 
   it('shows pending and failed rows', async () => {
@@ -163,5 +328,26 @@ describe('Timeline threads', () => {
     renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={onVisibleSeq} onGone={() => {}} />, { history: orphanHistory });
     expect(await screen.findByText('orphan reply')).toBeInTheDocument();
     await waitFor(() => expect(onVisibleSeq).toHaveBeenLastCalledWith('3'));
+  });
+
+  it('marks the message opened from Mentions and scrolls it into view', async () => {
+    const scrolled = vi.fn();
+    Element.prototype.scrollIntoView = scrolled;
+    const history = vi.fn(async () => ({ code: 'OK', items: [msg(1, 'm1', 'first'), msg(2, 'm2', 'hey @ep_web'), msg(3, 'm3', 'last')], next_after_seq: '3' }));
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} focus={{ message_id: 'm2', room_seq: '2' }} />, { history });
+    const row = (await screen.findByText('hey @ep_web')).closest('li');
+    expect(row).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByText('first').closest('li')).not.toHaveAttribute('aria-current');
+    await waitFor(() => expect(scrolled).toHaveBeenCalledTimes(1));
+    expect(scrolled.mock.contexts[0]).toBe(row);
+    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+  });
+
+  it('opens the thread when the message opened from Mentions is a reply', async () => {
+    const onOpenThread = vi.fn();
+    const history = vi.fn(async () => ({ code: 'OK', items: [msg(1, 'm1', 'root'), reply(2, 'r2', 'hey @ep_web', 'm1')], next_after_seq: '2' }));
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} onOpenThread={onOpenThread} focus={{ message_id: 'r2', room_seq: '2' }} />, { history });
+    await waitFor(() => expect(onOpenThread).toHaveBeenCalledWith('m1'));
+    expect(onOpenThread).toHaveBeenCalledTimes(1);
   });
 });

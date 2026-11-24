@@ -65,8 +65,8 @@ test('paste a token, list rooms, send, see it come back live, and ack', async ({
   await expect.poll(() => ackRequests.length, { timeout: 5000 }).toBeGreaterThan(0);
   expect(JSON.parse(ackRequests.at(-1)!)).toHaveProperty('up_to_room_seq');
 
-  // The token is in sessionStorage, not localStorage.
-  expect(await page.evaluate(() => localStorage.length)).toBe(0);
+  // The token is in sessionStorage, not localStorage. localStorage also holds the browser's room watermark.
+  expect(await page.evaluate(() => localStorage.getItem('sigil.token'))).toBeNull();
   expect(await page.evaluate(() => sessionStorage.getItem('sigil.token'))).toBe(harness.humanToken);
 });
 
@@ -122,10 +122,7 @@ test('rename, thread reply, Stop, and a response-mode change', async ({ page }) 
   await expect(page.getByRole('button', { name: '1 reply' })).toBeVisible();
   await thread.getByRole('button', { name: 'Close' }).click();
 
-  // Stop with nothing running answers 200 and leaves the button usable.
-  await page.getByRole('button', { name: 'Stop' }).click();
-  await expect(page.getByRole('button', { name: 'Stop' })).toBeEnabled();
-  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Stop' })).toHaveCount(0);
 
   // Response mode: add the agent from Node, then change its mode in the roster.
   const roomsResponse = await fetch(`${harness.relayUrl}/v1/rooms`, { headers: { authorization: `Bearer ${harness.humanToken}` } });

@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { Member } from '../api/types';
+import type { HistoryItem, Member } from '../api/types';
 import { useSelfEndpoint } from '../auth/AuthContext';
 import { Composer } from './Composer';
 import { mergeRows, type PendingMessage } from './mergeRows';
@@ -21,6 +21,8 @@ export function ThreadPanel({
   loginFor,
   ownerNameFor,
   members = [],
+  inspectingId = null,
+  onInspect,
 }: {
   roomId: string;
   rootId: string;
@@ -32,6 +34,8 @@ export function ThreadPanel({
   loginFor?: LoginFor;
   ownerNameFor?: OwnerNameFor;
   members?: Member[];
+  inspectingId?: string | null;
+  onInspect?: (item: HistoryItem) => void;
 }) {
   // The same query the timeline reads, so the panel adds no fetch.
   const { items } = useHistory(roomId);
@@ -65,14 +69,19 @@ export function ThreadPanel({
                 />
               </div>
               <span className="text">{formatMentionText(root.envelope.body.text, nameFor, members)}</span>
+              {onInspect ? (
+                <div className="row-actions">
+                  <button type="button" className="ghost" aria-expanded={inspectingId === root.message_id} aria-controls={inspectingId === root.message_id ? 'envelope-drawer' : undefined} onClick={() => onInspect(root)}>Envelope</button>
+                </div>
+              ) : null}
             </>
           ) : <em>Original message not loaded</em>}
         </li>
         {rows.map((row) => (
-          <RowView key={row.key} row={row} sender={sender} nameFor={nameFor} loginFor={loginFor} ownerNameFor={ownerNameFor} members={members} />
+          <RowView key={row.key} row={row} roomId={roomId} sender={sender} nameFor={nameFor} loginFor={loginFor} ownerNameFor={ownerNameFor} members={members} inspectingId={inspectingId} onInspect={onInspect} />
         ))}
       </ul>
-      <Composer send={onSend} disabledReason={disabledReason} label="Reply in thread" members={members} nameFor={nameFor} loginFor={loginFor} />
+      <Composer send={onSend} disabledReason={disabledReason} label="Reply in thread" members={members} nameFor={nameFor} loginFor={loginFor} viewer={sender} />
     </aside>
   );
 }

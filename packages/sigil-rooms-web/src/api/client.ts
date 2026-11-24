@@ -1,4 +1,4 @@
-import type { AckResult, AgentRoomInvite, Contact, CreatedAgentRoomInvite, Session, HistoryPage, InvokableBy, Member, ResponseMode, Room, SendResult, StopResult, TicketResult } from './types';
+import type { AckResult, AgentRoomInvite, Contact, CreatedAgentRoomInvite, Session, HistoryPage, Invocation, InvokableBy, Member, MentionPage, ResponseMode, Room, RoomSearchPage, SendResult, StopResult, TicketResult } from './types';
 
 export class ApiError extends Error {
   readonly code: string;
@@ -24,19 +24,23 @@ export interface ClientOptions {
 
 export interface ApiClient {
   listRooms(): Promise<Room[]>;
-  createRoom(name: string): Promise<Room>;
+  createRoom(name: string, description?: string): Promise<Room>;
   history(roomId: string, afterSeq: string, limit?: number): Promise<HistoryPage>;
+  historyBefore(roomId: string, beforeSeq: string | 'latest', limit?: number): Promise<HistoryPage>;
+  searchHistory(roomId: string, query: string, beforeSeq?: string | null, limit?: number): Promise<RoomSearchPage>;
   sendMessage(roomId: string, text: string, idempotencyKey: string, threadRootId?: string, mentions?: string[]): Promise<SendResult>;
   continueThread(roomId: string, threadRootId: string): Promise<SendResult>;
   listMembers(roomId: string): Promise<Member[]>;
   listAgentRoomInvites(roomId: string): Promise<AgentRoomInvite[]>;
   createAgentRoomInvite(roomId: string, endpointId: string): Promise<CreatedAgentRoomInvite>;
   revokeAgentRoomInvite(roomId: string, inviteId: string): Promise<void>;
+  listInvocations(roomId: string): Promise<Invocation[]>;
   renameRoom(roomId: string, name: string): Promise<Room>;
   setResponseMode(roomId: string, endpointId: string, mode: ResponseMode): Promise<Member>;
   setInvokableBy(roomId: string, endpointId: string, mode: InvokableBy): Promise<Member>;
   stopRoom(roomId: string): Promise<StopResult>;
   ack(roomId: string, upToRoomSeq: string): Promise<AckResult>;
+  listMentions(cursor?: string): Promise<MentionPage>;
   wsTicket(): Promise<TicketResult>;
   me(): Promise<Session>;
   listContacts(): Promise<Contact[]>;
@@ -47,8 +51,9 @@ export interface ApiClient {
 }
 
 export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized, fetchImpl = (...args) => fetch(...args) }: ClientOptions): ApiClient {
-  async function request<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<T> {
+  async function request<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
     let response: Response;
+    let text: string;
     try {
       if (mode === 'cookie') {
         // The session cookie is HttpOnly and travels on its own; the CSRF header is required on every non-GET.
@@ -59,6 +64,7 @@ export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized
           credentials: 'same-origin',
           headers,
           body: body === undefined ? undefined : JSON.stringify(body),
+          signal,
         });
       } else {
         const token = getToken?.() ?? null;
@@ -68,13 +74,14 @@ export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized
           method,
           headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
           body: body === undefined ? undefined : JSON.stringify(body),
+          signal,
         });
       }
+      text = await response.text();
     } catch (error) {
       if (error instanceof ApiError) throw error;
       throw new ApiError('NETWORK', 0, mode === 'cookie' ? "Can't reach the server." : `Can't reach relay at ${baseUrl}. Check --browser-origin.`);
     }
-    const text = await response.text();
     let parsed: any = null;
     try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
     if (!response.ok) {
@@ -88,11 +95,18 @@ export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized
     async listRooms() {
       return (await request<{ items: Room[] }>('GET', '/v1/rooms')).items;
     },
-    async createRoom(name) {
-      return (await request<{ room: Room }>('POST', '/v1/rooms', { name })).room;
+    async createRoom(name, description) {
+      return (await request<{ room: Room }>('POST', '/v1/rooms', { name, ...(description !== undefined ? { description } : {}) })).room;
     },
     history(roomId, afterSeq, limit = 100) {
       return request<HistoryPage>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/messages?after_seq=${encodeURIComponent(afterSeq)}&limit=${limit}`);
+    },
+    historyBefore(roomId, beforeSeq, limit = 100) {
+      return request<HistoryPage>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/messages?before_seq=${encodeURIComponent(beforeSeq)}&limit=${limit}`);
+    },
+    searchHistory(roomId, query, beforeSeq = null, limit = 20) {
+      const cursor = beforeSeq == null ? '' : `&before_seq=${encodeURIComponent(beforeSeq)}`;
+      return request<RoomSearchPage>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/messages/search?q=${encodeURIComponent(query)}${cursor}&limit=${limit}`);
     },
     sendMessage(roomId, text, idempotencyKey, threadRootId, mentions) {
       return request<SendResult>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/messages`, {
@@ -122,6 +136,22 @@ export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized
     async revokeAgentRoomInvite(roomId, inviteId) {
       await request<unknown>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/agent-invites/${encodeURIComponent(inviteId)}/revoke`);
     },
+    async listInvocations(roomId) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10_000);
+      try {
+        // shortcut: a 500-row cap per active status; add pagination if a room may exceed the cap.
+        const lists = await Promise.all((['queued', 'running'] as const).map((status) =>
+          request<{ items: Invocation[] }>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/invocations?status=${status}&limit=500`, undefined, controller.signal),
+        ));
+        return lists.flatMap(({ items }) => items);
+      } catch (error) {
+        controller.abort();
+        throw error;
+      } finally {
+        clearTimeout(timeout);
+      }
+    },
     async renameRoom(roomId, name) {
       return (await request<{ room: Room }>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/rename`, { name })).room;
     },
@@ -137,6 +167,10 @@ export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized
     },
     ack(roomId, upToRoomSeq) {
       return request<AckResult>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/ack`, { up_to_room_seq: upToRoomSeq });
+    },
+    async listMentions(cursor) {
+      const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+      return request<MentionPage>('GET', `/v1/mentions${query}`);
     },
     wsTicket() {
       return request<TicketResult>('POST', '/v1/rooms/ws-ticket');

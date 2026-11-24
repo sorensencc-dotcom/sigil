@@ -110,6 +110,7 @@ export function createOnPersisted(stream, { repository = null, logger = null } =
 
 export function createRelayServer({ registry, idempotency = new Map(), lookupIdempotency, persist, repository, authenticate, tokenHashes, now: configuredNow = () => new Date(), stream, relayOrigin, rpId, approvalChallenges = new Map(), maxPendingApprovals = 100, oidcIssuerAllowList = new Set(), lookupHumanCredential, verifyAssertion, enableMockOidc = false, oidcFetchImpl = fetch, relayDomain, federationMode, federationIdentity, fetchImpl, relayRequestFreshnessMs, stream_seq, resendMetrics, logger, agentmailIngress, agentmailControl, roomSystemIdentity, buildAcceptOptions: injectedBuildAcceptOptions, allowedOrigins = [], ticketStore = null, humanSigner = null, floorWardenReplies = null, registryRefreshAvailable } = {}) {
   const agUiRunIds = new Map();
+  const agUiInterruptedRuns = new Map();
   // B3: one clamped relay-request freshness window for this server. It bounds
   // how long a captured signed peer request stays replayable and doubles as the
   // nonce row's expiry horizon (expiresAt = signed_at + freshnessMs).
@@ -395,28 +396,124 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       const threadId = input?.threadId;
       const runId = input?.runId;
       const taskId = input?.forwardedProps?.sigil?.task_id;
+      const resumeEntries = input?.resume;
       if (!input || Array.isArray(input) || typeof input !== 'object' || typeof threadId !== 'string' || !threadId || typeof runId !== 'string' || !runId ||
           typeof input.protocolVersion !== 'string' ||
-          (input.resume === undefined && (typeof taskId !== 'string' || !taskId))) {
+          (resumeEntries === undefined && (typeof taskId !== 'string' || !taskId)) ||
+          (resumeEntries !== undefined && (!Array.isArray(resumeEntries) || resumeEntries.some((entry) => !entry || typeof entry.interruptId !== 'string' || !entry.interruptId || !['resolved', 'cancelled'].includes(entry.status)) || new Set(resumeEntries.map((entry) => entry.interruptId)).size !== resumeEntries.length))) {
         return failAgUi(400, 'INVALID_RUN_INPUT', 'threadId, runId, protocolVersion, and forwardedProps.sigil.task_id are required');
       }
       if (!/^1\.\d+$/.test(input.protocolVersion)) return failAgUi(400, 'UNSUPPORTED_PROTOCOL_VERSION', 'Supported protocol major version is 1.');
       if (!authenticateRequest) return failAgUi(401, 'UNAUTHENTICATED', 'Authentication required');
-      if (input.resume !== undefined) return failAgUi(501, 'RESUME_UNAVAILABLE', 'Run resume is not available yet');
       if (!repository?.isConversationMember || !repository?.lookupTaskRequest || !repository?.listRoomMessages) return failAgUi(503, 'AG_UI_UNAVAILABLE', 'AG-UI task history is unavailable');
       try {
         if (!await repository.isConversationMember(principal.endpoint_id, threadId)) return failAgUi(403, 'FOREIGN_CONVERSATION', 'Caller is not a member of this conversation');
-        const task = await repository.lookupTaskRequest(taskId, threadId);
+        const challenges = repository.listApprovalChallengesForConversation
+          ? await repository.listApprovalChallengesForConversation(threadId)
+          : [];
+        const interruptedRun = agUiInterruptedRuns.get(threadId);
+        let resolvedTaskId = taskId ?? interruptedRun?.taskId;
+        let history;
+        const readHistory = async () => (history ??= await repository.listRoomMessages(threadId, 0n, 500));
+        const challengeById = new Map(challenges.map((challenge) => [challenge.id, challenge]));
+        const approvalState = (challenge) => {
+          if (challenge.decisionStatus === 'consumed') return 'consumed';
+          if (challenge.decisionStatus === 'revoked' || challenge.status === 'cancelled') return 'cancelled';
+          const expires = Date.parse(challenge.decisionExpiresAt ?? challenge.expiresAt);
+          if (Number.isFinite(expires) && expires <= nowMs) return 'expired';
+          if (challenge.decisionStatus === 'approved') return 'approved';
+          if (challenge.status === 'pending') return 'pending';
+          return 'expired';
+        };
+        const challengeMatchesTask = (challenge, task) => {
+          const envelope = challenge.envelope;
+          const refs = envelope?.context_refs ?? [];
+          return envelope?.body?.task_id === resolvedTaskId || envelope?.correlation_id === task.message_id || refs.includes(task.message_id);
+        };
+        const resumeIds = resumeEntries?.map((entry) => entry.interruptId) ?? [];
+        if (resumeEntries && !resolvedTaskId) {
+          const first = challengeById.get(resumeIds[0]);
+          resolvedTaskId = first?.envelope?.body?.task_id;
+          if (!resolvedTaskId && first) {
+            const messageIds = new Set([first.envelope?.correlation_id, ...(first.envelope?.context_refs ?? [])].filter(Boolean));
+            const taskMessage = (await readHistory()).find((row) => messageIds.has(row.envelope.message_id) && row.envelope.message_type === 'task.request');
+            resolvedTaskId = taskMessage?.envelope.body?.task_id;
+          }
+        }
+        if (!resumeEntries) {
+          if (interruptedRun && !interruptedRun.completed) return failAgUi(409, 'INTERRUPT_PENDING', 'Resume every interrupt from the last interrupted run before starting another run');
+          const open = challenges.filter((challenge) => ['pending', 'approved'].includes(approvalState(challenge)));
+          if (open.length) {
+            const latest = open.at(-1);
+            const latestTaskId = latest.envelope?.body?.task_id;
+            const references = new Set([latest.envelope?.correlation_id, ...(latest.envelope?.context_refs ?? [])].filter(Boolean));
+            const lastRunChallenges = open.filter((challenge) => latestTaskId
+              ? challenge.envelope?.body?.task_id === latestTaskId
+              : challenge.envelope?.correlation_id === latest.envelope?.correlation_id
+                || (challenge.envelope?.context_refs ?? []).some((reference) => references.has(reference)));
+            const openTaskId = latestTaskId ?? resolvedTaskId;
+            if (openTaskId) agUiInterruptedRuns.set(threadId, { taskId: openTaskId, challengeIds: lastRunChallenges.map((challenge) => challenge.id) });
+            return failAgUi(409, 'INTERRUPT_PENDING', 'Resume every open interrupt before starting another run');
+          }
+        }
+        if (typeof resolvedTaskId !== 'string' || !resolvedTaskId) return failAgUi(400, 'INVALID_RUN_INPUT', 'A resume must identify a task-bound interrupt');
+        const task = await repository.lookupTaskRequest(resolvedTaskId, threadId);
         if (!task) return failAgUi(404, 'TASK_NOT_FOUND', 'Task not found in this conversation');
         if (!task.recipientEndpointId) return failAgUi(400, 'TASK_NOT_ASSIGNED', 'AG-UI runs require a task with one assigned endpoint');
         const agUiRelayOrigin = resolveRelayOrigin();
         if (!agUiRelayOrigin) return failAgUi(503, 'AG_UI_UNAVAILABLE', 'Relay origin is not configured');
+        let resumeChallenges = [];
+        let resumeState = new Map();
+        let resumeFailure = null;
+        if (resumeEntries) {
+          const resumeRun = interruptedRun ?? {
+            taskId: resolvedTaskId,
+            challengeIds: challenges.filter((challenge) => challengeMatchesTask(challenge, task)
+              && ['pending', 'approved', 'consumed'].includes(approvalState(challenge))).map((challenge) => challenge.id),
+          };
+          resumeChallenges = resumeRun.challengeIds.map((id) => challengeById.get(id)).filter(Boolean);
+          const actualIds = [...resumeRun.challengeIds].sort();
+          const suppliedIds = [...resumeIds].sort();
+          if (resumeRun.taskId !== resolvedTaskId || actualIds.length !== suppliedIds.length || actualIds.some((id, index) => id !== suppliedIds[index]) || resumeChallenges.length !== resumeRun.challengeIds.length) {
+            resumeFailure = ['INTERRUPT_COVERAGE', 'Resume must cover every interrupt from the last interrupted run'];
+          }
+          const initialStates = new Map(resumeEntries.map((entry) => [entry.interruptId, challengeById.has(entry.interruptId) ? approvalState(challengeById.get(entry.interruptId)) : 'expired']));
+          if (!resumeFailure && resumeEntries.some((entry) => entry.status === 'resolved' && initialStates.get(entry.interruptId) === 'pending')) {
+            return failAgUi(409, 'INTERRUPT_PENDING', 'The approval is still pending');
+          }
+          if (!resumeFailure) {
+            for (const entry of resumeEntries) {
+              const challenge = challengeById.get(entry.interruptId);
+              if (!challenge) continue;
+              let state = initialStates.get(entry.interruptId);
+              if (entry.status === 'cancelled' && state !== 'consumed') {
+                if (!repository.cancelApprovalChallenge) return failAgUi(503, 'AG_UI_UNAVAILABLE', 'Approval cancellation is unavailable');
+                try {
+                  await repository.cancelApprovalChallenge({ challengeId: challenge.id, endpointId: challenge.endpointId, now });
+                  state = 'cancelled';
+                } catch (error) {
+                  if (error.code === 'APPROVAL_ALREADY_CONSUMED') state = 'consumed';
+                  else if (error.code === 'APPROVAL_EXPIRED') state = 'expired';
+                  else throw error;
+                }
+              }
+              resumeState.set(entry.interruptId, state);
+              if (state === 'expired' || state === 'cancelled') resumeFailure ??= [state === 'expired' ? 'APPROVAL_EXPIRED' : 'APPROVAL_CANCELLED', state === 'expired' ? 'Approval challenge expired' : 'Approval challenge was cancelled'];
+            }
+          }
+          if (resumeFailure && resumeFailure[0] !== 'INTERRUPT_COVERAGE') agUiInterruptedRuns.delete(threadId);
+          else agUiInterruptedRuns.set(threadId, resumeRun);
+        }
         const runKey = `${threadId}\u0000${runId}`;
         if (agUiRunIds.has(runKey)) return failAgUi(409, 'RUN_ID_REUSED', 'runId has already been used for this thread');
         agUiRunIds.set(runKey, true);
-        const history = await repository.listRoomMessages(threadId, 0n, 500);
+        history = await readHistory();
         let lastRoomSeq = BigInt(history.at(-1)?.room_seq ?? 0);
         const projectState = { threadId, runId, assigneeEndpointId: task.recipientEndpointId, relayConfig: { relayOrigin: agUiRelayOrigin }, terminal: false };
+        const markTaskCompleted = () => {
+          const latest = agUiInterruptedRuns.get(threadId);
+          if (latest?.taskId === resolvedTaskId) latest.completed = true;
+        };
         const writeEvents = (events) => {
           for (const event of events) response.write(`data: ${JSON.stringify(event)}\n\n`);
         };
@@ -428,15 +525,44 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         };
         response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-sigil-request-id': requestId });
         if (emitFact({ type: 'attach.accepted' }) || emitFact({ type: 'history.snapshot', messages: history.map(({ envelope }) => ({ id: envelope.message_id, role: envelope.sender.endpoint_id === task.recipientEndpointId ? 'assistant' : 'user', content: typeof envelope.body?.text === 'string' ? envelope.body.text : JSON.stringify(envelope.body) })) })) return response.end();
-        if (history.some(({ envelope }) => envelope.message_type === 'task.result' && envelope.body?.task_id === taskId)) {
+        const emitAcceptedEnvelope = (row) => {
+          const envelope = row.envelope;
+          const messageId = envelope.message_id;
+          const content = typeof envelope.body?.text === 'string' ? envelope.body.text : JSON.stringify(envelope.body);
+          emitFact({ type: 'gated-envelope.accepted', messageId, toolCallId: messageId, content });
+          if (envelope.signature?.value && row.stream_seq != null && row.room_seq != null) {
+            emitFact({ type: 'receipt.written', receipt: { receipt_id: messageId, signature: envelope.signature.value, stream_seq: String(row.stream_seq), room_seq: String(row.room_seq) } });
+          }
+        };
+        for (const challenge of resumeChallenges) {
+          if (resumeState.get(challenge.id) !== 'consumed') continue;
+          const row = history.find((item) => item.envelope.message_id === challenge.envelope.message_id)
+            ?? await repository.getRoomMessage?.(threadId, challenge.envelope.message_id);
+          if (row) emitAcceptedEnvelope(row);
+        }
+        if (resumeFailure) {
+          emitFact({ type: 'rejection', code: resumeFailure[0], message: resumeFailure[1] });
+          response.end();
+          return;
+        }
+        if (!resumeEntries) {
+          for (const challenge of challenges.filter((item) => challengeMatchesTask(item, task) && approvalState(item) === 'consumed')) {
+            const row = history.find((item) => item.envelope.message_id === challenge.envelope.message_id)
+              ?? await repository.getRoomMessage?.(threadId, challenge.envelope.message_id);
+            if (row) emitAcceptedEnvelope(row);
+          }
+        }
+        if (history.some(({ envelope }) => envelope.message_type === 'task.result' && envelope.body?.task_id === resolvedTaskId)) {
           emitFact({ type: 'task.result.accepted' });
+          markTaskCompleted();
           return response.end();
         }
-        const seenChallenges = new Set();
+        const seenChallenges = new Set(resumeIds);
         let polling = false;
         let closed = false;
         let timer;
         const cleanup = () => { closed = true; clearInterval(timer); };
+        let completedTask = false;
         request.on('aborted', cleanup);
         response.on('close', cleanup);
         const poll = async () => {
@@ -449,12 +575,12 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
               return;
             }
             if (repository.listApprovalChallengesForConversation) {
-              for (const challenge of await repository.listApprovalChallengesForConversation(threadId)) {
-                if (seenChallenges.has(challenge.id)) continue;
-                seenChallenges.add(challenge.id);
-                const refs = challenge.envelope?.context_refs ?? [];
-                if (challenge.envelope?.body?.task_id !== taskId && challenge.envelope?.correlation_id !== task.message_id && !refs.includes(task.message_id)) continue;
-                if (emitFact({ type: 'challenge.created', challenge, capability: challenge.capabilities?.[0] ?? challenge.envelope.capabilities?.[0] })) break;
+              const openChallenges = (await repository.listApprovalChallengesForConversation(threadId))
+                .filter((challenge) => !seenChallenges.has(challenge.id) && ['pending', 'approved'].includes(approvalState(challenge)) && challengeMatchesTask(challenge, task));
+              if (openChallenges.length) {
+                openChallenges.forEach((challenge) => seenChallenges.add(challenge.id));
+                agUiInterruptedRuns.set(threadId, { taskId: resolvedTaskId, challengeIds: openChallenges.map((challenge) => challenge.id) });
+                emitFact({ type: 'challenges.created', challenges: openChallenges.map((challenge) => ({ challenge, capability: challenge.capabilities?.[0] ?? challenge.envelope.capabilities?.[0] })) });
               }
             }
             if (!projectState.terminal) {
@@ -465,12 +591,12 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
                 const challenge = await repository.getApprovalChallengeForMessage?.(threadId, envelope.message_id);
                 const challengeEnvelope = challenge?.envelope;
                 const challengeRefs = challengeEnvelope?.context_refs ?? [];
-                if (challenge && (challengeEnvelope?.body?.task_id === taskId || challengeEnvelope?.correlation_id === task.message_id || challengeRefs.includes(task.message_id))) {
-                  const content = typeof envelope.body?.text === 'string' ? envelope.body.text : JSON.stringify(envelope.body);
-                  if (emitFact({ type: 'gated-envelope.accepted', messageId: envelope.message_id, toolCallId: envelope.message_id, content })) break;
+                if (challenge && (challengeEnvelope?.body?.task_id === resolvedTaskId || challengeEnvelope?.correlation_id === task.message_id || challengeRefs.includes(task.message_id))) {
+                  emitAcceptedEnvelope(row);
                 } else if (envelope.message_type === 'room.message') {
                   if (emitFact({ type: 'room.message', envelope })) break;
-                } else if (envelope.message_type === 'task.result' && envelope.body?.task_id === taskId) {
+                } else if (envelope.message_type === 'task.result' && envelope.body?.task_id === resolvedTaskId) {
+                  completedTask = true;
                   if (emitFact({ type: 'task.result.accepted' })) break;
                 }
               }
@@ -480,7 +606,11 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
             cleanup();
             if (!response.destroyed) response.end();
           } finally { polling = false; }
-          if (projectState.terminal && !closed) { cleanup(); response.end(); }
+          if (projectState.terminal && !closed) {
+            if (completedTask) markTaskCompleted();
+            cleanup();
+            response.end();
+          }
         };
         // shortcut: polls every 500 ms; replace with relay event fan-out when this route can subscribe directly.
         timer = setInterval(poll, 500);

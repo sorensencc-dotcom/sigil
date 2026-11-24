@@ -52,6 +52,24 @@ The supplied comparison credits Sigil with signed envelopes, relay and room hist
 
 The public page and repo were read on 2026-10-18, and the result is in the [design comparison section](2026-10-16-sigil-hybrid-rooms-direct-messages-design.md#reason-network-comparison). That section labels each claim as verified or unverified. The earlier comparative security claims are now labeled there, since the roster is signed, the design lists no per-message signature, and removed machines are not cryptographically cut off (Verified: repo docs). No decided answer changes.
 
+## Issue 294: uncertain delivery state (spec change, 2026-11-23)
+
+[Issue 294](https://github.com/sorensencc-dotcom/sigil/issues/294) asks for an outcome beside `held` and `refused` for a send whose result is unknown. The design and the [delivery receipts design](2026-10-05-sigil-delivery-receipts-design.md#direct-message-states-and-uncertain-outcomes) now carry it. This section records the changes. It is a spec change only and authorizes no code. The reference for the idea is the AX 0.8.3 note in the 2026-11-23 weekly competition analysis (PR #285), which separates a definite refusal from an uncertain outcome. That source is unverified beyond that note.
+
+Specified in the design:
+
+- `uncertain` is a fifth `dm_state` and a raw delivery state added by migration 038 beside `held` and `refused`. It means the relay handed a message to a session and cannot tell whether the session showed it. `refused` stays a definite refusal.
+- The design adds a full transition table, including the five transitions that touch `uncertain`.
+- The retry rule is: never resend blindly. Resend only the identical signed envelope, with the same `message_id` and `idempotency_key`, until the envelope expires. After expiry, read the receipts route instead.
+- A send whose `202` is lost is a sender-local outcome, not a stored state.
+
+Left unresolved by this record:
+
+- The exit code for an uncertain send. The receipts design proposes `9`. The plan must confirm it is free.
+- Whether `uncertain` extends to deliveries with no `session_id` (design Q11) and how a clean session end behaves (design Q12).
+- Backlog and held counts in discovery. These are a follow-up, because they need a cross-owner visibility decision.
+- Whether the policy parameters reaper's lease reclaim for `delivered` rows and the `uncertain` move are one mechanism (design Assumption 12).
+
 ## Unresolved decisions and external follow-ups
 
 - **Q2:** Cross-owner default remains undecided: hold is proposed; refuse is the alternative.

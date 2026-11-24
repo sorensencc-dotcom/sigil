@@ -1,7 +1,6 @@
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { ApiError } from '../api/client';
 import type { Member } from '../api/types';
 import { renderWithClient } from '../testUtils';
 import { RoomHeader } from './RoomHeader';
@@ -13,35 +12,38 @@ const members: Member[] = [
 const listMembers = vi.fn(async () => members);
 
 describe('RoomHeader', () => {
-  it('posts Stop and disables the button while the request runs', async () => {
-    let finish!: (value: { code: string; cancelled: number }) => void;
-    const stopRoom = vi.fn(() => new Promise<{ code: string; cancelled: number }>((resolve) => { finish = resolve; }));
-    renderWithClient(<RoomHeader roomId="room_1" name="build" sender="ep_web" onGone={() => {}} />, { listMembers, stopRoom });
-    await userEvent.click(screen.getByRole('button', { name: 'Stop' }));
-    expect(stopRoom).toHaveBeenCalledWith('room_1');
-    expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled();
-    finish({ code: 'OK', cancelled: 0 });
-    await vi.waitFor(() => expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled());
+  it('shows the room purpose with the title', () => {
+    renderWithClient(<RoomHeader roomId="room_1" name="build" purpose="the build room" sender="ep_web" onGone={() => {}} />, { listMembers });
+    expect(screen.getByText('the build room')).toBeInTheDocument();
   });
-
-  it('returns to the list when Stop answers ROOM_NOT_FOUND', async () => {
-    const onGone = vi.fn();
-    const stopRoom = vi.fn(async () => { throw new ApiError('ROOM_NOT_FOUND', 404, 'gone'); });
-    renderWithClient(<RoomHeader roomId="room_1" name="build" sender="ep_web" onGone={onGone} />, { listMembers, stopRoom });
-    await userEvent.click(screen.getByRole('button', { name: 'Stop' }));
-    await vi.waitFor(() => expect(onGone).toHaveBeenCalled());
-  });
-
   it('shows rename and editable modes to a manager, and neither before the sender is known', async () => {
-    const first = renderWithClient(<RoomHeader roomId="room_1" name="build" sender="ep_web" onGone={() => {}} />, { listMembers });
+    const first = renderWithClient(<RoomHeader roomId="room_1" name="build" maxAgentTurns={6} sender="ep_web" onGone={() => {}} />, { listMembers });
     expect(await screen.findByRole('button', { name: 'Rename room' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Roster' }));
-    expect(await screen.findByLabelText('Response mode for ep_claude')).toBeInTheDocument();
+    expect(await screen.findByLabelText('Wake rule for ep_claude')).toBeInTheDocument();
+    expect(screen.getByText('Turn cap: 6 agent turns per thread.').tagName).toBe('P');
     first.unmount();
     renderWithClient(<RoomHeader roomId="room_1" name="build" sender={null} onGone={() => {}} />, { listMembers });
     await userEvent.click(screen.getByRole('button', { name: 'Roster' }));
     expect(await screen.findByText('ep_claude')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Rename room' })).toBeNull();
-    expect(screen.queryByLabelText('Response mode for ep_claude')).toBeNull();
+    expect(screen.queryByLabelText('Wake rule for ep_claude')).toBeNull();
+  });
+
+  it('opens an honest trust summary for any room member', async () => {
+    renderWithClient(<RoomHeader roomId="room_1" name="build" sender={null} onGone={() => {}} />, { listMembers });
+    await userEvent.click(screen.getByRole('button', { name: 'Trust' }));
+    const summary = screen.getByRole('region', { name: 'Room trust summary' });
+    expect(summary).toHaveTextContent('What is signed');
+    expect(summary).toHaveTextContent('What the relay can see');
+    expect(summary).toHaveTextContent('Not yet verified');
+    expect(summary).toHaveTextContent('relay-custodial key');
+    expect(screen.getByRole('button', { name: 'Trust' })).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('keeps Stop out of the header', async () => {
+    renderWithClient(<RoomHeader roomId="room_1" name="build" sender="ep_web" onGone={() => {}} />, { listMembers });
+    expect(await screen.findByRole('button', { name: 'Roster' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
   });
 });

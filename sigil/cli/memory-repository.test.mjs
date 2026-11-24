@@ -291,8 +291,13 @@ test('memory relay lists task-bound approval challenges by conversation and enve
   const envelope = { message_id: 'msg_action', conversation_id: 'room_1', context_refs: ['msg_task'], body: { task_id: 'task_1' } };
   await repository.createApprovalChallenge({ id: 'challenge_agui', endpointId: 'ep_worker', actionHash: 'hash', expiresAt: '2026-08-17T00:00:00Z', conversationId: 'room_1', messageId: 'msg_action', capabilities: ['filesystem/write'], envelope });
   const [challenge] = await repository.listApprovalChallengesForConversation('room_1');
-  assert.deepEqual(challenge, { id: 'challenge_agui', endpointId: 'ep_worker', actionHash: 'hash', expiresAt: '2026-08-17T00:00:00Z', capabilities: ['filesystem/write'], envelope });
-  assert.deepEqual(await repository.getApprovalChallengeForMessage('room_1', 'msg_action'), challenge);
+  const { status, decisionStatus, decisionExpiresAt, createdAt, ...stored } = challenge;
+  assert.deepEqual(stored, { id: 'challenge_agui', endpointId: 'ep_worker', actionHash: 'hash', expiresAt: '2026-08-17T00:00:00Z', capabilities: ['filesystem/write'], envelope });
+  assert.equal(status, 'pending');
+  assert.equal(decisionStatus, null);
+  assert.equal(decisionExpiresAt, null);
+  assert.ok(createdAt);
+  assert.deepEqual(await repository.getApprovalChallengeForMessage('room_1', 'msg_action'), stored);
   assert.equal(await repository.getApprovalChallengeForMessage('room_2', 'msg_action'), null);
 });
 

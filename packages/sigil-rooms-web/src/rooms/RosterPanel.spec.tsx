@@ -16,14 +16,14 @@ describe('RosterPanel', () => {
   it('shows role and mode badges and no controls for a non-manager', () => {
     renderWithClient(<RosterPanel roomId="room_1" members={members} manager={false} onGone={() => {}} />, {});
     expect(screen.getByText('ep_claude')).toBeInTheDocument();
-    expect(screen.getByText('joins')).toBeInTheDocument();
+    expect(screen.getByText('I can wake when mentioned, assigned a task, or picked by the router.')).toBeInTheDocument();
     expect(screen.queryByRole('combobox')).toBeNull();
   });
 
   it('gives a manager a mode select on agent rows only', () => {
     renderWithClient(<RosterPanel roomId="room_1" members={members} manager onGone={() => {}} />, {});
     expect(screen.getAllByRole('combobox')).toHaveLength(1);
-    expect(screen.getByLabelText('Response mode for ep_claude')).toHaveValue('joins');
+    expect(screen.getByLabelText('Wake rule for ep_claude')).toHaveValue('joins');
   });
 
   it('creates a one-time code and shows the agent invite pending', async () => {
@@ -61,7 +61,7 @@ describe('RosterPanel', () => {
     const setResponseMode = vi.fn(async () => ({ ...members[1]!, response_mode: 'mentions_only' as const }));
     const { queryClient } = renderWithClient(<RosterPanel roomId="room_1" members={members} manager onGone={() => {}} />, { setResponseMode });
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
-    await userEvent.selectOptions(screen.getByLabelText('Response mode for ep_claude'), 'mentions_only');
+    await userEvent.selectOptions(screen.getByLabelText('Wake rule for ep_claude'), screen.getByRole('option', { name: 'I can wake when mentioned or assigned a task.' }));
     await vi.waitFor(() => expect(setResponseMode).toHaveBeenCalledWith('room_1', 'ep_claude', 'mentions_only'));
     await vi.waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'members'] }));
   });
@@ -70,7 +70,7 @@ describe('RosterPanel', () => {
     const setResponseMode = vi.fn(async () => { throw new ApiError('ROUTE_NOT_AUTHORIZED', 403, 'no'); });
     const { queryClient } = renderWithClient(<RosterPanel roomId="room_1" members={members} manager onGone={() => {}} />, { setResponseMode });
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
-    await userEvent.selectOptions(screen.getByLabelText('Response mode for ep_claude'), 'router');
+    await userEvent.selectOptions(screen.getByLabelText('Wake rule for ep_claude'), 'router');
     expect(await screen.findByRole('alert')).toHaveTextContent('Only room managers can do this');
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'members'] });
   });
@@ -79,7 +79,7 @@ describe('RosterPanel', () => {
     const onGone = vi.fn();
     const setResponseMode = vi.fn(async () => { throw new ApiError('ROOM_NOT_FOUND', 404, 'gone'); });
     renderWithClient(<RosterPanel roomId="room_1" members={members} manager onGone={onGone} />, { setResponseMode });
-    await userEvent.selectOptions(screen.getByLabelText('Response mode for ep_claude'), 'router');
+    await userEvent.selectOptions(screen.getByLabelText('Wake rule for ep_claude'), 'router');
     await vi.waitFor(() => expect(onGone).toHaveBeenCalledOnce());
   });
 
@@ -117,21 +117,21 @@ describe('RosterPanel', () => {
     await vi.waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'members'] }));
   });
 
-  it('shows report_only members as a read-only Report only label with no mode control', () => {
+  it('shows report_only members as a read-only wake rule with no mode control', () => {
     const withReporter: Member[] = [
       ...members,
       { endpoint_id: 'ep_reporter', role: 'member', response_mode: 'report_only', added_at: 't', invokable_by: 'owner', owner_id: 'usr_a', display_name: 'Reporter' },
     ];
     renderWithClient(<RosterPanel roomId="room_1" members={withReporter} manager onGone={() => {}} />, {});
-    expect(screen.getByText('Report only')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Response mode for ep_reporter')).toBeNull();
+    expect(screen.getByText('I report updates and never wake for room messages.')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Wake rule for ep_reporter')).toBeNull();
     // Editable agent still has exactly one mode select; report_only adds none.
-    expect(screen.getByLabelText('Response mode for ep_claude')).toBeInTheDocument();
+    expect(screen.getByLabelText('Wake rule for ep_claude')).toBeInTheDocument();
   });
 
   it('keeps mode editor options to joins, mentions_only, and router without report_only', () => {
     renderWithClient(<RosterPanel roomId="room_1" members={members} manager onGone={() => {}} />, {});
-    const select = screen.getByLabelText('Response mode for ep_claude');
+    const select = screen.getByLabelText('Wake rule for ep_claude');
     const values = Array.from(select.querySelectorAll('option')).map((option) => (option as HTMLOptionElement).value);
     expect(values).toEqual(['joins', 'mentions_only', 'router']);
   });

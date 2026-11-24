@@ -15,7 +15,7 @@ The design covers:
 - delivery tiers shown to the sender before and after sending;
 - a directory of live sessions with person, machine, agent, repo, branch, busy or idle status, and a short "doing" text;
 - richer addressing: `person/*`, `repo:<name>`, direct session ids, plus the existing `ep_` endpoint ids and rooms;
-- receipts with the states stored, delivered, held, and refused;
+- receipts with the states stored, delivered, held, refused, and uncertain;
 - a recipient inbound policy of accept, hold, or refuse;
 - peer-input framing, so messages from other agents reach a model as untrusted peer input and not as instructions;
 - session name inheritance;
@@ -117,6 +117,7 @@ In scope:
 - the address resolver and delivery tiers;
 - inbound policy, held and refused states, and the hold and release flow;
 - the receipt vocabulary `dm_state`;
+- the `uncertain` outcome and the retry rule that goes with it;
 - peer-input framing;
 - session name inheritance;
 - the session-aware listener `sigil session run`;
@@ -135,8 +136,8 @@ Non-goals (v1):
 ## Decisions
 
 1. **D1. Live session directory table.** A new table `agent_sessions` (migration 037) holds one row per agent session. Liveness is derived from a heartbeat. Live names are unique per owner. The endpoint-level default inbound policy lives in a separate table so 037 and 038 do not alter `endpoints`.
-2. **D2. Delivery states for direct messages.** Migration 038 adds the delivery states `held` and `refused`, a nullable `deliveries.session_id`, `deliveries.address_used`, and a `direct_message_holds` audit table. Four transitions are added to `relay/v1/delivery-state.mjs`.
-3. **D3. Receipt vocabulary.** Direct-message receipts use `stored`, `delivered`, `held`, and `refused`, exposed in a new `dm_state` field. The existing `state` field and its mapping stay untouched for back-compat. `delivered` means a specific live session claimed the message.
+2. **D2. Delivery states for direct messages.** Migration 038 adds the delivery states `held`, `refused`, and `uncertain`, a nullable `deliveries.session_id`, `deliveries.address_used`, and a `direct_message_holds` audit table. Nine transitions are added to `relay/v1/delivery-state.mjs` (see Delivery states and transitions).
+3. **D3. Receipt vocabulary.** Direct-message receipts use `stored`, `delivered`, `held`, `refused`, and `uncertain`, exposed in a new `dm_state` field. The existing `state` field and its mapping stay untouched for back-compat. `delivered` means a specific live session claimed the message. `uncertain` means the relay handed the message to a session and cannot tell whether the session saw it. `refused` is always a definite refusal, never an unknown result.
 4. **D4. Claim replaces ack-on-print.** A session-aware listener stores the message locally and claims it when it shows the message to the model, at a turn boundary. The relay ack happens at the claim. A malformed message moves to `processing_failed` with reason `malformed` and is skipped.
 5. **D5. Delivery tiers.** The relay computes a tier per target at resolve time. The tier is shown before send (`sigil send --dry-run`, `sigil who`) and echoed in the accept response.
 6. **D6. Addressing grammar.** A new resolver, `relay/v1/address-resolver.mjs`, resolves session ids, endpoint ids, person scopes, repo scopes, and rooms. Wildcards freeze to a set of live sessions at send time, each with its own delivery row and receipt. Fan-out is capped at 20 targets (configurable) and quota is charged per target. Cross-owner addressing requires an existing `directory_links` link.
@@ -277,7 +278,8 @@ For direct messages the sender sees:
 - `stored`: the relay accepted and persisted the message; no live session has claimed it yet.
 - `delivered`: a specific live agent session claimed it into its context.
 - `held`: recipient policy is hold; the message waits for the owner.
-- `refused`: recipient policy is refuse, the owner refused a hold, or the address resolved to nothing.
+- `refused`: recipient policy is refuse, the owner refused a hold, or the address resolved to nothing. A refusal is definite: the message was not shown and will not be shown.
+- `uncertain`: the relay handed the message to a session and received no claim, and the relay cannot tell whether the session showed it to the model. The message may have been seen, or may not have been. Uncertain is not a refusal and not a failure.
 
 ### Mapping
 
@@ -290,13 +292,51 @@ For direct messages the sender sees:
 | `acknowledged`, `processing`, `processed` | null | `stored` for legacy non-session deliveries (the legacy `state` field applies) |
 | `held` | any | `held` |
 | `refused` | any | `refused` |
-| `delivery_rejected`, `processing_failed`, `dead_letter` | any | `refused` for policy and malformed outcomes; otherwise reported only through the legacy `state` field |
+| `uncertain` | set | `uncertain` |
+| `dead_letter` with `failure_reason` `uncertain_expired` | set | `uncertain` (the outcome never resolved before the envelope expired) |
+| `delivery_rejected`, `processing_failed`, `dead_letter` (other reasons) | any | `refused` for policy and malformed outcomes; otherwise reported only through the legacy `state` field |
 
-The last two rows are an assumption on how failures show in `dm_state` (Assumption 5).
+The last three rows are an assumption on how failures show in `dm_state` (Assumption 5). The `uncertain` rows exist because `processing_failed` cannot express the outcome: delivery-state.mjs allows `processing_failed` only after `acknowledged`, and an unclaimed hand-off never reaches `acknowledged`.
 
 ### Back-compat
 
-The existing receipt `state` field and the mapping in `relay/v1/receipt-state.mjs` stay untouched. `--wait-for-receipt` in `cli/send-with-receipt.mjs` keeps its terminal states (`acknowledged`, `processed`, `processing_failed`, `dead_letter`) and its exit codes FAILED 7 and TIMEOUT 8 with unchanged meaning. A new `dm_state` field and a `session_id` field are added to receipt rows and `delivery.receipt` frames. Because only a session claim reaches an acknowledged-family raw state for session deliveries, `delivered` now means a session saw the message, which fixes F1.
+The existing receipt `state` field and the mapping in `relay/v1/receipt-state.mjs` stay untouched. `--wait-for-receipt` in `cli/send-with-receipt.mjs` keeps its terminal states (`acknowledged`, `processed`, `processing_failed`, `dead_letter`) and its exit codes FAILED 7 and TIMEOUT 8 with unchanged meaning. A new `dm_state` field and a `session_id` field are added to receipt rows and `delivery.receipt` frames. Because only a session claim reaches an acknowledged-family raw state for session deliveries, `delivered` now means a session saw the message, which fixes F1. `mapReceiptState` already returns `unknown` for any raw state it does not list, so the legacy `state` field reads `unknown` for `held`, `refused`, and `uncertain` rows without a code change. The raw state still appears in `raw_state`. See [Delivery receipts design](2026-10-05-sigil-delivery-receipts-design.md#direct-message-states-and-uncertain-outcomes) for how receipts, frames, `--wait-for-receipt`, and wake rules treat these states.
+
+## Uncertain outcomes and retry rule
+
+An unknown outcome arises in two places with two owners. The design keeps them apart because only one of them is a relay state.
+
+### Accept is uncertain (sender-local)
+
+The sender wrote the request and received no response: a timeout, a dropped connection, or a bridge drop before the `202`. The relay either persisted the message or did not, and only the sender is unsure. No `deliveries` row can describe this, so `uncertain` here is an outcome that `sigil send` reports, not a stored state. The delivery tiers do not include it, because tiers are computed before send.
+
+Rules:
+
+1. `sigil send` writes `message_id`, `idempotency_key`, and the signed envelope to local storage before it sends the request. A retry then resends identical bytes.
+2. Do not resend blindly. Resend only the identical signed envelope, with the same `message_id` and the same `idempotency_key`. The protocol spec requires a retry to reuse both values (`docs/specs/sigil-protocol-spec-v1.0.0-draft.md`, section on idempotency).
+3. A resend of the identical envelope is safe. The relay answers `202` with `duplicate: true` and the original `message_id` if it persisted the first attempt, and accepts it normally if it did not. A fan-out message deduplicates as one message, and a duplicate is not charged quota again.
+4. A new `message_id` is a new message. A reused `message_id` under a new `idempotency_key` is rejected as `REPLAY_DETECTED` (`accept-envelope.mjs`), and the same key with a changed body is rejected as `DUPLICATE_MESSAGE`. Do not build a fresh envelope for the same logical message.
+5. The resend window ends when the envelope expires. The protocol spec keeps replay and idempotency records until at least `expires_at` plus the clock-skew tolerance (five minutes), and the maximum lifetime is 24 hours. After `expires_at`, do not resend. Read `GET /v1/messages/{message_id}/receipts` instead: a `200` means the relay accepted the message, and a `404` means it did not, except for federated sends (see the receipts design).
+
+### Delivery is uncertain (relay state)
+
+The relay handed a session delivery to a session and received no claim, and the session can no longer say what happened. The relay moves the row from `delivered` to `uncertain` when any of these occur, and the row has a `session_id`:
+
+- the session ends (`end` route or crash);
+- the session stops heartbeating for longer than the 90-second TTL, or its stream closes and does not resume within the TTL.
+
+A live session that is busy is never uncertain. A busy session keeps beating, so its delivery stays `delivered` until its next turn boundary (decided answer Q4 and Q5).
+
+Resolution:
+
+1. **Late claim.** The session or its successor claims the delivery. The row moves `uncertain -> acknowledged`, and `dm_state` becomes `delivered`.
+2. **Successor appears.** A session registers under the same name (name inheritance) or, for an `ep_` address, any live session of the endpoint registers. The relay moves the row `uncertain -> queued` and offers it again under the same `delivery_id`. The frame carries the original `session_id` and a `redelivery` flag, and the session de-duplicates by `delivery_id`. The first session may already have shown the message, so one message can be shown twice. This design accepts at-least-once delivery for this case.
+3. **Recipient rejects late.** The row moves `uncertain -> delivery_rejected`.
+4. **Expiry.** The envelope expires with no resolution. The reaper moves the row `uncertain -> dead_letter` with `failure_reason` `uncertain_expired`. Dead letters stay terminal and are never replayed automatically (`docs/specs/sigil-policy-parameters-v1.0.md`, dead-letter reaper).
+
+The sender must not resend while a delivery is `uncertain`. Resending the identical envelope changes nothing, because the relay deduplicates it and creates no second delivery row. Only a new envelope creates a second message, and that is an explicit operator choice that accepts a possible duplicate.
+
+Deliveries without a `session_id` (legacy endpoint deliveries and bridge-backed endpoints) keep today's behavior in v1. Q11 asks whether to extend `uncertain` to them.
 
 ## Recipient inbound policy
 
@@ -388,14 +428,41 @@ Every `INSERT INTO endpoints` elsewhere sets `kind` explicitly; this migration i
 
 ### Migration 038: direct-message delivery
 
-- Drops and re-adds the `deliveries` state CHECK by name to add `held` and `refused`. The expected constraint name is `deliveries_state_check` (Postgres auto-names the inline CHECK from migration 001). That name is an assumption (Assumption 2).
+- Drops and re-adds the `deliveries` state CHECK by name to add `held`, `refused`, and `uncertain`. The expected constraint name is `deliveries_state_check` (Postgres auto-names the inline CHECK from migration 001). That name is an assumption (Assumption 2).
 - Adds `deliveries.session_id`, a nullable FK to `agent_sessions`.
 - Adds `deliveries.address_used` (text), the address the sender typed.
 - Creates `direct_message_holds`: `delivery_id`, `held_at`, `released_by_human_id`, `released_at`, `decision` (`accept` or `refuse`).
 
-### Delivery-state transition additions
+### Delivery states and transitions
 
-In `relay/v1/delivery-state.mjs`: `queued -> held`, `held -> queued` (release), `held -> refused`, `queued -> refused`.
+The complete table follows. Rows marked "existing" match `relay/v1/delivery-state.mjs` today. Rows marked "038" are added by migration 038 and the matching change to `delivery-state.mjs`. Any pair not listed is illegal and stays rejected with `INVALID_STATE_TRANSITION`.
+
+| From | To | Trigger | Source |
+| --- | --- | --- | --- |
+| `queued` | `delivered` | recipient polls, or the relay hands the message to a live session | existing |
+| `queued` | `delivery_rejected` | relay or recipient rejects before hand-off | existing |
+| `queued` | `held` | recipient policy is hold | 038 |
+| `queued` | `refused` | the owner changes policy to refuse while the message is queued (Assumption 11) | 038 |
+| `held` | `queued` | owner releases (`sigil dm release`) | 038 |
+| `held` | `refused` | owner refuses (`sigil dm refuse`) | 038 |
+| `delivered` | `acknowledged` | recipient acks, or the session claims the message | existing |
+| `delivered` | `delivery_rejected` | recipient rejects | existing |
+| `delivered` | `uncertain` | session delivery with no claim, and its session ended or lapsed past the TTL | 038 |
+| `uncertain` | `acknowledged` | late claim by the session or its successor | 038 |
+| `uncertain` | `queued` | successor session appears; relay re-offers under the same `delivery_id` | 038 |
+| `uncertain` | `delivery_rejected` | recipient rejects late | 038 |
+| `uncertain` | `dead_letter` | envelope expires unresolved; `failure_reason` `uncertain_expired` | 038 |
+| `acknowledged` | `processing` | agent daemon starts work | existing |
+| `acknowledged` | `delivery_rejected` | recipient rejects | existing |
+| `acknowledged` | `processing_failed` | processing fails | existing |
+| `processing` | `processed` | processing succeeds | existing |
+| `processing` | `processing_failed` | processing fails | existing |
+| `processing_failed` | `processing` | retry, while attempts remain | existing |
+| `processing_failed` | `dead_letter` | retry limit reached | existing |
+
+`processed`, `delivery_rejected`, and `dead_letter` have no outgoing transitions. `refused` has none either. `uncertain` applies only to rows with a non-null `session_id`, so legacy deliveries never enter it. A policy-refused send stores no delivery row (see Recipient inbound policy), so a `refused` row arises only from `held` or from a queued row whose recipient policy changed.
+
+Every transition into `uncertain` and out of it writes an audit event, with the same fields as the other reaper transitions, and sends a `delivery.receipt` frame to the sender.
 
 ## Relay API and CLI surface
 
@@ -512,8 +579,10 @@ Each layer must prove:
 
 - **Repositories (memory and Postgres):** session register, heartbeat, end, TTL expiry, live-name uniqueness, listing visibility, policy resolution, hold and release audit rows. Both repositories behave the same.
 - **Address resolver:** every grammar form, each refusal reason, the fan-out cap, a frozen target set, the cross-owner link rule, and `hide_repo`.
-- **Delivery state:** the four new transitions and rejection of illegal ones.
-- **Receipts:** the `dm_state` mapping table, and that the legacy `state` field and `--wait-for-receipt` exit codes 7 and 8 are unchanged.
+- **Delivery state:** every transition in the table above, both legal and illegal, through the repository transition method on memory and Postgres. `uncertain` rejects rows with a null `session_id`.
+- **Receipts:** the `dm_state` mapping table, including `uncertain`, and that the legacy `state` field and `--wait-for-receipt` exit codes 7 and 8 are unchanged.
+- **Uncertain delivery:** a session that ends, or stops beating past the TTL, with an unclaimed delivery moves the row to `uncertain` and the sender gets a frame. A busy session that keeps beating never does. A late claim ends at `delivered`. A successor registration re-offers the same `delivery_id` and the session de-duplicates it. Expiry ends at `dead_letter` with `uncertain_expired` and `dm_state` `uncertain`.
+- **Uncertain send:** a lost `202` makes `sigil send` report `uncertain` with the message ID and exit with the dedicated code, not `1`. A resend of the identical envelope returns `duplicate: true` without a second delivery row or a second quota charge. A resend with a new key is rejected as `REPLAY_DETECTED`.
 - **Poison message:** a malformed envelope goes to `processing_failed` with reason `malformed`, the listener continues, and the next message is delivered (F4).
 - **Competing consumers:** two sessions on one endpoint each receive only messages addressed to them or claimed by them, with no double claim (F2).
 - **Claim, not print:** `delivered` appears only after a claim, never after local storage or printing (F1).
@@ -533,12 +602,15 @@ Each layer must prove:
 2. The inline CHECK on `deliveries.state` from migration 001 is named `deliveries_state_check`. Confirmed in plan Task 1 before migration 038 is written.
 3. `directory_links` can be queried efficiently by owner pair for visibility checks. Confirmed in the plan task that adds the directory listing repository method.
 4. The existing `/v1/stream` can carry a session-scoped subscription and claim frames without changing stream sequencing for other message types. Confirmed in the plan task for the stream claim frames.
-5. Failure outcomes (`delivery_rejected`, `processing_failed`, `dead_letter`) map to `dm_state` `refused` only for policy and malformed outcomes; other failures stay visible through the legacy `state` field. Confirmed in the plan task for receipt `dm_state`.
+5. Failure outcomes (`delivery_rejected`, `processing_failed`, `dead_letter`) map to `dm_state` `refused` only for policy and malformed outcomes, except `dead_letter` with `failure_reason` `uncertain_expired`, which maps to `uncertain`; other failures stay visible through the legacy `state` field. Confirmed in the plan task for receipt `dm_state`.
 6. The tincan held-queue action-hash check can be reused for hold release without change. Confirmed in the plan task for hold and release.
 7. Session policy overrides do not follow a name to an inheriting session; the inheriting session takes the endpoint default unless set. Confirmed in the plan task for name inheritance.
 8. A turn-boundary hook exists in each supported agent host for claiming. Confirmed in the plan task for `sigil session run`.
 9. `connectors/v1/sqlite-store.mjs` is reusable for a bounded per-session store. Confirmed in the plan task for the local store (Q6).
 10. The Floor Warden and report-only phases do not touch `deliveries`. Confirmed in the plan task for migration independence.
+11. The transition `queued -> refused` covers a policy change to refuse while a message is queued. The earlier design added the transition without stating its trigger. Confirmed in the plan task for hold and release.
+12. The relay can detect a lapsed or ended session and move its unclaimed deliveries to `uncertain` within one reaper pass. The policy parameters document already reclaims expired leases in `delivered`; whether that reclaim and the `uncertain` move are one mechanism is unresolved. Confirmed in the plan task for the reaper.
+13. `sigil send` can persist the signed envelope before the request, and a duplicate does not charge quota again. The receipts design leaves the write order of `sent.jsonl` open. Confirmed in the plan task for `sigil send`.
 
 ## Reason Network comparison
 
@@ -599,3 +671,10 @@ These are options for later review. None is a decision, and none changes the des
 - **Q8.** Should the phase 6 implementation branch, which already uses 035 locally, be renumbered to 036 now, before it is pushed? Resolved by events: phase 6 merged as 035 in PR #59, so phase 5 takes 036.
 - **Q9.** Should the web client get a directory panel in this series or later?
 - **Q10.** Who updates `run-sigil-daemon.ps1` (outside the repo) and the stream port in the local operator note (8793 versus 8792)?
+- **Q11.** Should `uncertain` also cover deliveries with no `session_id`, such as bridge-backed endpoints where a bridge drops after hand-off? Proposal: not in v1, because those rows have no session liveness signal to decide the move.
+- **Q12.** Should a clean session `end` with unclaimed deliveries move them to `uncertain` (proposed, one path) or straight back to `queued` (needs a new `delivered -> queued` transition)?
+
+### Follow-ups
+
+- Backlog and held counts in discovery (`sigil who`, `GET /v1/agent-sessions`) are deferred, because issue 294 asks for them only if cheap and they are not. The counts need a visibility decision first: listings today never carry message data, and counts shown to cross-owner viewers would leak mailbox activity. A cheap first step is owner-only counts of `held` and `uncertain` rows per session, with null for cross-owner viewers. Queued messages have no `session_id` until hand-off, so a per-session backlog needs an endpoint-level count as well.
+- The companion plan (`docs/superpowers/plans/2026-10-16-sigil-hybrid-rooms-direct-messages.md`) lists four `dm_state` values and four transition additions. It needs a matching update before implementation.

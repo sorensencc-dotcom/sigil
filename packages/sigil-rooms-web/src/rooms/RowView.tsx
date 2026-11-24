@@ -5,6 +5,22 @@ import { SenderChip, senderName } from './SenderChip';
 import { previewText } from './threads';
 import type { LoginFor, NameFor, OwnerNameFor } from './useContacts';
 
+function RowMenu({ roomId, messageId, text }: { roomId?: string; messageId: string; text: string }) {
+  const copy = (value: string) => navigator.clipboard.writeText(value);
+  const link = new URL(window.location.href);
+  if (roomId) link.searchParams.set('room', roomId);
+  link.hash = `message-${messageId}`;
+  return (
+    <details className="row-menu">
+      <summary aria-label="Message actions">More</summary>
+      <div className="row-menu-items">
+        <button type="button" className="ghost" onClick={() => void copy(text)}>Copy text</button>
+        <button type="button" className="ghost" onClick={() => void copy(link.href)}>Copy link</button>
+      </div>
+    </details>
+  );
+}
+
 function Stamp({ at }: { at: string }) {
   const date = new Date(at);
   if (Number.isNaN(date.getTime())) return null;
@@ -20,10 +36,16 @@ export function RowView({
   members = [],
   replies = 0,
   latestReplies = [],
+  inspectingId = null,
+  onInspect,
   onReply,
   onContinue,
+  roomId,
+  highlighted = false,
+  focused = false,
 }: {
   row: Row;
+  roomId?: string;
   sender: string | null;
   nameFor?: NameFor;
   loginFor?: LoginFor;
@@ -31,8 +53,12 @@ export function RowView({
   members?: Member[];
   replies?: number;
   latestReplies?: HistoryItem[];
+  inspectingId?: string | null;
+  onInspect?: (item: HistoryItem) => void;
   onReply?: () => void;
   onContinue?: (threadRootId: string) => void;
+  highlighted?: boolean;
+  focused?: boolean;
 }) {
   if (row.pending) {
     return (
@@ -42,28 +68,40 @@ export function RowView({
       </li>
     );
   }
-  const envelope = row.item!.envelope;
+  const item = row.item!;
+  const envelope = item.envelope;
+  const inspecting = inspectingId === item.message_id;
+  const inspect = onInspect ? (
+    <button type="button" className="ghost" aria-expanded={inspecting} aria-controls={inspecting ? 'envelope-drawer' : undefined} onClick={() => onInspect(item)}>Envelope</button>
+  ) : null;
   if (envelope.message_type === 'room.event') {
     const { kind, reason, thread_root_id: threadRootId } = envelope.body;
     return (
-      <li data-kind="event">
+      <li data-kind="event" data-room-seq={row.item!.room_seq} data-search-match={highlighted || undefined}>
         <em>{kind}{reason ? `: ${reason}` : ''}</em>
-        {kind === 'agent_cap_reached' && onContinue && threadRootId ? (
-          <div className="row-actions">
+        <div className="row-actions">
+          {kind === 'agent_cap_reached' && onContinue && threadRootId ? (
             <button type="button" className="ghost" onClick={() => onContinue(threadRootId)}>Continue</button>
-          </div>
-        ) : null}
+          ) : null}
+          {inspect}
+        </div>
       </li>
     );
   }
   const mine = sender !== null && envelope.sender.endpoint_id === sender;
   return (
-    <li data-mine={mine ? 'true' : undefined}>
+<li
+  id={`message-${envelope.message_id}`}
+  data-mine={mine ? 'true' : undefined}
+  data-room-seq={row.item!.room_seq}
+  data-search-match={highlighted || undefined}
+  aria-current={focused ? 'true' : undefined}
+>
       <div className="meta">
         <SenderChip
           endpointId={envelope.sender.endpoint_id}
           ownerId={envelope.sender.owner_id}
-          name={senderName(envelope.sender.endpoint_id, row.item!.display_name, members, nameFor, loginFor)}
+          name={senderName(envelope.sender.endpoint_id, item.display_name, members, nameFor, loginFor)}
           members={members}
           viewer={sender}
           ownerNameFor={ownerNameFor}
@@ -73,6 +111,7 @@ export function RowView({
         <Stamp at={envelope.created_at} />
       </div>
       <span className="text">{formatMentionText(envelope.body.text, nameFor, members)}</span>
+      <RowMenu roomId={roomId} messageId={envelope.message_id} text={envelope.body.text ?? ''} />
       {latestReplies.length > 0 && onReply ? (
         <button type="button" className="reply-preview" onClick={onReply}>
           {latestReplies.map((reply) => (
@@ -88,14 +127,17 @@ export function RowView({
           ))}
         </button>
       ) : null}
-      {onReply ? (
-        <div className="row-actions">
-          <button type="button" className="ghost" onClick={onReply}>Reply</button>
-          {replies > 0 ? (
-            <button type="button" className="ghost" onClick={onReply}>{replies} {replies === 1 ? 'reply' : 'replies'}</button>
-          ) : null}
-        </div>
-      ) : null}
+      <div className="row-actions">
+        {onReply ? (
+          <>
+            <button type="button" className="ghost" onClick={onReply}>Reply</button>
+            {replies > 0 ? (
+              <button type="button" className="ghost" onClick={onReply}>{replies} {replies === 1 ? 'reply' : 'replies'}</button>
+            ) : null}
+          </>
+        ) : null}
+        {inspect}
+      </div>
     </li>
   );
 }

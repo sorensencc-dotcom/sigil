@@ -65,11 +65,11 @@ describe('useSend', () => {
 
   it('adds a sending row, then records message_id and the sender on success', async () => {
     const sendMessage = vi.fn(async () => ({ code: 'OK', message_id: 'm9', room_seq: '9' }));
-    const history = vi.fn(async () => ({
-      code: 'OK', next_after_seq: '9',
+    const historyBefore = vi.fn(async () => ({
+      code: 'OK', next_after_seq: '9', next_before_seq: null, has_older: false,
       items: [{ room_seq: '9', message_id: 'm9', canonical_bytes: 'b', envelope: { message_id: 'm9', message_type: 'room.message', sender: { endpoint_id: 'ep_web', owner_id: 'u' }, body: { text: 'hi' }, created_at: 't' } }],
     }));
-    const { result } = renderHook(() => useSend('room_1'), { wrapper: wrapper({ sendMessage, history }) });
+    const { result } = renderHook(() => useSend('room_1'), { wrapper: wrapper({ sendMessage, historyBefore }) });
     act(() => result.current.send('hi'));
     expect(result.current.pending[0]).toMatchObject({ text: 'hi', status: 'sending' });
     await waitFor(() => expect(result.current.pending[0]?.messageId).toBe('m9'));
@@ -121,10 +121,10 @@ describe('useSend', () => {
 
   it('does not mark an accepted message failed when the history refetch fails', async () => {
     const sendMessage = vi.fn(async () => ({ code: 'OK', message_id: 'm3', room_seq: '3' }));
-    const history = vi.fn(async () => { throw new ApiError('NETWORK', 0, 'offline'); });
-    const { result } = renderHook(() => useSend('room_1'), { wrapper: wrapper({ sendMessage, history }) });
+    const historyBefore = vi.fn(async () => { throw new ApiError('NETWORK', 0, 'offline'); });
+    const { result } = renderHook(() => useSend('room_1'), { wrapper: wrapper({ sendMessage, historyBefore }) });
     act(() => result.current.send('ok'));
-    await waitFor(() => expect(history).toHaveBeenCalled());
+    await waitFor(() => expect(historyBefore).toHaveBeenCalled());
     await waitFor(() => expect(result.current.pending[0]?.messageId).toBe('m3'));
     expect(result.current.pending[0]?.status).toBe('sending');
     expect(result.current.sendError).toBeNull();
@@ -181,5 +181,53 @@ describe('useSend ordering and unavailable rows', () => {
     const { result } = renderHook(() => useSend('room_1'), { wrapper: wrapper({ sendMessage }) });
     act(() => result.current.send('x'));
     await waitFor(() => expect(result.current.pending[0]).toMatchObject({ status: 'failed', retryable: false }));
+  });
+});
+
+describe('Composer recipient preview', () => {
+  const me: Member = { endpoint_id: 'ep_me', role: 'owner', response_mode: null, added_at: 't', invokable_by: 'owner', owner_id: 'hu_me', display_name: 'Me' };
+  const router: Member = { endpoint_id: 'ep_router', role: 'member', response_mode: 'router', added_at: 't', invokable_by: 'owner', owner_id: 'hu_me', display_name: 'Router' };
+  const ada: Member = { endpoint_id: 'ep_ada', role: 'member', response_mode: 'joins', added_at: 't', invokable_by: 'owner', owner_id: 'hu_me', display_name: 'Ada' };
+  const quiet: Member = { endpoint_id: 'ep_quiet', role: 'member', response_mode: 'mentions_only', added_at: 't', invokable_by: 'members', owner_id: 'hu_me', display_name: 'Quiet' };
+  const members = [me, router, ada, quiet];
+
+  it('names the mentioned agent that will wake and why the others will not', async () => {
+    renderWithClient(<Composer send={() => {}} disabledReason={null} members={members} viewer="ep_me" />, {});
+    await userEvent.type(screen.getByRole('textbox'), '@Quiet look');
+    expect(screen.getByText('Will wake: Quiet')).toBeInTheDocument();
+    expect(screen.getByText("Won't wake: Ada (not mentioned)")).toBeInTheDocument();
+    expect(screen.queryByText(/router decides/i)).not.toBeInTheDocument();
+  });
+
+  it('words a plain message in a router room as a prediction, never as a certain wake', async () => {
+    renderWithClient(<Composer send={() => {}} disabledReason={null} members={members} viewer="ep_me" />, {});
+    await userEvent.type(screen.getByRole('textbox'), 'who can help?');
+    expect(screen.getByText('The router decides. It may wake Ada.')).toBeInTheDocument();
+    expect(screen.getByText("Won't wake: Quiet (not mentioned)")).toBeInTheDocument();
+    expect(screen.queryByText(/will wake/i)).not.toBeInTheDocument();
+  });
+
+  it('does not claim an owner-only router will decide before the viewer is known', async () => {
+    renderWithClient(<Composer send={() => {}} disabledReason={null} members={members} />, {});
+    await userEvent.type(screen.getByRole('textbox'), 'who can help?');
+    expect(screen.queryByText(/router decides/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Who this message wakes')).not.toBeInTheDocument();
+  });
+
+  it('labels owner-only joins agents as conditional instead of router candidates', async () => {
+    const sharedRouter = { ...router, invokable_by: 'members' as const };
+    renderWithClient(<Composer send={() => {}} disabledReason={null} members={[me, sharedRouter, ada]} />, {});
+    await userEvent.type(screen.getByRole('textbox'), 'who can help?');
+    expect(screen.getByText('The router may also consider these agents if you own them: Ada.')).toBeInTheDocument();
+    expect(screen.queryByText('The router decides. It may wake Ada.')).not.toBeInTheDocument();
+  });
+
+  it('shows nothing before text is typed or while members are unknown', async () => {
+    const { unmount } = renderWithClient(<Composer send={() => {}} disabledReason={null} members={members} viewer="ep_me" />, {});
+    expect(screen.queryByLabelText('Who this message wakes')).not.toBeInTheDocument();
+    unmount();
+    renderWithClient(<Composer send={() => {}} disabledReason={null} viewer="ep_me" />, {});
+    await userEvent.type(screen.getByRole('textbox'), 'hello');
+    expect(screen.queryByLabelText('Who this message wakes')).not.toBeInTheDocument();
   });
 });

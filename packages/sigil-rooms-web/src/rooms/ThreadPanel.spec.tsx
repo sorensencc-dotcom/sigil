@@ -28,6 +28,13 @@ describe('ThreadPanel', () => {
     expect(screen.queryByText('other thread')).toBeNull();
   });
 
+  it('lets the thread root open its envelope in the shared drawer', async () => {
+    const onInspect = vi.fn();
+    panel([msg(1, 'm1', 'root text')], { onInspect });
+    await userEvent.click(await screen.findByRole('button', { name: 'Envelope' }));
+    expect(onInspect).toHaveBeenCalledWith(expect.objectContaining({ message_id: 'm1' }));
+  });
+
   it('shows a placeholder when the root is not loaded and keeps the reply', async () => {
     panel([msg(5, 'm5', 'orphan reply', 'm1')]);
     expect(await screen.findByText('orphan reply')).toBeInTheDocument();

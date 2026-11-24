@@ -10,6 +10,22 @@ function make(fetchImpl: typeof fetch, token: string | null = 'tok', onUnauthori
 }
 
 describe('api client', () => {
+  it('lists mention pages and URL-encodes the continuation cursor', async () => {
+    const calls: string[] = [];
+    const page = { items: [], next_cursor: 'next+/=' };
+    const fetchImpl = vi.fn(async (url: string) => {
+      calls.push(url);
+      return jsonResponse(200, page);
+    });
+    const { client } = make(fetchImpl as unknown as typeof fetch);
+    await expect(client.listMentions()).resolves.toEqual(page);
+    await expect(client.listMentions('next+/=')).resolves.toEqual(page);
+    expect(calls).toEqual([
+      'http://relay.test/v1/mentions',
+      'http://relay.test/v1/mentions?cursor=next%2B%2F%3D',
+    ]);
+  });
+
   it('sends only authorization and content-type headers', async () => {
     const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse(200, { code: 'OK', items: [] }));
     const { client } = make(fetchImpl as unknown as typeof fetch);
@@ -94,6 +110,21 @@ describe('api client', () => {
     expect(JSON.parse(calls[2]![1].body as string)).toEqual({ up_to_room_seq: '9' });
     expect(calls[3]![0]).toBe('http://relay.test/v1/rooms/ws-ticket');
     expect(calls[3]![1].method).toBe('POST');
+  });
+
+  it('builds bounded latest-history and room-search requests', async () => {
+    const calls: Array<[string, RequestInit]> = [];
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push([url, init]);
+      return jsonResponse(200, { code: 'OK', items: [], next_before_seq: null, has_more: false, has_older: false });
+    });
+    const { client } = make(fetchImpl as unknown as typeof fetch);
+    await client.historyBefore('room_1', 'latest', 80);
+    await client.searchHistory('room_1', 'deploy 100%', '500', 10);
+    expect(calls.map(([url]) => url)).toEqual([
+      'http://relay.test/v1/rooms/room_1/messages?before_seq=latest&limit=80',
+      'http://relay.test/v1/rooms/room_1/messages/search?q=deploy%20100%25&before_seq=500&limit=10',
+    ]);
   });
 });
 

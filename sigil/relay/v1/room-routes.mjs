@@ -17,9 +17,41 @@ const RESPONSE_MODES = new Set(['joins', 'mentions_only', 'router', 'report_only
 const INVOKABLE_MODES = new Set(['owner', 'members']);
 const AGENT_INVITE_TTL_MS = 15 * 60_000;
 const ROOM_METHODS = ['createRoom', 'lookupRoom', 'listRoomsForEndpoint', 'addRoomMember', 'removeRoomMember', 'lookupRoomMember', 'listRoomMembers', 'listRoomMessages', 'listRoomInvocations', 'lookupRunningInvocation', 'finishInvocation', 'cancelRoomInvocations', 'nextQueuedInvocation', 'startInvocation', 'createRoomDelivery', 'lookupRouterDecision', 'lookupRoomMessage', 'lookupRoomEventByKey', 'lockRoom', 'createRoomInvocation', 'reserveAgentTurn', 'withTransaction', 'acknowledgeRoomDeliveries', 'renameRoom', 'setRoomMemberResponseMode'];
+const ROOM_HISTORY_LIMIT_MAX = 100;
+const ROOM_SEARCH_QUERY_MIN = 3;
+const ROOM_SEARCH_QUERY_MAX = 100;
+const ROOM_SEARCH_LIMIT_MAX = 50;
 const NAME_MAX = 80;
 const HISTORY_LIMIT_MAX = 500;
 const ROOM_SEQ_MAX = 9223372036854775807n; // envelopes.room_seq is int8
+const MENTIONS_LIMIT_MAX = 100;
+
+function decodeMentionCursor(value) {
+  if (value == null) return null;
+  if (!/^[A-Za-z0-9_-]{1,1024}$/.test(value)) return undefined;
+  try {
+    const json = Buffer.from(value, 'base64url').toString('utf8');
+    if (Buffer.from(json).toString('base64url') !== value) return undefined;
+    const cursor = JSON.parse(json);
+    if (!cursor || typeof cursor !== 'object' || Array.isArray(cursor)
+      || Object.keys(cursor).length !== 3
+      || typeof cursor.room_seq !== 'string' || !/^(0|[1-9]\d*)$/.test(cursor.room_seq)
+      || typeof cursor.conversation_id !== 'string' || !cursor.conversation_id || cursor.conversation_id.length > 200
+      || typeof cursor.message_id !== 'string' || !cursor.message_id || cursor.message_id.length > 200) return undefined;
+    if (BigInt(cursor.room_seq) > ROOM_SEQ_MAX) return undefined;
+    return cursor;
+  } catch {
+    return undefined;
+  }
+}
+
+function encodeMentionCursor(item) {
+  return Buffer.from(JSON.stringify({
+    room_seq: item.room_seq,
+    conversation_id: item.conversation_id,
+    message_id: item.message_id,
+  })).toString('base64url');
+}
 
 function send(response, requestId, status, body) {
   response.writeHead(status, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
@@ -126,8 +158,11 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     if (typeof repository?.listMentionsForEndpoint !== 'function') return fail(response, requestId, 503, 'DATABASE_UNAVAILABLE', 'Mentions are unavailable');
     const requested = Number(parsedUrl.searchParams.get('limit') ?? 50);
     const limit = Number.isFinite(requested) ? requested : 50;
-    const items = await repository.listMentionsForEndpoint(principal.endpoint_id, limit);
-    return send(response, requestId, 200, { code: 'OK', items });
+    const cursor = decodeMentionCursor(parsedUrl.searchParams.get('cursor'));
+    if (cursor === undefined) return fail(response, requestId, 400, 'INVALID_REQUEST', 'cursor is invalid');
+    const page = await repository.listMentionsForEndpoint(principal.endpoint_id, Math.min(limit, MENTIONS_LIMIT_MAX), cursor);
+    const last = page.hasMore ? page.items.at(-1) : null;
+    return send(response, requestId, 200, { code: 'OK', items: page.items, next_cursor: last ? encodeMentionCursor(last) : null });
   }
   if (request.method === 'POST' && path === '/v1/room-agent-invites/redeem') {
     if (!principal?.endpoint_id || !(await isAgentCaller(repository, registry, principal))) return fail(response, requestId, 403, 'AGENT_IDENTITY_REQUIRED', 'An authenticated agent endpoint is required');
@@ -416,14 +451,70 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     return send(response, requestId, 200, { code: 'OK', member });
   }
 
+  if (request.method === 'GET' && resource === 'messages' && segment === 'search') {
+    if (typeof repository.searchRoomMessages !== 'function') return fail(response, requestId, 503, 'DATABASE_UNAVAILABLE', 'Room search is unavailable');
+    const query = (parsedUrl.searchParams.get('q') ?? '').trim();
+    const limitRaw = parsedUrl.searchParams.get('limit') ?? '20';
+    const beforeRaw = parsedUrl.searchParams.get('before_seq');
+    if (query.length < ROOM_SEARCH_QUERY_MIN || query.length > ROOM_SEARCH_QUERY_MAX) {
+      return fail(response, requestId, 400, 'INVALID_REQUEST', `q must be ${ROOM_SEARCH_QUERY_MIN}-${ROOM_SEARCH_QUERY_MAX} characters`);
+    }
+    if (!/^\d+$/.test(limitRaw)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'limit must be a positive integer');
+    if (beforeRaw !== null && (!/^\d+$/.test(beforeRaw) || BigInt(beforeRaw) > ROOM_SEQ_MAX)) {
+      return fail(response, requestId, 400, 'INVALID_REQUEST', 'before_seq must be a non-negative room sequence');
+    }
+    const limit = Math.min(Math.max(Number(limitRaw), 1), ROOM_SEARCH_LIMIT_MAX);
+    const found = await repository.searchRoomMessages(roomId, query, beforeRaw === null ? null : BigInt(beforeRaw), limit + 1);
+    const hasMore = found.length > limit;
+    const items = found.slice(0, limit).map((row) => {
+      const text = row.envelope.body.text;
+      const matchAt = text.toLocaleLowerCase('en-US').indexOf(query.toLocaleLowerCase('en-US'));
+      const start = Math.max(0, matchAt - 80);
+      const end = Math.min(text.length, start + 240);
+      return {
+        room_seq: row.room_seq,
+        message_id: row.message_id,
+        display_name: row.display_name,
+        sender_endpoint_id: row.envelope.sender.endpoint_id,
+        created_at: row.envelope.created_at,
+        snippet: `${start > 0 ? '…' : ''}${text.slice(start, end)}${end < text.length ? '…' : ''}`,
+        ...(row.envelope.body.thread_root_id ? { thread_root_id: row.envelope.body.thread_root_id } : {}),
+      };
+    });
+    return send(response, requestId, 200, {
+      code: 'OK', items, has_more: hasMore,
+      next_before_seq: hasMore ? items.at(-1)?.room_seq ?? null : null,
+    });
+  }
+
   if (request.method === 'GET' && resource === 'messages' && !segment) {
+    const beforeRaw = parsedUrl.searchParams.get('before_seq');
+    if (beforeRaw !== null) {
+      if (typeof repository.listRoomMessagesBefore !== 'function') return fail(response, requestId, 503, 'DATABASE_UNAVAILABLE', 'Older room history is unavailable');
+      const limitRaw = parsedUrl.searchParams.get('limit') ?? '100';
+      if (beforeRaw !== 'latest' && (!/^\d+$/.test(beforeRaw) || BigInt(beforeRaw) > ROOM_SEQ_MAX)) {
+        return fail(response, requestId, 400, 'INVALID_REQUEST', 'before_seq must be latest or a non-negative room sequence');
+      }
+      if (!/^\d+$/.test(limitRaw)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'limit must be a positive integer');
+      const limit = Math.min(Math.max(Number(limitRaw), 1), ROOM_HISTORY_LIMIT_MAX);
+      const beforeSeq = beforeRaw === 'latest' ? null : BigInt(beforeRaw);
+      const found = await repository.listRoomMessagesBefore(roomId, beforeSeq, limit + 1);
+      const hasOlder = found.length > limit;
+      const items = hasOlder ? found.slice(-limit) : found;
+      return send(response, requestId, 200, {
+        code: 'OK', items, has_older: hasOlder,
+        next_before_seq: hasOlder ? items[0]?.room_seq ?? null : null,
+      });
+    }
     const afterRaw = parsedUrl.searchParams.get('after_seq') ?? '0';
     const limitRaw = parsedUrl.searchParams.get('limit') ?? '100';
     if (!/^\d+$/.test(afterRaw) || !/^\d+$/.test(limitRaw)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'after_seq and limit must be non-negative integers');
     if (BigInt(afterRaw) > ROOM_SEQ_MAX) return fail(response, requestId, 400, 'INVALID_REQUEST', 'after_seq is out of range');
     const limit = Math.min(Math.max(Number(limitRaw), 1), HISTORY_LIMIT_MAX);
-    const items = await repository.listRoomMessages(roomId, BigInt(afterRaw), limit);
-    return send(response, requestId, 200, { code: 'OK', items, next_after_seq: items.at(-1)?.room_seq ?? afterRaw });
+    const found = await repository.listRoomMessages(roomId, BigInt(afterRaw), limit + 1);
+    const hasMore = found.length > limit;
+    const items = found.slice(0, limit);
+    return send(response, requestId, 200, { code: 'OK', items, has_more: hasMore, next_after_seq: items.at(-1)?.room_seq ?? afterRaw });
   }
 
   if (request.method === 'GET' && resource === 'invocations' && !segment) {

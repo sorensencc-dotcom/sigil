@@ -14,11 +14,21 @@ describe('NewRoomForm', () => {
     const { queryClient } = renderWithClient(<NewRoomForm onCreated={onCreated} />, { createRoom });
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
     await userEvent.type(screen.getByLabelText('New room name'), '  fresh  ');
+    await userEvent.type(screen.getByLabelText('Room purpose (optional)'), '  planning  ');
     await userEvent.click(screen.getByRole('button', { name: 'Create' }));
     await vi.waitFor(() => expect(onCreated).toHaveBeenCalledWith('room_9'));
-    expect(createRoom).toHaveBeenCalledWith('fresh');
+    expect(createRoom).toHaveBeenCalledWith('fresh', 'planning');
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['rooms'] });
     expect(screen.getByLabelText('New room name')).toHaveValue('');
+    expect(screen.getByLabelText('Room purpose (optional)')).toHaveValue('');
+  });
+
+  it('creates a room without a purpose', async () => {
+    const createRoom = vi.fn(async () => room);
+    renderWithClient(<NewRoomForm onCreated={() => {}} />, { createRoom });
+    await userEvent.type(screen.getByLabelText('New room name'), 'fresh');
+    await userEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await vi.waitFor(() => expect(createRoom).toHaveBeenCalledWith('fresh', undefined));
   });
 
   it('keeps Create disabled for a blank name', () => {
