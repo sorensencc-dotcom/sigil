@@ -58,7 +58,7 @@ function RoomView({ roomId, onGone, focus }: { roomId: string; onGone: () => voi
       : null;
   return (
     <div className="room">
-      <RoomHeader roomId={roomId} name={roomName} purpose={room?.description} sender={sender} onGone={onGone} />
+      <RoomHeader roomId={roomId} name={roomName} purpose={room?.description} maxAgentTurns={room?.max_agent_turns} sender={sender} onGone={onGone} />
       <StatusLine roomId={roomId} onGone={onGone} />
       <div className="room-body">
         <div className="room-main">
