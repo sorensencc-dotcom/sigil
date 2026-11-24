@@ -135,5 +135,8 @@ describe('App', () => {
     expect(window.location.pathname).toBe('/');
     const row = (await screen.findByText('look @ep')).closest('li');
     expect(row).toHaveAttribute('aria-current', 'true');
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    await userEvent.click(within(screen.getByRole('navigation', { name: 'Main navigation' })).getByRole('button', { name: 'Rooms' }));
+    expect((await screen.findByText('look @ep')).closest('li')).not.toHaveAttribute('aria-current');
   });
 });

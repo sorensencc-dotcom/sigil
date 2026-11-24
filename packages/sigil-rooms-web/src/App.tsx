@@ -107,12 +107,13 @@ function Shell({ theme, onThemeChange }: { theme: string; onThemeChange: (next: 
   const navigate = useCallback((path: string) => {
     window.history.pushState(null, '', path);
     setPathname(path);
+    setFocus(null);
     setDrawerOpen(false);
   }, []);
   const openMention = useCallback((mention: Mention) => {
+    navigate('/');
     setRoomId(mention.conversation_id);
     setFocus({ message_id: mention.message_id, room_seq: mention.room_seq });
-    navigate('/');
   }, [navigate]);
   useEffect(() => {
     const syncPathname = () => setPathname(window.location.pathname);
