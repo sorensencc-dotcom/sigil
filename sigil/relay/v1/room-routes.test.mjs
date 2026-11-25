@@ -75,7 +75,7 @@ test('GET /v1/rooms/:id/approvals exposes the ceremony only to the named approve
     });
     const hidden = await call(port, 'GET', `/v1/rooms/${roomId}/approvals`, 'Bearer chris-web');
     assert.equal(hidden.status, 200);
-    assert.equal(hidden.body.items[0].approver_name, 'ep_web');
+    assert.equal(hidden.body.items[0].approver_name, 'usr_chris');
     assert.equal(hidden.body.items[0].approval_url, 'http://relay.test/approve?challenge=ch_1');
   }, { relayOrigin: 'http://relay.test' });
 });
