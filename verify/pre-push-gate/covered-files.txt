@@ -5,3 +5,4 @@ sigil/scripts/prepush-is-docs-only.mjs
 sigil/scripts/prepush-preflight.mjs
 sigil/scripts/install-git-hooks.mjs
 .github/workflows/ci.yml
+sigil/scripts/ci-changes.mjs
