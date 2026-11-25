@@ -109,6 +109,15 @@ test('Stop during the run aborts the CLI and posts nothing', async () => {
   assert.equal(relay.failed.length, 0);
 });
 
+test('Stop keeps the partial output the CLI wrote, in the outcome only', async () => {
+  const relay = fakeRelay({ runningAfterFirstPoll: [] });
+  const cli = { name: 'claude', run: ({ signal }) => new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error('x'), { code: 'CLI_CANCELLED', partial: 'half an ans' })))) };
+  const { instance } = bridge(relay, cli);
+  assert.deepEqual(await instance.handle({ envelope: trigger }), { outcome: 'cancelled', partial: 'half an ans' });
+  assert.equal(relay.sent.length, 0);
+  assert.equal(relay.failed.length, 0);
+});
+
 test('a CLI failure fails the invocation', async () => {
   const relay = fakeRelay();
   const { instance } = bridge(relay, { name: 'claude', run: async () => { throw Object.assign(new Error('boom'), { code: 'CLI_FAILED' }); } });

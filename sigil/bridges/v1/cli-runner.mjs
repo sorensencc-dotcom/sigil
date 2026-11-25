@@ -55,7 +55,8 @@ export function runCli({ command, args = [], input = '', cwd, env, timeoutMs = D
       signal?.removeEventListener('abort', onAbort);
       fn(value);
     };
-    const stop = (code, message) => { killTree(child); finish(reject, cliError(code, message)); };
+    // Keep what the CLI wrote before it was killed; a cancelled turn must not lose it.
+    const stop = (code, message) => { killTree(child); finish(reject, Object.assign(cliError(code, message), { partial: stdout })); };
     const onAbort = () => stop('CLI_CANCELLED', 'CLI run cancelled');
     const timer = setTimeout(() => stop('CLI_TIMEOUT', `CLI did not finish within ${timeoutMs} ms`), timeoutMs);
     signal?.addEventListener('abort', onAbort, { once: true });
