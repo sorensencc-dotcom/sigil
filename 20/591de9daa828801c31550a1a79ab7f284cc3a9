@@ -1,0 +1,19 @@
+sigil/relay/v1/room-routes.test.mjs
+  s_b2b3759b1bc72b::t_0ffb75a5652045 78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "20591de9daa828801c31550a1a79ab7f284cc3a9",
+  "prompts": {},
+  "sessions": {
+    "s_b2b3759b1bc72b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8daa8636-4b85-4405-9441-d632b3f553c9",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
