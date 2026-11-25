@@ -12,6 +12,12 @@ const root = import.meta.filename
 const watchdog = join(root, 'scripts', 'chief-watchdog.ps1');
 const setup = join(root, 'scripts', 'setup-chief-daemon.ps1');
 
+// These tests drive real PowerShell. Skip them where pwsh is not installed, but never in CI,
+// where a missing pwsh must fail the run instead of silently dropping coverage.
+const hasPwsh = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', 'exit 0'], { encoding: 'utf8' }).status === 0;
+if (!hasPwsh && process.env.CI) throw new Error('pwsh is required in CI for tests/chief-watchdog.test.mjs');
+const needsPwsh = hasPwsh ? {} : { skip: 'pwsh is not installed' };
+
 function runPowerShell(file, args, timeout = 30_000) {
   return spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file, ...args], {
     cwd: root, encoding: 'utf8', timeout,
@@ -48,7 +54,7 @@ async function teardownWatchdog(child, pids, pidFile) {
   destroyStdio(child);
 }
 
-test('watchdog restarts a killed daemon, probes its room socket, and redacts credentials in audit events', async () => {
+test('watchdog restarts a killed daemon, probes its room socket, and redacts credentials in audit events', needsPwsh, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'sigil-chief-watchdog-'));
   const daemon = join(dir, 'fake-daemon.mjs');
   const pidFile = join(dir, 'chief.pid');
@@ -109,7 +115,7 @@ test('watchdog restarts a killed daemon, probes its room socket, and redacts cre
   }
 });
 
-test('setup script plans a logon task that runs the watchdog without embedding secrets', () => {
+test('setup script plans a logon task that runs the watchdog without embedding secrets', needsPwsh, () => {
   assert.match(readFileSync(watchdog, 'utf8'), /\$IntervalSeconds = 60/);
   const res = runPowerShell(setup, ['-WhatIf']);
   const out = `${res.stdout}\n${res.stderr}`;
@@ -119,7 +125,7 @@ test('setup script plans a logon task that runs the watchdog without embedding s
   assert.doesNotMatch(out, /TOKEN|SECRET|Bearer/i);
 });
 
-test('setup script plans unregistration with -WhatIf', () => {
+test('setup script plans unregistration with -WhatIf', needsPwsh, () => {
   const res = runPowerShell(setup, ['-Unregister', '-WhatIf']);
   const out = `${res.stdout}\n${res.stderr}`;
   assert.equal(res.status, 0, out);

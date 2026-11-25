@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import { acceptEnvelopeAsync } from './accept-envelope.mjs';
 
 test('accept logs relay.accept_received before any repository call and accept_done after', async (t) => {
+  // npm test sets SIGIL_HOP_LOG=0 (sigil/scripts/test-quiet.mjs); this test needs the lines.
+  const previous = process.env.SIGIL_HOP_LOG;
+  process.env.SIGIL_HOP_LOG = '1';
+  t.after(() => { if (previous === undefined) delete process.env.SIGIL_HOP_LOG; else process.env.SIGIL_HOP_LOG = previous; });
   const order = [];
   t.mock.method(console, 'info', (line) => order.push(JSON.parse(String(line).replace(/^sigil\.hop /, '')).hop));
   const repository = new Proxy({}, {
