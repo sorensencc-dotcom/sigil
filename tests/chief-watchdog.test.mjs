@@ -16,7 +16,7 @@ const setup = join(root, 'scripts', 'setup-chief-daemon.ps1');
 // never in CI, where a missing pwsh must fail the run instead of silently dropping coverage.
 // A pwsh that is present but hangs or exits nonzero is a broken tool, not a missing one, so it
 // fails the file everywhere rather than quietly skipping the tests.
-const probe = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', 'exit 0'], { encoding: 'utf8', timeout: 15_000 });
+const probe = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', 'exit 0'], { encoding: 'utf8', timeout: 15_000, killSignal: 'SIGKILL' });
 const hasPwsh = !probe.error && probe.status === 0;
 const missingPwsh = probe.error?.code === 'ENOENT';
 if (!hasPwsh && (!missingPwsh || process.env.CI)) {
