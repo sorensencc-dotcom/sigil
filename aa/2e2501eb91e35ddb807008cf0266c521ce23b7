@@ -1,0 +1,48 @@
+sigil/relay/v1/room-routes.mjs
+  s_31fa4656396b62::t_e8058edc08234a 145,242,254-265
+  s_b2b3759b1bc72b::t_13479f8002e253 266
+packages/sigil-rooms-web/src/rooms/Timeline.spec.tsx
+  s_31fa4656396b62::t_10c1f4cad547a1 19-30
+packages/sigil-rooms-web/src/api/client.ts
+  s_31fa4656396b62::t_10c1f4cad547a1 25
+  s_31fa4656396b62::t_e8058edc08234a 26-29,39,104-105
+  s_b2b3759b1bc72b::t_2544ac7d349d96 106
+packages/sigil-rooms-web/src/testUtils.tsx
+  s_31fa4656396b62::t_e8058edc08234a 17
+packages/sigil-rooms-web/src/rooms/Timeline.tsx
+  s_31fa4656396b62::t_e8058edc08234a 1,63-67,359-364
+  s_b2b3759b1bc72b::t_c9432434927d06 365
+sigil/relay/v1/room-routes.test.mjs
+  s_31fa4656396b62::t_c44acc39195c18 79
+  s_31fa4656396b62::t_10c1f4cad547a1 68-78,80-82
+sigil/relay/v1/postgres-repository.mjs
+  s_31fa4656396b62::t_e8058edc08234a 508-527
+sigil/relay/v1/http-server.mjs
+  s_31fa4656396b62::t_e8058edc08234a 767
+sigil/cli/memory-repository.mjs
+  s_31fa4656396b62::t_10c1f4cad547a1 983-993
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "aa2e2501eb91e35ddb807008cf0266c521ce23b7",
+  "prompts": {},
+  "sessions": {
+    "s_31fa4656396b62": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a210e6-c94d-7531-ba3f-f90c94335569",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_b2b3759b1bc72b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8daa8636-4b85-4405-9441-d632b3f553c9",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
