@@ -764,7 +764,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     }
     try {
       if (await handleContactsRoute({ request, response, parsedUrl, principal, repository, requestId, now, readBody, isAgent: async (p) => (await lookupTrustedEntry(repository, registry, p.endpoint_id))?.kind === 'agent' })) return;
-      if (await handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream, inboxDepthLimit: DEFAULT_INBOX_DEPTH_LIMIT, systemIdentity: roomSystemIdentity, logger, ticketStore, humanSigner, buildAcceptOptions })) return;
+      if (await handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream, inboxDepthLimit: DEFAULT_INBOX_DEPTH_LIMIT, systemIdentity: roomSystemIdentity, logger, ticketStore, humanSigner, buildAcceptOptions, resolveRelayOrigin })) return;
     } catch (error) {
       logger?.error?.('room route failed', error);
       if (response.headersSent) return response.end();

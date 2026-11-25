@@ -142,7 +142,7 @@ async function postHumanMessage({ response, requestId, now, principal, repositor
   return send(response, requestId, result.body.duplicate ? 200 : 201, { code: 'OK', message_id: result.body.message_id, room_seq: row?.room_seq ?? null });
 }
 
-export async function handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream = null, inboxDepthLimit, systemIdentity = null, logger = null, ticketStore = null, humanSigner = null, buildAcceptOptions = null }) {
+export async function handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream = null, inboxDepthLimit, systemIdentity = null, logger = null, ticketStore = null, humanSigner = null, buildAcceptOptions = null, resolveRelayOrigin }) {
   const path = parsedUrl.pathname;
   // notifyRoomHumans needs a real client: with client null its member read
   // throws in Postgres mode and no room.updated frame goes out.
@@ -239,7 +239,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     return send(response, requestId, 200, { code: 'OK', items: await repository.listRoomsForEndpoint(principal.endpoint_id) });
   }
 
-  const match = path.match(/^\/v1\/rooms\/([^/]+)\/(members|messages|invocations|stop|ack|rename|continue|agent-invites)(?:\/([^/]+)(?:\/(remove|response-mode|invokable-by|revoke))?)?$/);
+  const match = path.match(/^\/v1\/rooms\/([^/]+)\/(members|messages|invocations|stop|ack|rename|continue|agent-invites|approvals)(?:\/([^/]+)(?:\/(remove|response-mode|invokable-by|revoke))?)?$/);
   if (!match) return false;
   const [, roomId, resource, segment, removeAction] = match;
   // Browsers percent-encode '@' in endpoint IDs (ep_claude%40local); the pathname arrives undecoded.
@@ -250,6 +250,19 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
   const action = removeAction;
   const access = await membership(repository, roomId, principal);
   if (!access) return fail(response, requestId, 404, 'ROOM_NOT_FOUND', 'Room not found');
+
+  if (request.method === 'GET' && resource === 'approvals' && !segment) {
+    const approvals = await repository.listPendingRoomApprovals?.(roomId, now) ?? [];
+    const origin = resolveRelayOrigin?.();
+    const items = approvals.map(({ challenge_id, approver_id, approver_name }) => {
+      // The ceremony URL itself reveals challenge details, so only send it to the approver.
+      const url = origin && principal.human_id === approver_id ? new URL('/approve', origin) : null;
+      url?.searchParams.set('challenge', challenge_id);
+      return { approver_name, approval_url: url?.href ?? null };
+    });
+    response.setHeader('cache-control', 'no-store');
+    return send(response, requestId, 200, { code: 'OK', items });
+  }
 
   if (resource === 'agent-invites') {
     if ((await isAgentCaller(repository, registry, principal)) || !principal?.human_id || !MANAGER_ROLES.has(access.member.role)) return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', 'Only room managers can manage agent invites');

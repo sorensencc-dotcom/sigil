@@ -65,6 +65,21 @@ test('GET /v1/mentions returns a cursor for the next mention page', async () => 
   });
 });
 
+test('GET /v1/rooms/:id/approvals exposes the ceremony only to the named approver', async () => {
+  await withServer(async (port, repository) => {
+    const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'approvals' })).body.room.conversation_id;
+    await repository.createApprovalChallenge({
+      id: 'ch_1', endpointId: 'ep_web', actionHash: 'hash', webauthnChallenge: 'challenge',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(), conversationId: roomId,
+      envelope: { message_id: 'm1' },
+    });
+    const hidden = await call(port, 'GET', `/v1/rooms/${roomId}/approvals`, 'Bearer chris-web');
+    assert.equal(hidden.status, 200);
+    assert.equal(hidden.body.items[0].approver_name, 'ep_web');
+    assert.equal(hidden.body.items[0].approval_url, 'http://relay.test/approve?challenge=ch_1');
+  }, { relayOrigin: 'http://relay.test' });
+});
+
 test('GET /v1/mentions rejects a malformed cursor before querying the repository', async () => {
   let queried = false;
   const response = { status: 0, payload: null, setHeader() {}, writeHead(status) { this.status = status; }, end(text) { this.payload = text ? JSON.parse(text) : null; } };

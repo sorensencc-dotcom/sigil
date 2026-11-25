@@ -22,6 +22,11 @@ export interface ClientOptions {
   fetchImpl?: typeof fetch;
 }
 
+export interface RoomApproval {
+  approver_name: string;
+  approval_url: string | null;
+}
+
 export interface ApiClient {
   listRooms(): Promise<Room[]>;
   createRoom(name: string, description?: string): Promise<Room>;
@@ -31,6 +36,7 @@ export interface ApiClient {
   sendMessage(roomId: string, text: string, idempotencyKey: string, threadRootId?: string, mentions?: string[]): Promise<SendResult>;
   continueThread(roomId: string, threadRootId: string): Promise<SendResult>;
   listMembers(roomId: string): Promise<Member[]>;
+  listApprovals(roomId: string): Promise<RoomApproval[]>;
   listAgentRoomInvites(roomId: string): Promise<AgentRoomInvite[]>;
   createAgentRoomInvite(roomId: string, endpointId: string): Promise<CreatedAgentRoomInvite>;
   revokeAgentRoomInvite(roomId: string, inviteId: string): Promise<void>;
@@ -94,6 +100,9 @@ export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized
   return {
     async listRooms() {
       return (await request<{ items: Room[] }>('GET', '/v1/rooms')).items;
+    },
+    async listApprovals(roomId) {
+      return (await request<{ items: RoomApproval[] }>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/approvals`)).items;
     },
     async createRoom(name, description) {
       return (await request<{ room: Room }>('POST', '/v1/rooms', { name, ...(description !== undefined ? { description } : {}) })).room;
