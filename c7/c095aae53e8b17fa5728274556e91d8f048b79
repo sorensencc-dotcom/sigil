@@ -1,0 +1,62 @@
+sigil/relay/v1/room-routes.mjs
+  s_b2b3759b1bc72b::t_455c041dae4517 254-271
+  s_b2b3759b1bc72b::t_f68509d206e780 242
+packages/sigil-rooms-web/src/App.tsx
+  s_b2b3759b1bc72b::t_86fb4f579e2fc7 17,97
+packages/sigil-rooms-web/src/api/client.ts
+  s_b2b3759b1bc72b::t_7e3547fb08e23e 1,45,177-179
+packages/sigil-rooms-web/src/rooms/EnvelopeInspector.spec.tsx
+  s_b2b3759b1bc72b::t_8c0a92c8d076ba 8,88-118
+packages/sigil-rooms-web/src/rooms/EnvelopeInspector.tsx
+  s_b2b3759b1bc72b::t_4e3bd7e19646b2 2,15-29,33,35,38-43
+packages/sigil-rooms-web/src/rooms/TrustSummary.tsx
+  s_b2b3759b1bc72b::t_7fa2f20c4dcabc 16
+packages/sigil-rooms-web/src/rooms/VerifiedEnvelopeInspector.spec.tsx
+  s_b2b3759b1bc72b::t_21efd47828feaa 1-41
+packages/sigil-rooms-web/src/rooms/useVerification.ts
+  s_15e4042d2dc28e::t_731f140a9f2193 1-36
+packages/sigil-rooms-web/src/styles.css
+  s_b2b3759b1bc72b::t_74663d792fde30 12,253-256
+packages/sigil-rooms-web/src/verify/pins.ts
+  s_b2b3759b1bc72b::t_22675c35d99e95 1-24
+packages/sigil-rooms-web/src/verify/verifyRow.spec.ts
+  s_b2b3759b1bc72b::t_2c6ba4b216c3f2 1-75
+packages/sigil-rooms-web/src/verify/verifyRow.ts
+  s_b2b3759b1bc72b::t_23d2aa998fadc3 1-95
+sigil/relay/v1/room-routes.manage.test.mjs
+  s_b2b3759b1bc72b::t_6e42b92b470da9 2,391-409
+packages/sigil-rooms-web/src/rooms/VerifiedEnvelopeInspector.tsx
+  s_f39c5e8fd144b0::t_96e6e351bf7379 1-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c7c095aae53e8b17fa5728274556e91d8f048b79",
+  "prompts": {},
+  "sessions": {
+    "s_15e4042d2dc28e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a210e6-c94d-7b82-bed0-948e83f5ab99",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_b2b3759b1bc72b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8daa8636-4b85-4405-9441-d632b3f553c9",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_f39c5e8fd144b0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a210e8-240d-73f0-9f9c-85aae5aadb37",
+        "model": "unknown"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
