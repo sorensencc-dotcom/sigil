@@ -11,7 +11,7 @@ session doesn't burn a retro write on zero new work. If counts differ, or no
 same-day retro exists yet, exits 0 (PROCEED).
 
 Also warns when the newest dated retro in the directory is at least
--MaxAgeDays old (default 7, matching retro-full-audit.yml).
+-MaxAgeDays old (default 7).
 
 .PARAMETER RetroDir
 Directory containing dated retro JSON files. Defaults to .context/retros.
@@ -34,7 +34,7 @@ if ($newest) {
   $newestDate = [DateTime]::ParseExact($newest.BaseName.Substring(0, 10), 'yyyy-MM-dd', $null)
   $ageDays = ([DateTime]::ParseExact($today, 'yyyy-MM-dd', $null) - $newestDate).Days
   if ($ageDays -ge $MaxAgeDays) {
-    Write-Host "WARN: newest retro $($newest.Name) is $ageDays days old (limit $MaxAgeDays); retro-full-audit fails past $MaxAgeDays."
+    Write-Host "WARN: newest retro $($newest.Name) is $ageDays days old (limit $MaxAgeDays)."
   }
 }
 

@@ -26,7 +26,7 @@ Sigil (`@sorensencc/sigil`) is a governed, cryptographically signed task relay a
 - `scripts/windows/`: Windows stack start and scheduled-task registration (see `scripts/windows/README.md`).
 - `.github/workflows/`: `ci.yml`, `release.yml`, `wiki-sync.yml`.
 - `.trail/learnings/`: teammate notes about gotchas (pre-push hook, Windows launcher, reapers, and so on). Read the ones relevant to your task.
-- Other root docs: `README.md`, `STATUS.md`, `TODOS.md`, `CHANGELOG.md`, `AGENTS.md`.
+- Other root docs: `README.md`, `STATUS.md` (recent entries only; older ones in `docs/status-archive/`), `TODOS.md`, `CHANGELOG.md`, `AGENTS.md`. Retros: `docs/retro.md`.
 
 ## Build and test
 
@@ -46,6 +46,9 @@ There is no build step for the main package. All scripts below exist in `package
 - `npm run wiki:sync`, `wiki:audit`, `wiki:verify-diagrams`, `wiki:record-diagrams`: maintain `docs/wiki/`.
 - `npm run prepare`: sets `core.hooksPath` to the tracked `.githooks/` directory. It runs automatically on `npm install`.
 - Pre-push is tiered by changed paths (`sigil/scripts/prepush-tier.mjs`): docs-only runs nothing, `packages/sigil-rooms-web/**` runs the web typecheck and vitest, everything else (and an unknown range) runs the RAM preflight, `audit:jcs` and `npm test`. A mixed push runs both. Live Postgres, Windows, and TLC stay in CI; run `npm run test:live:local` yourself for database-layer changes. `SIGIL_PREPUSH_FULL=1` forces every local gate. Model: `verify/pre-push-gate`.
+
+- CI is path-filtered (`sigil/scripts/ci-changes.mjs`, model in `verify/pre-push-gate`): the `changes` job takes the union of gates over every touched area. The four required checks (`Linux - Node 22.x/24.x`, `Windows - Node 22.x/24.x`) always run and skip only their steps; a job-level `if` on them would leave the PR waiting forever. See `.claude/skills/verify-pre-push-gate/SKILL.md` before changing `ci.yml` or the pre-push gate.
+- `npm test` loads `sigil/scripts/test-quiet.mjs` (sets `SIGIL_HOP_LOG=0`). Run `SIGIL_HOP_LOG=1 npm test` to see hop lines. Tests that need `pwsh` skip where it is missing and fail in CI.
 
 Run a single test file with `node --test path/to/file.test.mjs`.
 
@@ -71,6 +74,7 @@ Project skills live in `.claude/skills/`:
 - `.claude/skills/verify-suspend-pick/SKILL.md`: use when a change touches router pick vs human suspension lock order. It checks `verify/suspend-pick`.
 - `.claude/skills/verify-floor-warden-watch/SKILL.md`: use when a change touches Floor Warden invocation-watch. It exhaustively walks `applyWatchEvent` in `verify/floor-warden-watch`.
 - `.claude/skills/verify-ag-ui-approval/SKILL.md`: use when a change touches the approval risk gate, challenge persistence, AG-UI projection, or AG-UI run route. It model-checks `verify/ag-ui-approval` with TLC.
+- `.claude/skills/verify-pre-push-gate/SKILL.md`: use when a change touches the pre-push gate (`.githooks/`, `sigil/scripts/prepush-*.mjs`) or adds CI path filters to `ci.yml`. It checks `verify/pre-push-gate`.
 
 Runbooks and guides:
 
