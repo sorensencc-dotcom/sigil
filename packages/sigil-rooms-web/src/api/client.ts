@@ -1,3 +1,4 @@
+import type { RelayKey } from '../verify/verifyRow';
 import type { AckResult, AgentRoomInvite, Contact, CreatedAgentRoomInvite, Session, HistoryPage, Invocation, InvokableBy, Member, MentionPage, ResponseMode, Room, RoomSearchPage, SendResult, StopResult, TicketResult } from './types';
 
 export class ApiError extends Error {
@@ -47,6 +48,7 @@ export interface ApiClient {
   stopRoom(roomId: string): Promise<StopResult>;
   ack(roomId: string, upToRoomSeq: string): Promise<AckResult>;
   listMentions(cursor?: string): Promise<MentionPage>;
+  roomKeys(roomId: string, endpointId: string): Promise<RelayKey[]>;
   wsTicket(): Promise<TicketResult>;
   me(): Promise<Session>;
   listContacts(): Promise<Contact[]>;
@@ -180,6 +182,9 @@ export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized
     async listMentions(cursor) {
       const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
       return request<MentionPage>('GET', `/v1/mentions${query}`);
+    },
+    async roomKeys(roomId, endpointId) {
+      return (await request<{ keys: RelayKey[] }>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/keys/${encodeURIComponent(endpointId)}`)).keys;
     },
     wsTicket() {
       return request<TicketResult>('POST', '/v1/rooms/ws-ticket');

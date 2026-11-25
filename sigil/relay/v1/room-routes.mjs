@@ -239,7 +239,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     return send(response, requestId, 200, { code: 'OK', items: await repository.listRoomsForEndpoint(principal.endpoint_id) });
   }
 
-  const match = path.match(/^\/v1\/rooms\/([^/]+)\/(members|messages|invocations|stop|ack|rename|continue|agent-invites|approvals)(?:\/([^/]+)(?:\/(remove|response-mode|invokable-by|revoke))?)?$/);
+  const match = path.match(/^\/v1\/rooms\/([^/]+)\/(members|messages|invocations|stop|ack|rename|continue|agent-invites|approvals|keys)(?:\/([^/]+)(?:\/(remove|response-mode|invokable-by|revoke))?)?$/);
   if (!match) return false;
   const [, roomId, resource, segment, removeAction] = match;
   // Browsers percent-encode '@' in endpoint IDs (ep_claude%40local); the pathname arrives undecoded.
@@ -262,6 +262,24 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     });
     response.setHeader('cache-control', 'no-store');
     return send(response, requestId, 200, { code: 'OK', items });
+  }
+
+  // Public signing keys of one endpoint, for in-browser signature verification. Room members only.
+  // The key is the raw 32-byte Ed25519 key (base64url) so a browser can import it as-is.
+  if (resource === 'keys') {
+    if (request.method !== 'GET' || !segment) return fail(response, requestId, 405, 'METHOD_NOT_ALLOWED', 'Use GET /keys/{endpoint_id}');
+    const entry = await lookupTrustedEntry(repository, registry, targetEndpointId);
+    if (!entry?.keys) return fail(response, requestId, 404, 'ENDPOINT_NOT_FOUND', 'Endpoint not found');
+    const keys = [...entry.keys.values()].map((key) => ({
+      key_id: key.key_id,
+      algorithm: 'Ed25519',
+      public_key: (typeof key.public_key?.export === 'function' ? key.public_key : crypto.createPublicKey(key.public_key)).export({ type: 'spki', format: 'der' }).subarray(-32).toString('base64url'),
+      status: key.status,
+      valid_from: key.valid_from ?? null,
+      valid_until: key.valid_until ?? null,
+    }));
+    response.setHeader('cache-control', 'no-store');
+    return send(response, requestId, 200, { code: 'OK', endpoint_id: targetEndpointId, keys });
   }
 
   if (resource === 'agent-invites') {

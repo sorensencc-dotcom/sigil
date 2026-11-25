@@ -36,7 +36,7 @@ describe('RoomHeader', () => {
     const summary = screen.getByRole('region', { name: 'Room trust summary' });
     expect(summary).toHaveTextContent('What is signed');
     expect(summary).toHaveTextContent('What the relay can see');
-    expect(summary).toHaveTextContent('Not yet verified');
+    expect(summary).toHaveTextContent('check its signature in this browser');
     expect(summary).toHaveTextContent('relay-custodial key');
     expect(screen.getByRole('button', { name: 'Trust' })).toHaveAttribute('aria-expanded', 'true');
   });

@@ -13,7 +13,7 @@ export function TrustSummary() {
         </div>
         <div>
           <dt>What this browser verified</dt>
-          <dd>Not yet verified. This browser has not checked signatures against a pinned key. A key supplied by the relay alone cannot protect against a compromised relay.</dd>
+          <dd>Open a row's envelope to check its signature in this browser. A match with a key you pinned proves who signed. A match with a key the relay served proves only that the stored bytes are intact, because a compromised relay could serve a key of its own.</dd>
         </div>
       </dl>
     </section>
