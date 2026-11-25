@@ -1,0 +1,25 @@
+sigil/bridges/v1/cli-runner.mjs
+  s_b2b3759b1bc72b::t_32c267b1574d5b 58-59
+sigil/bridges/v1/cli-runner.test.mjs
+  s_b2b3759b1bc72b::t_bacf1e4d6a1121 52-63
+sigil/bridges/v1/room-bridge.mjs
+  s_b2b3759b1bc72b::t_ae2a0b666b6fe0 146-150,165,167
+sigil/bridges/v1/room-bridge.test.mjs
+  s_b2b3759b1bc72b::t_aa1c5e01511ace 112-120
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3bb904379928701e7815ec9b19945ab7d8834073",
+  "prompts": {},
+  "sessions": {
+    "s_b2b3759b1bc72b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8daa8636-4b85-4405-9441-d632b3f553c9",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
