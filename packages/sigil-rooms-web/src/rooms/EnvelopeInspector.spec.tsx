@@ -5,6 +5,7 @@ import type { HistoryItem } from '../api/types';
 import type { Row } from './mergeRows';
 import { EnvelopeInspector } from './EnvelopeInspector';
 import { RowView } from './RowView';
+import type { Verification } from './useVerification';
 
 const SIGNED = '{ "body": { "text": "hi" }, "message_id": "m1" }';
 
@@ -82,5 +83,36 @@ describe('EnvelopeInspector', () => {
     render(<EnvelopeInspector item={rowOf().item!} onClose={onClose} />);
     await userEvent.click(screen.getByRole('button', { name: 'Close envelope' }));
     expect(onClose).toHaveBeenCalledOnce();
+  });
+});
+
+describe('EnvelopeInspector verification states', () => {
+  const base = { pinned: false, relayKey: null, pin: () => {}, unpin: () => {} };
+  const show = (verification: Partial<Verification>) => render(<EnvelopeInspector item={rowOf().item!} onClose={() => {}} verification={{ ...base, result: null, ...verification }} />);
+
+  it('names the relay anchor and offers a pin, without the verified style', async () => {
+    const pin = vi.fn();
+    show({ result: { state: 'relay', keyId: 'key_ada_1' }, pin });
+    expect(screen.getByText("Matches the relay's key")).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Envelope' })).toHaveAttribute('data-trust', 'relay-key');
+    await userEvent.click(screen.getByRole('button', { name: 'Pin this key' }));
+    expect(pin).toHaveBeenCalledOnce();
+  });
+
+  it('claims verified only for a pinned match', () => {
+    show({ result: { state: 'pinned', keyId: 'key_ada_1' }, pinned: true });
+    expect(screen.getByText('Matches your pinned key')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Envelope' })).toHaveAttribute('data-trust', 'verified');
+    expect(screen.queryByText("Matches the relay's key")).toBeNull();
+    expect(screen.getByRole('button', { name: 'Unpin key' })).toBeInTheDocument();
+  });
+
+  it('shows failure and unsupported distinctly', () => {
+    const { unmount } = show({ result: { state: 'failed', reason: 'bad' } });
+    expect(screen.getByText('Signature check failed')).toBeInTheDocument();
+    unmount();
+    show({ result: { state: 'unsupported' } });
+    expect(screen.getByText("Can't verify in this browser")).toBeInTheDocument();
+    expect(document.querySelector('[data-trust="failed"]')).toBeNull();
   });
 });

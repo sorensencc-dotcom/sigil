@@ -14,7 +14,7 @@ import { MentionsView } from './pages/MentionsView';
 import { SettingsPage } from './pages/SettingsPage';
 import type { Mention } from './api/types';
 import { Composer } from './rooms/Composer';
-import { EnvelopeInspector } from './rooms/EnvelopeInspector';
+import { VerifiedEnvelopeInspector } from './rooms/VerifiedEnvelopeInspector';
 import { RoomHeader } from './rooms/RoomHeader';
 import { RoomList } from './rooms/RoomList';
 import { StatusLine } from './rooms/StatusLine';
@@ -94,7 +94,7 @@ function RoomView({ roomId, onGone, focus }: { roomId: string; onGone: () => voi
         ) : null}
         {inspectingEnvelope ? (
           <aside className="envelope-drawer" id="envelope-drawer" aria-label="Envelope inspector">
-            <EnvelopeInspector item={inspectingEnvelope} onClose={() => setInspectingEnvelope(null)} />
+            <VerifiedEnvelopeInspector roomId={roomId} item={inspectingEnvelope} onClose={() => setInspectingEnvelope(null)} />
           </aside>
         ) : null}
       </div>

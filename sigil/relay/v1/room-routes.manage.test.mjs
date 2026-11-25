@@ -1,4 +1,5 @@
 import test from 'node:test';
+import crypto from 'node:crypto';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createRelayServer } from './http-server.mjs';
@@ -386,4 +387,23 @@ test('create room: without --room-human-identity nobody creates rooms (503 NO_OP
     const refused = await call(port, 'POST', '/v1/rooms', 'Bearer web', { name: 'no-operator' });
     assert.deepEqual([refused.status, refused.body.code], [503, 'NO_OPERATOR_IDENTITY']);
   });
+});
+
+test('keys: a member reads an endpoint public key as raw base64url; non-members get 404, bad targets 404', async () => {
+  const { publicKey } = crypto.generateKeyPairSync('ed25519');
+  const raw = publicKey.export({ type: 'spki', format: 'der' }).subarray(-32).toString('base64url');
+  const keyed = new Map(registry);
+  keyed.set('ep_alice', { endpoint_id: 'ep_alice', owner_id: 'usr_chris', status: 'active', kind: 'human', key_id: 'key_alice_1', public_key: publicKey });
+  const repository = createMemoryRepository({ registry: keyed });
+  const server = createRelayServer({ registry: keyed, repository, stream: { notifyRoom: () => true }, humanSigner, authenticate: async (request) => principals[request.headers.authorization] ?? null });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const port = server.address().port;
+    const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer web', { name: 'keys' })).body.room.conversation_id;
+    const ok = await call(port, 'GET', `/v1/rooms/${roomId}/keys/ep_alice`, 'Bearer web');
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.deepEqual(ok.body.keys.map(({ key_id, algorithm, public_key }) => ({ key_id, algorithm, public_key })), [{ key_id: 'key_alice_1', algorithm: 'Ed25519', public_key: raw }]);
+    assert.equal((await call(port, 'GET', `/v1/rooms/${roomId}/keys/ep_alice`, 'Bearer stranger')).status, 404);
+    assert.equal((await call(port, 'GET', `/v1/rooms/${roomId}/keys/ep_nobody`, 'Bearer web')).status, 404);
+  } finally { await new Promise((resolve) => server.close(resolve)); }
 });
