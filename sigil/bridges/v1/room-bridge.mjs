@@ -143,6 +143,11 @@ export function createRoomBridge({ identity, relay, outbox, cli, sessions, pollI
     };
 
     const controller = new AbortController();
+    // A stopped turn keeps whatever the CLI had printed; only the outcome carries it.
+    const cancelled = (error) => {
+      const partial = typeof error?.partial === 'string' ? error.partial.slice(0, TEXT_MAX) : '';
+      return partial ? { outcome: 'cancelled', partial } : { outcome: 'cancelled' };
+    };
     const watcher = setInterval(async () => {
       try {
         const current = await runningFor(roomId);
@@ -157,9 +162,9 @@ export function createRoomBridge({ identity, relay, outbox, cli, sessions, pollI
       try {
         turn = await runTurn(firstSessionId, await contextPromise);
       } catch (error) {
-        if (controller.signal.aborted || error.code === 'CLI_CANCELLED') return { outcome: 'cancelled' };
+        if (controller.signal.aborted || error.code === 'CLI_CANCELLED') return cancelled(error);
         if (!replay && resumeId && error.code === 'CLI_SESSION_LOST') {
-          try { turn = await runTurn(null, await threadContext(roomId, threadRootId, '0')); } catch (retryError) { if (controller.signal.aborted || retryError.code === 'CLI_CANCELLED') return { outcome: 'cancelled' }; return fail(roomId, invocation, retryError.code ?? 'CLI_FAILED'); }
+          try { turn = await runTurn(null, await threadContext(roomId, threadRootId, '0')); } catch (retryError) { if (controller.signal.aborted || retryError.code === 'CLI_CANCELLED') return cancelled(retryError); return fail(roomId, invocation, retryError.code ?? 'CLI_FAILED'); }
         } else {
           return fail(roomId, invocation, error.code ?? 'CLI_FAILED');
         }

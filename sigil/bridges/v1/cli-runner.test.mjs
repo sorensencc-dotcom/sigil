@@ -49,6 +49,18 @@ test('abort kills the process tree and rejects CLI_CANCELLED', async () => {
   assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, 'the CLI process is gone');
 });
 
+test('abort keeps stdout written before the kill on the CLI_CANCELLED error', async () => {
+  const { EventEmitter } = await import('node:events');
+  const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), stdin: Object.assign(new EventEmitter(), { end() {} }), pid: 1 });
+  const controller = new AbortController();
+  let killed = 0;
+  const run = runCli({ command: 'x', signal: controller.signal, spawnImpl: () => child, killTree: () => { killed += 1; } });
+  child.stdout.emit('data', Buffer.from('partial answer'));
+  controller.abort();
+  await assert.rejects(run, (error) => error.code === 'CLI_CANCELLED' && error.partial === 'partial answer');
+  assert.equal(killed, 1);
+});
+
 test('an already-aborted signal never spawns', async () => {
   const controller = new AbortController();
   controller.abort();
