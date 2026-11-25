@@ -1,10 +1,23 @@
 {
   "MC.cfg": [],
-  "MC_untracked.cfg": ["WebOnlyPushCheap"],
-  "MC_current.cfg": ["WebOnlyPushCheap"],
-  "MC_current_ram.cfg": ["RamNeverBlocksWebOnly"],
-  "MC_local_bug.cfg": ["LocalCoversLocalReq"],
+  "MC_untracked.cfg": [
+    "WebOnlyPushCheap"
+  ],
+  "MC_current.cfg": [
+    "WebOnlyPushCheap"
+  ],
+  "MC_current_ram.cfg": [
+    "RamNeverBlocksWebOnly"
+  ],
+  "MC_local_bug.cfg": [
+    "LocalCoversLocalReq"
+  ],
   "MC_local_bug_ci_holds.cfg": [],
-  "MC_ci_bug.cfg": ["NoUnverifiedMerge"],
-  "MC_both_bug.cfg": ["NoUnverifiedMerge"]
+  "MC_ci_bug.cfg": [
+    "NoUnverifiedMerge"
+  ],
+  "MC_both_bug.cfg": [
+    "NoUnverifiedMerge"
+  ],
+  "MC_ci_filter.cfg": []
 }

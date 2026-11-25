@@ -8,6 +8,7 @@ CONSTANTS
   MemGate,    \* "core_only": RAM gate only when core tests run. "always": any non-docs push
   LocalBug,   \* TRUE: classifier treats the push as web-only when ANY file is under web
   CIBug,      \* TRUE: CI path filter picks only web gates when ANY file is under web
+  CIFilter,   \* TRUE: CI uses the real path filter (ci-changes.mjs); FALSE: every job runs
   MaxRebase
 
 Areas == {"docs", "web", "core", "db"}
@@ -20,7 +21,13 @@ Req(a) == CASE a = "docs" -> {} [] a = "web" -> {"web"}
 LocalReq(a) == CASE a = "docs" -> {} [] a = "web" -> {"web"}
                  [] a = "core" -> {"core"} [] a = "db" -> {"core"}
 
+\* Gates CI runs for an area under the path filter. Core and db changes run the whole
+\* Linux/Windows/TLC set plus the web job, a superset of Req: the filter may over-run, never under-run.
+FilterReq(a) == CASE a = "docs" -> {} [] a = "web" -> {"web"}
+                  [] a = "core" -> {"core", "live", "web"} [] a = "db" -> {"core", "live", "web"}
+
 UReq(S) == UNION {Req(a) : a \in S}
+UFilter(S) == UNION {FilterReq(a) : a \in S}
 ULocal(S) == UNION {LocalReq(a) : a \in S}
 
 VARIABLES touched, phase, rangeKnown, local, ci, ciDone, ram, hook, bypass,
@@ -45,8 +52,11 @@ MemBlocks ==
        THEN ~(touched \subseteq {"docs"})
        ELSE "core" \in Tier
 
+\* CI gates for the touched set. The filter is a UNION over every touched area, never a first match.
 CIGates ==
-  IF CIBug /\ "web" \in touched THEN {"web"} ELSE UReq(touched)
+  IF CIBug /\ "web" \in touched THEN {"web"}
+  ELSE IF CIFilter THEN UFilter(touched)
+  ELSE UReq(touched)                    \* no filter: every job runs, so every needed gate runs
 
 Init ==
   /\ touched = {} /\ phase = "dev" /\ rangeKnown = TRUE
@@ -144,6 +154,10 @@ WebOnlyPushCheap ==
   (phase \in {"pushed", "merged"} /\ ~bypass /\ rangeKnown
    /\ touched \subseteq {"docs", "web"})
     => ~ranCoreLocal
+
+\* CI cost: under the path filter a docs/web-only PR never runs the core or live-Postgres jobs.
+CIWebOnlyCheap ==
+  (ciDone /\ touched \subseteq {"docs", "web"}) => ci \cap {"core", "live"} = {}
 
 \* RAM: a docs/web-only push is never held up by low RAM.
 RamNeverBlocksWebOnly ==
