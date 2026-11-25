@@ -16,6 +16,18 @@ function msg(seq: number, id: string, text: string, type = 'room.message', creat
 describe('Timeline', () => {
   beforeEach(() => localStorage.clear());
 
+  it('shows the named approver and relay ceremony link without acknowledging it as a room row', async () => {
+    const history = vi.fn(async () => ({ code: 'OK', items: [], next_after_seq: '0' }));
+    const onVisibleSeq = vi.fn();
+    renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={onVisibleSeq} onGone={() => {}} />, {
+      history,
+      listApprovals: async () => [{ approver_name: 'Ada', approval_url: 'http://relay.test/approve?challenge=ch_1' }],
+    });
+    expect(await screen.findByText('Waiting for Ada')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Open approval page/ })).toHaveAttribute('href', 'http://relay.test/approve?challenge=ch_1');
+    expect(onVisibleSeq).not.toHaveBeenCalledWith('0');
+  });
+
   it('renders messages as plain text, never as HTML', async () => {
     const history = vi.fn(async () => ({ code: 'OK', items: [msg(1, 'm1', '<img src=x onerror=alert(1)> **bold**')], next_after_seq: '1' }));
     const { container } = renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} />, { history });

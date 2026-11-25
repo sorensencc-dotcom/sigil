@@ -14,6 +14,7 @@ export function renderWithClient(ui: ReactElement, client: Partial<ApiClient>) {
       return { ...page, has_older: false };
     }),
     searchHistory: client.searchHistory ?? (async () => ({ code: 'OK', items: [], next_before_seq: null, has_more: false })),
+    listApprovals: client.listApprovals ?? (async () => []),
   };
   const wrapped = (
     <QueryClientProvider client={queryClient}>

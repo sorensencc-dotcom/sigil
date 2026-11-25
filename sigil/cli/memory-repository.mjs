@@ -980,6 +980,17 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
         };
       });
     },
+    async listPendingRoomApprovals(conversationId, now = new Date()) {
+      const at = now instanceof Date ? now.getTime() : new Date(now).getTime();
+      return [...approvalChallenges.values()]
+        .filter((row) => row.conversation_id === conversationId && row.envelope && row.status === 'pending' && Date.parse(row.expires_at) > at)
+        .map((row) => {
+          const entry = registry.get(row.endpoint_id);
+          const approverId = entry?.owner_id ?? null;
+          const human = [...registry.values()].find((candidate) => candidate.owner_id === approverId && candidate.kind === 'human' && candidate.status === 'active' && candidate.display_name);
+          return { challenge_id: row.challenge_id, approver_id: approverId, approver_name: human?.display_name || approverId || row.endpoint_id };
+        });
+    },
     async getApprovalChallengeForMessage(conversationId, messageId) {
       const row = [...approvalChallenges.values()].find((item) => item.conversation_id === conversationId && item.message_id === messageId && item.envelope);
       return row ? { id: row.challenge_id, endpointId: row.endpoint_id, actionHash: row.action_hash, expiresAt: row.expires_at, capabilities: row.capabilities, envelope: row.envelope } : null;

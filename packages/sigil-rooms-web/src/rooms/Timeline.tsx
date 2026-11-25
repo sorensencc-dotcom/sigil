@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ApiError } from '../api/client';
 import type { HistoryItem, Member, Mention, RoomSearchItem } from '../api/types';
@@ -60,6 +60,11 @@ export function Timeline({
   const sender = useSelfEndpoint();
   const { client } = useAuth();
   const queryClient = useQueryClient();
+  const { data: approvals = [] } = useQuery({
+    queryKey: ['room', roomId, 'approvals'],
+    queryFn: () => client.listApprovals(roomId),
+    refetchInterval: 5_000,
+  });
   // 409 NOTHING_TO_CONTINUE means another click or client already resumed the thread; the refetch shows it.
   const resume = useMutation({
     mutationFn: (threadRootId: string) => client.continueThread(roomId, threadRootId),
@@ -350,6 +355,13 @@ export function Timeline({
             onReply={entry.row.item && entry.row.item.envelope.message_type === 'room.message' ? () => onOpenThread(threadRootOf(entry.row.item!, byId)) : undefined}
             focused={!!focus && entry.row.item?.message_id === focus.message_id}
           />
+        ))}
+        {approvals.map(({ approver_name, approval_url }, index) => (
+          <li key={approval_url ?? index}>
+            <strong>Approval required</strong>
+            <span>Waiting for {approver_name}</span>
+            {approval_url && <a href={approval_url} target="_blank" rel="noreferrer">Open approval page (opens in a new tab)</a>}
+          </li>
         ))}
       </ul>
     </section>

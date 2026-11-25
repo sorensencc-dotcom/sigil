@@ -505,6 +505,26 @@ export class PostgresRepository {
     }));
   }
 
+  async listPendingRoomApprovals(conversationId, now) {
+    const result = await this.pool.query(
+      `SELECT ac.challenge_id, e.owner_id AS approver_id,
+              COALESCE((
+                SELECT NULLIF(human_endpoint.display_name, '') FROM endpoints human_endpoint
+                WHERE human_endpoint.owner_id = e.owner_id AND human_endpoint.kind = 'human'
+                  AND human_endpoint.status = 'active' AND human_endpoint.display_name <> ''
+                ORDER BY human_endpoint.created_at, human_endpoint.endpoint_id LIMIT 1
+              ), e.owner_id) AS approver_name
+         FROM approval_challenges ac
+         JOIN endpoints e ON e.endpoint_id = ac.endpoint_id AND e.status = 'active'
+         JOIN humans h ON h.human_id = e.owner_id AND h.status = 'active'
+         JOIN conversation_members m ON m.conversation_id = ac.conversation_id
+           AND m.endpoint_id = ac.endpoint_id AND m.removed_at IS NULL
+        WHERE ac.conversation_id = $1 AND ac.status = 'pending' AND ac.expires_at > $2
+          AND ac.envelope IS NOT NULL
+        ORDER BY ac.created_at, ac.challenge_id`, [conversationId, now]);
+    return result.rows;
+  }
+
   async getApprovalChallengeForMessage(conversationId, messageId) {
     const result = await this.pool.query(
       `SELECT challenge_id, endpoint_id, action_hash, expires_at, capabilities, envelope
