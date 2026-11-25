@@ -1,0 +1,19 @@
+docs/audits/2026-11-24-no-content-analytics.md
+  s_b2b3759b1bc72b::t_082814b08f90c5 1-107
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0ed1ffa4a159521cd613ed4207eddf3c2d698f44",
+  "prompts": {},
+  "sessions": {
+    "s_b2b3759b1bc72b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8daa8636-4b85-4405-9441-d632b3f553c9",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
