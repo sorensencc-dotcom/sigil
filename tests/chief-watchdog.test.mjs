@@ -12,10 +12,17 @@ const root = import.meta.filename
 const watchdog = join(root, 'scripts', 'chief-watchdog.ps1');
 const setup = join(root, 'scripts', 'setup-chief-daemon.ps1');
 
-// These tests drive real PowerShell. Skip them where pwsh is not installed, but never in CI,
-// where a missing pwsh must fail the run instead of silently dropping coverage.
-const hasPwsh = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', 'exit 0'], { encoding: 'utf8' }).status === 0;
-if (!hasPwsh && process.env.CI) throw new Error('pwsh is required in CI for tests/chief-watchdog.test.mjs');
+// These tests drive real PowerShell. Skip them only where pwsh is not installed (ENOENT), and
+// never in CI, where a missing pwsh must fail the run instead of silently dropping coverage.
+// A pwsh that is present but hangs or exits nonzero is a broken tool, not a missing one, so it
+// fails the file everywhere rather than quietly skipping the tests.
+const probe = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', 'exit 0'], { encoding: 'utf8', timeout: 15_000, killSignal: 'SIGKILL' });
+const hasPwsh = !probe.error && probe.status === 0;
+const missingPwsh = probe.error?.code === 'ENOENT';
+if (!hasPwsh && (!missingPwsh || process.env.CI)) {
+  const why = missingPwsh ? 'is not installed' : probe.error ? `probe failed: ${probe.error.code ?? probe.error.message}` : `probe exited ${probe.status}`;
+  throw new Error(`pwsh is required for tests/chief-watchdog.test.mjs but ${why}`);
+}
 const needsPwsh = hasPwsh ? {} : { skip: 'pwsh is not installed' };
 
 function runPowerShell(file, args, timeout = 30_000) {
