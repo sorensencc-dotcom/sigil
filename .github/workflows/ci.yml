@@ -26,8 +26,32 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
 
+  # Path filter (sigil/scripts/ci-changes.mjs, modeled in verify/pre-push-gate). Gates are the
+  # union over every touched area. The Linux and Windows jobs are required checks, so they
+  # always run and report success; only their steps are skipped. Jobs that are not required
+  # checks (web, relay-jobs-verification, formal-verification) are skipped whole.
+  changes:
+    name: Changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      core: ${{ steps.filter.outputs.core }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed paths
+        id: filter
+        env:
+          CI_EVENT_NAME: ${{ github.event_name }}
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node sigil/scripts/ci-changes.mjs
+
   test-linux:
     name: Linux - Node ${{ matrix.node-version }}
+    needs: changes
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -54,31 +78,38 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Node.js ${{ matrix.node-version }}
+        if: needs.changes.outputs.core == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
 
       - name: Install dependencies
+        if: needs.changes.outputs.core == 'true'
         run: npm ci
 
       - name: Run JCS Conformance Audit
+        if: needs.changes.outputs.core == 'true'
         run: npm run audit:jcs
 
       - name: Run Unit & Contract Tests
+        if: needs.changes.outputs.core == 'true'
         run: npm test
 
       # sigil/integration/oauth-login.e2e.test.mjs serves the built web client; without dist/ it times out.
       - name: Build web client for the live gate
+        if: needs.changes.outputs.core == 'true'
         run: npm --prefix packages/sigil-rooms-web ci && npm --prefix packages/sigil-rooms-web run build
 
       - name: Run Live PostgreSQL Gate
+        if: needs.changes.outputs.core == 'true'
         env:
           SIGIL_TEST_DATABASE_URL: postgres://sigil:sigil_password@localhost:55432/sigil_test
         run: npm run test:live
 
   test-windows:
     name: Windows - Node ${{ matrix.node-version }}
+    needs: changes
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -90,22 +121,28 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Node.js ${{ matrix.node-version }}
+        if: needs.changes.outputs.core == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
 
       - name: Install dependencies
+        if: needs.changes.outputs.core == 'true'
         run: npm ci --ignore-scripts
 
       - name: Run JCS Conformance Audit
+        if: needs.changes.outputs.core == 'true'
         run: npm run audit:jcs
 
       - name: Run Unit & Contract Tests
+        if: needs.changes.outputs.core == 'true'
         run: npm test
 
   web:
     name: Web client
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -148,6 +185,8 @@ jobs:
   # failure and 2 when a known finding stops failing.
   relay-jobs-verification:
     name: Relay jobs schedule checker
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -187,6 +226,8 @@ jobs:
 
   formal-verification:
     name: Formal TLA+ Verification (TLC)
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -212,3 +253,8 @@ jobs:
         run: |
           export TLA2TOOLS="$HOME/.tla/tla2tools.jar"
           node verify/ag-ui-approval/check.mjs
+
+      - name: Run pre-push-gate formal model check
+        run: |
+          export TLA2TOOLS="$HOME/.tla/tla2tools.jar"
+          node verify/pre-push-gate/check.mjs
