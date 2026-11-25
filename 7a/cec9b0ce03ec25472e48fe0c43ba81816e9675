@@ -1,0 +1,27 @@
+.cursor/hooks.json
+  s_a8b1940dd60de5::t_aaffcb2afbf0bb 7,12,17
+.cursor/hooks/trail-hooks.cjs
+  s_a8b1940dd60de5::t_e73a3b8a86fe51 159
+.serena/project.yml
+  s_a8b1940dd60de5::t_515e7a13974bb7 5-20,29,34-35,174-187
+.trail/hook.cjs
+  s_a8b1940dd60de5::t_f584d451c39d6a 159
+scripts/windows/start-sigil-stack.ps1
+  s_a8b1940dd60de5::t_cebf9dcc24f63b 3-14,19,23,29-30,33,38-104,106-117,120-136,139-167
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7acec9b0ce03ec25472e48fe0c43ba81816e9675",
+  "prompts": {},
+  "sessions": {
+    "s_a8b1940dd60de5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a205bc-d09e-78d3-b665-1ad053ace4fa",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
