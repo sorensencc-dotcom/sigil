@@ -1,0 +1,21 @@
+sigil/relay/v1/http-server.test.mjs
+  s_9e6fbf1d8efff1::t_102cad7966e3e8 595-628
+sigil/relay/v1/http-server.mjs
+  s_9e6fbf1d8efff1::t_244b7476b7b1ee 221-230,233-234,236-241
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "501116d4ff3343568e7b57b3c98cbfa77eb23114",
+  "prompts": {},
+  "sessions": {
+    "s_9e6fbf1d8efff1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bcd2882f-274f-41ec-928c-452fadecdf72",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
