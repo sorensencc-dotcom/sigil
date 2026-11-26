@@ -1,0 +1,19 @@
+.trail/learnings/2026-11-26-room-timeline-folds-runs-of-3-chris.md
+  s_9e6fbf1d8efff1::t_e08875bcf3971e 1-28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "daf712dca18809b55db8fca9bd9b2969fda5a8c8",
+  "prompts": {},
+  "sessions": {
+    "s_9e6fbf1d8efff1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bcd2882f-274f-41ec-928c-452fadecdf72",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
