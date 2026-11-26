@@ -6,6 +6,10 @@ import { ErrorBanner } from '../errors/ErrorBanner';
 import { useAuth, useSelfEndpoint } from '../auth/AuthContext';
 import { mergeRows, type PendingMessage, type Row } from './mergeRows';
 import { RowView } from './RowView';
+import { classifyRow, groupAgentStretches } from './agentStretches';
+import { FoldedRows } from './CollapsedExchange';
+import { senderName } from './SenderChip';
+import { useFailedVerifications } from './useFailedVerifications';
 import { ackWatermark, isTopLevel, lastActivitySeq, latestReplies, replyCounts, rowsById, threadRootOf } from './threads';
 import { historyKey } from './historyQuery';
 import { useHistory } from './useHistory';
@@ -110,6 +114,20 @@ export function Timeline({
     }
     return result;
   }, [rows, activity, latestByRoot, savedWatermark]);
+  const failedSignatures = useFailedVerifications();
+  // Day and New dividers end a stretch, so neither can land inside a folded card.
+  const parts = useMemo(() => groupAgentStretches(
+    entries,
+    (entry) => entry.kind === 'row' ? classifyRow(entry.row, members) : { role: 'break' },
+    {
+      isFailed: (id) => failedSignatures.has(id),
+      isForcedOpen: (id) => id === focus?.message_id || id === inspectingId || (focusedSeq !== null && String(byId.get(id)?.room_seq) === focusedSeq),
+    },
+  ), [entries, members, failedSignatures, focus, inspectingId, focusedSeq, byId]);
+  const entryName = (entry: TimelineEntry) => {
+    const item = entry.kind === 'row' ? entry.row.item : null;
+    return item ? senderName(item.envelope.sender.endpoint_id, item.display_name, members, nameFor, loginFor) : '';
+  };
 
   const scroller = useRef<HTMLElement>(null);
   const newDivider = useRef<HTMLLIElement>(null);
@@ -332,7 +350,7 @@ export function Timeline({
         ) : searchTerm && !searching && !searchError ? <p className="room-search-empty">No messages found for “{searchTerm}”.</p> : null}
       {showJump || !atLatest ? <button className="timeline-jump" type="button" onClick={() => void jumpToLatest()}>Jump to latest</button> : null}
       <ul>
-        {entries.map((entry) => entry.kind === 'day' ? (
+        <FoldedRows parts={parts} nameOf={entryName} renderEntry={(entry) => entry.kind === 'day' ? (
           <li className="timeline-day" key={entry.key}><time>{entry.label}</time></li>
         ) : entry.kind === 'new' ? (
           <li className="timeline-divider" key="new" ref={newDivider}><span>New messages · this browser</span></li>
@@ -355,7 +373,7 @@ export function Timeline({
             onReply={entry.row.item && entry.row.item.envelope.message_type === 'room.message' ? () => onOpenThread(threadRootOf(entry.row.item!, byId)) : undefined}
             focused={!!focus && entry.row.item?.message_id === focus.message_id}
           />
-        ))}
+        )} />
         {approvals.map(({ approver_name, approval_url }, index) => (
           <li key={approval_url ?? index}>
             <strong>Approval required</strong>
