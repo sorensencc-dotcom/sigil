@@ -1,0 +1,21 @@
+sigil/ingress/v1/agentmail-polling-webhook-queue.test.mjs
+  s_9e6fbf1d8efff1::t_6f14bc328f5d05 64-73
+sigil/ingress/v1/agentmail-polling-webhook-queue.mjs
+  s_9e6fbf1d8efff1::t_62e4c59f1cdf0d 61-62,64-69
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e81da9c6b896ca72606c0c0139f5b17656068f01",
+  "prompts": {},
+  "sessions": {
+    "s_9e6fbf1d8efff1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bcd2882f-274f-41ec-928c-452fadecdf72",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
