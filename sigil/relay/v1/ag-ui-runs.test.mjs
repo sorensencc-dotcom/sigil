@@ -6,6 +6,8 @@ import { createRelayServer } from './http-server.mjs';
 const taskId = 'task_1';
 const threadId = 'room_1';
 const taskMessage = { room_seq: '1', envelope: { message_id: 'msg_task', conversation_id: threadId, message_type: 'task.request', sender: { endpoint_id: 'ep_human' }, body: { task_id: taskId, instruction: 'run' } } };
+// Challenges expire a day after the test runs, so the fixtures never age out.
+const challengeExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 const resultMessage = { room_seq: '2', envelope: { message_id: 'msg_result', conversation_id: threadId, message_type: 'task.result', sender: { endpoint_id: 'ep_worker' }, body: { task_id: taskId, status: 'completed', summary: 'done' } } };
 
 function makeServer(overrides = {}) {
@@ -118,7 +120,7 @@ test('AG-UI runs stream a snapshot and exactly one terminal event for a complete
 
 test('AG-UI runs project a bound approval challenge into one interrupt terminal event', async (t) => {
   const challenge = {
-    id: 'challenge_1', actionHash: 'a'.repeat(64), expiresAt: '2026-12-01T00:00:00.000Z', capabilities: ['filesystem/write'], status: 'pending', decisionStatus: null,
+    id: 'challenge_1', actionHash: 'a'.repeat(64), expiresAt: challengeExpiresAt, capabilities: ['filesystem/write'], status: 'pending', decisionStatus: null,
     envelope: { message_id: 'msg_action', conversation_id: threadId, context_refs: ['msg_task'], capabilities: ['filesystem/write'], body: { path: '/tmp/a' } },
   };
   let challengeReads = 0;
@@ -158,7 +160,7 @@ test('disconnecting an AG-UI stream emits no synthetic terminal event', async (t
 
 test('AG-UI resume covers multiple interrupts, refuses pending and partial resumes, and replays concurrent retries', async (t) => {
   const challenges = ['challenge_1', 'challenge_2'].map((id, index) => ({
-    id, endpointId: 'ep_worker', actionHash: 'a'.repeat(64), expiresAt: '2026-12-01T00:00:00.000Z',
+    id, endpointId: 'ep_worker', actionHash: 'a'.repeat(64), expiresAt: challengeExpiresAt,
     capabilities: ['filesystem/write'], status: 'pending', decisionStatus: null,
     envelope: { message_id: `msg_action_${index + 1}`, conversation_id: threadId, context_refs: ['msg_task'], capabilities: ['filesystem/write'], body: { task_id: taskId, path: `/tmp/${index + 1}` } },
   }));
@@ -211,7 +213,7 @@ test('AG-UI resume covers multiple interrupts, refuses pending and partial resum
 
 test('AG-UI cancellation calls the repository and reports the cancelled interrupt', async (t) => {
   const challenge = {
-    id: 'challenge_cancel', endpointId: 'ep_worker', actionHash: 'a'.repeat(64), expiresAt: '2026-12-01T00:00:00.000Z',
+    id: 'challenge_cancel', endpointId: 'ep_worker', actionHash: 'a'.repeat(64), expiresAt: challengeExpiresAt,
     capabilities: ['filesystem/write'], status: 'pending', decisionStatus: null,
     envelope: { message_id: 'msg_action', conversation_id: threadId, context_refs: ['msg_task'], capabilities: ['filesystem/write'], body: { task_id: taskId, path: '/tmp/a' } },
   };
@@ -228,4 +230,60 @@ test('AG-UI cancellation calls the repository and reports the cancelled interrup
   const events = response.text.trim().split('\n\n').map((frame) => JSON.parse(frame.slice('data: '.length)));
   assert.deepEqual(cancelled.map(({ challengeId, endpointId }) => [challengeId, endpointId]), [[challenge.id, 'ep_worker']]);
   assert.deepEqual(events.filter((event) => ['RUN_FINISHED', 'RUN_ERROR'].includes(event.type)).map((event) => [event.type, event.code]), [['RUN_ERROR', 'APPROVAL_CANCELLED']]);
+});
+
+test('AG-UI resume ends with APPROVAL_EXPIRED when an approved decision expires before the envelope arrives', async (t) => {
+  let clockMs = Date.parse('2030-01-01T00:00:00.000Z');
+  const expiresAt = new Date(clockMs + 60_000).toISOString();
+  const challenge = {
+    id: 'challenge_wait', endpointId: 'ep_worker', actionHash: 'a'.repeat(64), expiresAt,
+    capabilities: ['filesystem/write'], status: 'pending', decisionStatus: null,
+    envelope: { message_id: 'msg_action', conversation_id: threadId, context_refs: ['msg_task'], capabilities: ['filesystem/write'], body: { task_id: taskId, path: '/tmp/a' } },
+  };
+  let reads = 0;
+  const server = makeServer({
+    repository: { async listApprovalChallengesForConversation() { reads += 1; return reads === 1 ? [] : [challenge]; } },
+    options: { now: () => new Date(clockMs) },
+  });
+  const port = await listen(server);
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  await post(port, input());
+
+  Object.assign(challenge, { status: 'consumed', decisionStatus: 'approved', decisionExpiresAt: expiresAt });
+  setTimeout(() => { clockMs += 120_000; }, 100).unref();
+  const response = await post(port, { threadId, runId: 'run_wait', protocolVersion: '1.0', resume: [{ interruptId: challenge.id, status: 'resolved' }] });
+  assert.equal(response.status, 200);
+  const events = response.text.trim().split('\n\n').map((frame) => JSON.parse(frame.slice('data: '.length)));
+  assert.deepEqual(events.filter((event) => ['RUN_FINISHED', 'RUN_ERROR'].includes(event.type)).map((event) => [event.type, event.code]), [['RUN_ERROR', 'APPROVAL_EXPIRED']]);
+});
+
+test('AG-UI starts a new run once the last interrupted run has no open interrupt left', async (t) => {
+  let clockMs = Date.parse('2030-01-01T00:00:00.000Z');
+  const challenge = {
+    id: 'challenge_stale', endpointId: 'ep_worker', actionHash: 'a'.repeat(64), expiresAt: new Date(clockMs + 60_000).toISOString(),
+    capabilities: ['filesystem/write'], status: 'pending', decisionStatus: null,
+    envelope: { message_id: 'msg_action', conversation_id: threadId, context_refs: ['msg_task'], capabilities: ['filesystem/write'], body: { task_id: taskId, path: '/tmp/a' } },
+  };
+  let reads = 0;
+  let history = [taskMessage];
+  const server = makeServer({
+    repository: {
+      async listApprovalChallengesForConversation() { reads += 1; return reads === 1 ? [] : [challenge]; },
+      async listRoomMessages(_room, afterSeq) { return history.filter((row) => BigInt(row.room_seq) > BigInt(afterSeq)); },
+    },
+    options: { now: () => new Date(clockMs) },
+  });
+  const port = await listen(server);
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  await post(port, input());
+  const blocked = await post(port, input({ runId: 'run_blocked' }));
+  assert.equal(blocked.status, 409);
+  assert.equal(JSON.parse(blocked.text).code, 'INTERRUPT_PENDING');
+
+  clockMs += 120_000;
+  history = [taskMessage, resultMessage];
+  const response = await post(port, input({ runId: 'run_after_expiry' }));
+  assert.equal(response.status, 200);
+  const events = response.text.trim().split('\n\n').map((frame) => JSON.parse(frame.slice('data: '.length)));
+  assert.deepEqual(events.filter((event) => ['RUN_FINISHED', 'RUN_ERROR'].includes(event.type)).map((event) => event.type), ['RUN_FINISHED']);
 });
