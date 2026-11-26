@@ -218,10 +218,27 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       const effectiveRpId = rpId ?? new URL(effectiveRelayOrigin).hostname;
 
       try {
+        // The /approve page posts only credential_id, client_data_json,
+        // authenticator_data and signature. Fill the policy fields it omits from
+        // the WebAuthn data itself; verifyWebAuthnAssertion then checks the same
+        // challenge, origin, rpId hash and user-verified flag against the signature.
+        const clientDataJSON = assertion?.clientDataJSON ?? assertion?.client_data_json;
+        const authenticatorData = assertion?.authenticatorData ?? assertion?.authenticator_data;
+        let clientData = null;
+        try { clientData = clientDataJSON ? JSON.parse(Buffer.from(clientDataJSON, 'base64url').toString('utf8')) : null; } catch { clientData = null; }
+        const authBytes = authenticatorData ? Buffer.from(authenticatorData, 'base64url') : null;
+        const boundToChallenge = Boolean(challenge.webauthnChallenge) && clientData?.challenge === challenge.webauthnChallenge;
         const normalized = {
           ...assertion,
+          clientDataJSON,
+          authenticatorData,
           credentialId: assertion?.credentialId ?? assertion?.credential_id,
-          endpointId: assertion?.endpointId ?? assertion?.endpoint_id ?? challenge.endpointId
+          endpointId: assertion?.endpointId ?? assertion?.endpoint_id ?? challenge.endpointId,
+          challenge: assertion?.challenge ?? (boundToChallenge ? challenge.id : undefined),
+          actionHash: assertion?.actionHash ?? assertion?.action_hash ?? (boundToChallenge ? challenge.actionHash : undefined),
+          origin: assertion?.origin ?? clientData?.origin,
+          rpId: assertion?.rpId ?? assertion?.rp_id ?? effectiveRpId,
+          userVerified: assertion?.userVerified ?? (authBytes && authBytes.length >= 33 ? (authBytes[32] & 0x04) !== 0 : undefined)
         };
         const credential = await resolveHumanCredential?.(normalized.credentialId, challenge.endpointId);
         if (!credential || credential.endpointId !== challenge.endpointId) {
