@@ -592,6 +592,40 @@ test('approval assertion route accepts a correctly signed default WebAuthn asser
   assert.equal(result.status, 200); assert.equal(result.body.actorId, 'usr_1');
 });
 
+async function approvalPagePost({ flags = 0x05, origin = 'https://relay.example' } = {}) {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const challenges = new Map();
+  const server = createRelayServer({ relayOrigin: 'https://relay.example', rpId: 'relay.example', approvalChallenges: challenges, authenticate: async () => ({ endpoint_id: 'ep_codex' }), lookupHumanCredential: async (credentialId) => ({ credentialId, endpointId: 'ep_codex', humanId: 'usr_1', type: 'webauthn', status: 'active', publicKey }) });
+  await new Promise((resolve) => server.listen(0, resolve)); const { port } = server.address();
+  try {
+    const created = await request(port, { method: 'POST', path: '/v1/approval-challenges', body: { action_hash: 'sha256:abc', callback_url: 'http://127.0.0.1:4567/callback' } });
+    const challenge = challenges.get(created.body.challenge_id);
+    const clientDataJSON = Buffer.from(JSON.stringify({ type: 'webauthn.get', challenge: challenge.webauthnChallenge, origin })).toString('base64url');
+    const authenticatorData = Buffer.concat([crypto.createHash('sha256').update('relay.example').digest(), Buffer.from([flags, 0, 0, 0, 1])]).toString('base64url');
+    const signedBytes = Buffer.concat([Buffer.from(authenticatorData, 'base64url'), crypto.createHash('sha256').update(Buffer.from(clientDataJSON, 'base64url')).digest()]);
+    const signature = crypto.sign(null, signedBytes, privateKey).toString('base64url');
+    // Exactly the four fields the /approve page posts (approval-ui.mjs).
+    return await request(port, { method: 'POST', path: `/v1/approval-challenges/${challenge.id}/assertion`, body: { credential_id: 'cred_1', client_data_json: clientDataJSON, authenticator_data: authenticatorData, signature } });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+test('approval assertion route accepts the payload the /approve page posts', async () => {
+  const result = await approvalPagePost();
+  assert.equal(result.status, 200); assert.equal(result.body.actorId, 'usr_1');
+});
+
+test('approval page payload without the user-verified flag is rejected', async () => {
+  const result = await approvalPagePost({ flags: 0x01 });
+  assert.notEqual(result.status, 200); assert.equal(result.body.code, 'APPROVAL_REQUIRED');
+});
+
+test('approval page payload signed for another origin is rejected', async () => {
+  const result = await approvalPagePost({ origin: 'https://evil.example' });
+  assert.notEqual(result.status, 200); assert.equal(result.body.code, 'APPROVAL_REQUIRED');
+});
+
 test('approval assertion route accepts a correctly signed ES256 assertion', async () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
   const challenges = new Map();
