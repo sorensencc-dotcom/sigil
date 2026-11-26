@@ -5,10 +5,22 @@ import { Composer } from './Composer';
 import { mergeRows, type PendingMessage } from './mergeRows';
 import { formatMentionText } from './resolveMentions';
 import { RowView } from './RowView';
+import { classifyRow, groupAgentStretches } from './agentStretches';
+import { FoldedRows } from './CollapsedExchange';
 import { SenderChip, senderName } from './SenderChip';
-import { rowsById, threadReplies } from './threads';
+import { rowsById, threadReplies, threadRootOf } from './threads';
+import { useFailedVerifications } from './useFailedVerifications';
 import { useHistory } from './useHistory';
 import type { LoginFor, NameFor, OwnerNameFor } from './useContacts';
+
+// Cap and halt events stay top-level in the Timeline; they also show here when they name this
+// thread, so a folded agent stretch in the panel unfolds on them.
+function threadStopEvents(items: HistoryItem[], byId: Map<string, HistoryItem>, rootId: string): HistoryItem[] {
+  return items.filter((item) => item.envelope.message_type === 'room.event'
+    && (item.envelope.body.kind === 'agent_cap_reached' || item.envelope.body.kind === 'room_halted')
+    && !!item.envelope.body.thread_root_id
+    && threadRootOf(item, byId) === rootId);
+}
 
 export function ThreadPanel({
   roomId,
@@ -42,10 +54,15 @@ export function ThreadPanel({
   const byId = useMemo(() => rowsById(items), [items]);
   const root = byId.get(rootId) ?? null;
   const rows = useMemo(
-    () => mergeRows(threadReplies(items, byId, rootId), pending.filter((message) => message.threadRootId === rootId)),
+    () => mergeRows([...threadReplies(items, byId, rootId), ...threadStopEvents(items, byId, rootId)], pending.filter((message) => message.threadRootId === rootId)),
     [items, byId, rootId, pending],
   );
   const sender = useSelfEndpoint();
+  const failedSignatures = useFailedVerifications();
+  const parts = useMemo(() => groupAgentStretches(rows, (row) => classifyRow(row, members), {
+    isFailed: (id) => failedSignatures.has(id),
+    isForcedOpen: (id) => id === inspectingId,
+  }), [rows, members, failedSignatures, inspectingId]);
   return (
     <aside className="thread" aria-label="Thread">
       <header className="thread-head">
@@ -77,9 +94,13 @@ export function ThreadPanel({
             </>
           ) : <em>Original message not loaded</em>}
         </li>
-        {rows.map((row) => (
-          <RowView key={row.key} row={row} roomId={roomId} sender={sender} nameFor={nameFor} loginFor={loginFor} ownerNameFor={ownerNameFor} members={members} inspectingId={inspectingId} onInspect={onInspect} />
-        ))}
+        <FoldedRows
+          parts={parts}
+          nameOf={(row) => row.item ? senderName(row.item.envelope.sender.endpoint_id, row.item.display_name, members, nameFor, loginFor) : ''}
+          renderEntry={(row) => (
+            <RowView key={row.key} row={row} roomId={roomId} sender={sender} nameFor={nameFor} loginFor={loginFor} ownerNameFor={ownerNameFor} members={members} inspectingId={inspectingId} onInspect={onInspect} />
+          )}
+        />
       </ul>
       <Composer send={onSend} disabledReason={disabledReason} label="Reply in thread" members={members} nameFor={nameFor} loginFor={loginFor} viewer={sender} />
     </aside>
