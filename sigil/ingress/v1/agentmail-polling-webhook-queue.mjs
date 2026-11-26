@@ -40,7 +40,7 @@ export function verifySvixSignature({
   toleranceSeconds = 300,
   nowMs = Date.now()
 }) {
-  if (!svixId || !svixTimestamp || !svixSignature || typeof rawBody !== 'string') {
+  if (!svixId || !svixTimestamp || typeof svixSignature !== 'string' || !svixSignature || typeof rawBody !== 'string') {
     return { valid: false, reason: 'MISSING_SVIX_HEADERS' };
   }
 
@@ -58,11 +58,12 @@ export function verifySvixSignature({
   const expectedB64 = expectedFull.slice(3);
   const expBuf = Buffer.from(expectedB64, 'base64');
 
-  const candidates = String(svixSignature)
-    .split(/\s+/)
-    .map(part => part.trim())
-    .filter(part => part.startsWith('v1,'))
-    .map(part => part.slice(3));
+  const parts = svixSignature.trim().split(/\s+/);
+  const validBase64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+  if (parts.length === 0 || parts.some(part => !part.startsWith('v1,') || !validBase64.test(part.slice(3)))) {
+    return { valid: false, reason: 'MALFORMED_SIGNATURE' };
+  }
+  const candidates = parts.map(part => part.slice(3));
 
   for (const cand of candidates) {
     const candBuf = Buffer.from(cand, 'base64');
