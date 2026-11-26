@@ -120,7 +120,7 @@ test('AG-UI resumes after a dropped stream and concurrent Postgres clients repla
           await target.createApprovalChallenge({
             id: challengeId, endpointId: endpoints.worker.endpointId, actionHash,
             webauthnChallenge: `webauthn_${suffix}`, callbackUrl: 'https://relay.example/callback', token: `token_${suffix}`,
-            expiresAt: '2026-12-01T00:00:00.000Z', conversationId, messageId: action.message_id,
+            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), conversationId, messageId: action.message_id,
             capabilities: action.capabilities, envelope: action,
           });
           return [];

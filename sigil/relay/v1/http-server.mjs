@@ -416,11 +416,17 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         let history;
         const readHistory = async () => (history ??= await repository.listRoomMessages(threadId, 0n, 500));
         const challengeById = new Map(challenges.map((challenge) => [challenge.id, challenge]));
+        // Read the clock on every call: the stream below polls for minutes, and a
+        // time captured when the request arrived would never see an approval expire.
+        const currentMs = () => {
+          const current = typeof configuredNow === 'function' ? configuredNow() : configuredNow;
+          return current instanceof Date ? current.getTime() : typeof current === 'string' || typeof current === 'number' ? new Date(current).getTime() : Date.now();
+        };
         const approvalState = (challenge) => {
           if (challenge.decisionStatus === 'consumed') return 'consumed';
           if (challenge.decisionStatus === 'revoked' || challenge.status === 'cancelled') return 'cancelled';
           const expires = Date.parse(challenge.decisionExpiresAt ?? challenge.expiresAt);
-          if (Number.isFinite(expires) && expires <= nowMs) return 'expired';
+          if (Number.isFinite(expires) && expires <= currentMs()) return 'expired';
           if (challenge.decisionStatus === 'approved') return 'approved';
           if (challenge.status === 'pending') return 'pending';
           return 'expired';
@@ -441,7 +447,18 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
           }
         }
         if (!resumeEntries) {
-          if (interruptedRun && !interruptedRun.completed) return failAgUi(409, 'INTERRUPT_PENDING', 'Resume every interrupt from the last interrupted run before starting another run');
+          if (interruptedRun && !interruptedRun.completed) {
+            // Block only while one of that run's interrupts is still open. Once each
+            // has been consumed, cancelled, or has expired (for example through the
+            // approve page or the cancel route), the entry is stale and would
+            // otherwise block the thread until the relay restarts.
+            const stillOpen = interruptedRun.challengeIds.some((id) => {
+              const challenge = challengeById.get(id);
+              return challenge && ['pending', 'approved'].includes(approvalState(challenge));
+            });
+            if (stillOpen) return failAgUi(409, 'INTERRUPT_PENDING', 'Resume every interrupt from the last interrupted run before starting another run');
+            agUiInterruptedRuns.delete(threadId);
+          }
           const open = challenges.filter((challenge) => ['pending', 'approved'].includes(approvalState(challenge)));
           if (open.length) {
             const latest = open.at(-1);
@@ -558,6 +575,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
           return response.end();
         }
         const seenChallenges = new Set(resumeIds);
+        const awaitingApproval = new Set(resumeChallenges.filter((challenge) => resumeState.get(challenge.id) === 'approved').map((challenge) => challenge.id));
         let polling = false;
         let closed = false;
         let timer;
@@ -575,7 +593,23 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
               return;
             }
             if (repository.listApprovalChallengesForConversation) {
-              const openChallenges = (await repository.listApprovalChallengesForConversation(threadId))
+              const currentChallenges = await repository.listApprovalChallengesForConversation(threadId);
+              // A resumed approval that expires or is cancelled before the worker's
+              // envelope consumes it ends the run with RUN_ERROR (design section 8,
+              // WaitExpires in verify/ag-ui-approval) instead of waiting forever.
+              for (const challenge of currentChallenges) {
+                if (!awaitingApproval.has(challenge.id)) continue;
+                const state = approvalState(challenge);
+                if (state === 'consumed') awaitingApproval.delete(challenge.id);
+                else if (state === 'expired' || state === 'cancelled') {
+                  if (agUiInterruptedRuns.get(threadId)?.challengeIds.includes(challenge.id)) agUiInterruptedRuns.delete(threadId);
+                  emitFact(state === 'expired'
+                    ? { type: 'rejection', code: 'APPROVAL_EXPIRED', message: 'Approval challenge expired' }
+                    : { type: 'rejection', code: 'APPROVAL_CANCELLED', message: 'Approval challenge was cancelled' });
+                  break;
+                }
+              }
+              const openChallenges = projectState.terminal ? [] : currentChallenges
                 .filter((challenge) => !seenChallenges.has(challenge.id) && ['pending', 'approved'].includes(approvalState(challenge)) && challengeMatchesTask(challenge, task));
               if (openChallenges.length) {
                 openChallenges.forEach((challenge) => seenChallenges.add(challenge.id));
