@@ -58,12 +58,17 @@ export function verifySvixSignature({
   const expectedB64 = expectedFull.slice(3);
   const expBuf = Buffer.from(expectedB64, 'base64');
 
-  const parts = svixSignature.trim().split(/\s+/);
+  // Like Svix's own verifier, ignore tokens for other signature versions so a
+  // future `v2,...` alongside `v1,...` does not reject valid deliveries.
   const validBase64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
-  if (parts.length === 0 || parts.some(part => !part.startsWith('v1,') || !validBase64.test(part.slice(3)))) {
+  const candidates = svixSignature
+    .trim()
+    .split(/\s+/)
+    .filter(part => part.startsWith('v1,'))
+    .map(part => part.slice(3));
+  if (candidates.length === 0 || candidates.some(cand => !cand || !validBase64.test(cand))) {
     return { valid: false, reason: 'MALFORMED_SIGNATURE' };
   }
-  const candidates = parts.map(part => part.slice(3));
 
   for (const cand of candidates) {
     const candBuf = Buffer.from(cand, 'base64');

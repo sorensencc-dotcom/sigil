@@ -61,6 +61,14 @@ test('deduplicates polling events by event ID', async () => {
 
 test('rejects malformed signature headers', () => {
   const event = signedEvent('evt_malformed');
-  const result = verifySvixSignature({ ...event, svixSignature: `${event.svixSignature} garbage`, secret, nowMs });
-  assert.deepEqual(result, { valid: false, reason: 'MALFORMED_SIGNATURE' });
+  for (const svixSignature of [`${event.svixSignature} v1,not*base64`, 'v2,abc', 'garbage', 'v1,']) {
+    const result = verifySvixSignature({ ...event, svixSignature, secret, nowMs });
+    assert.deepEqual(result, { valid: false, reason: 'MALFORMED_SIGNATURE' }, svixSignature);
+  }
+});
+
+test('ignores tokens for other signature versions', () => {
+  const event = signedEvent('evt_future_version');
+  const result = verifySvixSignature({ ...event, svixSignature: `v2,abc ${event.svixSignature}`, secret, nowMs });
+  assert.deepEqual(result, { valid: true });
 });
