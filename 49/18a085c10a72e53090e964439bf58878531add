@@ -1,0 +1,19 @@
+docs/superpowers/specs/2026-11-25-room-history-search-proposal.md
+  s_38a869e1c31675::t_2ad159cd4f0dd4 1-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4918a085c10a72e53090e964439bf58878531add",
+  "prompts": {},
+  "sessions": {
+    "s_38a869e1c31675": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a2160a-4a02-7222-9ccb-bcac08f4a804",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
