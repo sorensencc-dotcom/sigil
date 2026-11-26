@@ -1,0 +1,22 @@
+sigil/ingress/v1/agentmail-polling-webhook-queue.mjs
+  s_ee228851f64f09::t_2957fa6aa868d2 43,61-66
+sigil/ingress/v1/agentmail-polling-webhook-queue.test.mjs
+  s_ee228851f64f09::t_3ba68bca98656b 44
+  s_ee228851f64f09::t_2957fa6aa868d2 1-43,45-66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "295c347637e346cae9acef784f422712c054c465",
+  "prompts": {},
+  "sessions": {
+    "s_ee228851f64f09": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a21607-a753-7e33-b7bb-6d938b460902",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
