@@ -141,7 +141,7 @@ export function SettingsPage({ onBackToRooms }: { onBackToRooms: () => void }) {
                         ) : contact.display_name}
                         {rowError ? <ErrorBanner error={rowError} /> : null}
                       </td>
-                      <td>{contact.endpoint_ids.length > 0 ? contact.endpoint_ids.join(', ') : 'none yet'}</td>
+                      <td className="machine-id">{contact.endpoint_ids.length > 0 ? contact.endpoint_ids.join(', ') : 'none yet'}</td>
                       <td className="contact-actions">
                         {editingId === contact.contact_id ? (
                           <>

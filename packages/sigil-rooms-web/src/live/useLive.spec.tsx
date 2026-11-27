@@ -41,6 +41,7 @@ describe('useLive', () => {
     sockets[0]!.onFrame({ type: 'room.updated', room_id: 'room_1', room_seq: '3', changed: 'messages' });
     await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'messages'] }));
     expect(spy).toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'invocations'] });
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'preview'] });
   });
 
   it('cancels in-flight history fetches before invalidating on a messages frame', async () => {

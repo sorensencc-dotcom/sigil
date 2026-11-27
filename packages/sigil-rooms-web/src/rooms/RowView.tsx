@@ -1,7 +1,7 @@
 import type { HistoryItem, Member } from '../api/types';
 import type { Row } from './mergeRows';
 import { formatMentionText } from './resolveMentions';
-import { SenderChip, senderName } from './SenderChip';
+import { SenderChip, senderKind, senderName } from './SenderChip';
 import { previewText } from './threads';
 import type { LoginFor, NameFor, OwnerNameFor } from './useContacts';
 
@@ -93,6 +93,7 @@ export function RowView({
 <li
   id={`message-${envelope.message_id}`}
   data-mine={mine ? 'true' : undefined}
+  data-sender-kind={senderKind(envelope.sender.endpoint_id, members)}
   data-room-seq={row.item!.room_seq}
   data-search-match={highlighted || undefined}
   aria-current={focused ? 'true' : undefined}

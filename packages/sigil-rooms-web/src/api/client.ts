@@ -135,7 +135,7 @@ export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized
       });
     },
     async listMembers(roomId) {
-      return (await request<{ items: Member[] }>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/members`)).items;
+      return (await request<{ items?: Member[] }>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/members`)).items ?? [];
     },
     async listAgentRoomInvites(roomId) {
       return (await request<{ items: AgentRoomInvite[] }>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/agent-invites`)).items;

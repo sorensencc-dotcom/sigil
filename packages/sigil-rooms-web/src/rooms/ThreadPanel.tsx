@@ -35,6 +35,7 @@ export function ThreadPanel({
   members = [],
   inspectingId = null,
   onInspect,
+  postingAs = null,
 }: {
   roomId: string;
   rootId: string;
@@ -48,6 +49,7 @@ export function ThreadPanel({
   members?: Member[];
   inspectingId?: string | null;
   onInspect?: (item: HistoryItem) => void;
+  postingAs?: string | null;
 }) {
   // The same query the timeline reads, so the panel adds no fetch.
   const { items } = useHistory(roomId);
@@ -102,7 +104,7 @@ export function ThreadPanel({
           )}
         />
       </ul>
-      <Composer send={onSend} disabledReason={disabledReason} label="Reply in thread" members={members} nameFor={nameFor} loginFor={loginFor} viewer={sender} />
+      <Composer send={onSend} disabledReason={disabledReason} label="Reply in thread" members={members} nameFor={nameFor} loginFor={loginFor} viewer={sender} postingAs={postingAs} />
     </aside>
   );
 }

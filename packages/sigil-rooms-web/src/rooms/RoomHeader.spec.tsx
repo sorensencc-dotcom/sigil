@@ -12,14 +12,17 @@ const members: Member[] = [
 const listMembers = vi.fn(async () => members);
 
 describe('RoomHeader', () => {
-  it('shows the room purpose with the title', () => {
+  it('shows the room purpose with the title', async () => {
     renderWithClient(<RoomHeader roomId="room_1" name="build" purpose="the build room" sender="ep_web" onGone={() => {}} />, { listMembers });
     expect(screen.getByText('the build room')).toBeInTheDocument();
+    expect(await screen.findByText('2 members')).toBeInTheDocument();
   });
   it('shows rename and editable modes to a manager, and neither before the sender is known', async () => {
     const first = renderWithClient(<RoomHeader roomId="room_1" name="build" maxAgentTurns={6} sender="ep_web" onGone={() => {}} />, { listMembers });
     expect(await screen.findByRole('button', { name: 'Rename room' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Roster' }));
+    const roster = await screen.findByRole('region', { name: 'Roster' });
+    expect(screen.getByRole('banner')).not.toContainElement(roster);
     expect(await screen.findByLabelText('Wake rule for ep_claude')).toBeInTheDocument();
     expect(screen.getByText('Turn cap: 6 agent turns per thread.').tagName).toBe('P');
     first.unmount();

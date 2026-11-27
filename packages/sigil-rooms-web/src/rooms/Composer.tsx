@@ -57,6 +57,7 @@ export function Composer({
   nameFor,
   loginFor,
   viewer = null,
+  postingAs = null,
 }: {
   send: (text: string) => void;
   disabledReason: string | null;
@@ -66,6 +67,8 @@ export function Composer({
   loginFor?: LoginFor;
   /** This browser's endpoint ID, so owner-only agents can be judged. */
   viewer?: string | null;
+  /** Display name for this browser. The signing key is not named here. */
+  postingAs?: string | null;
 }) {
   const [text, setText] = useState('');
   const [mention, setMention] = useState<MentionRange | null>(null);
@@ -76,6 +79,17 @@ export function Composer({
   const suggestions = mention && !disabled
     ? members.filter((member) => roomMemberName(member, members, nameFor, loginFor).toLowerCase().includes(mention.query.toLowerCase()))
     : [];
+  function insertAt() {
+    const cursor = textarea.current?.selectionStart ?? text.length;
+    const next = `${text.slice(0, cursor)}@${text.slice(cursor)}`;
+    const nextCursor = cursor + 1;
+    setText(next);
+    setMention({ start: cursor, cursor: nextCursor, query: '' });
+    requestAnimationFrame(() => {
+      textarea.current?.focus();
+      textarea.current?.setSelectionRange(nextCursor, nextCursor);
+    });
+  }
   function chooseMention(member: Member) {
     if (!mention) return;
     const name = roomMemberName(member, members, nameFor, loginFor);
@@ -102,6 +116,8 @@ export function Composer({
       }}
     >
       {disabledReason ? <p className="reason">{disabledReason}</p> : null}
+      {postingAs ? <p className="posting-as">Posting as {postingAs}</p> : null}
+      <div className="composer-pill">
       <textarea
         ref={textarea}
         aria-label={label}
@@ -128,7 +144,9 @@ export function Composer({
           })}
         </ul>
       ) : null}
+      <button type="button" className="ghost composer-at" aria-label="Mention someone" disabled={disabled} onClick={insertAt}>@</button>
       <button type="submit" disabled={disabled}>Send</button>
+      </div>
       {preview ? (
         <Recipients
           preview={preview}

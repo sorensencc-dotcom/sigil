@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ApiError } from './api/client';
 import type { HistoryItem } from './api/types';
 import { AuthProvider, useAuth, useSelfEndpoint } from './auth/AuthContext';
+import { getSender } from './auth/tokenStore';
 import { Mark, normalizeTheme, ThemeToggle } from './auth/GateHeader';
 import { TokenGate } from './auth/TokenGate';
 import { loadConfig, type WebConfig } from './config';
@@ -14,6 +15,7 @@ import { MentionsView } from './pages/MentionsView';
 import { SettingsPage } from './pages/SettingsPage';
 import type { Mention } from './api/types';
 import { Composer } from './rooms/Composer';
+import { DensityToggle } from './rooms/DensityToggle';
 import { VerifiedEnvelopeInspector } from './rooms/VerifiedEnvelopeInspector';
 import { RoomHeader } from './rooms/RoomHeader';
 import { RoomList } from './rooms/RoomList';
@@ -23,13 +25,14 @@ import { Timeline } from './rooms/Timeline';
 import { useAck } from './rooms/useAck';
 import { useContacts } from './rooms/useContacts';
 import { useMembers } from './rooms/useMembers';
+import { roomMemberName } from './rooms/resolveMentions';
 import { useSend } from './rooms/useSend';
 
 const THEME_KEY = 'sigil.theme';
 const DEFAULT_THEME = 'dark';
 
 function RoomView({ roomId, onGone, focus }: { roomId: string; onGone: () => void; focus: Pick<Mention, 'message_id' | 'room_seq'> | null }) {
-  const { client } = useAuth();
+  const { client, session } = useAuth();
   const sender = useSelfEndpoint();
   const membersQuery = useMembers(roomId);
   const { nameFor, loginFor, ownerNameFor } = useContacts();
@@ -52,6 +55,10 @@ function RoomView({ roomId, onGone, focus }: { roomId: string; onGone: () => voi
     setOpenThread(rootId);
     setSeenRoots((prev) => (prev.has(rootId) ? prev : new Set(prev).add(rootId)));
   }, []);
+  const self = membersQuery.data?.find((member) => member.endpoint_id === sender);
+  const postingAs = sender
+    ? roomMemberName({ endpoint_id: sender, display_name: self?.display_name || session?.display_name || '' }, membersQuery.data ?? [], nameFor, loginFor)
+    : null;
   const disabledReason =
     sendError instanceof ApiError && (sendError.code === 'ROOM_SEND_UNAVAILABLE' || sendError.code === 'NO_SIGNING_KEY')
       ? describeError(sendError)
@@ -73,7 +80,7 @@ function RoomView({ roomId, onGone, focus }: { roomId: string; onGone: () => voi
               ))}
             <ErrorBanner error={sendError && !disabledReason ? sendError : null} />
           </div>
-          <Composer send={(text) => send(text)} disabledReason={disabledReason} members={membersQuery.data ?? []} nameFor={nameFor} loginFor={loginFor} viewer={sender} />
+          <Composer send={(text) => send(text)} disabledReason={disabledReason} members={membersQuery.data ?? []} nameFor={nameFor} loginFor={loginFor} viewer={sender} postingAs={postingAs} />
         </div>
         {openThread ? (
           <ThreadPanel
@@ -90,6 +97,7 @@ function RoomView({ roomId, onGone, focus }: { roomId: string; onGone: () => voi
             ownerNameFor={ownerNameFor}
             inspectingId={inspectingEnvelope?.message_id ?? null}
             onInspect={toggleEnvelope}
+            postingAs={postingAs}
           />
         ) : null}
         {inspectingEnvelope ? (
@@ -103,7 +111,8 @@ function RoomView({ roomId, onGone, focus }: { roomId: string; onGone: () => voi
 }
 
 function Shell({ theme, onThemeChange }: { theme: string; onThemeChange: (next: string) => void }) {
-  const { mode, isLoggedIn, loading, login, signOut, rejected } = useAuth();
+  const { mode, session, isLoggedIn, loading, login, signOut, rejected } = useAuth();
+  const identity = session?.display_name || (mode === 'token' ? getSender() : null);
   const [pathname, setPathname] = useState(() => window.location.pathname);
   const [roomId, setRoomId] = useState<string | null>(() => new URLSearchParams(window.location.search).get('room'));
   // The message to bring into view when a room opens from Mentions.
@@ -176,6 +185,7 @@ function Shell({ theme, onThemeChange }: { theme: string; onThemeChange: (next: 
           <button type="button" className="ghost" aria-current={pathname === '/settings' ? 'page' : undefined} onClick={() => navigate('/settings')}>Settings</button>
         </nav>
         <span className="chip" data-live={live === 'live' ? 'true' : 'false'}>{live === 'live' ? 'Live' : 'Live: off'}</span>
+        <DensityToggle />
         <ThemeToggle theme={theme} onThemeChange={onThemeChange} />
         <button className="ghost" onClick={signOut}>Sign out</button>
       </header>
@@ -186,7 +196,14 @@ function Shell({ theme, onThemeChange }: { theme: string; onThemeChange: (next: 
       ) : (
         <div className="body">
           <aside className="sidebar" id="rooms-drawer">
-            <RoomList selectedId={roomId} onSelect={selectRoom} />
+            <div className="sidebar-list">
+              <RoomList selectedId={roomId} onSelect={selectRoom} />
+            </div>
+            {identity ? (
+              <button type="button" className="ghost identity-chip" aria-label={`Signed in as ${identity}`} onClick={() => navigate('/settings')}>
+                {identity}
+              </button>
+            ) : null}
           </aside>
           {drawerOpen ? <button type="button" className="scrim" aria-label="Close rooms" onClick={() => setDrawerOpen(false)} /> : null}
           <section className="pane">

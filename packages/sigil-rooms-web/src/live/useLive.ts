@@ -23,6 +23,7 @@ export function useLive(): 'live' | 'off' {
         } else {
           const queryKey = ['room', frame.room_id, 'messages'];
           void queryClient.invalidateQueries({ queryKey: ['room', frame.room_id, 'invocations'] });
+          void queryClient.invalidateQueries({ queryKey: ['room', frame.room_id, 'preview'] });
           // Cancel first so an in-flight fetch that predates this frame cannot be reused.
           void queryClient
             .cancelQueries({ queryKey })

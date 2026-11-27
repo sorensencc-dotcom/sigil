@@ -10,17 +10,20 @@ export function RoomHeader({ roomId, name, purpose, maxAgentTurns, sender, onGon
   const [openPanel, setOpenPanel] = useState<'roster' | 'trust' | null>(null);
   const manager = isManager(members.data ?? [], sender);
   return (
-    <header className="room-header">
-      <div className="room-heading">
-        <RenameTitle roomId={roomId} name={name} canRename={manager} onGone={onGone} />
-        {purpose ? <p className="room-purpose">{purpose}</p> : null}
-      </div>
-      <div className="room-actions">
-        <button type="button" className="ghost" aria-expanded={openPanel === 'roster'} onClick={() => setOpenPanel((open) => open === 'roster' ? null : 'roster')}>Roster</button>
-        <button type="button" className="ghost" aria-expanded={openPanel === 'trust'} onClick={() => setOpenPanel((open) => open === 'trust' ? null : 'trust')}>Trust</button>
-      </div>
+    <div className="room-top">
+      <header className="room-header">
+        <div className="room-heading">
+          <RenameTitle roomId={roomId} name={name} canRename={manager} onGone={onGone} />
+          {purpose ? <p className="room-purpose" title={purpose}>{purpose}</p> : null}
+          {members.data ? <p className="member-count">{members.data.length === 1 ? '1 member' : `${members.data.length} members`}</p> : null}
+        </div>
+        <div className="room-actions">
+          <button type="button" className="ghost" aria-expanded={openPanel === 'roster'} onClick={() => setOpenPanel((open) => open === 'roster' ? null : 'roster')}>Roster</button>
+          <button type="button" className="ghost" aria-expanded={openPanel === 'trust'} onClick={() => setOpenPanel((open) => open === 'trust' ? null : 'trust')}>Trust</button>
+        </div>
+      </header>
       {openPanel === 'roster' ? <RosterPanel roomId={roomId} maxAgentTurns={maxAgentTurns} members={members.data ?? []} manager={manager} viewer={sender} onGone={onGone} /> : null}
       {openPanel === 'trust' ? <TrustSummary /> : null}
-    </header>
+    </div>
   );
 }

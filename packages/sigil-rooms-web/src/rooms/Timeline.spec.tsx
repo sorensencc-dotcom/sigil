@@ -24,6 +24,7 @@ describe('Timeline', () => {
       listApprovals: async () => [{ approver_name: 'Ada', approval_url: 'http://relay.test/approve?challenge=ch_1' }],
     });
     expect(await screen.findByText('Waiting for Ada')).toBeInTheDocument();
+    expect(screen.getByText('Waiting for Ada').closest('li')).toHaveAttribute('data-trust', 'held');
     expect(screen.getByRole('link', { name: /Open approval page/ })).toHaveAttribute('href', 'http://relay.test/approve?challenge=ch_1');
     expect(onVisibleSeq).not.toHaveBeenCalledWith('0');
   });

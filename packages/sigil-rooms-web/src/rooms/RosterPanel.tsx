@@ -114,14 +114,14 @@ export function RosterPanel({ roomId, maxAgentTurns, members, manager, viewer = 
           <p>The agent owner runs <code>sigil room join &lt;code&gt; --identity &lt;agent.identity.json&gt; --relay-url &lt;relay-origin&gt;</code>.</p>
           {createdCode ? (
             <p>
-              <label>One-time invite code <input readOnly value={createdCode} /></label>
+              <label>One-time invite code <input className="machine-id" readOnly value={createdCode} /></label>
               <button type="button" onClick={() => { void navigator.clipboard?.writeText(createdCode); }}>Copy code</button>
             </p>
           ) : null}
           <ul>
             {(agentInvites.data ?? []).filter((invite) => invite.state === 'pending' || invite.state === 'connected').map((invite) => (
               <li key={invite.invite_id}>
-                <span>{invite.endpoint_id}</span>
+                <span className="machine-id">{invite.endpoint_id}</span>
                 <span className="badge">{invite.state}</span>
                 {invite.state === 'pending' ? <button type="button" disabled={revokeInvite.isPending} onClick={() => revokeInvite.mutate(invite.invite_id)}>Revoke</button> : null}
               </li>

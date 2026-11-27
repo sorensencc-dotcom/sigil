@@ -58,6 +58,22 @@ describe('Composer', () => {
     await userEvent.click(screen.getByRole('button', { name: /send/i }));
     expect(send).toHaveBeenCalledWith('@Ada');
   });
+
+  it('names who is posting and does not name a signing key', () => {
+    renderWithClient(<Composer send={() => {}} disabledReason={null} postingAs="Ada" />, {});
+    expect(screen.getByText('Posting as Ada')).toBeInTheDocument();
+    expect(screen.queryByText(/signed by/i)).toBeNull();
+  });
+
+  it('inserts @ and lists members', async () => {
+    const members: Member[] = [
+      { endpoint_id: 'ep_ada', role: 'member', response_mode: null, added_at: 't', invokable_by: 'owner', owner_id: null, display_name: 'Ada' },
+    ];
+    renderWithClient(<Composer send={() => {}} disabledReason={null} members={members} />, {});
+    await userEvent.click(screen.getByRole('button', { name: 'Mention someone' }));
+    expect(screen.getByRole('textbox')).toHaveValue('@');
+    expect(screen.getByRole('option', { name: 'Mention Ada' })).toBeInTheDocument();
+  });
 });
 
 describe('useSend', () => {

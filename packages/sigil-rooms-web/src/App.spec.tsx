@@ -101,6 +101,10 @@ describe('App', () => {
     stubFetch({ authMode: 'cookie' }, { status: 200, body: { human_id: 'h', endpoint_id: 'ep', display_name: 'Ada', is_operator: false } });
     render(<App />);
     await screen.findByText('No rooms yet.');
+    await userEvent.click(screen.getByRole('button', { name: 'Signed in as Ada' }));
+    expect(await screen.findByRole('heading', { name: 'Settings' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Back to rooms' }));
+    await screen.findByText('No rooms yet.');
     await userEvent.click(screen.getByRole('button', { name: 'Settings' }));
     expect(await screen.findByRole('heading', { name: 'Settings' })).toBeInTheDocument();
     expect(window.location.pathname).toBe('/settings');
@@ -133,11 +137,12 @@ describe('App', () => {
     expect(within(screen.getByRole('navigation', { name: 'Main navigation' })).getByRole('button', { name: 'Rooms' })).not.toHaveAttribute('aria-current');
     await userEvent.click(await screen.findByRole('button', { name: 'Open in build' }));
     expect(window.location.pathname).toBe('/');
-    const row = (await screen.findByText('look @ep')).closest('li');
+    const messageRow = () => within(screen.getByRole('region', { name: 'Messages' })).findByText('look @ep');
+    const row = (await messageRow()).closest('li');
     expect(row).toHaveAttribute('aria-current', 'true');
     await userEvent.click(screen.getByRole('button', { name: 'Settings' }));
     await userEvent.click(within(screen.getByRole('navigation', { name: 'Main navigation' })).getByRole('button', { name: 'Rooms' }));
-    expect((await screen.findByText('look @ep')).closest('li')).not.toHaveAttribute('aria-current');
+    expect((await messageRow()).closest('li')).not.toHaveAttribute('aria-current');
   });
 
   it('keeps the thread and envelope inspector mutually exclusive', async () => {

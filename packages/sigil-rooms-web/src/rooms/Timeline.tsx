@@ -375,7 +375,7 @@ export function Timeline({
           />
         )} />
         {approvals.map(({ approver_name, approval_url }, index) => (
-          <li key={approval_url ?? index}>
+          <li key={approval_url ?? index} data-trust="held">
             <strong>Approval required</strong>
             <span>Waiting for {approver_name}</span>
             {approval_url && <a href={approval_url} target="_blank" rel="noreferrer">Open approval page (opens in a new tab)</a>}
