@@ -1,0 +1,16 @@
+sigil/bridges/v1/room-bridge.mjs
+  h_5c172e9b435f5a 146-173,199
+sigil/bridges/v1/room-bridge.test.mjs
+  h_5c172e9b435f5a 112,114-130,133,135-143,198,202-206
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f6ef7ac22622a8eaf36dd49738577f550b67cd2c",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}

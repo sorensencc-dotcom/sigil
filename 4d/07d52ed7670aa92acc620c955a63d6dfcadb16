@@ -1,0 +1,16 @@
+README.md
+  h_5c172e9b435f5a 7-8,433
+docs/audits/2026-11-24-no-content-analytics.md
+  h_5c172e9b435f5a 108-139
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4d07d52ed7670aa92acc620c955a63d6dfcadb16",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
