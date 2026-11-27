@@ -109,13 +109,38 @@ test('Stop during the run aborts the CLI and posts nothing', async () => {
   assert.equal(relay.failed.length, 0);
 });
 
-test('Stop keeps the partial output the CLI wrote, in the outcome only', async () => {
+test('Stop closes the CLI, keeps the partial text, and a reload shows it beside invocation_stopped', async () => {
   const relay = fakeRelay({ runningAfterFirstPoll: [] });
-  const cli = { name: 'claude', run: ({ signal }) => new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error('x'), { code: 'CLI_CANCELLED', partial: 'half an ans' })))) };
+  const history = [{ room_seq: '2', message_id: 'evt_stop', envelope: { message_id: 'evt_stop', message_type: 'room.event', body: { kind: 'invocation_stopped', invocation_id: 'inv_1', endpoint_ids: ['ep_claude'], reason: 'stopped' } } }];
+  relay.sendEnvelope = async (envelope) => {
+    relay.sent.push(envelope);
+    history.push({ room_seq: '3', message_id: envelope.message_id, envelope });
+    return { code: 'ACCEPTED' };
+  };
+  relay.listRoomMessages = async () => ({ items: history, next_after_seq: '3' });
+  let upstreamClosed = false;
+  const cli = {
+    name: 'claude',
+    run: ({ signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => {
+        upstreamClosed = signal.aborted;
+        reject(Object.assign(new Error('x'), { code: 'CLI_CANCELLED', partial: 'half an ans' }));
+      });
+    }),
+  };
   const { instance } = bridge(relay, cli);
   assert.deepEqual(await instance.handle({ envelope: trigger }), { outcome: 'cancelled', partial: 'half an ans' });
-  assert.equal(relay.sent.length, 0);
+  assert.equal(upstreamClosed, true);
   assert.equal(relay.failed.length, 0);
+  assert.equal(relay.sent.length, 1);
+  assert.equal(relay.sent[0].idempotency_key, 'room_partial_inv_1');
+  assert.deepEqual(relay.sent[0].body, { text: 'half an ans', thread_root_id: 'msg_t', mentions: [] });
+  const reloaded = await relay.listRoomMessages('room_1');
+  const stopped = reloaded.items.filter((item) => item.envelope.message_type === 'room.event' && item.envelope.body.kind === 'invocation_stopped');
+  const partials = reloaded.items.filter((item) => item.envelope.body?.text === 'half an ans');
+  assert.equal(stopped.length, 1);
+  assert.equal(stopped[0].envelope.body.reason, 'stopped');
+  assert.equal(partials.length, 1);
 });
 
 test('a CLI failure fails the invocation', async () => {
@@ -170,12 +195,15 @@ test('a CLI that rejects with another code after Stop is cancelled, not failed',
   assert.equal(relay.failed.length, 0);
 });
 
-test('a CLI that resolves after Stop is cancelled and posts nothing', async () => {
+test('a CLI that resolves after Stop keeps the late text and does not resume', async () => {
   const relay = fakeRelay({ runningAfterFirstPoll: [] });
   const cli = { name: 'claude', run: ({ signal }) => new Promise((resolve) => signal.addEventListener('abort', () => resolve({ text: 'late', sessionId: 's' }))) };
   const { instance, sessions } = bridge(relay, cli);
-  assert.deepEqual(await instance.handle({ envelope: trigger }), { outcome: 'cancelled' });
-  assert.equal(relay.sent.length, 0);
+  assert.deepEqual(await instance.handle({ envelope: trigger }), { outcome: 'cancelled', partial: 'late' });
+  assert.equal(relay.sent.length, 1);
+  assert.equal(relay.sent[0].idempotency_key, 'room_partial_inv_1');
+  assert.equal(relay.sent[0].idempotency_key.startsWith('room_reply_'), false);
+  assert.deepEqual(relay.sent[0].body, { text: 'late', thread_root_id: 'msg_t', mentions: [] });
   assert.equal(sessions.get('room_1'), null);
 });
 

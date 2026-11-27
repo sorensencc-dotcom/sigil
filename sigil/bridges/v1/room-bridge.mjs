@@ -143,10 +143,34 @@ export function createRoomBridge({ identity, relay, outbox, cli, sessions, pollI
     };
 
     const controller = new AbortController();
-    // A stopped turn keeps whatever the CLI had printed; only the outcome carries it.
-    const cancelled = (error) => {
-      const partial = typeof error?.partial === 'string' ? error.partial.slice(0, TEXT_MAX) : '';
-      return partial ? { outcome: 'cancelled', partial } : { outcome: 'cancelled' };
+    // A stopped turn keeps whatever the CLI had printed. The text is posted
+    // with no mentions, so it survives reload and does not wake another agent.
+    // The relay's invocation_stopped event is what marks it as not a finished reply.
+    const cancelled = async (error) => {
+      const raw = typeof error?.partial === 'string' ? error.partial : '';
+      const partial = raw.slice(0, TEXT_MAX);
+      if (!partial.trim()) return { outcome: 'cancelled' };
+      const now = new Date();
+      const queued = outbox.queue({
+        protocol: 'sigil/1',
+        message_id: `msg_${crypto.randomUUID()}`,
+        conversation_id: roomId,
+        message_type: 'room.message',
+        broadcast_scope: { conversation_id: roomId },
+        correlation_id: envelope.message_id,
+        body: { text: partial, thread_root_id: threadRootId, mentions: [] },
+        context_refs: [],
+        capabilities: [],
+        idempotency_key: `room_partial_${invocation.invocation_id}`,
+        created_at: now.toISOString(),
+        expires_at: new Date(now.getTime() + REPLY_TTL_MS).toISOString(),
+      });
+      try {
+        await relay.sendEnvelope(queued.envelope);
+      } catch (sendError) {
+        logger.warn?.(`room bridge: partial reply not stored: ${sendError.message}`);
+      }
+      return { outcome: 'cancelled', partial };
     };
     const watcher = setInterval(async () => {
       try {
@@ -172,7 +196,7 @@ export function createRoomBridge({ identity, relay, outbox, cli, sessions, pollI
     } finally {
       clearInterval(watcher);
     }
-    if (controller.signal.aborted) return { outcome: 'cancelled' };
+    if (controller.signal.aborted) return cancelled({ partial: turn.result.text });
 
     const { context, result } = turn;
     const text = result.text.slice(0, TEXT_MAX);
