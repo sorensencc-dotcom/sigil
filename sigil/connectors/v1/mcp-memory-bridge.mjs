@@ -16,8 +16,7 @@ const HANDOFF_MEMORY_TOOL = Object.freeze({
     type: 'object',
     properties: {
       handoff: { type: 'object', description: 'Handoff memory bundle with files and transcript-backed assertions' },
-      transcript: { type: 'object', description: 'Exported sigil.room-transcript v1 document' },
-      pinnedKeys: { type: 'array', description: 'Optional trusted Ed25519 public key pins' },
+      transcript: { type: 'object', description: 'Exported sigil.room-transcript v1 document. Cited entries must be signed by a key the connector is configured to trust.' },
       maxFiles: { type: 'integer', maximum: MAX_HANDOFF_FILES },
       maxChars: { type: 'integer', maximum: MAX_HANDOFF_CHARS },
     },
@@ -119,7 +118,28 @@ function createFallbackKb() {
   };
 }
 
-export function createMcpMemoryBridge({ kbServerPath, kbModule } = {}) {
+// A tools/call can report failure as a JSON-RPC error or, per MCP, as a
+// result with isError set (kb-sync's vfs_upsert_document does the latter).
+function toolCallFailure(response) {
+  if (!response || typeof response !== 'object') return { message: 'no response from memory backend' };
+  if (response.error) return response.error;
+  if (response.result?.isError) {
+    const text = Array.isArray(response.result.content)
+      ? response.result.content.map((part) => (typeof part?.text === 'string' ? part.text : '')).filter(Boolean).join(' ')
+      : '';
+    return { message: text || 'memory backend reported an error', result: response.result };
+  }
+  return null;
+}
+
+/**
+ * handoffTrustedKeys: Ed25519 keys ({ endpoint_id, key_id, public_key_spki })
+ * whose signatures commit_handoff_memory accepts as evidence. Caller-supplied
+ * pins are ignored, since a caller could pin a key it generated itself. With
+ * no trusted keys configured, commit_handoff_memory refuses every handoff.
+ */
+export function createMcpMemoryBridge({ kbServerPath, kbModule, handoffTrustedKeys = [] } = {}) {
+  const trustedKeys = Array.isArray(handoffTrustedKeys) ? handoffTrustedKeys : [];
   let kbModulePromise = null;
 
   async function getKbModule() {
@@ -251,11 +271,23 @@ export function createMcpMemoryBridge({ kbServerPath, kbModule } = {}) {
         const args = rpcMessage.params.arguments ?? {};
         const verdict = await verifyHandoffMemory(args.handoff, {
           transcript: args.transcript,
-          pinnedKeys: args.pinnedKeys ?? args.pinned_keys ?? [],
+          pinnedKeys: trustedKeys,
+          requirePinnedSigners: true,
+          requireFileAssertions: true,
           maxFiles: args.maxFiles ?? args.max_files,
           maxChars: args.maxChars ?? args.max_chars,
         });
-        if (!verdict.ok) {
+        if (!trustedKeys.length) {
+          rpcResponse = {
+            jsonrpc: '2.0',
+            id: rpcMessage.id ?? null,
+            error: {
+              code: -32003,
+              message: 'Handoff memory rejected: no trusted signer keys are configured for this connector',
+              data: verdict,
+            },
+          };
+        } else if (!verdict.ok) {
           rpcResponse = {
             jsonrpc: '2.0',
             id: rpcMessage.id ?? null,
@@ -280,8 +312,9 @@ export function createMcpMemoryBridge({ kbServerPath, kbModule } = {}) {
                 arguments: { path: file.path, content: file.content },
               },
             });
-            if (upsertRes?.error) {
-              upsertFailure = { file: file.path, error: upsertRes.error };
+            const failure = toolCallFailure(upsertRes);
+            if (failure) {
+              upsertFailure = { file: file.path, error: failure };
               break;
             }
             committedFiles.push(file.path);
@@ -292,7 +325,7 @@ export function createMcpMemoryBridge({ kbServerPath, kbModule } = {}) {
               id: rpcMessage.id ?? null,
               error: {
                 code: -32603,
-                message: `Failed to persist verified handoff file ${upsertFailure.file}: ${upsertFailure.error.message ?? 'unknown error'}`,
+                message: `Failed to persist verified handoff file ${upsertFailure.file}: ${upsertFailure.error.message ?? 'unknown error'}. ${committedFiles.length} earlier file(s) were already written and were not rolled back.`,
                 data: { committed_files: committedFiles, failed_file: upsertFailure.file, cause: upsertFailure.error },
               },
             };

@@ -5,7 +5,6 @@
 //   1. Conciseness budget: <= 12 files and <= 50,000 characters.
 //   2. Transcript verification: every memory assertion must be corroborated by
 //      a cryptographically verified `sigil.room-transcript` v1 document.
-import { canonicalJson } from '../../relay/v1/jcs.mjs';
 import { verifyTranscript } from './transcript-verify.mjs';
 
 export const HANDOFF_MEMORY_FORMAT = 'sigil.handoff-memory';
@@ -24,7 +23,13 @@ export const HANDOFF_PROBLEM = Object.freeze({
   EVIDENCE_NOT_FOUND: 'EVIDENCE_NOT_FOUND',
   EVIDENCE_MISMATCH: 'EVIDENCE_MISMATCH',
   QUOTE_NOT_FOUND: 'QUOTE_NOT_FOUND',
+  UNCORROBORATED_FILE: 'UNCORROBORATED_FILE',
+  UNTRUSTED_SIGNER: 'UNTRUSTED_SIGNER',
 });
+
+// Shortest quote or claim (after whitespace normalization) that can count as
+// evidence. Anything shorter matches almost any message.
+export const MIN_EVIDENCE_TEXT_CHARS = 4;
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -54,26 +59,53 @@ function normalizeRelativePath(rawPath) {
   return clean.join('/');
 }
 
-function extractEntrySearchableText(envelope) {
-  const parts = [];
-  const body = envelope?.body;
-  if (typeof body === 'string') {
-    parts.push(body);
-  } else if (isObject(body)) {
-    for (const key of ['text', 'summary', 'instruction']) {
-      if (typeof body[key] === 'string' && body[key]) parts.push(body[key]);
-    }
-    for (const key of ['findings', 'verification', 'artifacts']) {
-      if (Array.isArray(body[key])) {
-        for (const item of body[key]) {
-          if (typeof item === 'string') parts.push(item);
-          else if (isObject(item)) parts.push(canonicalJson(item));
-        }
-      }
-    }
-    parts.push(canonicalJson(body));
+// Collect the string values of a message body (never its keys), each
+// normalized on its own, so a quote must sit inside one value and cannot
+// match JSON syntax, field names, or text spanning two fields.
+function collectStringLeaves(value, out, depth = 0) {
+  if (depth > 32) return out;
+  if (typeof value === 'string') {
+    const text = normalizeText(value);
+    if (text) out.push(text);
+  } else if (Array.isArray(value)) {
+    for (const item of value) collectStringLeaves(item, out, depth + 1);
+  } else if (isObject(value)) {
+    for (const key of Object.keys(value)) collectStringLeaves(value[key], out, depth + 1);
   }
-  return normalizeText(parts.join(' '));
+  return out;
+}
+
+function extractEntryTextFields(envelope) {
+  return collectStringLeaves(envelope?.body, []);
+}
+
+const WORD_CHAR = /[\p{L}\p{N}_]/u;
+
+// True when `needle` occurs in `haystack` without cutting a word in half at
+// either end ("hello 1" must not match "hello 10").
+function containsAtWordBoundary(haystack, needle) {
+  const needsLeft = WORD_CHAR.test(needle[0]);
+  const needsRight = WORD_CHAR.test(needle[needle.length - 1]);
+  let from = 0;
+  while (from <= haystack.length - needle.length) {
+    const at = haystack.indexOf(needle, from);
+    if (at === -1) return false;
+    const before = at > 0 ? haystack[at - 1] : '';
+    const after = haystack[at + needle.length] ?? '';
+    const leftOk = !needsLeft || !before || !WORD_CHAR.test(before);
+    const rightOk = !needsRight || !after || !WORD_CHAR.test(after);
+    if (leftOk && rightOk) return true;
+    from = at + 1;
+  }
+  return false;
+}
+
+function fieldsContain(fields, needle) {
+  return fields.some((field) => containsAtWordBoundary(field, needle));
+}
+
+function keyRef(endpointId, keyId) {
+  return `${endpointId}\u0000${keyId}`;
 }
 
 function resolveBudgetLimits({ maxFiles = MAX_HANDOFF_FILES, maxChars = MAX_HANDOFF_CHARS } = {}) {
@@ -197,6 +229,13 @@ export function evaluateConcisenessBudget(handoff, options = {}) {
  * Verify a handoff memory bundle against both the conciseness budget
  * (<= 12 files / <= 50,000 chars) and a cryptographically verified Sigil room
  * transcript. Never throws on untrusted input; fails closed with structured problems.
+ *
+ * requireFileAssertions (default true): every file in handoff.files must be
+ *   named by at least one assertion whose evidence all checks out, so no file
+ *   is stored on the strength of claims made about other files.
+ * requirePinnedSigners (default false): every cited transcript entry must be
+ *   signed by a key in pinnedKeys. Without it, a transcript is checked only
+ *   against the keys it carries itself, which anyone can generate.
  */
 export async function verifyHandoffMemory(
   handoff,
@@ -206,6 +245,8 @@ export async function verifyHandoffMemory(
     maxFiles = MAX_HANDOFF_FILES,
     maxChars = MAX_HANDOFF_CHARS,
     requireAssertions = true,
+    requireFileAssertions = true,
+    requirePinnedSigners = false,
   } = {}
 ) {
   const problems = [];
@@ -308,22 +349,31 @@ export async function verifyHandoffMemory(
   // 3. Index verified entries and corroborate every memory assertion.
   const byMessageId = new Map();
   const bySeq = new Map();
-  const searchableByMessageId = new Map();
+  const fieldsByEntry = new Map();
+  const pinnedRefs = new Set();
+  for (const pin of Array.isArray(pinnedKeys) ? pinnedKeys : []) {
+    if (isObject(pin) && typeof pin.endpoint_id === 'string' && typeof pin.key_id === 'string') {
+      pinnedRefs.add(keyRef(pin.endpoint_id, pin.key_id));
+    }
+  }
 
   for (const entry of backingTranscript.entries) {
+    fieldsByEntry.set(entry, extractEntryTextFields(entry.envelope));
     if (typeof entry.message_id === 'string') {
       byMessageId.set(entry.message_id, entry);
-      searchableByMessageId.set(entry.message_id, extractEntrySearchableText(entry.envelope));
     }
     const seq = parseSeqString(entry.room_seq);
     if (seq !== null) bySeq.set(seq, entry);
   }
 
   let checkedAssertions = 0;
+  const corroboratedFiles = new Set();
   for (let i = 0; i < assertions.length; i += 1) {
     const assertion = assertions[i];
     const index = i + 1;
     const assertionId = isObject(assertion) && typeof assertion.id === 'string' && assertion.id ? assertion.id : null;
+    const problemsBefore = problems.length;
+    let assertionFile = null;
     const addAssertionProblem = (code, message, extra = {}) => problems.push({
       code,
       message,
@@ -352,6 +402,7 @@ export async function verifyHandoffMemory(
 
     if (assertion.file !== undefined && assertion.file !== null) {
       const cleanFile = normalizeRelativePath(assertion.file);
+      if (cleanFile && budgetEval.normalized_paths.has(cleanFile)) assertionFile = cleanFile;
       if (!cleanFile || !budgetEval.normalized_paths.has(cleanFile)) {
         addAssertionProblem(
           HANDOFF_PROBLEM.EVIDENCE_MISMATCH,
@@ -432,20 +483,32 @@ export async function verifyHandoffMemory(
         }
       }
 
-      const searchable = searchableByMessageId.get(entryMessageId) ?? extractEntrySearchableText(entry.envelope);
-      const hasQuote = 'quote' in ref || 'excerpt' in ref;
-      if (hasQuote) {
-        const rawQuote = 'quote' in ref ? ref.quote : ref.excerpt;
-        const normalizedQuote = typeof rawQuote === 'string' ? normalizeText(rawQuote) : '';
-        if (!normalizedQuote) {
+      if (requirePinnedSigners) {
+        const signerRef = keyRef(entry.envelope?.sender?.endpoint_id, entry.envelope?.signature?.key_id);
+        if (!pinnedRefs.has(signerRef)) {
           addAssertionProblem(
-            HANDOFF_PROBLEM.UNCORROBORATED_ASSERTION,
-            'evidence quote must be a non-empty string',
+            HANDOFF_PROBLEM.UNTRUSTED_SIGNER,
+            `evidence entry ${entryMessageId ?? `room_seq ${entrySeq}`} is not signed by a pinned key`,
             { message_id: entryMessageId, room_seq: entrySeq }
           );
           continue;
         }
-        if (!searchable.includes(normalizedQuote)) {
+      }
+
+      const fields = fieldsByEntry.get(entry) ?? extractEntryTextFields(entry.envelope);
+      const hasQuote = 'quote' in ref || 'excerpt' in ref;
+      if (hasQuote) {
+        const rawQuote = 'quote' in ref ? ref.quote : ref.excerpt;
+        const normalizedQuote = typeof rawQuote === 'string' ? normalizeText(rawQuote) : '';
+        if (normalizedQuote.length < MIN_EVIDENCE_TEXT_CHARS) {
+          addAssertionProblem(
+            HANDOFF_PROBLEM.UNCORROBORATED_ASSERTION,
+            `evidence quote must be at least ${MIN_EVIDENCE_TEXT_CHARS} characters`,
+            { message_id: entryMessageId, room_seq: entrySeq }
+          );
+          continue;
+        }
+        if (!fieldsContain(fields, normalizedQuote)) {
           addAssertionProblem(
             HANDOFF_PROBLEM.QUOTE_NOT_FOUND,
             `quoted text not found in verified transcript entry ${entryMessageId ?? `room_seq ${entrySeq}`}`,
@@ -453,12 +516,26 @@ export async function verifyHandoffMemory(
           );
           continue;
         }
-      } else if (!searchable.includes(claim)) {
+      } else if (claim.length < MIN_EVIDENCE_TEXT_CHARS || !fieldsContain(fields, claim)) {
         addAssertionProblem(
           HANDOFF_PROBLEM.UNCORROBORATED_ASSERTION,
           `evidence omits quote and claim text does not appear in verified transcript entry ${entryMessageId ?? `room_seq ${entrySeq}`}`,
           { message_id: entryMessageId, room_seq: entrySeq }
         );
+      }
+    }
+
+    if (assertionFile && problems.length === problemsBefore) corroboratedFiles.add(assertionFile);
+  }
+
+  if (requireFileAssertions) {
+    for (const filePath of budgetEval.normalized_paths) {
+      if (!corroboratedFiles.has(filePath)) {
+        problems.push({
+          code: HANDOFF_PROBLEM.UNCORROBORATED_FILE,
+          file: filePath,
+          message: `file ${filePath} is not named by any fully corroborated assertion`,
+        });
       }
     }
   }
