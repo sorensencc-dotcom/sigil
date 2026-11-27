@@ -52,7 +52,7 @@ import { cmdIngressDoctor, cmdIngressStatus } from './ingress-commands.mjs';
 import { cmdAgentSetInvokable, cmdHumanAdd, cmdHumanAddToRoom, cmdHumanSuspend, cmdHumanUnsuspend } from './human-commands.mjs';
 import { runRoomReport } from './room-report-command.mjs';
 import { runRoomJoin } from './room-agent-invite-command.mjs';
-import { runRoomExport, runVerify } from './transcript-commands.mjs';
+import { runRoomExport, runVerify, runVerifyHandoff } from './transcript-commands.mjs';
 import { cmdIdentityRevoke, cmdInviteCreate, cmdInviteList, cmdInviteRevoke } from './oauth-commands.mjs';
 import { provisionIngressEndpoint } from './agentmail-provision.mjs';
 import { createAgentMailDeployment } from '../ingress/v1/agentmail-bootstrap.mjs';
@@ -110,6 +110,7 @@ Commands:
                                                             Post an Ironbots report as a signed room.message. Exit 0: posted, reconciled, policy skip, already_posted, or operator --drop-pending/--break-lock/--break-state-lock. Exit 1: usage. Exit 2: permanent refusal (report_refused). Exit 3: transient, pending unresolved, or lock_timeout. Also: --state path --break-lock <bot> | --break-state-lock
   room export --room id --out path [--database-url url]    Export a room transcript (envelopes plus sender public keys) as JSON
   verify <file> [--pin keys.json] [--json]                 Verify an exported room transcript offline (no relay): Ed25519 over JCS for every envelope; reports bad, missing, or reordered entries by entry number. Exit 0: verified. Exit 1: verification failed. Exit 2: usage or unreadable file
+  verify-handoff <handoff.json> [--transcript file] [--pin keys.json] [--json]  Verify a concise handoff memory bundle (<= 12 files / <= 50K chars) against a signed room transcript offline. Exit 0: verified. Exit 1: rejected. Exit 2: usage or unreadable file
   endpoint revoke <endpoint_id> [--database-url url]       Revoke an endpoint and retire all of its signing keys
   federation outbox list [--database-url url]              List queue-mode federation forward jobs: state counts, then one row per job (no envelope bodies)
   federation outbox show <id> [--database-url url]         Show one relay_jobs federation row's metadata (no envelope body)
@@ -2198,6 +2199,10 @@ export async function main() {
     else if (command === 'room' && sub === 'join') await runRoomJoin(rest);
     else if (command === 'verify') {
       const code = await runVerify(process.argv.slice(3));
+      if (code) process.exitCode = code;
+    }
+    else if (command === 'verify-handoff') {
+      const code = await runVerifyHandoff(process.argv.slice(3));
       if (code) process.exitCode = code;
     }
     else if (command === 'room' && sub === 'export') {
