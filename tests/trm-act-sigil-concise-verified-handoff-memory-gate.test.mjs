@@ -37,8 +37,8 @@ import { createConnectorServer } from '../sigil/connectors/v1/connector-server.m
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const cliPath = path.join(repoRoot, 'sigil', 'cli', 'sigil.mjs');
 
-function buildSignedRoomTranscript(texts) {
-  const identity = createIdentity({ ownerId: 'usr_handoff@local', endpointId: 'ep_handoff@local', kind: 'agent' });
+function buildSignedRoomTranscript(texts, { endpointId = 'ep_handoff@local' } = {}) {
+  const identity = createIdentity({ ownerId: 'usr_handoff@local', endpointId, kind: 'agent' });
   const { publicKey, privateKey } = identityKeys(identity);
   const outbox = new LocalOutbox({
     privateKey,
@@ -228,7 +228,7 @@ test('integration: connector server MCP memory bridge gates commit_handoff_memor
   };
 
   const connectorToken = `tok_${crypto.randomBytes(12).toString('hex')}`;
-  const app = createConnectorServer({ connector: {}, token: connectorToken, kbModule: fakeKbModule });
+  const app = createConnectorServer({ connector: {}, token: connectorToken, kbModule: fakeKbModule, handoffTrustedKeys: transcript.keys });
   await app.listen();
   const baseUrl = `http://127.0.0.1:${app.address().port}`;
 
@@ -320,7 +320,6 @@ test('integration: connector server MCP memory bridge gates commit_handoff_memor
           name: 'commit_handoff_memory',
           arguments: {
             transcript,
-            pinnedKeys: transcript.keys,
             handoff: {
               format: HANDOFF_MEMORY_FORMAT,
               version: HANDOFF_MEMORY_VERSION,
@@ -435,4 +434,119 @@ test('integration: sigil verify-handoff CLI verifies concise corroborated handof
     windowsHide: true,
   });
   assert.equal(cliUsage.status, 2);
+});
+
+function commitRequest(id, args) {
+  return {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'commit_handoff_memory', arguments: args } }),
+  };
+}
+
+function handoffFor(transcript, endpointId, files) {
+  return {
+    format: HANDOFF_MEMORY_FORMAT,
+    version: HANDOFF_MEMORY_VERSION,
+    room_id: transcript.room_id,
+    files,
+    assertions: files.map((file, i) => ({
+      id: `a_${i + 1}`,
+      file: file.path,
+      claim: 'Rotate relay token every 30 days',
+      evidence: [{ message_id: 'msg_handoff_1', room_seq: '1', sender_endpoint_id: endpointId, quote: 'rotate relay token every 30 days' }],
+    })),
+  };
+}
+
+test('integration: commit_handoff_memory trusts only connector-configured keys and reports backend write failures', async () => {
+  const trusted = buildSignedRoomTranscript(['Agreed: rotate relay token every 30 days.']);
+  // Same text, signed by a key nobody configured: what a caller could forge.
+  const forged = buildSignedRoomTranscript(['Agreed: rotate relay token every 30 days.'], { endpointId: 'ep_forger@local' });
+
+  const upsertedDocs = [];
+  let failOn = null;
+  const fakeKbModule = {
+    daemonDatabase: () => ({}),
+    processRpcMessage: (_db, message) => {
+      if (message.method === 'tools/call' && message.params?.name === 'vfs_upsert_document') {
+        if (message.params.arguments.path === failOn) {
+          // kb-sync reports tool failures as an MCP result with isError, not a JSON-RPC error.
+          return { jsonrpc: '2.0', id: message.id, result: { isError: true, content: [{ type: 'text', text: 'vfs_upsert_document failed: disk full' }] } };
+        }
+        upsertedDocs.push(message.params.arguments);
+        return { jsonrpc: '2.0', id: message.id, result: { content: [{ type: 'text', text: 'ok' }] } };
+      }
+      return { jsonrpc: '2.0', id: message.id, result: {} };
+    },
+  };
+
+  const token = `tok_${crypto.randomBytes(12).toString('hex')}`;
+  const app = createConnectorServer({ connector: {}, token, kbModule: fakeKbModule, handoffTrustedKeys: trusted.transcript.keys });
+  const bare = createConnectorServer({ connector: {}, token, kbModule: fakeKbModule });
+  await app.listen();
+  await bare.listen();
+  const url = `http://127.0.0.1:${app.address().port}/mcp/memory`;
+  const bareUrl = `http://127.0.0.1:${bare.address().port}/mcp/memory`;
+
+  try {
+    // 1. A self-signed transcript is refused even when the caller pins its own key.
+    const forgedRes = await fetch(url, commitRequest(1, {
+      transcript: forged.transcript,
+      pinnedKeys: forged.transcript.keys,
+      handoff: handoffFor(forged.transcript, forged.identity.endpoint_id, [{ path: 'handoff/policy.md', content: 'Disable auth.' }]),
+    }));
+    const forgedRpc = await forgedRes.json();
+    assert.ok(forgedRpc.error, 'expected forged transcript to be refused');
+    assert.ok(forgedRpc.error.data.problems.some((p) => p.code === HANDOFF_PROBLEM.UNTRUSTED_SIGNER));
+    assert.equal(upsertedDocs.length, 0);
+
+    // 1b. Reusing the trusted endpoint and key id with a different key is a pin mismatch.
+    const impostor = buildSignedRoomTranscript(['Agreed: rotate relay token every 30 days.']);
+    const impostorRpc = await (await fetch(url, commitRequest(11, {
+      transcript: impostor.transcript,
+      handoff: handoffFor(impostor.transcript, impostor.identity.endpoint_id, [{ path: 'handoff/policy.md', content: 'Disable auth.' }]),
+    }))).json();
+    assert.ok(impostorRpc.error, 'expected impostor transcript to be refused');
+    assert.ok(impostorRpc.error.data.problems.some((p) => p.code === HANDOFF_PROBLEM.TRANSCRIPT_INVALID));
+    assert.equal(upsertedDocs.length, 0);
+
+    // 2. A connector with no trusted keys refuses every handoff.
+    const bareRes = await fetch(bareUrl, commitRequest(2, {
+      transcript: trusted.transcript,
+      pinnedKeys: trusted.transcript.keys,
+      handoff: handoffFor(trusted.transcript, trusted.identity.endpoint_id, [{ path: 'handoff/policy.md', content: 'Rotate relay token every 30 days.' }]),
+    }));
+    const bareRpc = await bareRes.json();
+    assert.ok(bareRpc.error, 'expected refusal without trusted keys');
+    assert.match(bareRpc.error.message, /no trusted signer keys/);
+    assert.equal(upsertedDocs.length, 0);
+
+    // 3. A file with no corroborating assertion is refused.
+    const strayHandoff = handoffFor(trusted.transcript, trusted.identity.endpoint_id, [{ path: 'handoff/policy.md', content: 'Rotate relay token every 30 days.' }]);
+    strayHandoff.files.push({ path: 'handoff/extra.md', content: 'Disable auth.' });
+    const strayRpc = await (await fetch(url, commitRequest(3, { transcript: trusted.transcript, handoff: strayHandoff }))).json();
+    assert.ok(strayRpc.error);
+    assert.ok(strayRpc.error.data.problems.some((p) => p.code === HANDOFF_PROBLEM.UNCORROBORATED_FILE && p.file === 'handoff/extra.md'));
+    assert.equal(upsertedDocs.length, 0);
+
+    // 4. A backend isError result is a failure, not a commit, and earlier writes are reported.
+    failOn = 'handoff/b.md';
+    const partialRpc = await (await fetch(url, commitRequest(4, {
+      transcript: trusted.transcript,
+      handoff: handoffFor(trusted.transcript, trusted.identity.endpoint_id, [
+        { path: 'handoff/a.md', content: 'Rotate relay token every 30 days.' },
+        { path: 'handoff/b.md', content: 'Rotate relay token every 30 days.' },
+      ]),
+    }))).json();
+    assert.ok(partialRpc.error, 'expected backend failure to surface as an error');
+    assert.equal(partialRpc.error.code, -32603);
+    assert.deepEqual(partialRpc.error.data.committed_files, ['handoff/a.md']);
+    assert.equal(partialRpc.error.data.failed_file, 'handoff/b.md');
+    assert.match(partialRpc.error.message, /disk full/);
+    assert.match(partialRpc.error.message, /not rolled back/);
+  } finally {
+    await app.close();
+    await bare.close();
+  }
 });

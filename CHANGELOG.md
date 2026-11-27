@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- **Handoff memory gate hardening (follow-up to #323).** `verifyHandoffMemory` now refuses a handoff unless every file is named by an assertion whose evidence all checks out (`UNCORROBORATED_FILE`; opt out with `requireFileAssertions: false`). Quotes and claims match whole words inside one string value of the message body, never field names, and must be at least 4 characters. New `requirePinnedSigners` option (`UNTRUSTED_SIGNER`) accepts evidence only from pinned keys. The MCP bridge's `commit_handoff_memory` now trusts only keys the connector is configured with (`handoffTrustedKeys`, `node sigil/cli/connector-daemon.mjs --handoff-pins <file>`), ignores caller-supplied pins, refuses every handoff when none are configured, and treats a backend `isError` result as a failed write instead of a commit.
+
 ## [0.2.3] - 2026-11-13
 
 ### Added

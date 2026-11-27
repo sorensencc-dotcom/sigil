@@ -15,7 +15,8 @@ const options = {
   port: { type: 'string', default: '4411' },
   'relay-url': { type: 'string' },
   identity: { type: 'string', default: '.sigil/grokbot.identity.json' },
-  token: { type: 'string', default: 'token_local_dev' }
+  token: { type: 'string', default: 'token_local_dev' },
+  'handoff-pins': { type: 'string' }
 };
 
 const { values } = parseArgs({ options, allowPositionals: true });
@@ -23,6 +24,21 @@ const port = parseInt(values.port, 10);
 const relayUrl = values['relay-url'];
 const identityPath = values.identity;
 const token = values.token;
+
+// Keys whose signed room messages commit_handoff_memory accepts as evidence:
+// a JSON array of { endpoint_id, key_id, public_key_spki }, or an exported
+// transcript's { keys: [...] }. Without it, commit_handoff_memory refuses.
+let handoffTrustedKeys = [];
+if (values['handoff-pins']) {
+  try {
+    const pinDoc = JSON.parse(fs.readFileSync(values['handoff-pins'], 'utf8'));
+    handoffTrustedKeys = Array.isArray(pinDoc) ? pinDoc : pinDoc.keys;
+    if (!Array.isArray(handoffTrustedKeys)) throw new Error('expected an array of keys or a document with a keys array');
+  } catch (error) {
+    console.error(`Cannot read --handoff-pins ${values['handoff-pins']}: ${error.message}`);
+    process.exit(1);
+  }
+}
 
 if (!fs.existsSync(identityPath)) {
   console.error(`Identity file not found: ${identityPath}`);
@@ -63,7 +79,8 @@ const connector = createConnector({
 const connectorApp = createConnectorServer({
   connector,
   token: identity.connector_token ?? token,
-  allowedCallers: []
+  allowedCallers: [],
+  handoffTrustedKeys
 });
 
 connectorApp.server.listen(port, '127.0.0.1', () => {
