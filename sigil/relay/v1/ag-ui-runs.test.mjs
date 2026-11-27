@@ -222,6 +222,8 @@ test('AG-UI cancellation calls the repository and reports the cancelled interrup
   const server = makeServer({ repository: {
     async listApprovalChallengesForConversation() { reads += 1; return reads === 1 ? [] : [challenge]; },
     async cancelApprovalChallenge(args) { cancelled.push(args); challenge.status = 'cancelled'; return { status: 'cancelled' }; },
+    // human_1 owns the worker endpoint that asked for the approval.
+    async lookupTrustedEndpoint(endpointId) { return endpointId === 'ep_worker' ? { endpoint_id: 'ep_worker', owner_id: 'human_1', kind: 'agent' } : null; },
   } });
   const port = await listen(server);
   t.after(() => { server.closeAllConnections(); server.close(); });
@@ -286,4 +288,84 @@ test('AG-UI starts a new run once the last interrupted run has no open interrupt
   assert.equal(response.status, 200);
   const events = response.text.trim().split('\n\n').map((frame) => JSON.parse(frame.slice('data: '.length)));
   assert.deepEqual(events.filter((event) => ['RUN_FINISHED', 'RUN_ERROR'].includes(event.type)).map((event) => event.type), ['RUN_FINISHED']);
+});
+
+test('AG-UI cancellation is refused for a member who does not own the approval', async (t) => {
+  const challenge = {
+    id: 'challenge_foreign', endpointId: 'ep_worker', actionHash: 'a'.repeat(64), expiresAt: challengeExpiresAt,
+    capabilities: ['filesystem/write'], status: 'pending', decisionStatus: null,
+    envelope: { message_id: 'msg_action', conversation_id: threadId, context_refs: ['msg_task'], capabilities: ['filesystem/write'], body: { task_id: taskId, path: '/tmp/a' } },
+  };
+  const cancelled = [];
+  const repository = {
+    async listApprovalChallengesForConversation() { return [challenge]; },
+    async cancelApprovalChallenge(args) { cancelled.push(args); challenge.status = 'cancelled'; return { status: 'cancelled' }; },
+    async lookupTrustedEndpoint(endpointId) { return endpointId === 'ep_worker' ? { endpoint_id: 'ep_worker', owner_id: 'human_1', kind: 'agent' } : null; },
+  };
+  const cancelEntry = (runId) => ({ threadId, runId, protocolVersion: '1.0', resume: [{ interruptId: challenge.id, status: 'cancelled' }] });
+
+  // Another human in the room, and an agent endpoint with no human behind the
+  // request, are both refused, and the approval stays pending.
+  for (const principal of [
+    { endpoint_id: 'ep_other', owner_id: 'human_2', human_id: 'human_2' },
+    { endpoint_id: 'ep_other_agent', owner_id: 'human_1' },
+  ]) {
+    const server = makeServer({ repository, authenticate: async () => principal });
+    const port = await listen(server);
+    t.after(() => { server.closeAllConnections(); server.close(); });
+    const response = await post(port, cancelEntry(`run_${principal.endpoint_id}`));
+    assert.equal(response.status, 403);
+    assert.equal(JSON.parse(response.text).code, 'APPROVAL_CANCEL_FORBIDDEN');
+  }
+  assert.deepEqual(cancelled, []);
+  assert.equal(challenge.status, 'pending');
+
+  // The endpoint that asked for the approval may withdraw it.
+  const requester = makeServer({ repository, authenticate: async () => ({ endpoint_id: 'ep_worker', owner_id: 'human_1' }) });
+  const requesterPort = await listen(requester);
+  t.after(() => { requester.closeAllConnections(); requester.close(); });
+  const response = await post(requesterPort, cancelEntry('run_requester'));
+  assert.equal(response.status, 200);
+  assert.deepEqual(cancelled.map(({ challengeId }) => challengeId), [challenge.id]);
+});
+
+test('AG-UI resume after a relay restart covers only the open interrupts, not earlier consumed rounds', async (t) => {
+  const makeChallenge = (id, round, messageId) => ({
+    id, endpointId: 'ep_worker', actionHash: 'a'.repeat(64), expiresAt: challengeExpiresAt,
+    capabilities: ['filesystem/write'], status: 'pending', decisionStatus: null, round,
+    envelope: { message_id: messageId, conversation_id: threadId, context_refs: ['msg_task'], capabilities: ['filesystem/write'], body: { task_id: taskId, path: `/tmp/${id}` } },
+  });
+  // Round one was approved and consumed before the restart; round two is open.
+  const earlier = Object.assign(makeChallenge('challenge_round_1', 1, 'msg_round_1'), { status: 'consumed', decisionStatus: 'consumed' });
+  const open = [makeChallenge('challenge_round_2a', 2, 'msg_round_2a'), makeChallenge('challenge_round_2b', 2, 'msg_round_2b')];
+  let history = [taskMessage];
+  // A fresh server has no record of the last interrupted run, as after a restart.
+  const server = makeServer({ repository: {
+    async listApprovalChallengesForConversation() { return [earlier, ...open]; },
+    async listRoomMessages(_room, afterSeq) { return history.filter((row) => BigInt(row.room_seq) > BigInt(afterSeq)); },
+  } });
+  const port = await listen(server);
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const resume = (runId, ids) => ({ threadId, runId, protocolVersion: '1.0', resume: ids.map((interruptId) => ({ interruptId, status: 'resolved' })) });
+  const terminal = (response) => response.text.trim().split('\n\n').map((frame) => JSON.parse(frame.slice('data: '.length)))
+    .filter((event) => ['RUN_FINISHED', 'RUN_ERROR'].includes(event.type)).map((event) => [event.type, event.code ?? null]);
+
+  // Leaving out an open interrupt still fails coverage.
+  const partial = await post(port, resume('run_partial', ['challenge_round_2a']));
+  assert.equal(partial.status, 200);
+  assert.deepEqual(terminal(partial), [['RUN_ERROR', 'INTERRUPT_COVERAGE']]);
+
+  // An interrupt from another task fails coverage too.
+  const foreign = await post(port, resume('run_foreign', ['challenge_round_2a', 'challenge_round_2b', 'challenge_unknown']));
+  assert.deepEqual(terminal(foreign), [['RUN_ERROR', 'INTERRUPT_COVERAGE']]);
+
+  // Both open interrupts, without the consumed first round, resume the run.
+  open.forEach((challenge) => { challenge.status = 'consumed'; challenge.decisionStatus = 'consumed'; });
+  history = [taskMessage, ...open.map((challenge, index) => ({
+    room_seq: String(index + 2), stream_seq: String(index + 12),
+    envelope: { message_id: challenge.envelope.message_id, conversation_id: threadId, message_type: 'room.message', sender: { endpoint_id: 'ep_worker' }, body: { text: `accepted ${challenge.id}` }, signature: { value: `signed-${challenge.id}` } },
+  })), { ...resultMessage, room_seq: '4' }];
+  const resumed = await post(port, resume('run_resumed', ['challenge_round_2a', 'challenge_round_2b']));
+  assert.equal(resumed.status, 200);
+  assert.deepEqual(terminal(resumed), [['RUN_FINISHED', null]]);
 });

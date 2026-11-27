@@ -500,18 +500,43 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
         let resumeState = new Map();
         let resumeFailure = null;
         if (resumeEntries) {
-          const resumeRun = interruptedRun ?? {
-            taskId: resolvedTaskId,
-            challengeIds: challenges.filter((challenge) => challengeMatchesTask(challenge, task)
-              && ['pending', 'approved', 'consumed'].includes(approvalState(challenge))).map((challenge) => challenge.id),
-          };
-          resumeChallenges = resumeRun.challengeIds.map((id) => challengeById.get(id)).filter(Boolean);
-          const actualIds = [...resumeRun.challengeIds].sort();
-          const suppliedIds = [...resumeIds].sort();
-          if (resumeRun.taskId !== resolvedTaskId || actualIds.length !== suppliedIds.length || actualIds.some((id, index) => id !== suppliedIds[index]) || resumeChallenges.length !== resumeRun.challengeIds.length) {
-            resumeFailure = ['INTERRUPT_COVERAGE', 'Resume must cover every interrupt from the last interrupted run'];
+          let resumeRun = interruptedRun;
+          if (resumeRun) {
+            resumeChallenges = resumeRun.challengeIds.map((id) => challengeById.get(id)).filter(Boolean);
+            const actualIds = [...resumeRun.challengeIds].sort();
+            const suppliedIds = [...resumeIds].sort();
+            if (resumeRun.taskId !== resolvedTaskId || actualIds.length !== suppliedIds.length || actualIds.some((id, index) => id !== suppliedIds[index]) || resumeChallenges.length !== resumeRun.challengeIds.length) {
+              resumeFailure = ['INTERRUPT_COVERAGE', 'Resume must cover every interrupt from the last interrupted run'];
+            }
+          } else {
+            // No record of the last interrupted run (the relay restarted since it
+            // ended). Rebuild it from the resume itself: every supplied interrupt
+            // must belong to this task, and every interrupt of the task that is
+            // still open must be supplied. Earlier rounds that were already
+            // consumed, cancelled, or expired may be left out.
+            resumeRun = { taskId: resolvedTaskId, challengeIds: [...resumeIds] };
+            resumeChallenges = resumeIds.map((id) => challengeById.get(id)).filter(Boolean);
+            const supplied = new Set(resumeIds);
+            const unknown = resumeChallenges.length !== resumeIds.length || resumeChallenges.some((challenge) => !challengeMatchesTask(challenge, task));
+            const uncovered = challenges.some((challenge) => challengeMatchesTask(challenge, task)
+              && ['pending', 'approved'].includes(approvalState(challenge)) && !supplied.has(challenge.id));
+            if (unknown || uncovered) resumeFailure = ['INTERRUPT_COVERAGE', 'Resume must cover every interrupt from the last interrupted run'];
           }
           const initialStates = new Map(resumeEntries.map((entry) => [entry.interruptId, challengeById.has(entry.interruptId) ? approvalState(challengeById.get(entry.interruptId)) : 'expired']));
+          // Only the approval's owner may cancel it: the endpoint that asked for
+          // the approval, or the human who owns that endpoint and would approve
+          // it. Check every entry before cancelling any, so a refused resume
+          // leaves every approval as it was.
+          if (!resumeFailure) {
+            for (const entry of resumeEntries) {
+              if (entry.status !== 'cancelled') continue;
+              const challenge = challengeById.get(entry.interruptId);
+              if (!challenge || initialStates.get(entry.interruptId) === 'consumed') continue;
+              if (principal.endpoint_id === challenge.endpointId) continue;
+              const approver = principal.human_id ? (await lookupTrustedEntry(repository, registry, challenge.endpointId))?.owner_id : null;
+              if (!approver || approver !== principal.human_id) return failAgUi(403, 'APPROVAL_CANCEL_FORBIDDEN', 'Only the approval\'s owner can cancel it');
+            }
+          }
           if (!resumeFailure && resumeEntries.some((entry) => entry.status === 'resolved' && initialStates.get(entry.interruptId) === 'pending')) {
             return failAgUi(409, 'INTERRUPT_PENDING', 'The approval is still pending');
           }
@@ -535,8 +560,10 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
               if (state === 'expired' || state === 'cancelled') resumeFailure ??= [state === 'expired' ? 'APPROVAL_EXPIRED' : 'APPROVAL_CANCELLED', state === 'expired' ? 'Approval challenge expired' : 'Approval challenge was cancelled'];
             }
           }
+          // A coverage failure keeps whatever record there was, so a rebuilt run
+          // that failed coverage is never remembered as the last interrupted run.
           if (resumeFailure && resumeFailure[0] !== 'INTERRUPT_COVERAGE') agUiInterruptedRuns.delete(threadId);
-          else agUiInterruptedRuns.set(threadId, resumeRun);
+          else if (!resumeFailure) agUiInterruptedRuns.set(threadId, resumeRun);
         }
         const runKey = `${threadId}\u0000${runId}`;
         if (agUiRunIds.has(runKey)) return failAgUi(409, 'RUN_ID_REUSED', 'runId has already been used for this thread');
