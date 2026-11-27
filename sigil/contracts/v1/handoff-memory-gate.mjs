@@ -46,7 +46,7 @@ function parseSeqString(value) {
 }
 
 // Pure POSIX relative path validation (no node:path dependency so module stays browser-safe).
-function normalizeRelativePath(rawPath) {
+export function normalizeRelativePath(rawPath) {
   if (typeof rawPath !== 'string' || !rawPath.trim()) return null;
   if (rawPath.includes('\0') || rawPath.includes('\\')) return null;
   if (rawPath.startsWith('/') || /^[A-Za-z]:/.test(rawPath)) return null;
