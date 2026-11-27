@@ -105,3 +105,35 @@ Nothing in this repository blocks "Signed messages. No content analytics." Befor
 - Add a test that every `logHop` and `recordAuditEvent` payload key is on an allow-list of id and status fields.
 - Truncate or drop CLI stderr in `CLI_FAILED` messages (F2).
 - If the slogan is published, record the line in the README so future changes are checked against it.
+
+## Recheck 2026-11-27
+
+Verdict unchanged. Still PASS for "Signed messages. No content analytics." The slogan is not in the repo and is not published. `git diff 0ed1ffa..HEAD` (the audit commit through current `main`) adds no `analytics`, `posthog`, `sentry`, `sendBeacon`, `telemetry`, `gtag`, `plausible`, or `mixpanel` lines, and no `logHop(` call changes. Rooms-web still depends only on React and React Query. In-browser signature verification (`packages/sigil-rooms-web/src/verify/verifyRow.ts`) checks signatures locally.
+
+Citations that moved, same behavior:
+
+- Envelope body insert is `sigil/relay/v1/postgres-repository.mjs:1302`. `recordAuditEvent` is at line 1932 and still stores the caller-built `payload`.
+- `CLI_FAILED` still copies child stderr into the error message at `sigil/bridges/v1/cli-runner.mjs:72`. `room-bridge.mjs:106` still logs `error.message`. F2 stands.
+- Floor Warden forward payload is unchanged: full `trigger.text` at `sigil/bridges/v1/floor-warden-payload.mjs:58`, thread text clipped to 4000 characters, last 20 messages, 256 KiB cap.
+
+G1, room indexing: closed for both repositories. `C:\dev\kb-sync` has no `room.message` hits in 324 indexed files. `vfs_upsert_document` refuses any path outside `wiki/` (`modules/cache/vfs-upsert.mjs:111-114`) and then stores that wiki page in `kb_documents`. Sigil's memory bridge still does not read rooms. kb-sync does store full signed envelopes, body included, in `local_approvals.envelope_json` for its own competitor-watch approvals (`watch-competitors-v2.mjs` `dispatchSigilEnvelope`). Those are kb-sync task envelopes, not Sigil room history.
+
+## Limits inspected 2026-11-27
+
+This host, not a dashboard.
+
+Deployed logs and backups:
+
+- Postgres `sigil` on `localhost:55432` (`sigil_postgres`, postgres:16-alpine) has `log_statement=none`, `log_min_duration_statement=-1`, `logging_collector=off`, `archive_mode=off`. The Docker json-file log for the last 72 hours has no `INSERT INTO envelopes` line and no line containing `body`.
+- The data directory is Docker volume `74a004297e9eb0a2aa77da11071891007ec14c1b2f7a6e72b0b7ff73cfe41832`. That volume holds the plaintext envelope rows. No scheduled task argument mentions `pg_dump`, `sigil_postgres`, `55432`, or `docker volume`.
+- `RewriteLabsDailyBackup` copies the rewritelabs-io site, wiki, and two SQLite files. It does not copy this database.
+- `Cloudflared` is running (`tunnel run --token-file`). `C:\ProgramData\cloudflared` contains the token and no request log. Application events for the last week are service start lines only. `rooms.rewritelabs.io` and `sigil-ingress.rewritelabs.io` both resolve to Cloudflare (`104.21.80.87`, `172.67.176.159`). Relay ports 8791, 8796, and 8797 listen on `127.0.0.1` only, so those hostnames reach this PC through the tunnel. A room post and a bot reply therefore cross Cloudflare in cleartext at the edge. The Cloudflare account's log retention was not opened.
+- Tailscale serve is tailnet-only. `/` proxies to `127.0.0.1:3773` (T3 Code) and `/mcp/memory` proxies to `127.0.0.1:4411`. It does not proxy the relay.
+
+Third parties that receive text:
+
+- The three running room agents (`grok_bot`, `first_mate`, `floor_warden`) use the floor-warden bridge. The webhook URL is an external HTTPS automation endpoint with a path and no query string. The host is not recorded in this repo. That POST is the trigger text plus up to 20 clipped thread messages. Replies return through the public ingress hostname to the loopback ingress on port 8796.
+- Claude, Codex, and Copilot CLI bridges are not selected in `.sigil/service.json`. If one were, `cli-runner.mjs:76` would write the prompt to that process's stdin, and a failed CLI could still echo text into the local error log (F2).
+- AgentMail is off. `SIGIL_AGENTMAIL_ENABLE` is unset for the user and the machine, and `service.json` does not load an AgentMail env file. The code path, when enabled, regex-scans the email body for financial and prompt-injection markers (`sigil/ingress/v1/classify.mjs:2-3`) and stores the classification label, not the body (`agentmail-provenance.mjs:37-46`). The normalized instruction is then delivered as a task. That scan is routing, and it is not running here.
+
+Published in the README as "Signed messages. No content analytics." The supporting sentence names delivery, the agent thread handoff, and a proxy in front of the relay. It does not say end-to-end encrypted, and it does not say the relay never sees messages.

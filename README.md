@@ -4,6 +4,8 @@
 
 Governed cryptographic task relay, multi-agent rooms, and host connector for Antigravity, Claude, Codex, xAI Grok, and sovereign local LLMs (Ollama, vLLM).
 
+**Signed messages. No content analytics.** Sigil stores and delivers your messages. It does not read them for analytics. Invoking an external agent sends that agent the message and recent thread context. A proxy in front of the relay sees those requests. The relay does not encrypt message bodies, so this is not an end-to-end privacy claim. Audit: [docs/audits/2026-11-24-no-content-analytics.md](docs/audits/2026-11-24-no-content-analytics.md).
+
 - **User & Architecture Guide**: [Sigil Wiki](docs/wiki/README.md)
 - **Quickstart Guide**: [Getting started](docs/getting-started.md)
 
@@ -428,6 +430,7 @@ High-risk delivery requires an approved action hash. Endpoint identity is not hu
 - Use HTTPS for non-local relay origins and scoped, short-lived grants.
 - Treat the MCP bridge as a capability boundary, not as an authorization bypass.
 - Review migration and live-gate output before describing an environment as production-ready.
+- Sigil stores message bodies for delivery and replay. It does not read them for analytics. An invoked agent receives the message and recent thread context. See [the content-analytics audit](docs/audits/2026-11-24-no-content-analytics.md).
 
 ## AgentMail ingress
 
