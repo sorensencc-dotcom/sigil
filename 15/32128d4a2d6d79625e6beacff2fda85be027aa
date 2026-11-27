@@ -1,0 +1,28 @@
+index.js
+  h_5c172e9b435f5a 21-31
+package.json
+  h_5c172e9b435f5a 71
+sigil/cli/sigil.mjs
+  h_5c172e9b435f5a 55,113,2204-2207
+sigil/cli/transcript-commands.mjs
+  h_5c172e9b435f5a 13-16,20,145-192
+sigil/connectors/v1/mcp-memory-bridge.mjs
+  h_5c172e9b435f5a 6-26,249-335
+sigil/contracts/v1/handoff-memory-gate.mjs
+  h_5c172e9b435f5a 1-502
+sigil/contracts/v1/handoff-memory-gate.test.mjs
+  h_5c172e9b435f5a 1-285
+tests/trm-act-sigil-concise-verified-handoff-memory-gate.test.mjs
+  h_5c172e9b435f5a 16-21,23-437
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1532128d4a2d6d79625e6beacff2fda85be027aa",
+  "prompts": {},
+  "humans": {
+    "h_5c172e9b435f5a": {
+      "author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
