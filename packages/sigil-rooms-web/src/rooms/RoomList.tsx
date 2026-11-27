@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { useId } from 'react';
 import type { HistoryItem, Room } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { ErrorBanner } from '../errors/ErrorBanner';
@@ -48,9 +49,24 @@ function RoomRow({
   const faces = (members.data ?? []).filter((member) => senderKind(member.endpoint_id, members.data ?? []) !== 'unknown').slice(0, 3);
   const working = (invocations.data ?? []).some((row) => row.status === 'queued' || row.status === 'running');
   const preview = latest.data?.items ? latestText(latest.data.items) : null;
+  // The button's accessible name is the room name and nothing else. Purpose, preview and time are its
+  // description, so adding to the row never renames the button (tests and screen readers rely on it).
+  const id = useId();
+  const nameId = `${id}-name`;
+  const describedBy = [
+    room.description ? `${id}-purpose` : null,
+    preview ? `${id}-preview` : null,
+    preview ? `${id}-time` : null,
+  ].filter(Boolean).join(' ') || undefined;
   return (
     <li>
-      <button className="room-btn" aria-current={selected} onClick={() => onSelect(room.conversation_id)}>
+      <button
+        className="room-btn"
+        aria-current={selected}
+        aria-labelledby={nameId}
+        aria-describedby={describedBy}
+        onClick={() => onSelect(room.conversation_id)}
+      >
         {faces.length > 0 ? (
           <span className="avatar-stack" aria-hidden="true">
             {faces.map((member) => (
@@ -65,11 +81,11 @@ function RoomRow({
             ))}
           </span>
         ) : null}
-        <span className="room-btn__name">{room.name}</span>
+        <span className="room-btn__name" id={nameId}>{room.name}</span>
         {working ? <span className="working-dot" title="Working" /> : null}
-        {room.description ? <span className="room-btn__purpose">{room.description}</span> : null}
-        {preview ? <span className="room-btn__preview">{preview.sender}: {preview.text}</span> : null}
-        {preview ? <time dateTime={preview.at}>{new Date(preview.at).toLocaleString()}</time> : null}
+        {room.description ? <span className="room-btn__purpose" id={`${id}-purpose`}>{room.description}</span> : null}
+        {preview ? <span className="room-btn__preview" id={`${id}-preview`}>{preview.sender}: {preview.text}</span> : null}
+        {preview ? <time id={`${id}-time`} dateTime={preview.at}>{new Date(preview.at).toLocaleString()}</time> : null}
       </button>
       <button
         className="pin"

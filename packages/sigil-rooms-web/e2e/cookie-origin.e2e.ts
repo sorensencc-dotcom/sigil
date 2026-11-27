@@ -36,7 +36,7 @@ test('the invite form POSTs to start with Origin equal to the public origin', as
     const context = await browser.newContext({ ignoreHTTPSErrors: true });
     const page = await context.newPage();
     await page.goto(`${origin}/invite#tok_secret`);
-    await page.getByRole('button', { name: 'Continue with GitHub' }).click();
+    await page.getByRole('button', { name: 'Continue with GitHub', exact: true }).click();
     await page.waitForURL(/\/login\?error=denied/);
 
     const start = seen.find((entry) => entry.method === 'POST' && entry.url === '/v1/auth/oauth/github/start');
