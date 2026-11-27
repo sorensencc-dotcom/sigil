@@ -33,6 +33,7 @@ import {
 } from '../index.js';
 import { buildTranscript, runVerifyHandoff } from '../sigil/cli/transcript-commands.mjs';
 import { createConnectorServer } from '../sigil/connectors/v1/connector-server.mjs';
+import { handoffMemoryDocument, HANDOFF_MEMORY_CATEGORY } from '../sigil/connectors/v1/mcp-memory-bridge.mjs';
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const cliPath = path.join(repoRoot, 'sigil', 'cli', 'sigil.mjs');
@@ -216,11 +217,23 @@ test('integration: connector server MCP memory bridge gates commit_handoff_memor
         return { jsonrpc: '2.0', id: message.id, result: { tools: [] } };
       }
       if (message.method === 'tools/call' && message.params?.name === 'vfs_upsert_document') {
-        upsertedDocs.push(message.params.arguments);
+        // Mirrors kb-sync's vfs_upsert_document: topic and category are
+        // required, the default file is wiki/{category}/{topic}.md, and
+        // anything outside wiki/ is refused as an isError result.
+        const args = message.params.arguments ?? {};
+        const filePath = args.file_path ?? (args.topic && args.category ? `wiki/${args.category}/${args.topic}.md` : null);
+        if (!args.topic || !args.category || typeof args.content !== 'string' || !filePath || !filePath.startsWith('wiki/')) {
+          return {
+            jsonrpc: '2.0',
+            id: message.id,
+            result: { isError: true, content: [{ type: 'text', text: 'vfs_upsert_document failed: topic, category and a wiki/ path are required' }] },
+          };
+        }
+        upsertedDocs.push(args);
         return {
           jsonrpc: '2.0',
           id: message.id,
-          result: { content: [{ type: 'text', text: `upserted:${message.params.arguments.path}` }] },
+          result: { content: [{ type: 'text', text: `upserted:${filePath}` }] },
         };
       }
       return { jsonrpc: '2.0', id: message.id, result: {} };
@@ -350,8 +363,14 @@ test('integration: connector server MCP memory bridge gates commit_handoff_memor
     const payload = JSON.parse(okRpc.result.content[0].text);
     assert.equal(payload.ok, true);
     assert.deepEqual(payload.committed_files, ['handoff/policy.md']);
+    assert.deepEqual(payload.memory_paths, ['wiki/handoff/policy.md']);
     assert.equal(upsertedDocs.length, 1);
-    assert.equal(upsertedDocs[0].path, 'handoff/policy.md');
+    assert.deepEqual(upsertedDocs[0], {
+      topic: 'policy',
+      category: 'handoff',
+      file_path: 'wiki/handoff/policy.md',
+      content: 'Rotate relay token every 30 days.',
+    });
   } finally {
     await app.close();
   }
@@ -470,7 +489,7 @@ test('integration: commit_handoff_memory trusts only connector-configured keys a
     daemonDatabase: () => ({}),
     processRpcMessage: (_db, message) => {
       if (message.method === 'tools/call' && message.params?.name === 'vfs_upsert_document') {
-        if (message.params.arguments.path === failOn) {
+        if (message.params.arguments.file_path === failOn) {
           // kb-sync reports tool failures as an MCP result with isError, not a JSON-RPC error.
           return { jsonrpc: '2.0', id: message.id, result: { isError: true, content: [{ type: 'text', text: 'vfs_upsert_document failed: disk full' }] } };
         }
@@ -531,7 +550,7 @@ test('integration: commit_handoff_memory trusts only connector-configured keys a
     assert.equal(upsertedDocs.length, 0);
 
     // 4. A backend isError result is a failure, not a commit, and earlier writes are reported.
-    failOn = 'handoff/b.md';
+    failOn = 'wiki/handoff/b.md';
     const partialRpc = await (await fetch(url, commitRequest(4, {
       transcript: trusted.transcript,
       handoff: handoffFor(trusted.transcript, trusted.identity.endpoint_id, [
@@ -543,10 +562,34 @@ test('integration: commit_handoff_memory trusts only connector-configured keys a
     assert.equal(partialRpc.error.code, -32603);
     assert.deepEqual(partialRpc.error.data.committed_files, ['handoff/a.md']);
     assert.equal(partialRpc.error.data.failed_file, 'handoff/b.md');
+    assert.deepEqual(partialRpc.error.data.memory_paths, ['wiki/handoff/a.md']);
     assert.match(partialRpc.error.message, /disk full/);
     assert.match(partialRpc.error.message, /not rolled back/);
   } finally {
     await app.close();
     await bare.close();
+  }
+});
+
+test('handoffMemoryDocument maps handoff files to kb-sync wiki/handoff documents', () => {
+  assert.equal(HANDOFF_MEMORY_CATEGORY, 'handoff');
+  assert.deepEqual(handoffMemoryDocument('handoff/decisions.md'), {
+    topic: 'decisions',
+    category: 'handoff',
+    file_path: 'wiki/handoff/decisions.md',
+  });
+  // A bundle path without the handoff/ prefix lands in the same place.
+  assert.deepEqual(handoffMemoryDocument('decisions.md'), handoffMemoryDocument('handoff/decisions.md'));
+  // Subfolders are kept, and the topic stays unique across them.
+  assert.deepEqual(handoffMemoryDocument('handoff/ops/Release Notes.md'), {
+    topic: 'ops-release-notes',
+    category: 'handoff',
+    file_path: 'wiki/handoff/ops/Release Notes.md',
+  });
+  // kb-sync stores markdown, so a missing extension gets .md.
+  assert.equal(handoffMemoryDocument('handoff/status').file_path, 'wiki/handoff/status.md');
+  // Anything the gate would reject maps to nothing, so it never reaches the store.
+  for (const bad of ['../wiki/x.md', '/etc/passwd', 'handoff/../../x.md', 'C:/x.md', 'a\\b.md', 'handoff/', '', null, '!!!.md']) {
+    assert.equal(handoffMemoryDocument(bad), null, String(bad));
   }
 });

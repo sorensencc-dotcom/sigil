@@ -6,8 +6,41 @@ import path from 'node:path';
 import {
   MAX_HANDOFF_FILES,
   MAX_HANDOFF_CHARS,
+  normalizeRelativePath,
   verifyHandoffMemory,
 } from '../../contracts/v1/handoff-memory-gate.mjs';
+
+// kb-sync's vfs_upsert_document files each document as wiki/{category}/{topic}.md
+// and refuses anything outside wiki/. Verified handoff files go in wiki/handoff/.
+export const HANDOFF_MEMORY_CATEGORY = 'handoff';
+const HANDOFF_WIKI_ROOT = `wiki/${HANDOFF_MEMORY_CATEGORY}`;
+
+// Same rule as kb-sync's sanitizeTopic, so the topic we send is the one it stores.
+function kebabTopic(value) {
+  return String(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Maps a handoff bundle file path to kb-sync vfs_upsert_document arguments.
+ * 'handoff/decisions.md' and 'decisions.md' both land at
+ * wiki/handoff/decisions.md; subfolders are kept, and a missing .md is added.
+ * Returns null for a path the handoff gate would reject.
+ */
+export function handoffMemoryDocument(filePath) {
+  const rel = normalizeRelativePath(filePath);
+  if (!rel) return null;
+  let inner = rel.startsWith(`${HANDOFF_MEMORY_CATEGORY}/`) ? rel.slice(HANDOFF_MEMORY_CATEGORY.length + 1) : rel;
+  if (!inner) return null;
+  if (!/\.md$/i.test(inner)) inner = `${inner}.md`;
+  const topic = kebabTopic(inner.replace(/\.md$/i, '').replace(/\//g, '-'));
+  if (!topic) return null;
+  return { topic, category: HANDOFF_MEMORY_CATEGORY, file_path: `${HANDOFF_WIKI_ROOT}/${inner}` };
+}
 
 const HANDOFF_MEMORY_TOOL = Object.freeze({
   name: 'commit_handoff_memory',
@@ -54,10 +87,12 @@ const FALLBACK_TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string' },
-        content: { type: 'string' }
+        topic: { type: 'string' },
+        category: { type: 'string' },
+        content: { type: 'string' },
+        file_path: { type: 'string' }
       },
-      required: ['path', 'content']
+      required: ['topic', 'category', 'content']
     }
   }
 ];
@@ -299,17 +334,23 @@ export function createMcpMemoryBridge({ kbServerPath, kbModule, handoffTrustedKe
           };
         } else {
           const committedFiles = [];
+          const memoryPaths = [];
           let upsertFailure = null;
           const files = Array.isArray(args.handoff?.files) ? args.handoff.files : [];
           for (let idx = 0; idx < files.length; idx += 1) {
             const file = files[idx];
+            const doc = handoffMemoryDocument(file.path);
+            if (!doc) {
+              upsertFailure = { file: file.path, error: { message: 'path cannot be mapped to a wiki document' } };
+              break;
+            }
             const upsertRes = kb.processRpcMessage(db, {
               jsonrpc: '2.0',
               id: `${rpcMessage.id ?? 'handoff'}:file:${idx}`,
               method: 'tools/call',
               params: {
                 name: 'vfs_upsert_document',
-                arguments: { path: file.path, content: file.content },
+                arguments: { ...doc, content: file.content },
               },
             });
             const failure = toolCallFailure(upsertRes);
@@ -318,6 +359,7 @@ export function createMcpMemoryBridge({ kbServerPath, kbModule, handoffTrustedKe
               break;
             }
             committedFiles.push(file.path);
+            memoryPaths.push(doc.file_path);
           }
           if (upsertFailure) {
             rpcResponse = {
@@ -326,7 +368,7 @@ export function createMcpMemoryBridge({ kbServerPath, kbModule, handoffTrustedKe
               error: {
                 code: -32603,
                 message: `Failed to persist verified handoff file ${upsertFailure.file}: ${upsertFailure.error.message ?? 'unknown error'}. ${committedFiles.length} earlier file(s) were already written and were not rolled back.`,
-                data: { committed_files: committedFiles, failed_file: upsertFailure.file, cause: upsertFailure.error },
+                data: { committed_files: committedFiles, memory_paths: memoryPaths, failed_file: upsertFailure.file, cause: upsertFailure.error },
               },
             };
           } else {
@@ -341,6 +383,7 @@ export function createMcpMemoryBridge({ kbServerPath, kbModule, handoffTrustedKe
                       ok: true,
                       room_id: verdict.room_id,
                       committed_files: committedFiles,
+                      memory_paths: memoryPaths,
                       checked_entries: verdict.checked_entries,
                       checked_assertions: verdict.checked_assertions,
                       budget: verdict.budget,
