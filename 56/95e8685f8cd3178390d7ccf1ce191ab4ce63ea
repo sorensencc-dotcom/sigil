@@ -1,0 +1,21 @@
+packages/sigil-rooms-web/src/rooms/DensityToggle.spec.tsx
+  s_460f7b580c5e56::t_93773961f47956 1-22
+packages/sigil-rooms-web/src/rooms/DensityToggle.tsx
+  s_460f7b580c5e56::t_149b2c9f7a982a 1-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5695e8685f8cd3178390d7ccf1ce191ab4ce63ea",
+  "prompts": {},
+  "sessions": {
+    "s_460f7b580c5e56": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a21dec-d3d6-7bf2-b405-1a6ec05917e5",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
