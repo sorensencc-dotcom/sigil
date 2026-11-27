@@ -18,3 +18,14 @@ export { renderApprovalPage } from './sigil/relay/v1/approval-ui.mjs';
 
 export { createAgentDaemon } from './sigil/cli/agent-daemon.mjs';
 export { createIdentity, loadIdentity, identityKeys } from './sigil/cli/identity.mjs';
+export {
+  HANDOFF_MEMORY_FORMAT,
+  HANDOFF_MEMORY_VERSION,
+  MAX_HANDOFF_FILES,
+  MAX_HANDOFF_CHARS,
+  HANDOFF_PROBLEM,
+  evaluateConcisenessBudget,
+  verifyHandoffMemory,
+  assertVerifiedHandoffMemory,
+  formatHandoffProblem,
+} from './sigil/contracts/v1/handoff-memory-gate.mjs';

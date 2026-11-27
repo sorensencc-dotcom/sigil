@@ -68,6 +68,7 @@
     "./identity": "./sigil/cli/identity.mjs",
     "./vault-isolation": "./sigil/connectors/v1/vault-isolation-layer.mjs",
     "./insider-quarantine": "./sigil/connectors/v1/insider-quarantine-policy.mjs",
+    "./handoff-memory-gate": "./sigil/contracts/v1/handoff-memory-gate.mjs",
     "./contracts/*": "./sigil/contracts/v1/*"
   },
   "directories": {

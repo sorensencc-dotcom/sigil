@@ -3,6 +3,27 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
+import {
+  MAX_HANDOFF_FILES,
+  MAX_HANDOFF_CHARS,
+  verifyHandoffMemory,
+} from '../../contracts/v1/handoff-memory-gate.mjs';
+
+const HANDOFF_MEMORY_TOOL = Object.freeze({
+  name: 'commit_handoff_memory',
+  description: `Verifies a concise handoff memory bundle (<= ${MAX_HANDOFF_FILES} files, <= ${MAX_HANDOFF_CHARS} chars) against a signed Sigil room transcript before persisting files to local memory.`,
+  inputSchema: {
+    type: 'object',
+    properties: {
+      handoff: { type: 'object', description: 'Handoff memory bundle with files and transcript-backed assertions' },
+      transcript: { type: 'object', description: 'Exported sigil.room-transcript v1 document' },
+      pinnedKeys: { type: 'array', description: 'Optional trusted Ed25519 public key pins' },
+      maxFiles: { type: 'integer', maximum: MAX_HANDOFF_FILES },
+      maxChars: { type: 'integer', maximum: MAX_HANDOFF_CHARS },
+    },
+    required: ['handoff'],
+  },
+});
 
 const FALLBACK_TOOLS = [
   {
@@ -225,7 +246,93 @@ export function createMcpMemoryBridge({ kbServerPath, kbModule } = {}) {
         return true;
       }
 
-      const rpcResponse = kb.processRpcMessage(db, rpcMessage);
+      let rpcResponse;
+      if (rpcMessage?.method === 'tools/call' && rpcMessage?.params?.name === 'commit_handoff_memory') {
+        const args = rpcMessage.params.arguments ?? {};
+        const verdict = await verifyHandoffMemory(args.handoff, {
+          transcript: args.transcript,
+          pinnedKeys: args.pinnedKeys ?? args.pinned_keys ?? [],
+          maxFiles: args.maxFiles ?? args.max_files,
+          maxChars: args.maxChars ?? args.max_chars,
+        });
+        if (!verdict.ok) {
+          rpcResponse = {
+            jsonrpc: '2.0',
+            id: rpcMessage.id ?? null,
+            error: {
+              code: -32003,
+              message: `Handoff memory rejected: ${verdict.problems[0]?.code ?? 'VERIFICATION_FAILED'}`,
+              data: verdict,
+            },
+          };
+        } else {
+          const committedFiles = [];
+          let upsertFailure = null;
+          const files = Array.isArray(args.handoff?.files) ? args.handoff.files : [];
+          for (let idx = 0; idx < files.length; idx += 1) {
+            const file = files[idx];
+            const upsertRes = kb.processRpcMessage(db, {
+              jsonrpc: '2.0',
+              id: `${rpcMessage.id ?? 'handoff'}:file:${idx}`,
+              method: 'tools/call',
+              params: {
+                name: 'vfs_upsert_document',
+                arguments: { path: file.path, content: file.content },
+              },
+            });
+            if (upsertRes?.error) {
+              upsertFailure = { file: file.path, error: upsertRes.error };
+              break;
+            }
+            committedFiles.push(file.path);
+          }
+          if (upsertFailure) {
+            rpcResponse = {
+              jsonrpc: '2.0',
+              id: rpcMessage.id ?? null,
+              error: {
+                code: -32603,
+                message: `Failed to persist verified handoff file ${upsertFailure.file}: ${upsertFailure.error.message ?? 'unknown error'}`,
+                data: { committed_files: committedFiles, failed_file: upsertFailure.file, cause: upsertFailure.error },
+              },
+            };
+          } else {
+            rpcResponse = {
+              jsonrpc: '2.0',
+              id: rpcMessage.id ?? null,
+              result: {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      ok: true,
+                      room_id: verdict.room_id,
+                      committed_files: committedFiles,
+                      checked_entries: verdict.checked_entries,
+                      checked_assertions: verdict.checked_assertions,
+                      budget: verdict.budget,
+                    }),
+                  },
+                ],
+              },
+            };
+          }
+        }
+      } else {
+        rpcResponse = kb.processRpcMessage(db, rpcMessage);
+        if (rpcMessage?.method === 'tools/list' && Array.isArray(rpcResponse?.result?.tools)) {
+          const hasTool = rpcResponse.result.tools.some((tool) => tool?.name === HANDOFF_MEMORY_TOOL.name);
+          if (!hasTool) {
+            rpcResponse = {
+              ...rpcResponse,
+              result: {
+                ...rpcResponse.result,
+                tools: [...rpcResponse.result.tools, HANDOFF_MEMORY_TOOL],
+              },
+            };
+          }
+        }
+      }
 
       // If tied to an active SSE session, send response over SSE
       if (sessionId && sseSessions.has(sessionId)) {

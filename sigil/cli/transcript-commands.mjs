@@ -10,9 +10,14 @@ import {
   formatProblem,
   verifyTranscript,
 } from '../contracts/v1/transcript-verify.mjs';
+import {
+  formatHandoffProblem,
+  verifyHandoffMemory,
+} from '../contracts/v1/handoff-memory-gate.mjs';
 
 export const ROOM_EXPORT_USAGE = 'usage: sigil room export --room <room_id> --out <file> [--database-url url]';
 export const VERIFY_USAGE = 'usage: sigil verify <file> [--pin <keys.json>] [--json]';
+export const VERIFY_HANDOFF_USAGE = 'usage: sigil verify-handoff <handoff.json> [--transcript <transcript.json>] [--pin <keys.json>] [--json]';
 
 const PAGE = 500;
 
@@ -134,6 +139,54 @@ export async function runVerify(argv, { out = (line) => console.log(line) } = {}
   } else {
     out(`FAILED: ${result.problems.length} problem(s) in room ${result.room_id ?? '(unknown)'}`);
     for (const problem of result.problems) out(formatProblem(problem));
+  }
+  return result.ok ? 0 : 1;
+}
+
+/** `sigil verify-handoff <handoff.json>`. Exit 0 verified, 1 rejected, 2 usage or unreadable file. */
+export async function runVerifyHandoff(argv, { out = (line) => console.log(line) } = {}) {
+  let parsed;
+  try {
+    parsed = parseArgs({
+      args: argv,
+      options: {
+        transcript: { type: 'string' },
+        pin: { type: 'string' },
+        json: { type: 'boolean', default: false },
+      },
+      allowPositionals: true,
+    });
+  } catch (error) {
+    throw usageError(`${VERIFY_HANDOFF_USAGE} (${error.message})`);
+  }
+  const [file, ...extra] = parsed.positionals;
+  if (!file || extra.length) throw usageError(VERIFY_HANDOFF_USAGE);
+
+  let handoff;
+  try { handoff = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (error) { throw usageError(`cannot read ${file}: ${error.message}`); }
+
+  let transcript;
+  if (parsed.values.transcript) {
+    try { transcript = JSON.parse(fs.readFileSync(parsed.values.transcript, 'utf8')); } catch (error) { throw usageError(`cannot read --transcript ${parsed.values.transcript}: ${error.message}`); }
+  }
+
+  let pinnedKeys = [];
+  if (parsed.values.pin) {
+    try {
+      const pinDoc = JSON.parse(fs.readFileSync(parsed.values.pin, 'utf8'));
+      pinnedKeys = Array.isArray(pinDoc) ? pinDoc : pinDoc.keys;
+      if (!Array.isArray(pinnedKeys)) throw new Error('expected an array of keys or a transcript with a keys array');
+    } catch (error) { throw usageError(`cannot read --pin ${parsed.values.pin}: ${error.message}`); }
+  }
+
+  const result = await verifyHandoffMemory(handoff, { transcript, pinnedKeys });
+  if (parsed.values.json) {
+    out(JSON.stringify(result));
+  } else if (result.ok) {
+    out(`verified handoff (${result.budget.file_count}/${result.budget.max_files} files, ${result.budget.total_chars}/${result.budget.max_chars} chars, ${result.checked_assertions} corroborated assertion(s)) in room ${result.room_id ?? '(unknown)'}`);
+  } else {
+    out(`FAILED: ${result.problems.length} handoff problem(s) in room ${result.room_id ?? '(unknown)'}`);
+    for (const problem of result.problems) out(formatHandoffProblem(problem));
   }
   return result.ok ? 0 : 1;
 }
