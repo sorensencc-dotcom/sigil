@@ -1,0 +1,19 @@
+AGENTS.md
+  s_a8b1940dd60de5::t_0238de68528a3c 54-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6df0773703cfb64bd1c942ada284f0ab4ac35d36",
+  "prompts": {},
+  "sessions": {
+    "s_a8b1940dd60de5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a205bc-d09e-78d3-b665-1ad053ace4fa",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
