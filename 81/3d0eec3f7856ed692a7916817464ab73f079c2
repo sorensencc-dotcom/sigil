@@ -1,0 +1,165 @@
+packages/sigil-rooms-web/src/rooms/RoomHeader.tsx
+  s_39de2b8baa4e2b::t_ac5b66c62d7dce 15-19,23
+  s_71af19460510db::t_c7d3bb436c6f18 21-22
+  s_460f7b580c5e56::t_02dcf52c2a2cc9 13-14,20,24,27
+packages/sigil-rooms-web/src/rooms/ThreadPanel.tsx
+  s_ac5f6c144a2753::t_6afc025d6b46ae 107
+  s_460f7b580c5e56::t_9d1f379e65823b 38,52
+packages/sigil-rooms-web/src/styles.css
+  s_3d47f544d83c8d::t_b0b9ff5a8a6918 221,225,228
+  s_b2b3759b1bc72b::t_74663d792fde30 284-293
+  s_a2a6467b291efe::t_a5b06bee2ca6f4 337
+  s_0884683a621e61::t_6d26c943d576ca 192
+  s_7a0390bb7d5cfc::t_67264446939e0b 137-139
+  s_7a0390bb7d5cfc::t_8bd06c00bfc9f0 197-199,237,352-353
+  s_71af19460510db::t_c7d3bb436c6f18 209
+  s_0884683a621e61::t_ce705e3e4312d3 17-19,28,43-47,56,71-72,89,119,122,124-126,129,153,207,231,238,240-241,318,325,330-331,341
+  s_bb430532dff8a2::t_efb73870118541 243-244
+  s_460f7b580c5e56::t_6d21bbdcae17d2 13-14,141-150,170,314-317
+packages/sigil-rooms-web/src/rooms/RowView.tsx
+  s_ece608a5010af8::t_be7d9749921021 4
+  s_460f7b580c5e56::t_1d6924061fc731 96
+packages/sigil-rooms-web/src/rooms/DensityToggle.tsx
+  s_460f7b580c5e56::t_149b2c9f7a982a 1-31
+packages/sigil-rooms-web/src/App.spec.tsx
+  s_bb430532dff8a2::t_61596f52ce1e99 145
+  s_bb430532dff8a2::t_c16503cfd8e755 140-141
+  s_460f7b580c5e56::t_b9294e630e3991 104-107
+packages/sigil-rooms-web/src/rooms/RoomList.tsx
+  s_39de2b8baa4e2b::t_ac5b66c62d7dce 67,114-116
+  s_460f7b580c5e56::t_8e7d644fa01c8c 2,6-7,10-66,68-85,92-104,111-113,117-120
+packages/sigil-rooms-web/src/App.tsx
+  s_ac5f6c144a2753::t_980a4a24ad0934 83
+  s_460f7b580c5e56::t_e159657b2a2bce 6,18,28,35,58-61,100,114-115,188,199-206
+packages/sigil-rooms-web/src/rooms/RoomHeader.spec.tsx
+  s_39de2b8baa4e2b::t_caf0d7fffe49b1 15
+  s_460f7b580c5e56::t_fb21a385513929 18,24-25
+packages/sigil-rooms-web/src/rooms/DensityToggle.spec.tsx
+  s_460f7b580c5e56::t_93773961f47956 1-22
+packages/sigil-rooms-web/src/rooms/Timeline.tsx
+  s_31fa4656396b62::t_e8058edc08234a 378
+packages/sigil-rooms-web/src/api/client.ts
+  s_460f7b580c5e56::t_9e5d84090fcf7e 138
+packages/sigil-rooms-web/src/live/useLive.spec.tsx
+  s_460f7b580c5e56::t_d328f602108263 44
+packages/sigil-rooms-web/src/live/useLive.ts
+  s_460f7b580c5e56::t_9f1db9dd0a4f70 26
+packages/sigil-rooms-web/src/pages/SettingsPage.tsx
+  s_460f7b580c5e56::t_e4b588cf7897dd 144
+packages/sigil-rooms-web/src/rooms/Composer.spec.tsx
+  s_460f7b580c5e56::t_8f33279c0b78d0 61-76
+packages/sigil-rooms-web/src/rooms/Composer.tsx
+  s_460f7b580c5e56::t_65455ef678ed93 60,70-71,82-92,119-120,147,149
+packages/sigil-rooms-web/src/rooms/RoomList.spec.tsx
+  s_460f7b580c5e56::t_bea2dae45da75b 5,42,52-81
+packages/sigil-rooms-web/src/rooms/RosterPanel.tsx
+  s_460f7b580c5e56::t_ad1a60c6c3dae1 117,124
+packages/sigil-rooms-web/src/rooms/RowView.spec.tsx
+  s_460f7b580c5e56::t_c5f1f1396de312 93,104
+packages/sigil-rooms-web/src/rooms/Timeline.spec.tsx
+  s_460f7b580c5e56::t_51d382ab0f622b 27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "813d0eec3f7856ed692a7916817464ab73f079c2",
+  "prompts": {},
+  "sessions": {
+    "s_0884683a621e61": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a151ef88-3dfd-4428-b0a3-179744fe4739",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_31fa4656396b62": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a210e6-c94d-7531-ba3f-f90c94335569",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_39de2b8baa4e2b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20a46-a93d-71f0-9be2-5eb6a04fbd98",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_3d47f544d83c8d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20591-fa75-7fb1-99b1-86d1919e003e",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_460f7b580c5e56": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a21dec-d3d6-7bf2-b405-1a6ec05917e5",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_71af19460510db": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20712-8886-7e73-a673-28a534c49329",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_7a0390bb7d5cfc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fea57a9a-ad38-4e8a-a3e5-181aba492d70",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_a2a6467b291efe": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20ad0-d3af-77c1-b3f6-97fdf1a392bc",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_ac5f6c144a2753": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bcad3895-2967-4351-9013-3b5a90f3bbf7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_b2b3759b1bc72b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8daa8636-4b85-4405-9441-d632b3f553c9",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_bb430532dff8a2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "864bdcc1-0d96-46ff-aa61-e768b8999402",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    },
+    "s_ece608a5010af8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a0fae397-18fc-4b34-8afd-cb165a31eea3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chris Sorensen <sorensencc@gmail.com>"
+    }
+  }
+}
