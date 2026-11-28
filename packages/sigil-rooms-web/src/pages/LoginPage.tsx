@@ -7,6 +7,7 @@ const ERROR_COPY: Record<string, string> = {
   invite_required: 'An invite link is required to sign in. Ask the room operator for one.',
   invite_expired: 'That invite link is no longer valid. Ask the room operator for a new one.',
   provider_error: 'GitHub could not complete the sign-in. Try again in a moment.',
+  join_request_limit: 'That room has too many people waiting to join, or you are waiting on too many rooms. Try again after the room owner answers.',
 };
 
 export function LoginPage({ theme, onThemeChange }: { theme?: string; onThemeChange?: (next: string) => void }) {

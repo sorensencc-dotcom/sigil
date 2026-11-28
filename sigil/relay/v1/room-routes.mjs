@@ -10,12 +10,27 @@ import { sendReceiptFrame } from './receipt-notify.mjs';
 import { LocalOutbox } from '../../connectors/v1/local-outbox.mjs';
 import { acceptEnvelopeAsync } from './accept-envelope.mjs';
 import { validateRoomMessageBody } from '../../contracts/v1/room-message-schema.mjs';
+import { createInvite, listRoomInvites, revokeRoomInvite } from './oauth/invites.mjs';
+import { listRoomJoinRequests, listOwnJoinRequests, decideJoinRequestTx, withdrawJoinRequestTx } from './join-requests.mjs';
 
 const MANAGER_ROLES = new Set(['owner', 'room_manager']);
 const GRANTABLE_ROLES = new Set(['room_manager', 'member']);
 const RESPONSE_MODES = new Set(['joins', 'mentions_only', 'router', 'report_only']);
 const INVOKABLE_MODES = new Set(['owner', 'members']);
 const AGENT_INVITE_TTL_MS = 15 * 60_000;
+const ROOM_INVITE_TTL_HOURS_DEFAULT = 24;
+const ROOM_INVITE_TTL_HOURS_MAX = 7 * 24;
+const ADMISSIONS = new Set(['direct', 'request']);
+// Join request queue (#272) error codes and their statuses.
+const JOIN_ERRORS = {
+  JOIN_REQUEST_NOT_FOUND: [404, 'Join request not found'],
+  JOIN_REQUEST_DECIDED: [409, 'Join request was already decided'],
+  JOIN_REQUEST_EXPIRED: [409, 'Join request has expired'],
+  REQUESTER_INACTIVE: [409, 'The requester is no longer active'],
+  ROUTE_NOT_AUTHORIZED: [403, 'Only room owners and room managers can do this'],
+  INVALID_REQUEST: [400, 'Invalid request'],
+  INVITE_NOT_FOUND: [404, 'Invite not found'],
+};
 const ROOM_METHODS = ['createRoom', 'lookupRoom', 'listRoomsForEndpoint', 'addRoomMember', 'removeRoomMember', 'lookupRoomMember', 'listRoomMembers', 'listRoomMessages', 'listRoomInvocations', 'lookupRunningInvocation', 'finishInvocation', 'cancelRoomInvocations', 'nextQueuedInvocation', 'startInvocation', 'createRoomDelivery', 'lookupRouterDecision', 'lookupRoomMessage', 'lookupRoomEventByKey', 'lockRoom', 'createRoomInvocation', 'reserveAgentTurn', 'withTransaction', 'acknowledgeRoomDeliveries', 'renameRoom', 'setRoomMemberResponseMode'];
 const ROOM_HISTORY_LIMIT_MAX = 100;
 const ROOM_SEARCH_QUERY_MIN = 3;
@@ -195,6 +210,28 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     await notifyRoomChange(member.roomId, 'members');
     return send(response, requestId, 200, { code: 'OK', room_id: member.roomId, member: member.member });
   }
+  const ownJoin = path === '/v1/join-requests' ? [] : path.match(/^\/v1\/join-requests\/(jreq_[0-9a-f]{32})\/withdraw$/);
+  if (ownJoin) {
+    if ((await isAgentCaller(repository, registry, principal)) || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'An authenticated human context is required');
+    if (!repository?.pool || typeof repository.withTransaction !== 'function') return fail(response, requestId, 503, 'DATABASE_UNAVAILABLE', 'Join requests are unavailable');
+    response.setHeader('cache-control', 'no-store');
+    if (request.method === 'GET' && !ownJoin[1]) {
+      const items = await repository.withTransaction((client) => listOwnJoinRequests(client, { humanId: principal.human_id, now }));
+      return send(response, requestId, 200, { code: 'OK', items });
+    }
+    if (request.method === 'POST' && ownJoin[1]) {
+      try {
+        const withdrawn = await repository.withTransaction((client) => withdrawJoinRequestTx(client, { requestId: ownJoin[1], humanId: principal.human_id, now }));
+        await notifyRoomChange(withdrawn.room_id, 'join_requests');
+        return send(response, requestId, 200, { code: 'OK', request: withdrawn });
+      } catch (error) {
+        if (JOIN_ERRORS[error.code]) return fail(response, requestId, JOIN_ERRORS[error.code][0], error.code, error.message);
+        throw error;
+      }
+    }
+    return fail(response, requestId, 405, 'METHOD_NOT_ALLOWED', 'Method not allowed');
+  }
+  if (path.startsWith('/v1/join-requests/')) return fail(response, requestId, 404, 'JOIN_REQUEST_NOT_FOUND', 'Join request not found');
   if (path !== '/v1/rooms' && !path.startsWith('/v1/rooms/')) return false;
   if (request.method === 'POST' && path === '/v1/rooms/ws-ticket') {
     if ((await isAgentCaller(repository, registry, principal)) || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'An authenticated human context is required');
@@ -239,7 +276,7 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     return send(response, requestId, 200, { code: 'OK', items: await repository.listRoomsForEndpoint(principal.endpoint_id) });
   }
 
-  const match = path.match(/^\/v1\/rooms\/([^/]+)\/(members|messages|invocations|stop|ack|rename|continue|agent-invites|approvals|keys)(?:\/([^/]+)(?:\/(remove|response-mode|invokable-by|revoke))?)?$/);
+  const match = path.match(/^\/v1\/rooms\/([^/]+)\/(members|messages|invocations|stop|ack|rename|continue|agent-invites|approvals|keys|invites|join-requests)(?:\/([^/]+)(?:\/(remove|response-mode|invokable-by|revoke|accept|decline))?)?$/);
   if (!match) return false;
   const [, roomId, resource, segment, removeAction] = match;
   // Browsers percent-encode '@' in endpoint IDs (ep_claude%40local); the pathname arrives undecoded.
@@ -280,6 +317,19 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
     }));
     response.setHeader('cache-control', 'no-store');
     return send(response, requestId, 200, { code: 'OK', endpoint_id: targetEndpointId, keys });
+  }
+
+  if (resource === 'invites' || resource === 'join-requests') {
+    if ((await isAgentCaller(repository, registry, principal)) || !principal?.human_id) return fail(response, requestId, 403, 'HUMAN_CONTEXT_REQUIRED', 'An authenticated human context is required');
+    if (!MANAGER_ROLES.has(access.member.role)) return fail(response, requestId, 403, 'ROUTE_NOT_AUTHORIZED', 'Only room owners and room managers can manage invites and join requests');
+    if (!repository.pool) return fail(response, requestId, 503, 'DATABASE_UNAVAILABLE', 'Invites and join requests are unavailable');
+    response.setHeader('cache-control', 'no-store');
+    try {
+      return await handleAdmissionRoute({ request, response, requestId, now, readBody, principal, repository, registry, roomId, room: access.room, resource, segment, action, systemIdentity, inboxDepthLimit, stream, resolveRelayOrigin, notifyRoomChange });
+    } catch (error) {
+      if (JOIN_ERRORS[error.code]) return fail(response, requestId, JOIN_ERRORS[error.code][0], error.code, error.message || JOIN_ERRORS[error.code][1]);
+      throw error;
+    }
   }
 
   if (resource === 'agent-invites') {
@@ -671,4 +721,68 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
   }
 
   return false;
+}
+
+// Human room invites and the join request queue (#272). The caller is already
+// a room owner or room manager here; the decision functions re-check that
+// under the room lock.
+async function handleAdmissionRoute({ request, response, requestId, now, readBody, principal, repository, registry, roomId, room, resource, segment, action, systemIdentity, inboxDepthLimit, stream, resolveRelayOrigin, notifyRoomChange }) {
+  if (resource === 'invites') {
+    if (request.method === 'GET' && !segment) {
+      const items = await repository.withTransaction((client) => listRoomInvites(client, { roomId, now }));
+      return send(response, requestId, 200, { code: 'OK', items });
+    }
+    if (request.method === 'POST' && !segment) {
+      const body = await readJson(request, readBody);
+      const name = typeof body?.name === 'string' ? body.name.trim() : '';
+      if (!name || name.length > NAME_MAX) return fail(response, requestId, 400, 'INVALID_REQUEST', `name must be 1-${NAME_MAX} characters`);
+      const role = body.role ?? 'member';
+      if (!GRANTABLE_ROLES.has(role)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'role must be room_manager or member');
+      // Invites minted here default to the queue; the CLI keeps 'direct'.
+      const admission = body.admission ?? 'request';
+      if (!ADMISSIONS.has(admission)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'admission must be direct or request');
+      const hours = body.ttl_hours ?? ROOM_INVITE_TTL_HOURS_DEFAULT;
+      if (!Number.isInteger(hours) || hours < 1 || hours > ROOM_INVITE_TTL_HOURS_MAX) return fail(response, requestId, 400, 'INVALID_REQUEST', `ttl_hours must be a whole number from 1 to ${ROOM_INVITE_TTL_HOURS_MAX}`);
+      const created = await repository.withTransaction((client) => createInvite(client, {
+        name, createdByHumanId: principal.human_id, rooms: [{ roomId, role, admission }], ttlMs: hours * 3600_000, now: new Date(now),
+      }));
+      const origin = resolveRelayOrigin?.();
+      // The token is shown once, like `sigil relay invite create`; only its hash is stored.
+      return send(response, requestId, 201, { code: 'OK', invite_id: created.invite_id, role, admission, link: origin ? `${origin}/invite#${created.token}` : null, token: created.token });
+    }
+    if (request.method === 'POST' && segment && action === 'revoke') {
+      const result = await repository.withTransaction((client) => revokeRoomInvite(client, { roomId, inviteId: segment, actorHumanId: principal.human_id, now: new Date(now) }));
+      return send(response, requestId, 200, { code: 'OK', revoked: result.revoked });
+    }
+    return fail(response, requestId, 405, 'METHOD_NOT_ALLOWED', 'Method not allowed');
+  }
+  if (request.method === 'GET' && !segment) {
+    const queue = await repository.withTransaction((client) => listRoomJoinRequests(client, { roomId, now }));
+    return send(response, requestId, 200, { code: 'OK', ...queue });
+  }
+  if (request.method === 'POST' && segment && (action === 'accept' || action === 'decline')) {
+    if (!/^jreq_[0-9a-f]{32}$/.test(segment)) return fail(response, requestId, 404, 'JOIN_REQUEST_NOT_FOUND', 'Join request not found');
+    const body = action === 'accept' ? await readJson(request, readBody) : {};
+    if (body === null) return fail(response, requestId, 400, 'INVALID_REQUEST', 'Body must be JSON');
+    const role = body.role ?? null;
+    if (role !== null && !GRANTABLE_ROLES.has(role)) return fail(response, requestId, 400, 'INVALID_REQUEST', 'role must be room_manager or member');
+    const decided = await repository.withTransaction(async (client) => {
+      const result = await decideJoinRequestTx(client, { repository, roomId, requestId: segment, deciderHumanId: principal.human_id, decision: action, role, now });
+      // The signed record of the join (design rule 3), in the same
+      // transaction as the membership it records.
+      if (result.joined && systemIdentity) {
+        const name = result.request.requester_name ?? '';
+        await emitRoomEvent({
+          identity: systemIdentity, repository, client, room,
+          body: { kind: 'member_joined', endpoint_ids: [result.request.requester_endpoint_id], reason: clampReason(`${name || 'Someone'} joined as ${result.request.decided_role === 'room_manager' ? 'room manager' : 'member'}`) },
+          idempotencyKey: `evt_joined_${segment}`, now, inboxDepthLimit, registered: registry, stream,
+        });
+      }
+      return result;
+    });
+    await notifyRoomChange(roomId, 'join_requests');
+    if (decided.joined) await notifyRoomChange(roomId, 'members');
+    return send(response, requestId, 200, { code: 'OK', request: decided.request, member: decided.member ?? null });
+  }
+  return fail(response, requestId, 405, 'METHOD_NOT_ALLOWED', 'Method not allowed');
 }

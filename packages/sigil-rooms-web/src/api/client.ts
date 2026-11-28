@@ -1,5 +1,5 @@
 import type { RelayKey } from '../verify/verifyRow';
-import type { AckResult, AgentRoomInvite, Contact, CreatedAgentRoomInvite, Session, HistoryPage, Invocation, InvokableBy, Member, MentionPage, ResponseMode, Room, RoomSearchPage, SendResult, StopResult, TicketResult } from './types';
+import type { AckResult, AgentRoomInvite, Contact, CreatedAgentRoomInvite, CreatedRoomInvite, GrantableRole, JoinRequest, JoinRequestQueue, OwnJoinRequest, RoomInvite, Session, HistoryPage, Invocation, InvokableBy, Member, MentionPage, ResponseMode, Room, RoomSearchPage, SendResult, StopResult, TicketResult } from './types';
 
 export class ApiError extends Error {
   readonly code: string;
@@ -41,6 +41,14 @@ export interface ApiClient {
   listAgentRoomInvites(roomId: string): Promise<AgentRoomInvite[]>;
   createAgentRoomInvite(roomId: string, endpointId: string): Promise<CreatedAgentRoomInvite>;
   revokeAgentRoomInvite(roomId: string, inviteId: string): Promise<void>;
+  // Human invites and the join request queue (#272). Optional so older test doubles still type-check.
+  listRoomInvites?(roomId: string): Promise<RoomInvite[]>;
+  createRoomInvite?(roomId: string, name: string, role: GrantableRole): Promise<CreatedRoomInvite>;
+  revokeRoomInvite?(roomId: string, inviteId: string): Promise<void>;
+  listJoinRequests?(roomId: string): Promise<JoinRequestQueue>;
+  decideJoinRequest?(roomId: string, requestId: string, decision: 'accept' | 'decline', role?: GrantableRole): Promise<JoinRequest>;
+  listOwnJoinRequests?(): Promise<OwnJoinRequest[]>;
+  withdrawJoinRequest?(requestId: string): Promise<void>;
   listInvocations(roomId: string): Promise<Invocation[]>;
   renameRoom(roomId: string, name: string): Promise<Room>;
   setResponseMode(roomId: string, endpointId: string, mode: ResponseMode): Promise<Member>;
@@ -146,6 +154,29 @@ export function createClient({ mode = 'token', baseUrl, getToken, onUnauthorized
     },
     async revokeAgentRoomInvite(roomId, inviteId) {
       await request<unknown>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/agent-invites/${encodeURIComponent(inviteId)}/revoke`);
+    },
+    async listRoomInvites(roomId) {
+      return (await request<{ items: RoomInvite[] }>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/invites`)).items;
+    },
+    async createRoomInvite(roomId, name, role) {
+      const { invite_id, link, token, admission } = await request<CreatedRoomInvite>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/invites`, { name, role, admission: 'request' });
+      return { invite_id, role, admission, link, token };
+    },
+    async revokeRoomInvite(roomId, inviteId) {
+      await request<unknown>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/invites/${encodeURIComponent(inviteId)}/revoke`);
+    },
+    async listJoinRequests(roomId) {
+      const { pending, decided } = await request<JoinRequestQueue>('GET', `/v1/rooms/${encodeURIComponent(roomId)}/join-requests`);
+      return { pending, decided };
+    },
+    async decideJoinRequest(roomId, requestId, decision, role) {
+      return (await request<{ request: JoinRequest }>('POST', `/v1/rooms/${encodeURIComponent(roomId)}/join-requests/${encodeURIComponent(requestId)}/${decision}`, decision === 'accept' && role ? { role } : undefined)).request;
+    },
+    async listOwnJoinRequests() {
+      return (await request<{ items: OwnJoinRequest[] }>('GET', '/v1/join-requests')).items;
+    },
+    async withdrawJoinRequest(requestId) {
+      await request<unknown>('POST', `/v1/join-requests/${encodeURIComponent(requestId)}/withdraw`);
     },
     async listInvocations(roomId) {
       const controller = new AbortController();

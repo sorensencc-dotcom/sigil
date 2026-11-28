@@ -152,7 +152,7 @@ test('2. atomicity: losing the creator\'s manager role on one room aborts with i
   assert.equal((await auditRows(pool, 'invite.redeemed')).length, 0);
 });
 
-test('3. returning login needs no invite, keeps the endpoint, and ignores an unrelated open invite', { skip }, async (t) => {
+test('3. returning login needs no invite, keeps the endpoint, and redeems a new room invite', { skip }, async (t) => {
   const { pool, repository, operator } = await setup(t);
   const { inviteId, token } = await makeInviteFor(pool, operator, { rooms: [{ roomId: 'room_a', role: 'member' }] });
   const first = await login(repository, { identity: identity(3), inviteToken: token });
@@ -174,14 +174,18 @@ test('3. returning login needs no invite, keeps the endpoint, and ignores an unr
   const third = await login(repository, { identity: identity(3), inviteToken: unrelated.token });
   assert.equal(third.outcome, 'login');
   assert.equal(third.endpoint_id, first.endpoint_id);
-  const open = await inviteRow(pool, unrelated.inviteId);
-  assert.equal(open.consumed_at, null, 'an invite on a returning flow is not consumed');
-  assert.equal(await count(pool, 'conversation_members', 'endpoint_id = $1 AND conversation_id = $2', [first.endpoint_id, 'room_b']), 0, 'its rooms are not added');
+  // Join request design (#272) section 4: a returning person's invite is now
+  // honoured, where before it was ignored and they could never join a second
+  // room. A direct invite adds the room and is consumed.
+  const used = await inviteRow(pool, unrelated.inviteId);
+  assert.ok(used.consumed_at, 'an invite on a returning flow is consumed');
+  assert.equal(used.consumed_by_human_id, first.human_id);
+  assert.equal(await count(pool, 'conversation_members', 'endpoint_id = $1 AND conversation_id = $2 AND removed_at IS NULL', [first.endpoint_id, 'room_b']), 1, 'its direct rooms are added');
   const after = await counts(pool);
   assert.equal(after.humans, before.humans);
   assert.equal(after.oidc_identities, before.oidc_identities);
   assert.equal(after.human_sessions, before.human_sessions + 2);
-  assert.equal((await auditRows(pool, 'invite.redeemed')).length, 1);
+  assert.equal((await auditRows(pool, 'invite.redeemed')).length, 2);
 });
 
 test('4. unknown identity with no invite is invite_required; expired, revoked, consumed, and unknown tokens are invite_expired', { skip }, async (t) => {

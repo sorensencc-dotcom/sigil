@@ -3,6 +3,7 @@ import { checkStartOrigin } from './csrf.mjs';
 import { completeLogin, SESSION_ABSOLUTE_MS } from './login-tx.mjs';
 import { hashInviteToken } from './invites.mjs';
 import { json, notFound } from './public-listener.mjs';
+import { notifyRoomHumans } from '../room-notify.mjs';
 
 const LIMITS = { invite: 10, oauth_provider_subject: 10, oauth_start: 60 };
 const redirect = (response, location, headers = {}) => { response.writeHead(302, { location, ...headers }); response.end(); };
@@ -79,6 +80,14 @@ export function createOAuthRoutes({ repository, providers, flowStore, ticketStor
     const session = newCookieSecret();
     const result = await completeLoginImpl({ repository, identity, inviteToken, flowId: flow.flow_id, sessionId: session.hash, wrapKey, authenticationMethod: `oauth_${flow.provider}`, now: now() });
     if (result.outcome !== 'login') return loginError(response, result.outcome, clearFlow);
+    // A queued join request (#272) refreshes the room's manager panels; best effort, after commit.
+    for (const { room_id: roomId } of result.join_requests ?? []) {
+      try {
+        await repository.withTransaction((client) => notifyRoomHumans({ repository, stream, client, roomId, changed: 'join_requests', logger: logger ?? console }));
+      } catch (error) {
+        logger?.error?.('join request notify failed', error);
+      }
+    }
     const presented = cookies[SESSION_COOKIE];
     if (presented) await revokeSession(hashCookie(presented));
     response.writeHead(302, { location: '/', 'set-cookie': [clearCookie(FLOW_COOKIE), setCookie(SESSION_COOKIE, session.value, { maxAge: SESSION_ABSOLUTE_MS / 1000 })] });

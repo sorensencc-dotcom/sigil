@@ -4,6 +4,7 @@ import { useAuth } from '../auth/AuthContext';
 import { ApiError } from '../api/client';
 import type { InvokableBy, Member, ResponseMode } from '../api/types';
 import { ErrorBanner } from '../errors/ErrorBanner';
+import { JoinRequestQueue } from './JoinRequestQueue';
 import { membersKey } from './useMembers';
 import { roomMemberName } from './resolveMentions';
 import { useContacts } from './useContacts';
@@ -100,6 +101,7 @@ export function RosterPanel({ roomId, maxAgentTurns, members, manager, viewer = 
           </li>
         ))}
       </ul>
+      {manager ? <JoinRequestQueue roomId={roomId} onGone={onGone} /> : null}
       {manager ? (
         <section aria-label="Agent invites">
           <h3>Bring an agent</h3>
