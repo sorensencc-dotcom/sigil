@@ -167,6 +167,48 @@ export function readCredential(target, { platform = process.platform, execFn = d
   });
 }
 
+// `security -i` reads commands from stdin, so the secret never appears in any
+// process's argument list. Its tokenizer takes double-quoted words with
+// backslash escapes; a newline would end the command, so it is refused.
+export function quoteSecurityArg(value) {
+  const text = String(value);
+  if (/[\r\n\0]/.test(text)) {
+    throw Object.assign(new Error('Keychain values cannot contain line breaks or NUL'), {
+      code: 'SECRET_INVALID',
+    });
+  }
+  return `"${text.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function writeMacKeychain(target, secret, execFn) {
+  const account = process.env.USER || 'sigil';
+  const command = [
+    'add-generic-password',
+    '-U',
+    '-s',
+    quoteSecurityArg(target),
+    '-a',
+    quoteSecurityArg(account),
+    '-w',
+    quoteSecurityArg(secret),
+  ].join(' ');
+  const res = execFn('security', ['-i'], { input: `${command}\n` });
+  const failed = (detail) =>
+    Object.assign(new Error(`Failed to write credential "${target}" to macOS Keychain${detail ? `: ${detail}` : ''}`), {
+      code: 'CREDENTIAL_STORE_ERROR',
+    });
+  if (res.error || res.status !== 0) {
+    throw failed(res.stderr?.trim() || res.error?.message);
+  }
+  // Interactive mode can exit 0 when the command inside it failed, so read the
+  // item back and compare. find-generic-password returns it on stdout only.
+  const check = execFn('security', ['find-generic-password', '-s', target, '-a', account, '-w']);
+  const stored = typeof check.stdout === 'string' ? check.stdout.replace(/\r?\n$/, '') : null;
+  if (check.error || check.status !== 0 || stored !== secret) {
+    throw failed(res.stderr?.trim() || 'item did not read back');
+  }
+}
+
 export function writeCredential(target, secret, { platform = process.platform, execFn = defaultExecFn, keystorePath } = {}) {
   if (!secret) {
     throw Object.assign(new Error('Cannot store empty secret'), { code: 'SECRET_EMPTY' });
@@ -206,21 +248,7 @@ export function writeCredential(target, secret, { platform = process.platform, e
   }
 
   if (platform === 'darwin') {
-    const res = execFn('security', [
-      'add-generic-password',
-      '-U',
-      '-s',
-      target,
-      '-a',
-      process.env.USER || 'sigil',
-      '-w',
-      secret,
-    ]);
-    if (res.status !== 0) {
-      throw Object.assign(new Error(`Failed to write credential "${target}" to macOS Keychain`), {
-        code: 'CREDENTIAL_STORE_ERROR',
-      });
-    }
+    writeMacKeychain(target, secret, execFn);
     return true;
   }
 

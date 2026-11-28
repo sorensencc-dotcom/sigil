@@ -157,3 +157,65 @@ test('Linux credential adapter falls back to file keystore when secret-tool fail
   }
 });
 
+
+test('writeCredential never puts the secret in a child process argument list (#330)', () => {
+  const secret = 'top-secret "quoted" \\ value';
+  for (const platform of ['win32', 'darwin', 'linux']) {
+    const calls = [];
+    const mockExec = (cmd, args, opts = {}) => {
+      calls.push({ cmd, args, opts });
+      if (args.includes('find-generic-password')) {
+        return { status: 0, stdout: `${secret}\n`, stderr: '' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    };
+    writeCredential('argv-target', secret, { platform, execFn: mockExec });
+    assert.ok(calls.length > 0, `${platform} ran no command`);
+    for (const call of calls) {
+      assert.ok(
+        !call.args.some((a) => String(a).includes('top-secret')),
+        `${platform}: secret found in argv of ${call.cmd}`
+      );
+    }
+    assert.ok(
+      calls.some((c) => typeof c.opts.input === 'string' && c.opts.input.includes('top-secret')),
+      `${platform}: secret not passed on stdin`
+    );
+  }
+});
+
+test('macOS write drives security -i on stdin with quoted words and reads the item back', () => {
+  const calls = [];
+  const mockExec = (cmd, args, opts = {}) => {
+    calls.push({ cmd, args, opts });
+    if (args.includes('find-generic-password')) return { status: 0, stdout: 'a"b\\c\n', stderr: '' };
+    return { status: 0, stdout: '', stderr: '' };
+  };
+  writeCredential('mac target', 'a"b\\c', { platform: 'darwin', execFn: mockExec });
+  assert.equal(calls[0].cmd, 'security');
+  assert.deepEqual(calls[0].args, ['-i']);
+  assert.match(calls[0].opts.input, /^add-generic-password -U -s "mac target" -a ".*" -w "a\\"b\\\\c"\n$/);
+  assert.ok(calls[1].args.includes('find-generic-password'));
+});
+
+test('macOS write fails when the item does not read back, even if security -i exits 0', () => {
+  const mockExec = (cmd, args) =>
+    args.includes('find-generic-password')
+      ? { status: 44, stdout: '', stderr: 'The specified item could not be found in the keychain.' }
+      : { status: 0, stdout: '', stderr: '' };
+  assert.throws(() => writeCredential('mac-target', 'value', { platform: 'darwin', execFn: mockExec }), {
+    code: 'CREDENTIAL_STORE_ERROR',
+  });
+});
+
+test('macOS write refuses a secret with a line break before running anything', () => {
+  let ran = false;
+  const mockExec = () => {
+    ran = true;
+    return { status: 0, stdout: '', stderr: '' };
+  };
+  assert.throws(() => writeCredential('mac-target', 'line1\nline2', { platform: 'darwin', execFn: mockExec }), {
+    code: 'SECRET_INVALID',
+  });
+  assert.equal(ran, false);
+});
