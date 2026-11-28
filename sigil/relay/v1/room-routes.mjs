@@ -157,6 +157,12 @@ async function postHumanMessage({ response, requestId, now, principal, repositor
   return send(response, requestId, result.body.duplicate ? 200 : 201, { code: 'OK', message_id: result.body.message_id, room_seq: row?.room_seq ?? null });
 }
 
+function isoOrNull(value) {
+  if (value == null) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
 export async function handleRoomRoute({ request, response, parsedUrl, principal, repository, registry, requestId, now, readBody, stream = null, inboxDepthLimit, systemIdentity = null, logger = null, ticketStore = null, humanSigner = null, buildAcceptOptions = null, resolveRelayOrigin }) {
   const path = parsedUrl.pathname;
   // notifyRoomHumans needs a real client: with client null its member read
@@ -291,11 +297,24 @@ export async function handleRoomRoute({ request, response, parsedUrl, principal,
   if (request.method === 'GET' && resource === 'approvals' && !segment) {
     const approvals = await repository.listPendingRoomApprovals?.(roomId, now) ?? [];
     const origin = resolveRelayOrigin?.();
-    const items = approvals.map(({ challenge_id, approver_id, approver_name }) => {
-      // The ceremony URL itself reveals challenge details, so only send it to the approver.
-      const url = origin && principal.human_id === approver_id ? new URL('/approve', origin) : null;
-      url?.searchParams.set('challenge', challenge_id);
-      return { approver_name, approval_url: url?.href ?? null };
+    const items = approvals.map((approval) => {
+      // The approval page renders a challenge for anyone holding its id (#338), so the id and
+      // the ceremony URL go to the approver only. Everyone else keys the card on message_id.
+      // The held envelope's body is never returned.
+      const isApprover = Boolean(principal.human_id) && principal.human_id === approval.approver_id;
+      const url = origin && isApprover ? new URL('/approve', origin) : null;
+      url?.searchParams.set('challenge', approval.challenge_id);
+      return {
+        message_id: approval.message_id ?? null,
+        sender_endpoint_id: approval.sender_endpoint_id ?? null,
+        sender_name: approval.sender_name ?? approval.sender_endpoint_id ?? null,
+        capabilities: approval.capabilities ?? [],
+        created_at: isoOrNull(approval.created_at),
+        expires_at: isoOrNull(approval.expires_at),
+        approver_name: approval.approver_name,
+        challenge_id: isApprover ? approval.challenge_id : null,
+        approval_url: url?.href ?? null,
+      };
     });
     response.setHeader('cache-control', 'no-store');
     return send(response, requestId, 200, { code: 'OK', items });

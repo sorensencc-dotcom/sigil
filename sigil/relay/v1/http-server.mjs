@@ -25,6 +25,7 @@ import { verifyRealIdToken, createJwksCache, createDiscoveryCache, CLOCK_SKEW_SE
 import { attemptDirectoryMatchOnOidcLogin } from './directory-trust.mjs';
 import { DEFAULT_INBOX_DEPTH_LIMIT, resolveDirectoryRateLimits, resolveRelayRequestFreshnessMs, resolveStreamSequence } from './relay-config.mjs';
 import { projectRelayFact } from './ag-ui-projection.mjs';
+import { createApprovalRoomHook } from './approval-room-events.mjs';
 
 function normalizeIssuerOrRespond(rawIssuer, response, requestId) {
   try {
@@ -122,6 +123,9 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
     federationMode, federationIdentity, fetchImpl, stream_seq: streamSequence, resendMetrics, logger,
     onPersisted: createOnPersisted(stream, { repository, logger }), systemIdentity: roomSystemIdentity, stream,
   });
+  // Rooms #269: hooks that write a held envelope's signed room record and tell
+  // the room's humans to refetch approvals, inside the challenge's transaction.
+  const approvalHook = (outcome, at) => createApprovalRoomHook({ outcome, repository, systemIdentity: roomSystemIdentity, registered: registry, stream, inboxDepthLimit: DEFAULT_INBOX_DEPTH_LIMIT, now: at, logger: logger ?? console });
   const jwksCache = createJwksCache({ fetchImpl: oidcFetchImpl });
   const discoveryCache = createDiscoveryCache({ fetchImpl: oidcFetchImpl });
   const authenticateRequest = authenticate ?? (tokenHashes ? createBearerAuthenticator(tokenHashes, registry) : null);
@@ -254,7 +258,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
           verifyAssertion: verifyAssertion ?? (({ assertion: candidate, credential: registered }) => verifyWebAuthnAssertion({ ...candidate, challenge, relayOrigin: effectiveRelayOrigin, rpId: effectiveRpId, credential: registered })),
           now: nowMs
         });
-        if (repository?.finalizeApprovalDecision) await repository.finalizeApprovalDecision({ challengeId: challenge.id, humanId: result.actorId, credentialId: result.credentialId, endpointId: challenge.endpointId, now });
+        if (repository?.finalizeApprovalDecision) await repository.finalizeApprovalDecision({ challengeId: challenge.id, humanId: result.actorId, credentialId: result.credentialId, endpointId: challenge.endpointId, now, onChange: approvalHook('granted', now) });
         assertionRateLimits.delete(challengeId);
         response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'OK', ...result }));
@@ -548,7 +552,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
               if (entry.status === 'cancelled' && state !== 'consumed') {
                 if (!repository.cancelApprovalChallenge) return failAgUi(503, 'AG_UI_UNAVAILABLE', 'Approval cancellation is unavailable');
                 try {
-                  await repository.cancelApprovalChallenge({ challengeId: challenge.id, endpointId: challenge.endpointId, now });
+                  await repository.cancelApprovalChallenge({ challengeId: challenge.id, endpointId: challenge.endpointId, now, onChange: approvalHook('cancelled', now) });
                   state = 'cancelled';
                 } catch (error) {
                   if (error.code === 'APPROVAL_ALREADY_CONSUMED') state = 'consumed';
@@ -732,6 +736,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
           challengeId: decodeURIComponent(cancelMatch[1]),
           endpointId: principal?.endpoint_id,
           now,
+          onChange: approvalHook('cancelled', now),
         });
         response.writeHead(200, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'OK', challenge_id: result.challengeId, status: result.status, duplicate: result.duplicate, revoked_decision_count: result.revokedDecisionCount }));
@@ -804,7 +809,7 @@ export function createRelayServer({ registry, idempotency = new Map(), lookupIde
       try {
         const challenge = createApprovalChallenge({ relayOrigin: effectiveRelayOrigin, actionHash, endpointId: principal.endpoint_id, callbackUrl: body.callback_url });
         if (bound) Object.assign(challenge, { conversationId: bound.conversationId, messageId: bound.messageId, capabilities: bound.capabilities, envelope: bound.envelope });
-        if (repository?.createApprovalChallenge) await repository.createApprovalChallenge(challenge);
+        if (repository?.createApprovalChallenge) await repository.createApprovalChallenge(challenge, bound ? { onChange: approvalHook('requested', now) } : {});
         else approvalChallenges.set(challenge.id, challenge);
         response.writeHead(201, { 'content-type': 'application/json', 'x-sigil-request-id': requestId });
         return response.end(JSON.stringify({ request_id: requestId, code: 'OK', challenge_id: challenge.id, webauthn_challenge: challenge.webauthnChallenge, approval_url: challenge.approvalUrl, expires_at: challenge.expiresAt }));

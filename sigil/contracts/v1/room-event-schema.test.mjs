@@ -49,3 +49,13 @@ test('accepts an optional thread_root_id string and rejects other types', () => 
   assert.doesNotThrow(() => validateRoomEventBody({ kind: 'agent_cap_reached', endpoint_ids: ['ep_claude'], thread_root_id: 'msg_root' }));
   for (const bad of ['', 7, null]) assert.throws(() => validateRoomEventBody({ kind: 'agent_cap_reached', endpoint_ids: [], thread_root_id: bad }), (error) => error.details.field === 'thread_root_id');
 });
+
+test('approval events carry held_message_id and never a challenge id', () => {
+  for (const kind of ['approval_requested', 'approval_granted', 'approval_cancelled', 'approval_expired']) {
+    assert.doesNotThrow(() => validateRoomEventBody({ kind, endpoint_ids: ['ep_claude'], held_message_id: 'msg_held', reason: 'payments.send' }));
+    assert.throws(() => validateRoomEventBody({ kind, endpoint_ids: ['ep_claude'] }), (error) => error.details.field === 'held_message_id');
+    assert.throws(() => validateRoomEventBody({ kind, endpoint_ids: ['ep_claude'], held_message_id: '' }), (error) => error.details.field === 'held_message_id');
+    assert.throws(() => validateRoomEventBody({ kind, endpoint_ids: ['ep_claude'], held_message_id: 'msg_held', challenge_id: 'ch_1' }), (error) => error.details.field === 'challenge_id');
+  }
+  assert.throws(() => validateRoomEventBody({ kind: 'router_failed', endpoint_ids: [], held_message_id: 'msg_held' }), (error) => error.details.field === 'held_message_id');
+});

@@ -1,6 +1,6 @@
 # Sigil rooms: in-timeline approval card (#269)
 
-Status: proposal, no code yet. Date: 2026-11-28.
+Status: building. The relay part (sections 1 to 3 and 2a) is built; the web part (sections 2, 4 to 6) comes next. Build notes below mark where the build departs from the proposal. Date: 2026-11-28.
 
 ## Problem
 
@@ -74,8 +74,13 @@ Expiry has no event today. The client flips the card to "Expired" at
 `expires_at` on its own, so the screen is right without a round trip. The
 relay record comes from a small sweep, in the style of the existing reapers:
 each pass locks due rows (`status = 'pending' AND expires_at <= now`,
-`FOR UPDATE SKIP LOCKED`), moves each to a new `expired` status, writes its
-outcome event and notifies, all in one transaction. The status change is the
+`FOR UPDATE SKIP LOCKED`), moves each to the `expired` status, writes its
+outcome event and notifies, all in one transaction.
+
+*Build note (relay PR):* `expired` was already an allowed status in
+`approval_challenges`, so no migration. The sweep takes one row per
+transaction, so a room whose emit fails is rolled back and retried on the
+next pass without blocking other rooms. It runs every 30 seconds. The status change is the
 once-only marker, so two passes can't both emit for one challenge.
 
 A lazy emit on the next read was the first idea, and it fails: an idle room
@@ -93,20 +98,34 @@ Add relay-signed room events so a hold leaves a record after the card goes:
 - `approval_cancelled` (agent or approver cancelled)
 - `approval_expired` (written by the sweep in 2a)
 
-Each carries `challenge_id`, the sender's `endpoint_ids` and a short `reason`
-(capability names). They go through `emitRoomEvent` in the same transaction
+Each carries `held_message_id` (the held envelope's `message_id`), the
+sender's `endpoint_ids` and a short `reason` (capability names).
+
+*Build note (relay PR):* the first draft had these events carry
+`challenge_id`. Room events reach every member, and section 1 keeps the
+challenge id to the approver because of #338, so the events name the held
+message instead, and the event's idempotency key uses a hash of the
+challenge id rather than the id itself (the key is part of the signed
+envelope). The client joins the event to the approvals item on
+`message_id`, which it already uses. They go through `emitRoomEvent` in the same transaction
 as the state change, so the record can't drift from the challenge row. Today
 `createApprovalChallenge`, `finalizeApprovalDecision` and
 `cancelApprovalChallenge` each open and commit their own transaction, so they
 change to take an `onChange(client, challenge)` hook that runs before commit.
 A failed emit rolls the state change back.
 
-`emitRoomEvent` gives every event a 24-hour `expires_at`. These four use the
-room's message retention instead, since the point is a lasting record.
+`emitRoomEvent` gives every event a 24-hour `expires_at`. These four keep
+it.
 
-This adds four values to `ROOM_EVENT_KINDS`, `challenge_id` to the allowed
-fields in `room-event-schema.mjs`, and a per-kind TTL to `emitRoomEvent`,
-which is a contract change.
+*Build note (relay PR):* the first draft gave these events the room's
+message retention instead. The relay has no such setting: room envelopes
+stay in the timeline whatever their `expires_at`, which only bounds
+delivery, and client-sent room messages also use 24 hours. So the record
+lasts as long as any other room row without a per-kind TTL.
+
+This adds four values to `ROOM_EVENT_KINDS` and `held_message_id` to the
+allowed fields in `room-event-schema.mjs` (required on these four kinds and
+refused on the others), which is a contract change.
 
 ### 4. Where the card sits
 
@@ -154,11 +173,12 @@ Relay:
   back.
 - two concurrent sweep passes emit `approval_expired` once for one challenge;
   an idle room still gets it.
-- outcome events carry the room's retention, not 24 hours.
+- outcome events name the held message, never the challenge id, in the
+  body or the idempotency key.
 
 Schema:
-- `room-event-schema` accepts the four kinds with `challenge_id` and rejects
-  unknown fields.
+- `room-event-schema` accepts the four kinds with `held_message_id` and
+  rejects unknown fields.
 
 Web:
 - the card renders in time order, not at the tail.
