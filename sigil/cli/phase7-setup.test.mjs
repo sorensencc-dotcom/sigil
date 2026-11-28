@@ -821,12 +821,12 @@ const relayHealth = (body, { requestId = 'req_fixture', ok = true } = {}) => asy
 
 test('probeRegistryRefreshStatus trusts only a relay-shaped /v1/health that reports registry refresh', async () => {
   const cfg = { ports: { relay: 8791 } };
-  assert.deepEqual(await probeRegistryRefreshStatus(cfg, {
+  assert.equal(await probeRegistryRefreshStatus(cfg, {
     fetch: async (url, ...rest) => {
       assert.equal(url, 'http://127.0.0.1:8791/v1/health');
       return relayHealth({ status: 'ok', registry_refresh: true })(url, ...rest);
     },
-  }), { status: 'verified', source: 'relay' });
+  }), 'verified');
   for (const fetch of [
     relayHealth({ status: 'ok', registry_refresh: false }),
     relayHealth({ status: 'ok' }),
@@ -836,40 +836,39 @@ test('probeRegistryRefreshStatus trusts only a relay-shaped /v1/health that repo
     async () => ({ ok: true, json: async () => ({ status: 'ok', registry_refresh: true }) }),
     async () => { throw new Error('ECONNREFUSED'); },
   ]) {
-    assert.deepEqual(await probeRegistryRefreshStatus(cfg, { fetch }), { status: 'unverified', source: 'relay' });
+    assert.equal(await probeRegistryRefreshStatus(cfg, { fetch }), 'unverified');
     assert.equal(await probeLiveRegistryRefresh(cfg, { fetch }), 'unverified');
   }
-  assert.deepEqual(await probeRegistryRefreshStatus({}), { status: 'unverified', source: 'relay' });
+  assert.equal(await probeRegistryRefreshStatus({}), 'unverified');
 });
 
-test('probeRegistryRefreshStatus checks the relay before registryRefreshConfirmed and names the config as the source', async () => {
+test('probeRegistryRefreshStatus ignores registryRefreshConfirmed in setup.json', async () => {
   let asked = 0;
   const live = await probeRegistryRefreshStatus({ registryRefreshConfirmed: true, ports: { relay: 8791 } }, {
     fetch: async (...a) => { asked += 1; return relayHealth({ status: 'ok', registry_refresh: true })(...a); },
   });
   assert.equal(asked, 1, 'the relay is asked even when setup.json says yes');
-  assert.deepEqual(live, { status: 'verified', source: 'relay' });
-  assert.deepEqual(await probeRegistryRefreshStatus({ registryRefreshConfirmed: true, ports: { relay: 8791 } }, {
+  assert.equal(live, 'verified');
+  assert.equal(await probeRegistryRefreshStatus({ registryRefreshConfirmed: true, ports: { relay: 8791 } }, {
     fetch: async () => { throw new Error('ECONNREFUSED'); },
-  }), { status: 'verified', source: 'config' });
-  assert.deepEqual(await probeRegistryRefreshStatus({ registryRefreshConfirmed: true }), { status: 'verified', source: 'config' });
-  assert.deepEqual(await probeRegistryRefreshStatus({ registryRefreshConfirmed: false }), { status: 'unverified', source: 'relay' });
+  }), 'unverified', 'an unreachable relay stays unverified whatever setup.json says');
+  assert.equal(await probeRegistryRefreshStatus({ registryRefreshConfirmed: true }), 'unverified');
 });
 
-test('entry: a refresh vouched for only by setup.json is flagged in the summary and before the phrase', async () => {
-  const w = world({ refresh: { status: 'verified', source: 'config' }, answers: ['not the phrase'] });
-  assert.equal(await main(['--apply'], w.deps), EXIT.DECLINED);
+test('entry: registryRefreshConfirmed in setup.json is ignored, flagged, and cannot pass the refresh gate', async () => {
+  const w = world({
+    readConfig: async () => ({ ...e2eConfig(), registryRefreshConfirmed: true }),
+    refresh: 'unverified', answers: [applyPhrase(E2E_LABEL)],
+  });
+  assert.notEqual(await main(['--apply'], w.deps), EXIT.OK);
   const text = w.text();
-  assert.match(text, /registry_refresh: verified\nregistry_refresh source: setup\.json registryRefreshConfirmed; the relay did not confirm it/);
-  const promptAt = text.indexOf('apply: declined');
-  const warnAt = text.indexOf('registry_refresh warning: setup.json registryRefreshConfirmed says yes, but the relay did not confirm it');
-  assert.ok(warnAt > 0 && warnAt < promptAt, 'the warning is shown before the phrase is asked');
-  assert.deepEqual(w.effects(), []);
+  assert.match(text, /registry_refresh: unverified\nregistry_refresh note: setup\.json registryRefreshConfirmed is ignored; only the relay can confirm refresh, so remove it/);
+  assert.deepEqual(w.effects(), [], 'no file, lock, prompt or bot');
   assertSafeOutput(w);
 
-  const relay = world({ refresh: { status: 'verified', source: 'relay' }, answers: ['not the phrase'] });
-  await main(['--apply'], relay.deps);
-  assert.doesNotMatch(relay.text(), /registry_refresh (source|warning)/);
+  const plain = world({ answers: ['not the phrase'] });
+  await main(['--apply'], plain.deps);
+  assert.doesNotMatch(plain.text(), /registry_refresh note/);
 });
 
 // Builds a URL with a user and password without writing one out literally,

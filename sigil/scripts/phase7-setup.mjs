@@ -94,11 +94,12 @@ async function takeSnapshot(config, storage, deps) {
   const sources = await storage.inspectSources(config);
   const db = await deps.inspectDatabase(config);
   const registryPreflight = await deps.preflightRegistry(config);
-  // The probe answers a status string, or { status, source } where source
-  // 'config' means only setup.json's registryRefreshConfirmed vouches for it.
+  // Only the live relay check can verify refresh. registryRefreshConfirmed in
+  // setup.json is still accepted so old files load, but it is ignored and the
+  // summary says so.
   const probe = await deps.probeRegistryRefresh(config);
   const registryRefresh = typeof probe === 'string' ? probe : (probe?.status ?? 'unverified');
-  const registryRefreshSource = probe && typeof probe === 'object' && probe.source === 'config' ? 'config' : 'relay';
+  const refreshOverrideIgnored = config?.registryRefreshConfirmed !== undefined;
   const blockers = [...(db?.blockers ?? [])];
   if (sources.secretRoot === 'rejected') blockers.push('secret-root-rejected');
   if (sources.routine.keyHeader !== 'valid') blockers.push('routine-key-header-invalid');
@@ -112,7 +113,7 @@ async function takeSnapshot(config, storage, deps) {
     routine: { urlState: sources.routine.urlState, keyState: sources.routine.keyState },
     registryPreflight,
     registryRefresh,
-    registryRefreshSource,
+    refreshOverrideIgnored,
     blockers,
   };
 }
@@ -137,7 +138,6 @@ export function describeDatabaseTarget(url) {
   return `database target: host ${host}${parsed.port ? `:${parsed.port}` : ''}, database ${name}`;
 }
 
-const REFRESH_FROM_CONFIG = 'registry_refresh warning: setup.json registryRefreshConfirmed says yes, but the relay did not confirm it; new bots may not be picked up';
 
 function describeWrites(config, plan, env) {
   const lines = ['Apply will:'];
@@ -149,7 +149,6 @@ function describeWrites(config, plan, env) {
   }
   lines.push(`- database: ${safeText(config.dbLabel)}`);
   lines.push(`- ${describeDatabaseTarget(env?.[config.databaseEnv])}`);
-  if (plan.registryRefreshSource === 'config') lines.push(`- ${REFRESH_FROM_CONFIG}`);
   return lines.join('\n');
 }
 
@@ -347,14 +346,10 @@ export async function probeLiveRegistryRefresh(config, { fetch = globalThis.fetc
   }
 }
 
-// The live check always runs first. registryRefreshConfirmed in setup.json is
-// only a fallback, and when it is what passes the gate the answer says so, so
-// the summary and the apply prompt can warn the owner.
+// Only the relay can verify automatic refresh. A bot the relay cannot pick up
+// is never created, so nothing in setup.json can stand in for this check.
 export async function probeRegistryRefreshStatus(config, { fetch = globalThis.fetch } = {}) {
-  const live = await probeLiveRegistryRefresh(config, { fetch });
-  if (live === 'verified') return { status: 'verified', source: 'relay' };
-  if (config?.registryRefreshConfirmed === true) return { status: 'verified', source: 'config' };
-  return { status: live, source: 'relay' };
+  return probeLiveRegistryRefresh(config, { fetch });
 }
 
 // Real capabilities, wired only when the script is run directly. Each one is

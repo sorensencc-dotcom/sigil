@@ -199,7 +199,7 @@ export function planSetup(snapshot, { apply = false, configBots, databaseEnv } =
     replyTokens: Object.freeze(replyTokens),
     tokenDatabaseEnv: typeof databaseEnv === 'string' ? databaseEnv : null,
     registryRefresh: snapshot.registryRefresh ?? 'unverified',
-    registryRefreshSource: snapshot.registryRefreshSource === 'config' ? 'config' : 'relay',
+    refreshOverrideIgnored: snapshot.refreshOverrideIgnored === true,
     registryPreflight: Object.freeze({ ok: preflightOk, gapCount: preflightGaps.length }),
     relayReady,
     smokeRun: false,
@@ -213,8 +213,8 @@ export function renderSummary(plan) {
   const lines = [`Mode: ${plan.mode}; Phase 7 paused; active track: one-link enrollment`];
   for (const input of plan.inputs) lines.push(`${safe(input.name)}: ${safe(input.state)}`);
   lines.push(`registry_refresh: ${safe(plan.registryRefresh)}`);
-  if (plan.registryRefreshSource === 'config') {
-    lines.push('registry_refresh source: setup.json registryRefreshConfirmed; the relay did not confirm it');
+  if (plan.refreshOverrideIgnored) {
+    lines.push('registry_refresh note: setup.json registryRefreshConfirmed is ignored; only the relay can confirm refresh, so remove it');
   }
   lines.push(`registry_preflight: ${plan.registryPreflight?.ok ? 'ok' : `${Number(plan.registryPreflight?.gapCount ?? 0)} gap(s)`}`);
   lines.push(`relay_ready: ${plan.relayReady ? 'yes' : 'no'}`);
