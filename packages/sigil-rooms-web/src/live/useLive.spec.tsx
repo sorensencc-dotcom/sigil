@@ -70,6 +70,15 @@ describe('useLive', () => {
     expect(spy).toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'members'] });
   });
 
+  it('invalidates the join request queue and the own requests on a join_requests frame', async () => {
+    const { spy } = setup();
+    await waitFor(() => expect(sockets.length).toBe(1));
+    sockets[0]!.onFrame({ type: 'room.updated', room_id: 'room_1', changed: 'join_requests' });
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'join-requests'] });
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['join-requests'] });
+    expect(spy).not.toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'messages'] });
+  });
+
   it('invalidates only the room list on a room frame', async () => {
     const { spy } = setup();
     await waitFor(() => expect(sockets.length).toBe(1));

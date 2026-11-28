@@ -7,7 +7,7 @@ export interface Room {
   max_agent_turns: number;
 }
 
-export type RoomEventKind = 'router_decision' | 'invocation_refused' | 'invocation_stopped' | 'router_failed' | 'agent_cap_reached' | 'room_halted' | 'invocation_failed';
+export type RoomEventKind = 'router_decision' | 'invocation_refused' | 'invocation_stopped' | 'router_failed' | 'agent_cap_reached' | 'room_halted' | 'invocation_failed' | 'member_joined';
 
 export interface RoomEnvelope {
   message_id: string;
@@ -94,7 +94,7 @@ export interface RoomUpdatedFrame {
   type: 'room.updated';
   room_id: string;
   room_seq?: string | number;
-  changed: 'messages' | 'members' | 'room';
+  changed: 'messages' | 'members' | 'room' | 'join_requests';
 }
 
 export type ResponseMode = 'joins' | 'mentions_only' | 'router' | 'report_only';
@@ -151,4 +151,50 @@ export interface Contact {
   created_at: string;
   updated_at: string;
   endpoint_ids: string[];
+}
+
+export type GrantableRole = 'member' | 'room_manager';
+export type JoinRequestStatus = 'pending' | 'accepted' | 'declined' | 'withdrawn' | 'expired';
+
+export interface JoinRequest {
+  request_id: string;
+  room_id: string;
+  requester_human_id: string;
+  requester_endpoint_id: string;
+  requester_name: string | null;
+  offered_role: GrantableRole;
+  status: JoinRequestStatus;
+  decided_role: GrantableRole | null;
+  created_at: string;
+  expires_at: string;
+  decided_at: string | null;
+}
+
+export interface JoinRequestQueue {
+  pending: JoinRequest[];
+  decided: JoinRequest[];
+}
+
+export interface OwnJoinRequest extends JoinRequest {
+  room_name: string;
+}
+
+export interface RoomInvite {
+  invite_id: string;
+  name: string;
+  role: GrantableRole;
+  admission: 'direct' | 'request';
+  created_by_human_id: string;
+  created_at: string;
+  expires_at: string;
+  consumed_by_human_id: string | null;
+  state: 'open' | 'used' | 'expired' | 'revoked';
+}
+
+export interface CreatedRoomInvite {
+  invite_id: string;
+  role: GrantableRole;
+  admission: 'direct' | 'request';
+  link: string | null;
+  token: string;
 }

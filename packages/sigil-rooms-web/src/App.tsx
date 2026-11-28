@@ -18,6 +18,7 @@ import { Composer } from './rooms/Composer';
 import { DensityToggle } from './rooms/DensityToggle';
 import { VerifiedEnvelopeInspector } from './rooms/VerifiedEnvelopeInspector';
 import { RoomHeader } from './rooms/RoomHeader';
+import { PendingJoinRequests } from './rooms/PendingJoinRequests';
 import { RoomList } from './rooms/RoomList';
 import { StatusLine } from './rooms/StatusLine';
 import { ThreadPanel } from './rooms/ThreadPanel';
@@ -197,6 +198,7 @@ function Shell({ theme, onThemeChange }: { theme: string; onThemeChange: (next: 
         <div className="body">
           <aside className="sidebar" id="rooms-drawer">
             <div className="sidebar-list">
+              <PendingJoinRequests />
               <RoomList selectedId={roomId} onSelect={selectRoom} />
             </div>
             {identity ? (

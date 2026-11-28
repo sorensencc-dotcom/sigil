@@ -45,7 +45,7 @@ test('error responses have stable machine-readable shape', () => {
 test('every rooms route declares DATABASE_UNAVAILABLE and every room error code is a contract error', () => {
   const states = JSON.parse(fs.readFileSync(new URL('./errors-and-states.json', import.meta.url)));
   const rooms = api.routes.filter((route) => route.path === '/v1/rooms' || route.path.startsWith('/v1/rooms/'));
-  assert.equal(rooms.length, 17);
+  assert.equal(rooms.length, 23);
   for (const route of rooms) {
     // ws-ticket is served before the repository check and never touches the database.
     if (route.path === '/v1/rooms/ws-ticket') continue;
@@ -101,7 +101,7 @@ test('relay-api lists the phase 4a browser routes and the room.updated frame', (
   assert.ok(frame, 'room.updated listed');
   assert.deepEqual(frame.fields, ['type', 'room_id', 'room_seq', 'changed']);
   assert.deepEqual(frame.optional_fields, ['room_seq']);
-  assert.deepEqual(frame.changed_values, ['messages', 'members', 'room']);
+  assert.deepEqual(frame.changed_values, ['messages', 'members', 'room', 'join_requests']);
 
   const states = JSON.parse(fs.readFileSync(new URL('./errors-and-states.json', import.meta.url)));
   for (const code of ['TICKET_CAP', 'TICKETS_UNAVAILABLE', 'ROOM_SEND_UNAVAILABLE', 'NO_SIGNING_KEY']) assert.ok(states.errors.includes(code), code);
@@ -115,7 +115,7 @@ test('relay API lists the rename route and the room frame value', () => {
   assert.deepEqual(route.response_fields, ['code', 'room']);
   for (const code of ['HUMAN_CONTEXT_REQUIRED', 'ROUTE_NOT_AUTHORIZED', 'INVALID_REQUEST', 'ROOM_NAME_TAKEN', 'ROOM_NOT_FOUND']) assert.ok(route.errors.includes(code), code);
   const frame = api.stream_frames.find((item) => item.type === 'room.updated');
-  assert.deepEqual(frame.changed_values, ['messages', 'members', 'room']);
+  assert.deepEqual(frame.changed_values, ['messages', 'members', 'room', 'join_requests']);
 });
 
 test('relay API lists the Floor Warden reply route with its spec codes', () => {
@@ -177,3 +177,17 @@ test('relay API response-mode notes list report_only among response modes', () =
   }
 });
 
+
+test('relay API lists the join request queue routes (#272)', () => {
+  const states = JSON.parse(fs.readFileSync(new URL('./errors-and-states.json', import.meta.url)));
+  const accept = api.routes.find((r) => r.method === 'POST' && r.path === '/v1/rooms/{room_id}/join-requests/{request_id}/accept');
+  assert.deepEqual(accept.request_fields, ['role']);
+  for (const code of ['JOIN_REQUEST_NOT_FOUND', 'JOIN_REQUEST_DECIDED', 'JOIN_REQUEST_EXPIRED', 'REQUESTER_INACTIVE']) {
+    assert.ok(accept.errors.includes(code), code);
+    assert.ok(states.errors.includes(code), code);
+  }
+  const mint = api.routes.find((r) => r.method === 'POST' && r.path === '/v1/rooms/{room_id}/invites');
+  assert.deepEqual(mint.request_fields, ['name', 'role', 'admission', 'ttl_hours']);
+  assert.ok(api.routes.some((r) => r.method === 'GET' && r.path === '/v1/join-requests'));
+  assert.ok(api.routes.some((r) => r.method === 'POST' && r.path === '/v1/join-requests/{request_id}/withdraw'));
+});

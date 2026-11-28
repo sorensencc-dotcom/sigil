@@ -10,7 +10,7 @@ const O = 'https://sigil.test';
 const OPERATOR = 'usr_operator';
 const NOW = new Date('2030-01-02T03:04:05.000Z');
 
-async function harness(t, { providerOverrides = {}, invites = {}, limits = {}, repoOverrides = {}, principal = null, completeLoginImpl = null } = {}) {
+async function harness(t, { providerOverrides = {}, invites = {}, limits = {}, repoOverrides = {}, principal = null, completeLoginImpl = null, streamOverrides = {} } = {}) {
   const calls = { authorizeUrl: 0, audit: [], pool: [], closeSession: [], revokeSession: [], reserve: [], login: [] };
   const provider = {
     authorizeUrl({ state, codeChallenge, redirectUri }) {
@@ -46,7 +46,7 @@ async function harness(t, { providerOverrides = {}, invites = {}, limits = {}, r
     providers: { github: provider },
     flowStore,
     ticketStore: { revokeSession: (id) => calls.revokeSession.push(id) },
-    stream: { closeSession: (id) => calls.closeSession.push(id) },
+    stream: { closeSession: (id) => calls.closeSession.push(id), ...streamOverrides },
     publicOrigin: O,
     wrapKey: Buffer.alloc(32),
     operatorHumanId: OPERATOR,
@@ -185,7 +185,7 @@ test('callback success sets the session cookie, clears the flow cookie, and revo
 });
 
 test('callback maps non-login outcomes onto the login error codes', async (t) => {
-  for (const outcome of ['denied', 'invite_required', 'invite_expired']) {
+  for (const outcome of ['denied', 'invite_required', 'invite_expired', 'join_request_limit']) {
     const h = await harness(t, { completeLoginImpl: async () => ({ outcome }) });
     const { cookie, state } = await startFlow(h);
     const res = await h.send('GET', `/v1/auth/oauth/github/callback?state=${state}&code=c`, { headers: { cookie: `${FLOW_COOKIE}=${cookie}` } });
@@ -237,4 +237,17 @@ test('flow store cap yields 503', async (t) => {
   const h = await harness(t);
   h.flowStore.start = () => { throw Object.assign(new Error('full'), { code: 'FLOW_CAP' }); };
   assert.equal((await h.send('POST', '/v1/auth/oauth/github/start', { headers: startHeaders, body: '{}' })).status, 503);
+});
+
+test('callback sends join_requests to each room a login queued a request for (#272)', async (t) => {
+  const frames = [];
+  const h = await harness(t, {
+    completeLoginImpl: async () => ({ outcome: 'login', human_id: 'usr_g', endpoint_id: 'ep_g', join_requests: [{ request_id: 'jreq_1', room_id: 'room_a' }] }),
+    repoOverrides: { listRoomMembers: async () => [{ endpoint_id: 'ep_owner', response_mode: null }], lookupRecipientEndpoint: async () => ({ kind: 'human' }) },
+    streamOverrides: { notifyRoom: (endpointId, frame) => frames.push([endpointId, frame]) },
+  });
+  const { cookie, state } = await startFlow(h);
+  const res = await h.send('GET', `/v1/auth/oauth/github/callback?state=${state}&code=c`, { headers: { cookie: `${FLOW_COOKIE}=${cookie}` } });
+  assert.equal(res.headers.location, '/');
+  assert.deepEqual(frames, [['ep_owner', { room_id: 'room_a', changed: 'join_requests' }]]);
 });

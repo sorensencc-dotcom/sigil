@@ -8,6 +8,10 @@ export function describeError(error: unknown): string {
     case 'NO_SIGNING_KEY': return 'This token\'s endpoint is not the identity loaded with --room-human-identity.';
     case 'ROOM_NAME_TAKEN': return 'A room with that name already exists';
     case 'ROUTE_NOT_AUTHORIZED': return 'Only room managers can do this';
+    case 'JOIN_REQUEST_DECIDED': return 'Someone already answered this request';
+    case 'JOIN_REQUEST_EXPIRED': return 'This request has expired';
+    case 'JOIN_REQUEST_NOT_FOUND': return 'This request is no longer here';
+    case 'REQUESTER_INACTIVE': return 'This person can no longer join';
     case 'DATABASE_UNAVAILABLE': return 'Rooms are unavailable (DATABASE_UNAVAILABLE)';
     case 'NETWORK': return error.message;
     default: return error.message || error.code;

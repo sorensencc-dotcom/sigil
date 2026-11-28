@@ -9,6 +9,7 @@
 import crypto from 'node:crypto';
 import { provisionHumanTx, addHumanToRoomsTx, lockManagerRows } from '../provision-human.mjs';
 import { hashInviteToken } from './invites.mjs';
+import { queueJoinRequestsTx } from '../join-requests.mjs';
 
 export const SESSION_ABSOLUTE_MS = 7 * 24 * 3600_000;
 const MANAGER = new Set(['owner', 'room_manager']);
@@ -31,8 +32,8 @@ async function lockInvite(client, tokenHash, now) {
     `SELECT * FROM room_invites WHERE token_hash = $1 AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > $2 FOR UPDATE`,
     [tokenHash, now.toISOString()]);
   if (!rows[0]) throw new Abort('invite_expired');
-  const { rows: rooms } = await client.query(`SELECT room_id, role FROM room_invite_rooms WHERE invite_id = $1 ORDER BY room_id`, [rows[0].invite_id]);
-  return { invite: rows[0], rooms: rooms.map((r) => ({ roomId: r.room_id, role: r.role })) };
+  const { rows: rooms } = await client.query(`SELECT room_id, role, admission FROM room_invite_rooms WHERE invite_id = $1 ORDER BY room_id`, [rows[0].invite_id]);
+  return { invite: rows[0], rooms: rooms.map((r) => ({ roomId: r.room_id, role: r.role, admission: r.admission })) };
 }
 
 // Spec linking step 2: lock the creator's membership rows in sorted order and
@@ -62,6 +63,20 @@ async function addRooms(client, args) {
     await addHumanToRoomsTx(client, args);
   } catch (error) {
     if (error.code === 'ROUTE_NOT_AUTHORIZED') throw new Abort('invite_expired');
+    throw error;
+  }
+}
+
+// Join request design (#272): 'direct' rooms are added as before; 'request'
+// rooms queue a pending join request for a room manager to decide.
+async function admitToRooms(client, { invite, rooms, humanId, endpointId, repository, now }) {
+  const direct = rooms.filter((r) => r.admission !== 'request').map(({ roomId, role }) => ({ roomId, role }));
+  const queued = rooms.filter((r) => r.admission === 'request');
+  if (direct.length) await addRooms(client, { endpointId, memberships: direct, actorHumanId: invite.created_by_human_id, repository, now });
+  try {
+    return await queueJoinRequestsTx(client, { invite, rooms: queued, humanId, endpointId, now });
+  } catch (error) {
+    if (error.code === 'JOIN_REQUEST_LIMIT') throw new Abort('join_request_limit');
     throw error;
   }
 }
@@ -100,9 +115,9 @@ export async function completeLogin({ repository, identity, inviteToken = null, 
     });
   }
 
-  async function success(client, humanId, endpointId) {
+  async function success(client, humanId, endpointId, joinRequests = []) {
     await audit(client, { type: 'oauth_login.success', subjectId: humanId, actorHumanId: humanId, now });
-    return { outcome: 'login', human_id: humanId, endpoint_id: endpointId, audit: { type: 'oauth_login.success', subjectId: humanId } };
+    return { outcome: 'login', human_id: humanId, endpoint_id: endpointId, join_requests: joinRequests, audit: { type: 'oauth_login.success', subjectId: humanId } };
   }
 
   async function existing(client, row) {
@@ -118,9 +133,20 @@ export async function completeLogin({ repository, identity, inviteToken = null, 
       if (inv?.target_human_id) targeted = inv;
     }
     if (row.status === 'active') {
+      // A signed-in person opening another room's invite: the invite now
+      // admits them (or queues a request) and is consumed, where before it was
+      // ignored and the person could never join a second room (#272).
+      // An unusable invite still lets a returning person log in.
+      const redeem = await lockUsableInviteFor(client, row);
       if (!(await lockActiveHumanEndpoint(client, row.human_id, row.endpoint_id))) throw new Abort('denied', row.human_id);
+      let joinRequests = [];
+      if (redeem) {
+        joinRequests = await admitToRooms(client, { invite: redeem.invite, rooms: redeem.rooms, humanId: row.human_id, endpointId: row.endpoint_id, repository, now });
+        await consume(client, redeem.invite, row.human_id);
+        await audit(client, { type: 'invite.redeemed', subjectId: row.human_id, actorHumanId: row.human_id, objectType: 'room_invite', objectId: redeem.invite.invite_id, now });
+      }
       await newSession(client, row.human_id, row.endpoint_id);
-      return success(client, row.human_id, row.endpoint_id);
+      return success(client, row.human_id, row.endpoint_id, joinRequests);
     }
     if (row.status === 'revoked' && targeted && pinMatches(targeted, identity)) {
       // Reactivation transaction: linking steps 1 and 3 on the locked invite.
@@ -139,6 +165,24 @@ export async function completeLogin({ repository, identity, inviteToken = null, 
     throw new Abort('denied', row.human_id);
   }
 
+  // Lock the invite for a returning, active person, or return null when there
+  // is none or it can no longer be honoured. A pinned invite is honoured only
+  // for the human and identity it pins. lockInvite and recheckCreator only
+  // read and lock before they refuse, so catching their refusal here leaves
+  // the transaction clean.
+  async function lockUsableInviteFor(client, row) {
+    if (!tokenHash) return null;
+    try {
+      const locked = await lockInvite(client, tokenHash, now);
+      if (locked.invite.target_human_id && !(locked.invite.target_human_id === row.human_id && pinMatches(locked.invite, identity))) return null;
+      await recheckCreator(client, locked.invite, locked.rooms);
+      return locked;
+    } catch (error) {
+      if (error instanceof Abort && error.outcome === 'invite_expired') return null;
+      throw error;
+    }
+  }
+
   async function link(client) {
     const { invite, rooms } = await lockInvite(client, tokenHash, now);
     await recheckCreator(client, invite, rooms);
@@ -153,7 +197,7 @@ export async function completeLogin({ repository, identity, inviteToken = null, 
       const provisioned = await provisionHumanTx(client, { displayName: invite.name, attributes, wrapKey, now });
       humanId = provisioned.human_id; endpointId = provisioned.endpoint_id;
     }
-    if (rooms.length) await addRooms(client, { endpointId, memberships: rooms, actorHumanId: invite.created_by_human_id, repository, now });
+    const joinRequests = await admitToRooms(client, { invite, rooms, humanId, endpointId, repository, now });
     try {
       await repository.createOidcIdentity({ issuer: identity.issuer, subject: identity.subject, humanId, now, client, verifiedVia: 'oauth', endpointId });
     } catch (error) {
@@ -164,7 +208,7 @@ export async function completeLogin({ repository, identity, inviteToken = null, 
     await newSession(client, humanId, endpointId);
     await consume(client, invite, humanId);
     await audit(client, { type: 'invite.redeemed', subjectId: humanId, actorHumanId: humanId, objectType: 'room_invite', objectId: invite.invite_id, now });
-    return success(client, humanId, endpointId);
+    return success(client, humanId, endpointId, joinRequests);
   }
 
   async function consume(client, invite, humanId) {
