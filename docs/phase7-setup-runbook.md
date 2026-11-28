@@ -72,7 +72,7 @@ node sigil/scripts/phase7-setup.mjs --config "$env:USERPROFILE\.sigil-secrets\ph
 
 Exit code `0` means no blockers remain; exit code `2` lists missing prerequisites or blockers (such as `registry-refresh-unverified` or a repo-local path).
 
-`registry_refresh` comes from the relay: setup asks `http://127.0.0.1:<ports.relay>/v1/health` and accepts only a reply with `"status":"ok"`, `"registry_refresh":true` and Sigil's `x-sigil-request-id` header. That endpoint is unauthenticated, so this only rules out a different service on the port, not a process imitating the relay. `registryRefreshConfirmed: true` in `setup.json` is a fallback for when the relay cannot be reached: it still lets apply proceed, but the summary then prints `registry_refresh source: setup.json registryRefreshConfirmed; the relay did not confirm it`. Remove it once the relay answers, so a stale `true` cannot pass the gate.
+`registry_refresh` comes from the relay: setup asks `http://127.0.0.1:<ports.relay>/v1/health` and accepts only a reply with `"status":"ok"`, `"registry_refresh":true` and Sigil's `x-sigil-request-id` header. That endpoint is unauthenticated, so this only rules out a different service on the port, not a process imitating the relay. Nothing in `setup.json` can stand in for that reply: if the relay is not running or does not report refresh, apply creates no bots. Start the relay and run setup again. An old `registryRefreshConfirmed` field still loads but is ignored, and the summary prints `registry_refresh note: setup.json registryRefreshConfirmed is ignored`; remove it from the file.
 
 ## Apply confirmation
 
