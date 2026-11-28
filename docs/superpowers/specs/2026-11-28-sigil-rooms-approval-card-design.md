@@ -84,6 +84,8 @@ rows out, so the record would often never be written.
 
 ### 3. Signed outcome in the timeline
 
+Decided 2026-11-28: included.
+
 Add relay-signed room events so a hold leaves a record after the card goes:
 
 - `approval_requested` (challenge created)
@@ -117,9 +119,6 @@ once. After it ends, the same row shows the outcome line.
 The approved message lands at its own, later `room_seq`. The client does not
 move it back to the hold's position, because the timeline's order is the
 signed order. The outcome row says "Approved" and links to the message.
-
-If section 3 is left out, the card falls back to the challenge's `created_at`
-among rows, and it disappears when the challenge ends.
 
 ### 5. What the card shows
 
@@ -183,9 +182,8 @@ Web:
   holder of the id today. This design avoids handing the id out, but the page
   itself should check the viewer; worth its own issue.
 
-## Decision needed
+## Decisions
 
-Section 3 (signed outcome events) changes the room event contract and the
-three approval repository methods. Without it, the card still works, but it
-anchors by time instead of on a row, and a hold leaves no record in the
-timeline once it ends.
+- 2026-11-28, Chris: add the signed hold events (section 3), accepting the
+  room event contract change and the change to the three approval repository
+  methods.
