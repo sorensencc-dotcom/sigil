@@ -94,7 +94,11 @@ async function takeSnapshot(config, storage, deps) {
   const sources = await storage.inspectSources(config);
   const db = await deps.inspectDatabase(config);
   const registryPreflight = await deps.preflightRegistry(config);
-  const registryRefresh = await deps.probeRegistryRefresh(config);
+  // The probe answers a status string, or { status, source } where source
+  // 'config' means only setup.json's registryRefreshConfirmed vouches for it.
+  const probe = await deps.probeRegistryRefresh(config);
+  const registryRefresh = typeof probe === 'string' ? probe : (probe?.status ?? 'unverified');
+  const registryRefreshSource = probe && typeof probe === 'object' && probe.source === 'config' ? 'config' : 'relay';
   const blockers = [...(db?.blockers ?? [])];
   if (sources.secretRoot === 'rejected') blockers.push('secret-root-rejected');
   if (sources.routine.keyHeader !== 'valid') blockers.push('routine-key-header-invalid');
@@ -108,13 +112,34 @@ async function takeSnapshot(config, storage, deps) {
     routine: { urlState: sources.routine.urlState, keyState: sources.routine.keyState },
     registryPreflight,
     registryRefresh,
+    registryRefreshSource,
     blockers,
   };
 }
 
 const missingRoutine = (plan) => plan.inputs.filter((i) => (i.name === 'routine_url' || i.name === 'sender_key') && i.state === 'missing').map((i) => i.name);
 
-function describeWrites(config, plan) {
+// The non-secret part of the database URL: host, port and database name, never
+// the user, password or query options. The typed phrase names dbLabel, which is
+// only a label in setup.json, so this line shows what the URL really points at.
+const DB_PART = /^[A-Za-z0-9_.\-[\]:/]{1,100}$/;
+export function describeDatabaseTarget(url) {
+  if (typeof url !== 'string' || url === '') return 'database target: unknown (database env var is not set)';
+  let parsed;
+  try { parsed = new URL(url); } catch { return 'database target: unknown (not a postgres:// URL; check it before typing the phrase)'; }
+  if (parsed.protocol !== 'postgres:' && parsed.protocol !== 'postgresql:') {
+    return 'database target: unknown (not a postgres:// URL; check it before typing the phrase)';
+  }
+  const decode = (v) => { try { return decodeURIComponent(v); } catch { return ''; } };
+  const show = (v, fallback) => (!v ? fallback : DB_PART.test(v) ? v : '[unreadable]');
+  const host = show(parsed.hostname || parsed.searchParams.get('host'), 'local socket');
+  const name = show(decode(parsed.pathname.replace(/^\//, '')) || parsed.searchParams.get('dbname'), '(default for the user)');
+  return `database target: host ${host}${parsed.port ? `:${parsed.port}` : ''}, database ${name}`;
+}
+
+const REFRESH_FROM_CONFIG = 'registry_refresh warning: setup.json registryRefreshConfirmed says yes, but the relay did not confirm it; new bots may not be picked up';
+
+function describeWrites(config, plan, env) {
   const lines = ['Apply will:'];
   const fields = missingRoutine(plan);
   if (fields.length) lines.push(`- prompt for ${fields.join(', ')} (hidden) and store them in the protected secret root`);
@@ -123,6 +148,8 @@ function describeWrites(config, plan) {
     lines.push('- sigil bot add also applies any pending migrations; setup has checked none are pending');
   }
   lines.push(`- database: ${safeText(config.dbLabel)}`);
+  lines.push(`- ${describeDatabaseTarget(env?.[config.databaseEnv])}`);
+  if (plan.registryRefreshSource === 'config') lines.push(`- ${REFRESH_FROM_CONFIG}`);
   return lines.join('\n');
 }
 
@@ -222,7 +249,7 @@ export async function main(argv, deps) {
     out(`apply: refused until these are fixed: ${pre.map(safeText).join(', ')}; nothing was changed`);
     return EXIT.INCOMPLETE;
   }
-  out(describeWrites(config, plan));
+  out(describeWrites(config, plan, deps.env));
   const entered = await deps.confirm(`Type ${applyPhrase(config.dbLabel)} to continue: `);
   if (!authorized({ apply: true, isTTY: deps.isTTY, entered, dbLabel: config.dbLabel })) {
     out('apply: declined; nothing was changed');
@@ -300,18 +327,33 @@ export async function main(argv, deps) {
   return code;
 }
 
-export async function probeRegistryRefreshStatus(config, { fetch = globalThis.fetch } = {}) {
-  if (config?.registryRefreshConfirmed === true) return 'verified';
+// Asks the relay on loopback whether it refreshes the registry by itself. The
+// answer must look like Sigil's relay: status ok and its request-id header.
+// That is a sanity check against a different service on the port, not proof:
+// the endpoint is unauthenticated, so any local process could imitate it.
+export async function probeLiveRegistryRefresh(config, { fetch = globalThis.fetch } = {}) {
   const relayPort = config?.ports?.relay;
   if (!Number.isInteger(relayPort) || relayPort <= 0 || typeof fetch !== 'function') return 'unverified';
   try {
     const res = await fetch(`http://127.0.0.1:${relayPort}/v1/health`, { signal: AbortSignal.timeout(2000) });
     if (!res?.ok) return 'unverified';
+    const requestId = typeof res.headers?.get === 'function' ? res.headers.get('x-sigil-request-id') : null;
+    if (typeof requestId !== 'string' || requestId === '') return 'unverified';
     const body = await res.json();
-    return body?.registry_refresh === true ? 'verified' : 'unverified';
+    return body?.status === 'ok' && body?.registry_refresh === true ? 'verified' : 'unverified';
   } catch {
     return 'unverified';
   }
+}
+
+// The live check always runs first. registryRefreshConfirmed in setup.json is
+// only a fallback, and when it is what passes the gate the answer says so, so
+// the summary and the apply prompt can warn the owner.
+export async function probeRegistryRefreshStatus(config, { fetch = globalThis.fetch } = {}) {
+  const live = await probeLiveRegistryRefresh(config, { fetch });
+  if (live === 'verified') return { status: 'verified', source: 'relay' };
+  if (config?.registryRefreshConfirmed === true) return { status: 'verified', source: 'config' };
+  return { status: live, source: 'relay' };
 }
 
 // Real capabilities, wired only when the script is run directly. Each one is

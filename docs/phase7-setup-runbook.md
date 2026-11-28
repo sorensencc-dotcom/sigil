@@ -53,6 +53,15 @@ Start-ScheduledTask -TaskName SigilStack
 
 5. Confirm `http://127.0.0.1:8791/v1/health` returns `{"status":"ok","registry_refresh":true}` and check `.sigil\logs\supervisor.log`, `.sigil\logs\relay.out.log`, and `.sigil\logs\chief.out.log`, then delete the superseded copies in `.sigil\`.
 
+### What this storage protects against, and what it does not
+
+These limits came out of the Phase 7 setup review on issue #200. They are accepted for a single-user Windows host.
+
+- **Anyone running as you, as `SYSTEM` or as an administrator can read the secrets.** `routine.credentials.json` is plain JSON inside the protected root, with no DPAPI wrapping, and the identity files are the same. The directory and file ACLs are the only protection, so keep the `icacls` listing above clean: only your account and `NT AUTHORITY\SYSTEM`, with no `(I)` entries.
+- **Prompted secrets live as strings in memory while setup runs.** The hidden prompt zeroes its byte buffers, but the decoded value is a JavaScript string in Node and a .NET string in the PowerShell helper, and neither can be wiped. A memory dump of either process taken during the run could hold the value.
+- **The PowerShell helper is trusted by its path.** Setup runs `sigil/cli/phase7-setup-windows.ps1` from the repository checkout with `-ExecutionPolicy Bypass`. Keep the checkout writable only by your account, so no other user can replace the helper before you run setup.
+- **Path checks and writes are not one atomic step.** Setup checks each path for junctions and other reparse points, then writes. A process running as you could swap a folder for a junction in between. Such a process can already read your files, so this adds little, but do not run setup while untrusted tools run under your account.
+
 ## Dry-run
 
 Run `phase7-setup.mjs` without `--apply` to inspect the database, registry preflight, routine secret state, and relay refresh probe without writing files, acquiring locks, or prompting:
@@ -62,6 +71,8 @@ node sigil/scripts/phase7-setup.mjs --config "$env:USERPROFILE\.sigil-secrets\ph
 ```
 
 Exit code `0` means no blockers remain; exit code `2` lists missing prerequisites or blockers (such as `registry-refresh-unverified` or a repo-local path).
+
+`registry_refresh` comes from the relay: setup asks `http://127.0.0.1:<ports.relay>/v1/health` and accepts only a reply with `"status":"ok"`, `"registry_refresh":true` and Sigil's `x-sigil-request-id` header. That endpoint is unauthenticated, so this only rules out a different service on the port, not a process imitating the relay. `registryRefreshConfirmed: true` in `setup.json` is a fallback for when the relay cannot be reached: it still lets apply proceed, but the summary then prints `registry_refresh source: setup.json registryRefreshConfirmed; the relay did not confirm it`. Remove it once the relay answers, so a stale `true` cannot pass the gate.
 
 ## Apply confirmation
 
@@ -73,7 +84,7 @@ Exit code `0` means no blockers remain; exit code `2` lists missing prerequisite
 node sigil/scripts/phase7-setup.mjs --config "$env:USERPROFILE\.sigil-secrets\phase7\setup.json" --apply
 ```
 
-2. Review the planned writes and type `APPLY PHASE7 <dbLabel>` to authorize secret storage and bot creation.
+2. Review the planned writes and type `APPLY PHASE7 <dbLabel>` to authorize secret storage and bot creation. `dbLabel` is only a label from `setup.json`, so first check the `database target` line above the prompt: it shows the host, port and database name from the URL in `databaseEnv` (never the user or password). If they are not the database you mean, type anything else to stop. If a `registry_refresh warning` line is shown, the relay did not confirm automatic refresh; see Dry-run above.
 3. For each bot to create, type `CREATE <endpointId>` when prompted. Typing anything else declines that bot, leaves remaining bots untouched, and exits with code `4` (`partial apply`).
 
 The live smoke run is separate: after `--apply` finishes, run the live Grok smoke check separately against the running relay.

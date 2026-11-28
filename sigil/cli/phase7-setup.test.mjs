@@ -255,7 +255,7 @@ import fsSync from 'node:fs';
 import os from 'node:os';
 import pathMod from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { main, EXIT, USAGE, REPO_ROOT, REQUIRED_CONFIG_FIELDS, defaultConfigPath, probeRegistryRefreshStatus } from '../scripts/phase7-setup.mjs';
+import { main, EXIT, USAGE, REPO_ROOT, REQUIRED_CONFIG_FIELDS, defaultConfigPath, probeRegistryRefreshStatus, probeLiveRegistryRefresh, describeDatabaseTarget } from '../scripts/phase7-setup.mjs';
 import { applyPhrase, botPhrase } from './phase7-setup-apply.mjs';
 
 const E2E_LABEL = 'fixture';
@@ -782,25 +782,122 @@ test('validateSetupConfig accepts boolean registryRefreshConfirmed and rejects n
   assert.throws(() => validateSetupConfig({ ...base, registryRefreshConfirmed: 'yes' }, ctx), { code: 'INVALID_SETUP_CONFIG' });
 });
 
-test('probeRegistryRefreshStatus verifies live /v1/health pickup or explicit confirmation, and returns unverified otherwise', async () => {
-  assert.equal(await probeRegistryRefreshStatus({ registryRefreshConfirmed: true }), 'verified');
-  assert.equal(await probeRegistryRefreshStatus({ ports: { relay: 8791 } }, {
-    fetch: async (url) => {
+test('validateSetupConfig limits displayName length and rejects control and invisible characters', () => {
+  const ctx = { repoRoot: '/fixture/repo' };
+  const bot = { botId: 'bot_test', endpointId: `ep_test_bot@${DOMAIN}`, role: 'reply', roleConfirmed: true, identityPath: '/fixture/secrets/bot.json' };
+  const base = {
+    secretRoot: '/fixture/secrets',
+    operatorIdentityPath: '/fixture/secrets/op.json',
+    registryPath: '/fixture/secrets/registry.json',
+    dbLabel: 'fixture_db',
+    databaseEnv: 'FIXTURE_DB',
+    wrapKeyRef: 'FIXTURE_WRAP',
+    relayDomain: DOMAIN,
+    routine: { urlEnv: 'FIXTURE_URL', keyEnv: 'FIXTURE_KEY' },
+  };
+  const withName = (displayName) => ({ ...base, bots: [{ ...bot, displayName }] });
+  for (const ok of ['Grok Bot · Elon', 'First Mate · Orchestrator', 'Floor Warden', 'Ünïcødé 名前', 'x'.repeat(64), '😀'.repeat(64)]) {
+    assert.equal(validateSetupConfig(withName(ok), ctx).bots[0].displayName, ok);
+  }
+  assert.equal(validateSetupConfig({ ...base, bots: [bot] }, ctx).bots[0].displayName, undefined, 'still optional at validation');
+  const cases = [
+    ['', /non-empty/], ['   ', /non-empty/], [42, /non-empty/],
+    [' Grok', /start or end with spaces/], ['Grok\t', /start or end with spaces/],
+    ['x'.repeat(65), /at most 64/],
+    ['Grok\nBot', /control or invisible/], ['Grok\u0007', /control or invisible/],
+    ['Grok‮Bot', /control or invisible/], ['Gr​ok', /control or invisible/],
+    ['Grok Bot', /control or invisible/], ['Grok', /control or invisible/],
+  ];
+  for (const [value, message] of cases) {
+    assert.throws(() => validateSetupConfig(withName(value), ctx), (e) => e.code === 'INVALID_SETUP_CONFIG' && message.test(e.message), JSON.stringify(value));
+  }
+});
+
+const relayHealth = (body, { requestId = 'req_fixture', ok = true } = {}) => async () => ({
+  ok,
+  headers: { get: (name) => (name === 'x-sigil-request-id' ? requestId : null) },
+  json: async () => body,
+});
+
+test('probeRegistryRefreshStatus trusts only a relay-shaped /v1/health that reports registry refresh', async () => {
+  const cfg = { ports: { relay: 8791 } };
+  assert.deepEqual(await probeRegistryRefreshStatus(cfg, {
+    fetch: async (url, ...rest) => {
       assert.equal(url, 'http://127.0.0.1:8791/v1/health');
-      return { ok: true, json: async () => ({ status: 'ok', registry_refresh: true }) };
+      return relayHealth({ status: 'ok', registry_refresh: true })(url, ...rest);
     },
-  }), 'verified');
-  assert.equal(await probeRegistryRefreshStatus({ ports: { relay: 8791 } }, {
-    fetch: async () => ({ ok: true, json: async () => ({ status: 'ok', registry_refresh: false }) }),
-  }), 'unverified');
-  assert.equal(await probeRegistryRefreshStatus({ ports: { relay: 8791 } }, {
-    fetch: async () => ({ ok: true, json: async () => ({ status: 'ok' }) }),
-  }), 'unverified');
-  assert.equal(await probeRegistryRefreshStatus({ ports: { relay: 8791 } }, {
-    fetch: async () => ({ ok: false, json: async () => ({}) }),
-  }), 'unverified');
-  assert.equal(await probeRegistryRefreshStatus({ ports: { relay: 8791 } }, {
+  }), { status: 'verified', source: 'relay' });
+  for (const fetch of [
+    relayHealth({ status: 'ok', registry_refresh: false }),
+    relayHealth({ status: 'ok' }),
+    relayHealth({ registry_refresh: true }),
+    relayHealth({ status: 'ok', registry_refresh: true }, { requestId: null }),
+    relayHealth({ status: 'ok', registry_refresh: true }, { ok: false }),
+    async () => ({ ok: true, json: async () => ({ status: 'ok', registry_refresh: true }) }),
+    async () => { throw new Error('ECONNREFUSED'); },
+  ]) {
+    assert.deepEqual(await probeRegistryRefreshStatus(cfg, { fetch }), { status: 'unverified', source: 'relay' });
+    assert.equal(await probeLiveRegistryRefresh(cfg, { fetch }), 'unverified');
+  }
+  assert.deepEqual(await probeRegistryRefreshStatus({}), { status: 'unverified', source: 'relay' });
+});
+
+test('probeRegistryRefreshStatus checks the relay before registryRefreshConfirmed and names the config as the source', async () => {
+  let asked = 0;
+  const live = await probeRegistryRefreshStatus({ registryRefreshConfirmed: true, ports: { relay: 8791 } }, {
+    fetch: async (...a) => { asked += 1; return relayHealth({ status: 'ok', registry_refresh: true })(...a); },
+  });
+  assert.equal(asked, 1, 'the relay is asked even when setup.json says yes');
+  assert.deepEqual(live, { status: 'verified', source: 'relay' });
+  assert.deepEqual(await probeRegistryRefreshStatus({ registryRefreshConfirmed: true, ports: { relay: 8791 } }, {
     fetch: async () => { throw new Error('ECONNREFUSED'); },
-  }), 'unverified');
-  assert.equal(await probeRegistryRefreshStatus({}), 'unverified');
+  }), { status: 'verified', source: 'config' });
+  assert.deepEqual(await probeRegistryRefreshStatus({ registryRefreshConfirmed: true }), { status: 'verified', source: 'config' });
+  assert.deepEqual(await probeRegistryRefreshStatus({ registryRefreshConfirmed: false }), { status: 'unverified', source: 'relay' });
+});
+
+test('entry: a refresh vouched for only by setup.json is flagged in the summary and before the phrase', async () => {
+  const w = world({ refresh: { status: 'verified', source: 'config' }, answers: ['not the phrase'] });
+  assert.equal(await main(['--apply'], w.deps), EXIT.DECLINED);
+  const text = w.text();
+  assert.match(text, /registry_refresh: verified\nregistry_refresh source: setup\.json registryRefreshConfirmed; the relay did not confirm it/);
+  const promptAt = text.indexOf('apply: declined');
+  const warnAt = text.indexOf('registry_refresh warning: setup.json registryRefreshConfirmed says yes, but the relay did not confirm it');
+  assert.ok(warnAt > 0 && warnAt < promptAt, 'the warning is shown before the phrase is asked');
+  assert.deepEqual(w.effects(), []);
+  assertSafeOutput(w);
+
+  const relay = world({ refresh: { status: 'verified', source: 'relay' }, answers: ['not the phrase'] });
+  await main(['--apply'], relay.deps);
+  assert.doesNotMatch(relay.text(), /registry_refresh (source|warning)/);
+});
+
+// Builds a URL with a user and password without writing one out literally,
+// so the repository's secret scan has nothing to flag in fixture data.
+const withLogin = (url, user, password) => { const u = new URL(url); u.username = user; if (password) u.password = password; return u.href; };
+
+test('entry: the apply prompt shows the host and database the URL points at, never its user or password', async () => {
+  const w = world({ answers: ['not the phrase'] });
+  w.deps.env.FIXTURE_DATABASE_ENV = withLogin('postgres://db.fixture.invalid:6543/sigil_live?sslmode=require', 'sigil_owner', SENTINEL);
+  assert.equal(await main(['--apply'], w.deps), EXIT.DECLINED);
+  const text = w.text();
+  const targetAt = text.indexOf('- database target: host db.fixture.invalid:6543, database sigil_live');
+  assert.ok(targetAt > 0 && targetAt < text.indexOf('apply: declined'), 'the target is shown before the phrase is asked');
+  assert.match(w.prompts[0], /^Type APPLY PHASE7 /);
+  assert.doesNotMatch(text, /sigil_owner|sslmode|SENTINEL/);
+  assertSafeOutput(w);
+});
+
+test('describeDatabaseTarget reads host and database name only', () => {
+  assert.equal(describeDatabaseTarget(withLogin('postgres://localhost/sigil', 'u', 'p')), 'database target: host localhost, database sigil');
+  assert.equal(describeDatabaseTarget(withLogin('postgresql://[::1]:5432/sigil_test', 'u')), 'database target: host [::1]:5432, database sigil_test');
+  assert.equal(describeDatabaseTarget('postgres:///sigil?host=/var/run/postgresql'), 'database target: host /var/run/postgresql, database sigil');
+  assert.equal(describeDatabaseTarget(withLogin('postgres://h.invalid', 'u', 'p')), 'database target: host h.invalid, database (default for the user)');
+  assert.equal(describeDatabaseTarget(withLogin('postgres://h.invalid/bad%0Aname', 'u', 'p')), 'database target: host h.invalid, database [unreadable]');
+  assert.match(describeDatabaseTarget('host=h dbname=x password=p'), /^database target: unknown \(not a postgres/);
+  assert.match(describeDatabaseTarget(withLogin('mysql://h/x', 'u', 'p')), /^database target: unknown \(not a postgres/);
+  assert.match(describeDatabaseTarget(undefined), /^database target: unknown \(database env var is not set\)$/);
+  for (const url of [withLogin('postgres://h.invalid/x', 'alice', 'hunter2'), 'host=h password=hunter2']) {
+    assert.doesNotMatch(describeDatabaseTarget(url), /alice|hunter2/);
+  }
 });
