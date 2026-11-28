@@ -62,6 +62,18 @@ function validateEndpoint(endpointId, relayDomain) {
 // paths are accepted, before anything is read.
 const isRemoteOrUnsafePath = (p) => /^[\\/]{2}/.test(p) || /[\u0000-\u001f]/.test(p);
 const DB_LABEL = /^[A-Za-z0-9_.-]{1,40}$/;
+// displayName goes to `sigil bot add --name`. Letters in any script and
+// punctuation such as the middle dot are fine; control and invisible format
+// characters (bidi overrides, zero-width marks) are not.
+const DISPLAY_NAME_MAX = 64;
+const DISPLAY_NAME_BAD = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\u2028\u2029]/u;
+function validateDisplayName(value, index) {
+  if (value === undefined) return;
+  if (typeof value !== 'string' || value.trim() === '') throw configError(`bots[${index}].displayName must be a non-empty string`);
+  if (value !== value.trim()) throw configError(`bots[${index}].displayName must not start or end with spaces`);
+  if ([...value].length > DISPLAY_NAME_MAX) throw configError(`bots[${index}].displayName must be at most ${DISPLAY_NAME_MAX} characters`);
+  if (DISPLAY_NAME_BAD.test(value)) throw configError(`bots[${index}].displayName has control or invisible characters`);
+}
 
 export function validateSetupConfig(raw, { repoRoot }) {
   if (!raw || typeof raw !== 'object') throw configError('config must be an object');
@@ -88,6 +100,7 @@ export function validateSetupConfig(raw, { repoRoot }) {
     if (typeof bot.botId !== 'string' || !bot.botId) throw configError(`bots[${index}].botId is required`);
     validateEndpoint(bot.endpointId, raw.relayDomain);
     if (bot.botId === bot.endpointId) throw configError(`bots[${index}] botId must differ from endpointId`);
+    validateDisplayName(bot.displayName, index);
     if (!ROLES.has(bot.role)) throw configError(`bots[${index}].role must be reply or dispatcher`);
     if (typeof bot.roleConfirmed !== 'boolean') throw configError(`bots[${index}].roleConfirmed must be boolean`);
     if (typeof bot.identityPath !== 'string' || !bot.identityPath || isRemoteOrUnsafePath(bot.identityPath)) throw configError(`bots[${index}].identityPath must be a local path`);
@@ -186,6 +199,7 @@ export function planSetup(snapshot, { apply = false, configBots, databaseEnv } =
     replyTokens: Object.freeze(replyTokens),
     tokenDatabaseEnv: typeof databaseEnv === 'string' ? databaseEnv : null,
     registryRefresh: snapshot.registryRefresh ?? 'unverified',
+    registryRefreshSource: snapshot.registryRefreshSource === 'config' ? 'config' : 'relay',
     registryPreflight: Object.freeze({ ok: preflightOk, gapCount: preflightGaps.length }),
     relayReady,
     smokeRun: false,
@@ -199,6 +213,9 @@ export function renderSummary(plan) {
   const lines = [`Mode: ${plan.mode}; Phase 7 paused; active track: one-link enrollment`];
   for (const input of plan.inputs) lines.push(`${safe(input.name)}: ${safe(input.state)}`);
   lines.push(`registry_refresh: ${safe(plan.registryRefresh)}`);
+  if (plan.registryRefreshSource === 'config') {
+    lines.push('registry_refresh source: setup.json registryRefreshConfirmed; the relay did not confirm it');
+  }
   lines.push(`registry_preflight: ${plan.registryPreflight?.ok ? 'ok' : `${Number(plan.registryPreflight?.gapCount ?? 0)} gap(s)`}`);
   lines.push(`relay_ready: ${plan.relayReady ? 'yes' : 'no'}`);
   lines.push(`create: ${plan.create.map((b) => safe(b.endpointId)).join(', ') || 'none'}`);
