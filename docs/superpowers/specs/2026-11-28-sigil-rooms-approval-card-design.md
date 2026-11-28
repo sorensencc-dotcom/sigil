@@ -1,6 +1,6 @@
 # Sigil rooms: in-timeline approval card (#269)
 
-Status: building. The relay part (sections 1 to 3 and 2a) is built; the web part (sections 2, 4 to 6) comes next. Build notes below mark where the build departs from the proposal. Date: 2026-11-28.
+Status: built in two PRs, the relay part (sections 1 to 3 and 2a) and the web part (sections 2, 4 to 6). Build notes below mark where the build departs from the proposal. Date: 2026-11-28.
 
 ## Problem
 
@@ -135,6 +135,15 @@ has a `room_seq` like any message, and the client renders it as the card
 while the challenge is pending, not as a separate event row, so the hold shows
 once. After it ends, the same row shows the outcome line.
 
+*Build note (web PR):* the outcome event is folded into the request's row
+and not drawn again. An outcome whose request is older than the loaded
+history still shows, on its own row. A pending hold with no request event in
+the loaded history (history not loaded that far, or a relay that predates
+these events) still shows after the timeline, as the old row did, so no hold
+is ever invisible. A hold that has just left the approvals list keeps the
+last item seen for it until its outcome event loads, so the countdown can
+still flip to Expired.
+
 The approved message lands at its own, later `room_seq`. The client does not
 move it back to the hold's position, because the timeline's order is the
 signed order. The outcome row says "Approved" and links to the message.
@@ -149,6 +158,11 @@ signed order. The outcome row says "Approved" and links to the message.
 - After it ends: one muted line (Approved, Cancelled, Expired) from the
   signed event.
 
+*Build note (web PR):* the outcome line reads "{sender}'s held message:
+Approved" (or Cancelled, Expired), and an approved one links to the
+message by its anchor. The link reads "Approve on the relay page (opens in
+a new tab)".
+
 ### 6. Fold rule
 
 `groupAgentStretches` calls `isForcedOpen` only for agent rows in a stretch's
@@ -159,6 +173,12 @@ has a stretch that ends at or after the hold's `created_at`. The check covers
 event rows and trailing rows, not just the body. If the user has folded a
 stretch and a new hold arrives, it unfolds. This satisfies "a folded exchange
 never hides a hold" without a separate pinned badge.
+
+*Build note (web PR):* the second input is an `isHeld(runIds)` option that
+gets every row id in the run, trailing event rows included. An open stretch
+shows the existing fold notice, "Agent exchange shown in full: an approval
+is pending". In `RoomsPlan.tla` the hold arriving now sets the fold open,
+which is what makes `HoldNeverHidden` hold in p1.
 
 ## Tests to write first
 

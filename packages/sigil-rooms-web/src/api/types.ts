@@ -7,13 +7,14 @@ export interface Room {
   max_agent_turns: number;
 }
 
-export type RoomEventKind = 'router_decision' | 'invocation_refused' | 'invocation_stopped' | 'router_failed' | 'agent_cap_reached' | 'room_halted' | 'invocation_failed' | 'member_joined';
+export type RoomEventKind = 'router_decision' | 'invocation_refused' | 'invocation_stopped' | 'router_failed' | 'agent_cap_reached' | 'room_halted' | 'invocation_failed' | 'member_joined'
+  | 'approval_requested' | 'approval_granted' | 'approval_cancelled' | 'approval_expired';
 
 export interface RoomEnvelope {
   message_id: string;
   message_type: string;
   sender: { endpoint_id: string; owner_id: string };
-  body: { text?: string; kind?: RoomEventKind | (string & {}); reason?: string; endpoint_ids?: string[]; invocation_id?: string; thread_root_id?: string };
+  body: { text?: string; kind?: RoomEventKind | (string & {}); reason?: string; endpoint_ids?: string[]; invocation_id?: string; thread_root_id?: string; held_message_id?: string };
   created_at: string;
   signature?: EnvelopeSignature;
 }
@@ -94,7 +95,7 @@ export interface RoomUpdatedFrame {
   type: 'room.updated';
   room_id: string;
   room_seq?: string | number;
-  changed: 'messages' | 'members' | 'room' | 'join_requests';
+  changed: 'messages' | 'members' | 'room' | 'join_requests' | 'approvals';
 }
 
 export type ResponseMode = 'joins' | 'mentions_only' | 'router' | 'report_only';
