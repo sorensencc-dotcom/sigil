@@ -334,7 +334,7 @@ function world({
     out: (text) => out.push(text),
     home: '/home/fixture',
     platform: 'linux',
-    env: { PATH: '/usr/bin', FIXTURE_DATABASE_ENV: 'postgres://fixture.invalid/sigil_fixture_test', FIXTURE_WRAP_KEY_ENV: 'FAKE_WRAP_KEY_NOT_A_SECRET' },
+    env: { PATH: '/usr/bin', FIXTURE_DATABASE_ENV: 'postgres://fixture.invalid/fixture', FIXTURE_WRAP_KEY_ENV: 'FAKE_WRAP_KEY_NOT_A_SECRET' },
     isTTY,
     repoRoot: '/fixture/repo',
     execPath: '/fixture/node',
@@ -876,12 +876,24 @@ test('entry: a refresh vouched for only by setup.json is flagged in the summary 
 // so the repository's secret scan has nothing to flag in fixture data.
 const withLogin = (url, user, password) => { const u = new URL(url); u.username = user; if (password) u.password = password; return u.href; };
 
+test('entry: a dbLabel that is not the database in the URL refuses apply before the phrase', async () => {
+  const w = world({ answers: [applyPhrase(E2E_LABEL)] });
+  w.deps.env.FIXTURE_DATABASE_ENV = withLogin('postgres://db.fixture.invalid:6543/sigil_live', 'sigil_owner', SENTINEL);
+  assert.equal(await main(['--apply'], w.deps), EXIT.INCOMPLETE);
+  const text = w.text();
+  assert.match(text, /apply: refused until these are fixed: db-label-mismatch; nothing was changed/);
+  assert.match(text, /dbLabel in setup\.json must be the database name in FIXTURE_DATABASE_ENV; database target: host db\.fixture\.invalid:6543, database sigil_live/);
+  assert.equal(w.prompts.length, 0, 'no phrase was asked');
+  assert.doesNotMatch(text, /sigil_owner|SENTINEL/);
+  assertSafeOutput(w);
+});
+
 test('entry: the apply prompt shows the host and database the URL points at, never its user or password', async () => {
   const w = world({ answers: ['not the phrase'] });
-  w.deps.env.FIXTURE_DATABASE_ENV = withLogin('postgres://db.fixture.invalid:6543/sigil_live?sslmode=require', 'sigil_owner', SENTINEL);
+  w.deps.env.FIXTURE_DATABASE_ENV = withLogin('postgres://db.fixture.invalid:6543/fixture?sslmode=require', 'sigil_owner', SENTINEL);
   assert.equal(await main(['--apply'], w.deps), EXIT.DECLINED);
   const text = w.text();
-  const targetAt = text.indexOf('- database target: host db.fixture.invalid:6543, database sigil_live');
+  const targetAt = text.indexOf('- database target: host db.fixture.invalid:6543, database fixture');
   assert.ok(targetAt > 0 && targetAt < text.indexOf('apply: declined'), 'the target is shown before the phrase is asked');
   assert.match(w.prompts[0], /^Type APPLY PHASE7 /);
   assert.doesNotMatch(text, /sigil_owner|sslmode|SENTINEL/);

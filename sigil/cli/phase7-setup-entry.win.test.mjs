@@ -85,7 +85,7 @@ function deps({ home, root, stub, answers, botState }) {
       out: (text) => out.push(text),
       home,
       platform: 'win32',
-      env: { ...process.env, SIGIL_TEST_FAKE_DATABASE_ENV: 'postgres://fixture.invalid/sigil_fixture_test', SIGIL_TEST_FAKE_WRAP_ENV: 'FAKE_WRAP_KEY_NOT_A_SECRET' },
+      env: { ...process.env, SIGIL_TEST_FAKE_DATABASE_ENV: 'postgres://fixture.invalid/TEST_DB', SIGIL_TEST_FAKE_WRAP_ENV: 'FAKE_WRAP_KEY_NOT_A_SECRET' },
       isTTY: true,
       repoRoot: realpathSync.native(process.cwd()),
       execPath: process.execPath,
