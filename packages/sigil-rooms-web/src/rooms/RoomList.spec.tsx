@@ -15,7 +15,7 @@ describe('RoomList', () => {
   it('lists rooms and reports a selection', async () => {
     const onSelect = vi.fn();
     renderWithClient(<RoomList selectedId={null} onSelect={onSelect} />, { listRooms: async () => rooms });
-    await userEvent.click(await screen.findByRole('button', { name: /^build/ }));
+    await userEvent.click(await screen.findByRole('button', { name: 'build' }));
     expect(onSelect).toHaveBeenCalledWith('room_1');
     expect(screen.getByText('the build room')).toBeInTheDocument();
   });
@@ -72,11 +72,40 @@ describe('RoomList pinning', () => {
       listInvocations: async () => [{ invocation_id: 'i1', endpoint_id: 'ep_claude', status: 'running', subject_human_id: 'h' }],
       historyBefore: async () => ({ code: 'OK', items: [item], next_after_seq: '4', has_older: false }),
     });
-    const build = await screen.findByRole('button', { name: /^build/ });
+    const build = await screen.findByRole('button', { name: 'build' });
     await waitFor(() => expect(build.querySelector('.sender-avatar')).toHaveTextContent('CL'));
     expect(build).toHaveTextContent('Claude: shipped the fix');
     await waitFor(() => expect(build.querySelector('.working-dot')).not.toBeNull());
     expect(build.querySelector('time')).toHaveAttribute('dateTime', '2026-11-27T15:00:00Z');
+  });
+
+  // Contract the end-to-end test relies on (e2e/rooms.e2e.ts finds rooms by exact button name).
+  // Anything added to a room row goes in the description, never the name.
+  it('names each room button by the room name alone, with purpose and preview as its description', async () => {
+    const item: HistoryItem = {
+      room_seq: '4',
+      message_id: 'm1',
+      canonical_bytes: null,
+      display_name: 'Claude',
+      envelope: {
+        message_id: 'm1',
+        message_type: 'room.message',
+        sender: { endpoint_id: 'ep_claude', owner_id: 'h' },
+        body: { text: 'build is green' },
+        created_at: '2026-11-27T15:00:00Z',
+      },
+    };
+    renderWithClient(<RoomList selectedId={null} onSelect={() => {}} />, {
+      listRooms: async () => rooms,
+      historyBefore: async () => ({ code: 'OK', items: [item], next_after_seq: '4', has_older: false }),
+    });
+    const build = await screen.findByRole('button', { name: 'build' });
+    await waitFor(() => expect(build).toHaveAccessibleDescription(/Claude: build is green/));
+    expect(build).toHaveAccessibleName('build');
+    expect(build).toHaveAccessibleDescription(/the build room/);
+    expect(screen.getByRole('button', { name: 'ops' })).toHaveAccessibleName('ops');
+    // The preview text is not part of any button's name, so a search for it never lands on the sidebar.
+    expect(screen.queryByRole('button', { name: /build is green/ })).toBeNull();
   });
 
   it('does not select a room when its pin is clicked', async () => {

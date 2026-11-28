@@ -51,6 +51,7 @@ no API key, $0).
 
 - `npm run test:live:local`: starts a throwaway local PostgreSQL, runs the live gate (the suites that skip without SIGIL_TEST_DATABASE_URL and otherwise only run in Linux CI), and removes it; run it before pushing changes that touch CLI output, the relay, or anything a *.pg / live suite covers.
 - On Windows, run tests from an uppercase drive path (`C:\dev\...`, not `c:\dev\...`). A lowercase drive makes vitest load under two path casings, and every spec fails with "Vitest failed to find the current suite". `packages/sigil-rooms-web/vite.config.ts` stops vitest early with a clear error.
+- The rooms-web Playwright suite (`packages/sigil-rooms-web/e2e/`) runs only in CI. A room row's button is named by the room name alone (`aria-labelledby`); purpose, preview and time go in its description, so adding to the row never renames it. In e2e, find message text inside the timeline or thread, and find buttons by exact name. `packages/sigil-rooms-web/src/e2eLocators.spec.ts` enforces both in the pre-push web gate. If a UI change needs a locator change, you are probably repeating text somewhere new: scope the locator, do not loosen it. Run `npm --prefix packages/sigil-rooms-web run test:e2e` before pushing a change to what a room row or the timeline shows.
 
 ## Agent skills
 
