@@ -444,9 +444,13 @@ export function buildServicePlan(config, {
     if (comp.name.startsWith('agent-')) comp.depends_on_ports = [relayPort, streamPort];
     else if (comp.name === 'rooms-web') comp.depends_on_ports = [relayPort];
     else if (!Array.isArray(comp.depends_on_ports)) comp.depends_on_ports = [];
+    const runnerArgv = [sigilEntry, 'service', 'run', comp.name, '--service-config', absConfig];
     comp.task = {
       execute: nodePath,
-      arguments: [sigilEntry, 'service', 'run', comp.name, '--service-config', absConfig].map(quoteWindowsArg).join(' '),
+      // argv for supervisors that take an argument array (launchd); arguments
+      // is the same list as one Windows command line.
+      argv: runnerArgv,
+      arguments: runnerArgv.map(quoteWindowsArg).join(' '),
       working_directory: basePath,
     };
   }
