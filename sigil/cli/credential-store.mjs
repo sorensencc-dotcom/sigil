@@ -167,14 +167,16 @@ export function readCredential(target, { platform = process.platform, execFn = d
   });
 }
 
-// `security -i` reads commands from stdin, so the secret never appears in any
-// process's argument list. Its tokenizer takes double-quoted words with
-// backslash escapes; a newline would end the command, so it is refused.
+// `security -i` reads commands from stdin, so the secret never appears in a
+// child process's argument list. The secret goes as hex (-X), so any bytes,
+// line breaks included, survive; the service and account names are
+// double-quoted with backslash escapes, and a line break in them is refused
+// because it would end the command.
 export function quoteSecurityArg(value) {
   const text = String(value);
   if (/[\r\n\0]/.test(text)) {
-    throw Object.assign(new Error('Keychain values cannot contain line breaks or NUL'), {
-      code: 'SECRET_INVALID',
+    throw Object.assign(new Error('Keychain service and account names cannot contain line breaks or NUL'), {
+      code: 'CREDENTIAL_NAME_INVALID',
     });
   }
   return `"${text.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
@@ -182,6 +184,7 @@ export function quoteSecurityArg(value) {
 
 function writeMacKeychain(target, secret, execFn) {
   const account = process.env.USER || 'sigil';
+  const hex = Buffer.from(String(secret), 'utf8').toString('hex');
   const command = [
     'add-generic-password',
     '-U',
@@ -189,24 +192,33 @@ function writeMacKeychain(target, secret, execFn) {
     quoteSecurityArg(target),
     '-a',
     quoteSecurityArg(account),
-    '-w',
-    quoteSecurityArg(secret),
+    '-X',
+    hex,
   ].join(' ');
   const res = execFn('security', ['-i'], { input: `${command}\n` });
-  const failed = (detail) =>
-    Object.assign(new Error(`Failed to write credential "${target}" to macOS Keychain${detail ? `: ${detail}` : ''}`), {
-      code: 'CREDENTIAL_STORE_ERROR',
-    });
   if (res.error || res.status !== 0) {
-    throw failed(res.stderr?.trim() || res.error?.message);
+    throw Object.assign(
+      new Error(`Failed to write credential "${target}" to macOS Keychain: ${res.stderr?.trim() || res.error?.message || `exit code ${res.status}`}`),
+      { code: 'CREDENTIAL_STORE_ERROR' }
+    );
   }
   // Interactive mode can exit 0 when the command inside it failed, so read the
-  // item back and compare. find-generic-password returns it on stdout only.
+  // item back and compare. find-generic-password returns it on stdout only, as
+  // text or, for some values, as hex.
   const check = execFn('security', ['find-generic-password', '-s', target, '-a', account, '-w']);
   const stored = typeof check.stdout === 'string' ? check.stdout.replace(/\r?\n$/, '') : null;
-  if (check.error || check.status !== 0 || stored !== secret) {
-    throw failed(res.stderr?.trim() || 'item did not read back');
+  if (!check.error && check.status === 0 && (stored === secret || stored?.toLowerCase() === hex)) {
+    return;
   }
+  // The add may have gone through even though the read-back failed, so say so
+  // rather than report a clean failure.
+  throw Object.assign(
+    new Error(
+      `Could not confirm credential "${target}" in macOS Keychain; it may or may not be saved. ` +
+        `Check with: security find-generic-password -s "${target}" -a "${account}"`
+    ),
+    { code: 'CREDENTIAL_STORE_UNCONFIRMED' }
+  );
 }
 
 export function writeCredential(target, secret, { platform = process.platform, execFn = defaultExecFn, keystorePath } = {}) {
