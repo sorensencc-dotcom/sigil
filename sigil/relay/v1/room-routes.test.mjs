@@ -12,6 +12,7 @@ const principals = {
   'Bearer claude': { endpoint_id: 'ep_claude', owner_id: 'usr_chris', human_id: 'usr_chris' },
   'Bearer codex': { endpoint_id: 'ep_codex', owner_id: 'usr_chris', human_id: 'usr_chris' },
   'Bearer other-agent': { endpoint_id: 'ep_other_agent', owner_id: 'usr_other' },
+  'Bearer codex-agent': { endpoint_id: 'ep_codex', owner_id: 'usr_chris' },
   'Bearer stranger': { endpoint_id: 'ep_stranger', owner_id: 'usr_other', human_id: 'usr_other' },
 };
 const registry = new Map([
@@ -37,9 +38,9 @@ function call(port, method, path, authorization, body) {
   });
 }
 
-async function withServer(fn, serverOptions = {}) {
-  const repository = createMemoryRepository({ registry });
-  const server = createRelayServer({ ...serverOptions, registry, repository, humanSigner, authenticate: async (request) => principals[request.headers.authorization] ?? null });
+async function withServer(fn, serverOptions = {}, serverRegistry = registry) {
+  const repository = createMemoryRepository({ registry: serverRegistry });
+  const server = createRelayServer({ ...serverOptions, registry: serverRegistry, repository, humanSigner, authenticate: async (request) => principals[request.headers.authorization] ?? null });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try { await fn(server.address().port, repository); } finally { await new Promise((resolve) => server.close(resolve)); }
 }
@@ -68,16 +69,54 @@ test('GET /v1/mentions returns a cursor for the next mention page', async () => 
 test('GET /v1/rooms/:id/approvals exposes the ceremony only to the named approver', async () => {
   await withServer(async (port, repository) => {
     const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'approvals' })).body.room.conversation_id;
+    await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_codex', response_mode: 'joins' });
+    await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_claude', response_mode: 'joins' });
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
     await repository.createApprovalChallenge({
-      id: 'ch_1', endpointId: 'ep_web', actionHash: 'hash', webauthnChallenge: 'challenge',
-      expiresAt: new Date(Date.now() + 60_000).toISOString(), conversationId: roomId,
-      envelope: { message_id: 'm1' },
+      id: 'ch_1', endpointId: 'ep_claude', actionHash: 'hash', webauthnChallenge: 'challenge',
+      expiresAt, conversationId: roomId, messageId: 'msg_held', capabilities: ['payments.send'],
+      envelope: { message_id: 'msg_held', body: { text: 'held body' } },
     });
-    const hidden = await call(port, 'GET', `/v1/rooms/${roomId}/approvals`, 'Bearer chris-web');
-    assert.equal(hidden.status, 200);
-    assert.equal(hidden.body.items[0].approver_name, 'usr_chris');
-    assert.equal(hidden.body.items[0].approval_url, 'http://relay.test/approve?challenge=ch_1');
+    const own = await call(port, 'GET', `/v1/rooms/${roomId}/approvals`, 'Bearer chris-web');
+    assert.equal(own.status, 200);
+    const [item] = own.body.items;
+    assert.equal(item.approver_name, 'usr_chris');
+    assert.equal(item.approval_url, 'http://relay.test/approve?challenge=ch_1');
+    assert.equal(item.challenge_id, 'ch_1');
+    assert.equal(item.message_id, 'msg_held');
+    assert.equal(item.sender_endpoint_id, 'ep_claude');
+    assert.deepEqual(item.capabilities, ['payments.send']);
+    assert.equal(item.expires_at, expiresAt);
+    assert.match(item.created_at, /^\d{4}-\d{2}-\d{2}T/);
+    assert.doesNotMatch(JSON.stringify(own.body), /held body/);
+
+    // A member without the approver's human session sees the hold but not the challenge id or the ceremony link.
+    const other = await call(port, 'GET', `/v1/rooms/${roomId}/approvals`, 'Bearer codex-agent');
+    assert.equal(other.status, 200);
+    assert.equal(other.body.items[0].message_id, 'msg_held');
+    assert.equal(other.body.items[0].challenge_id, null);
+    assert.equal(other.body.items[0].approval_url, null);
+    assert.doesNotMatch(JSON.stringify(other.body), /ch_1/);
   }, { relayOrigin: 'http://relay.test' });
+});
+
+test('cancelling a room challenge over HTTP writes approval_cancelled to the room', async () => {
+  const roomSystemIdentity = createIdentity({ ownerId: 'relay_system', endpointId: 'ep_relay_system', kind: 'system' });
+  await withServer(async (port, repository) => {
+    await repository.ensureRoomSystemEndpoint({ identity: roomSystemIdentity, now: new Date() });
+    const roomId = (await call(port, 'POST', '/v1/rooms', 'Bearer chris-web', { name: 'cancels' })).body.room.conversation_id;
+    await call(port, 'POST', `/v1/rooms/${roomId}/members`, 'Bearer chris-web', { endpoint_id: 'ep_claude', response_mode: 'joins' });
+    await repository.createApprovalChallenge({
+      id: 'ch_cancel', endpointId: 'ep_claude', actionHash: 'hash_cancel', webauthnChallenge: 'challenge',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(), conversationId: roomId, messageId: 'msg_held',
+      capabilities: ['payments.send'], envelope: { message_id: 'msg_held' },
+    });
+    const cancelled = await call(port, 'DELETE', '/v1/approval-challenges/ch_cancel', 'Bearer claude');
+    assert.equal(cancelled.status, 200);
+    const history = await call(port, 'GET', `/v1/rooms/${roomId}/messages?after_seq=0`, 'Bearer chris-web');
+    const kinds = history.body.items.filter((row) => row.envelope.message_type === 'room.event').map((row) => row.envelope.body.kind);
+    assert.ok(kinds.includes('approval_cancelled'));
+  }, { roomSystemIdentity }, new Map(registry));
 });
 
 test('GET /v1/mentions rejects a malformed cursor before querying the repository', async () => {

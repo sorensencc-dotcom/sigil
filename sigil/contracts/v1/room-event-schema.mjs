@@ -1,9 +1,12 @@
 // Body shape for message_type: 'room.event' (rooms design, phase 3). Only the
 // relay emits these; clients cannot post them (room-policy.mjs refuses the type).
-export const ROOM_EVENT_KINDS = new Set(['router_decision', 'invocation_refused', 'invocation_stopped', 'router_failed', 'agent_cap_reached', 'room_halted', 'invocation_failed', 'member_joined']);
+export const ROOM_EVENT_KINDS = new Set(['router_decision', 'invocation_refused', 'invocation_stopped', 'router_failed', 'agent_cap_reached', 'room_halted', 'invocation_failed', 'member_joined', 'approval_requested', 'approval_granted', 'approval_cancelled', 'approval_expired']);
+// Approval outcomes name the held envelope by its message_id, never by the
+// challenge id: the approval page renders a challenge for anyone holding its id (#338).
+export const APPROVAL_EVENT_KINDS = new Set(['approval_requested', 'approval_granted', 'approval_cancelled', 'approval_expired']);
 export const ROOM_EVENT_REASON_MAX = 280;
 export const ROOM_EVENT_ENDPOINTS_MAX = 50;
-const ALLOWED_FIELDS = new Set(['kind', 'invocation_id', 'endpoint_ids', 'reason', 'thread_root_id']);
+const ALLOWED_FIELDS = new Set(['kind', 'invocation_id', 'endpoint_ids', 'reason', 'thread_root_id', 'held_message_id']);
 
 function fail(field, reason) {
   throw Object.assign(new Error(`Invalid room.event body: ${reason}`), { code: 'INVALID_ENVELOPE', details: { field, reason } });
@@ -18,6 +21,8 @@ export function validateRoomEventBody(body) {
   }
   if ('invocation_id' in body && (typeof body.invocation_id !== 'string' || !body.invocation_id)) fail('invocation_id', 'must be a non-empty string');
   if ('thread_root_id' in body && (typeof body.thread_root_id !== 'string' || !body.thread_root_id)) fail('thread_root_id', 'must be a non-empty string');
+  if ('held_message_id' in body && (typeof body.held_message_id !== 'string' || !body.held_message_id)) fail('held_message_id', 'must be a non-empty string');
+  if (APPROVAL_EVENT_KINDS.has(body.kind) !== ('held_message_id' in body)) fail('held_message_id', 'is required on approval events and only on them');
   if ('reason' in body && (typeof body.reason !== 'string' || body.reason.length > ROOM_EVENT_REASON_MAX)) fail('reason', `must be a string of at most ${ROOM_EVENT_REASON_MAX} characters`);
 }
 

@@ -7,7 +7,7 @@ import { senderKind } from './SenderChip';
 
 export const FOLD_THRESHOLD = 3;
 
-export type StretchFlag = 'cap' | 'halted' | 'failed' | 'focus';
+export type StretchFlag = 'cap' | 'halted' | 'failed' | 'focus' | 'held';
 
 export type Classified =
   | { role: 'agent'; id: string }
@@ -24,6 +24,9 @@ export interface GroupOptions {
   isFailed?: (messageId: string) => boolean;
   // True when something else on screen points at this row (mention focus, search hit, open envelope).
   isForcedOpen?: (messageId: string) => boolean;
+  // True when a pending hold belongs to this run (#269). Gets every row id in the run, the
+  // trailing event rows included, because the hold's card is an event row and often trails.
+  isHeld?: (runIds: readonly string[]) => boolean;
 }
 
 // Room events ride inside a run without counting toward the threshold, so a cap event can sit
@@ -43,7 +46,7 @@ export function classifyRow(row: Row, members: Member[]): Classified {
 }
 
 export function groupAgentStretches<T>(entries: readonly T[], classify: (entry: T) => Classified, options: GroupOptions = {}): StretchPart<T>[] {
-  const { threshold = FOLD_THRESHOLD, isFailed = () => false, isForcedOpen = () => false } = options;
+  const { threshold = FOLD_THRESHOLD, isFailed = () => false, isForcedOpen = () => false, isHeld = () => false } = options;
   const parts: StretchPart<T>[] = [];
   let run: { entry: T; info: Exclude<Classified, { role: 'break' }> }[] = [];
 
@@ -62,6 +65,7 @@ export function groupAgentStretches<T>(entries: readonly T[], classify: (entry: 
         if (isFailed(info.id)) flags.add('failed');
         if (isForcedOpen(info.id)) flags.add('focus');
       }
+      if (isHeld(run.map(({ info }) => info.id))) flags.add('held');
       const firstId = body[0]!.info.id;
       parts.push({
         kind: 'stretch',

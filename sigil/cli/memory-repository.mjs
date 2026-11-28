@@ -95,6 +95,7 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
   // (envelope, invocations, turns, deliveries) register an undo here; this is
   // not a general transaction log. Undos run newest first, so two writes to
   // one key restore its original value.
+  const hookChallenge = (row) => ({ challengeId: row.challenge_id, endpointId: row.endpoint_id, conversationId: row.conversation_id ?? null, messageId: row.message_id ?? null, capabilities: row.capabilities ?? [] });
   const transactionRollbackStore = new AsyncLocalStorage(); // per-async-context undo stack
   const onRollback = (undo) => { transactionRollbackStore.getStore()?.push(undo); };
   // Registers an undo that puts `key` in `map` back to its current state.
@@ -937,24 +938,28 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
       grant.revoked_at = (now instanceof Date ? now : new Date(now)).toISOString();
       return { ...grant, duplicate: false };
     },
-    async createApprovalChallenge(challenge) {
-      const row = {
-        challenge_id: challenge.id,
-        endpoint_id: challenge.endpointId,
-        action_hash: challenge.actionHash,
-        webauthn_challenge: challenge.webauthnChallenge,
-        callback_url: challenge.callbackUrl,
-        status: 'pending',
-        created_at: new Date().toISOString(),
-        expires_at: challenge.expiresAt,
-        conversation_id: challenge.conversationId ?? null,
-        message_id: challenge.messageId ?? null,
-        capabilities: challenge.capabilities ?? [],
-        envelope: challenge.envelope ?? null,
-        consumed_at: null,
-      };
-      approvalChallenges.set(challenge.id, row);
-      return row;
+    async createApprovalChallenge(challenge, { onChange = null } = {}) {
+      return this.withTransaction(async () => {
+        const row = {
+          challenge_id: challenge.id,
+          endpoint_id: challenge.endpointId,
+          action_hash: challenge.actionHash,
+          webauthn_challenge: challenge.webauthnChallenge,
+          callback_url: challenge.callbackUrl,
+          status: 'pending',
+          created_at: new Date().toISOString(),
+          expires_at: challenge.expiresAt,
+          conversation_id: challenge.conversationId ?? null,
+          message_id: challenge.messageId ?? null,
+          capabilities: challenge.capabilities ?? [],
+          envelope: challenge.envelope ?? null,
+          consumed_at: null,
+        };
+        approvalChallenges.set(challenge.id, row);
+        onRollback(() => { approvalChallenges.delete(challenge.id); });
+        if (onChange) await onChange(null, hookChallenge(row));
+        return row;
+      });
     },
     async getApprovalChallenge(challengeId) {
       const row = approvalChallenges.get(challengeId);
@@ -988,57 +993,66 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
           const entry = registry.get(row.endpoint_id);
           const approverId = entry?.owner_id ?? null;
           const human = [...registry.values()].find((candidate) => candidate.owner_id === approverId && candidate.kind === 'human' && candidate.status === 'active' && candidate.display_name);
-          return { challenge_id: row.challenge_id, approver_id: approverId, approver_name: human?.display_name || approverId || row.endpoint_id };
+          return {
+            challenge_id: row.challenge_id, message_id: row.message_id, capabilities: row.capabilities ?? [],
+            created_at: row.created_at, expires_at: row.expires_at,
+            sender_endpoint_id: row.endpoint_id, sender_name: entry?.display_name || row.endpoint_id,
+            approver_id: approverId, approver_name: human?.display_name || approverId || row.endpoint_id,
+          };
         });
     },
     async getApprovalChallengeForMessage(conversationId, messageId) {
       const row = [...approvalChallenges.values()].find((item) => item.conversation_id === conversationId && item.message_id === messageId && item.envelope);
       return row ? { id: row.challenge_id, endpointId: row.endpoint_id, actionHash: row.action_hash, expiresAt: row.expires_at, capabilities: row.capabilities, envelope: row.envelope } : null;
     },
-    async cancelApprovalChallenge({ challengeId, endpointId, now = new Date() } = {}) {
-      const row = approvalChallenges.get(challengeId);
-      if (!row || row.endpoint_id !== endpointId) {
-        throw Object.assign(new Error('Approval challenge not found'), { code: 'APPROVAL_CHALLENGE_NOT_FOUND' });
-      }
-      if (row.status === 'consumed') {
-        const stored = [...approvalDecisions.values()].find((decision) => decision.nonce === challengeId) ?? null;
-        if (stored?.status === 'consumed') {
-          throw Object.assign(new Error('Approval decision was already consumed by envelope acceptance'), {
-            code: 'APPROVAL_ALREADY_CONSUMED',
-            storedResult: stored,
-          });
+    async cancelApprovalChallenge({ challengeId, endpointId, now = new Date(), onChange = null } = {}) {
+      return this.withTransaction(async () => {
+        const row = approvalChallenges.get(challengeId);
+        if (!row || row.endpoint_id !== endpointId) {
+          throw Object.assign(new Error('Approval challenge not found'), { code: 'APPROVAL_CHALLENGE_NOT_FOUND' });
+        }
+        if (row.status === 'consumed') {
+          const stored = [...approvalDecisions.values()].find((decision) => decision.nonce === challengeId) ?? null;
+          if (stored?.status === 'consumed') {
+            throw Object.assign(new Error('Approval decision was already consumed by envelope acceptance'), {
+              code: 'APPROVAL_ALREADY_CONSUMED',
+              storedResult: stored,
+            });
+          }
+          row.status = 'cancelled';
+          onRollback(() => { row.status = 'consumed'; });
+          let revokedDecisionCount = 0;
+          if (stored?.status === 'approved') {
+            stored.status = 'revoked';
+            revokedDecisionCount = 1;
+            onRollback(() => { stored.status = 'approved'; });
+          }
+          if (onChange) await onChange(null, hookChallenge(row));
+          return { challengeId, status: 'cancelled', revokedDecisionCount, duplicate: false };
+        }
+        if (row.status === 'cancelled') {
+          return { challengeId, status: 'cancelled', revokedDecisionCount: 0, duplicate: true };
+        }
+        if (row.status !== 'pending') {
+          throw Object.assign(new Error('Approval challenge is no longer pending'), { code: 'APPROVAL_EXPIRED' });
         }
         row.status = 'cancelled';
-        onRollback(() => { row.status = 'consumed'; });
+        onRollback(() => { row.status = 'pending'; });
         let revokedDecisionCount = 0;
-        if (stored?.status === 'approved') {
-          stored.status = 'revoked';
-          revokedDecisionCount = 1;
-          onRollback(() => { stored.status = 'approved'; });
+        for (const decision of approvalDecisions.values()) {
+          if (decision.endpoint_id === endpointId
+            && (decision.action_hash === row.action_hash || decision.action_hash === `sha256:${row.action_hash}`)
+            && decision.status === 'approved') {
+            decision.status = 'revoked';
+            revokedDecisionCount += 1;
+            onRollback(() => { decision.status = 'approved'; });
+          }
         }
+        if (onChange) await onChange(null, hookChallenge(row));
         return { challengeId, status: 'cancelled', revokedDecisionCount, duplicate: false };
-      }
-      if (row.status === 'cancelled') {
-        return { challengeId, status: 'cancelled', revokedDecisionCount: 0, duplicate: true };
-      }
-      if (row.status !== 'pending') {
-        throw Object.assign(new Error('Approval challenge is no longer pending'), { code: 'APPROVAL_EXPIRED' });
-      }
-      row.status = 'cancelled';
-      onRollback(() => { row.status = 'pending'; });
-      let revokedDecisionCount = 0;
-      for (const decision of approvalDecisions.values()) {
-        if (decision.endpoint_id === endpointId
-          && (decision.action_hash === row.action_hash || decision.action_hash === `sha256:${row.action_hash}`)
-          && decision.status === 'approved') {
-          decision.status = 'revoked';
-          revokedDecisionCount += 1;
-          onRollback(() => { decision.status = 'approved'; });
-        }
-      }
-      return { challengeId, status: 'cancelled', revokedDecisionCount, duplicate: false };
+      });
     },
-    async finalizeApprovalDecision({ challengeId, humanId, credentialId, endpointId, now = new Date() } = {}) {
+    async finalizeApprovalDecision({ challengeId, humanId, credentialId, endpointId, now = new Date(), onChange = null } = {}) {
       return this.withTransaction(async () => {
         const challenge = approvalChallenges.get(challengeId);
         const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
@@ -1065,8 +1079,34 @@ export function createMemoryRepository({ registry = new Map() } = {}) {
         };
         approvalDecisions.set(decision.decision_id, decision);
         onRollback(() => { approvalDecisions.delete(decision.decision_id); });
+        if (onChange) await onChange(null, hookChallenge(challenge));
         return decision;
       });
+    },
+    // Mirrors postgres-repository.mjs: one row per transaction, a failing hook
+    // rolls that row back and skips it for the rest of the pass.
+    async expireRoomApprovalChallenges({ now = new Date(), limit = 100, onChange = null } = {}) {
+      const at = (now instanceof Date ? now : new Date(now)).getTime();
+      const due = [...approvalChallenges.values()]
+        .filter((row) => row.status === 'pending' && row.envelope && Date.parse(row.expires_at) <= at)
+        .sort((a, b) => Date.parse(a.expires_at) - Date.parse(b.expires_at) || a.challenge_id.localeCompare(b.challenge_id))
+        .slice(0, limit);
+      let expired = 0;
+      let failed = 0;
+      for (const row of due) {
+        try {
+          await this.withTransaction(async () => {
+            if (row.status !== 'pending') return;
+            row.status = 'expired';
+            onRollback(() => { row.status = 'pending'; });
+            if (onChange) await onChange(null, hookChallenge(row));
+            expired += 1;
+          });
+        } catch {
+          failed += 1;
+        }
+      }
+      return { expired, failed };
     },
     // Test/demo seeding for the approval_decisions ceremony this repo has no
     // real WebAuthn flow for -- shaped like postgres-repository.mjs's

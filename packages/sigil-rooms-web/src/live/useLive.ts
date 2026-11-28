@@ -19,6 +19,9 @@ export function useLive(): 'live' | 'off' {
         } else if (frame.changed === 'join_requests') {
           void queryClient.invalidateQueries({ queryKey: ['room', frame.room_id, 'join-requests'] });
           void queryClient.invalidateQueries({ queryKey: ['join-requests'] });
+        } else if (frame.changed === 'approvals') {
+          // A hold started or ended. Its signed event comes in its own messages frame.
+          void queryClient.invalidateQueries({ queryKey: ['room', frame.room_id, 'approvals'] });
         } else if (frame.changed === 'members') {
           // A member added to a room the client has not opened still has to show up in the sidebar.
           void queryClient.invalidateQueries({ queryKey: ['rooms'] });

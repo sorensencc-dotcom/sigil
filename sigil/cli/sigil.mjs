@@ -660,6 +660,8 @@ async function cmdRelayUp(argv) {
   const { positiveIntFromEnv: envInt } = await import('../relay/v1/pool-instrumentation.mjs');
   const eventLoopMonitor = startEventLoopMonitor({ thresholdMs: envInt(process.env.SIGIL_EVENT_LOOP_WARN_MS, DEFAULT_EVENT_LOOP_WARN_MS) });
   if (resendWorkerTimer) console.log('Session resend worker running (60s interval).');
+  const { startApprovalExpirySweep } = await import('../relay/v1/approval-expiry-sweep.mjs');
+  const approvalExpirySweep = startApprovalExpirySweep({ repository, systemIdentity: roomSystemIdentity, registered: registry, stream, logger: relayLogger });
   if (enableMockOidc) console.log('WARNING: mock-OIDC login is enabled (--enable-mock-oidc). This is for local development and CI only -- never expose this relay to untrusted networks.');
   if (ingressOrigin && ingressAllowGlobalToken) console.log('WARNING: --ingress-allow-global-token enables the legacy global reply token on the ingress.');
   console.log(`Sigil relay listening on http://127.0.0.1:${address.port}`);
@@ -683,6 +685,7 @@ async function cmdRelayUp(argv) {
     const shutdown = async () => {
       registryRefresh.close();
       eventLoopMonitor.stop();
+      approvalExpirySweep.stop();
       agentmailDeployment?.close();
       await adminListener?.close();
       if (p2pHost) await p2pHost.stop();

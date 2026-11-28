@@ -116,6 +116,11 @@ function relayJobToFederationOutboxRecord(row) {
   return { ...record, state: jobStateToFederationState[state] ?? state };
 }
 
+// The shape approval hooks receive (approval-room-events.mjs).
+function approvalHookChallenge(row) {
+  return { challengeId: row.challenge_id, endpointId: row.endpoint_id, conversationId: row.conversation_id ?? null, messageId: row.message_id ?? null, capabilities: row.capabilities ?? [] };
+}
+
 function roomNameConflict(error) {
   if (error.code !== '23505' || error.constraint !== 'rooms_workspace_id_name_key') return null;
   return Object.assign(new Error('A room with this name already exists in the workspace'), { code: 'ROOM_NAME_TAKEN' });
@@ -468,15 +473,21 @@ export class PostgresRepository {
     return row ? { credentialId: row.credential_id, humanId: row.human_id, endpointId: row.endpoint_id, type: row.type, publicKey: row.public_key, status: row.status, humanStatus: row.human_status, validFrom: row.valid_from, validUntil: row.valid_until } : null;
   }
 
-  async createApprovalChallenge(challenge) {
-    const result = await this.pool.query(
-      `INSERT INTO approval_challenges (challenge_id, endpoint_id, action_hash, webauthn_challenge, callback_url, token_hash, status, created_at, expires_at, conversation_id, message_id, capabilities, envelope)
-       VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10, $11, $12)
-       RETURNING challenge_id, endpoint_id, action_hash, webauthn_challenge, callback_url, status, created_at, expires_at, conversation_id, message_id, capabilities`,
-      [challenge.id, challenge.endpointId, challenge.actionHash, challenge.webauthnChallenge, challenge.callbackUrl, crypto.createHash('sha256').update(challenge.token).digest('hex'), new Date().toISOString(), challenge.expiresAt,
-        challenge.envelope ? challenge.conversationId : null, challenge.envelope ? challenge.messageId : null, challenge.envelope ? challenge.capabilities : null, challenge.envelope ? JSON.stringify(challenge.envelope) : null]
-    );
-    return result.rows[0];
+  // onChange(client, challenge) runs inside the insert's transaction, before
+  // commit; a throw rolls the insert back (rooms #269 signed hold events).
+  async createApprovalChallenge(challenge, { onChange = null } = {}) {
+    const insert = async (client) => {
+      const result = await client.query(
+        `INSERT INTO approval_challenges (challenge_id, endpoint_id, action_hash, webauthn_challenge, callback_url, token_hash, status, created_at, expires_at, conversation_id, message_id, capabilities, envelope)
+         VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10, $11, $12)
+         RETURNING challenge_id, endpoint_id, action_hash, webauthn_challenge, callback_url, status, created_at, expires_at, conversation_id, message_id, capabilities`,
+        [challenge.id, challenge.endpointId, challenge.actionHash, challenge.webauthnChallenge, challenge.callbackUrl, crypto.createHash('sha256').update(challenge.token).digest('hex'), new Date().toISOString(), challenge.expiresAt,
+          challenge.envelope ? challenge.conversationId : null, challenge.envelope ? challenge.messageId : null, challenge.envelope ? challenge.capabilities : null, challenge.envelope ? JSON.stringify(challenge.envelope) : null]
+      );
+      if (onChange) await onChange(client, approvalHookChallenge(result.rows[0]));
+      return result.rows[0];
+    };
+    return onChange ? this.withTransaction(insert) : insert(this.pool);
   }
 
   async getApprovalChallenge(challengeId) {
@@ -507,7 +518,10 @@ export class PostgresRepository {
 
   async listPendingRoomApprovals(conversationId, now) {
     const result = await this.pool.query(
-      `SELECT ac.challenge_id, e.owner_id AS approver_id,
+      `SELECT ac.challenge_id, ac.message_id, ac.capabilities, ac.created_at, ac.expires_at,
+              ac.endpoint_id AS sender_endpoint_id,
+              COALESCE(NULLIF(e.display_name, ''), e.endpoint_id) AS sender_name,
+              e.owner_id AS approver_id,
               COALESCE((
                 SELECT NULLIF(human_endpoint.display_name, '') FROM endpoints human_endpoint
                 WHERE human_endpoint.owner_id = e.owner_id AND human_endpoint.kind = 'human'
@@ -534,7 +548,7 @@ export class PostgresRepository {
     return row ? { id: row.challenge_id, endpointId: row.endpoint_id, actionHash: row.action_hash, expiresAt: row.expires_at, capabilities: row.capabilities, envelope: typeof row.envelope === 'string' ? JSON.parse(row.envelope) : row.envelope } : null;
   }
 
-  async cancelApprovalChallenge({ challengeId, endpointId, now = new Date() } = {}) {
+  async cancelApprovalChallenge({ challengeId, endpointId, now = new Date(), onChange = null } = {}) {
     return this.withTransaction(async (client) => {
       const locked = await client.query('SELECT * FROM approval_challenges WHERE challenge_id = $1 FOR UPDATE', [challengeId]);
       const challenge = locked.rows[0];
@@ -568,6 +582,7 @@ export class PostgresRepository {
             RETURNING decision_id`,
           [endpointId, bareActionHash, `sha256:${bareActionHash}`, challenge.action_hash],
         );
+        if (onChange) await onChange(client, approvalHookChallenge(challenge));
         return { challengeId, status: 'cancelled', revokedDecisionCount: revoked.rowCount, duplicate: false };
       }
       if (challenge.status === 'cancelled') {
@@ -589,11 +604,12 @@ export class PostgresRepository {
           RETURNING decision_id`,
         [endpointId, bareActionHash, `sha256:${bareActionHash}`, challenge.action_hash],
       );
+      if (onChange) await onChange(client, approvalHookChallenge(challenge));
       return { challengeId, status: 'cancelled', revokedDecisionCount: revoked.rowCount, duplicate: false };
     });
   }
 
-  async finalizeApprovalDecision({ challengeId, humanId, credentialId, endpointId, now = new Date() } = {}) {
+  async finalizeApprovalDecision({ challengeId, humanId, credentialId, endpointId, now = new Date(), onChange = null } = {}) {
     const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
     return this.withTransaction(async (client) => {
       const locked = await client.query('SELECT * FROM approval_challenges WHERE challenge_id = $1 FOR UPDATE', [challengeId]);
@@ -609,8 +625,51 @@ export class PostgresRepository {
          RETURNING decision_id, action_hash, status, created_at, expires_at`,
         [`decision_${crypto.randomUUID()}`, humanId, credentialId, endpointId, challenge.action_hash, challenge.challenge_id, timestamp, challenge.expires_at]
       );
+      if (onChange) await onChange(client, approvalHookChallenge(challenge));
       return decision.rows[0];
     });
+  }
+
+  // Rooms #269 expiry sweep: moves due room challenges from 'pending' to
+  // 'expired', one row per transaction, and runs onChange before each commit.
+  // The status change is the once-only marker; SKIP LOCKED lets concurrent
+  // passes split the work instead of both handling one row. A row whose hook
+  // throws is rolled back, skipped for the rest of this pass and retried on
+  // the next one.
+  async expireRoomApprovalChallenges({ now = new Date(), limit = 100, onChange = null } = {}) {
+    const timestamp = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    const skipped = [];
+    let expired = 0;
+    let failed = 0;
+    while (expired + failed < limit) {
+      let claimed = null;
+      try {
+        claimed = await this.withTransaction(async (client) => {
+          const due = await client.query(
+            `SELECT * FROM approval_challenges
+              WHERE status = 'pending' AND expires_at <= $1 AND envelope IS NOT NULL
+                AND NOT (challenge_id = ANY($2::text[]))
+              ORDER BY expires_at, challenge_id
+              LIMIT 1
+              FOR UPDATE SKIP LOCKED`, [timestamp, skipped]);
+          const row = due.rows[0];
+          if (!row) return null;
+          await client.query(`UPDATE approval_challenges SET status = 'expired' WHERE challenge_id = $1`, [row.challenge_id]);
+          if (onChange) {
+            try { await onChange(client, approvalHookChallenge(row)); } catch (error) { throw Object.assign(error, { expiryChallengeId: row.challenge_id }); }
+          }
+          return row;
+        });
+      } catch (error) {
+        if (!error.expiryChallengeId) throw error;
+        skipped.push(error.expiryChallengeId);
+        failed += 1;
+        continue;
+      }
+      if (!claimed) break;
+      expired += 1;
+    }
+    return { expired, failed };
   }
   // Atomically claims a decision for use in the accept-envelope transaction
   // (design §9): a 'high'-risk-capability envelope may be accepted only if

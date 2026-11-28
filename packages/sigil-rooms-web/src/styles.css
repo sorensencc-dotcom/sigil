@@ -291,6 +291,7 @@ li[data-kind='event'] .ghost { background: var(--color-paper-2); border-color: v
 .envelope-inspector[data-trust='unsupported'] .trust-label { color: var(--color-muted); }
 .timeline li[data-trust='held'] { background: var(--color-held-soft); border: var(--rule-hair) solid var(--color-held); }
 .timeline li[data-trust='held'] strong { color: var(--trust-held); }
+.timeline .approval-card time { color: var(--color-muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
 .envelope-inspector .trust-detail { margin: 0 0 var(--space-xs); color: var(--color-muted); font-size: var(--text-xs); }
 .envelope-inspector-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); }
 .envelope-inspector dl { display: grid; gap: var(--space-3xs); margin: 0; }
