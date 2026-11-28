@@ -32,7 +32,7 @@ import { useSend } from './rooms/useSend';
 const THEME_KEY = 'sigil.theme';
 const DEFAULT_THEME = 'dark';
 
-function RoomView({ roomId, onGone, focus }: { roomId: string; onGone: () => void; focus: Pick<Mention, 'message_id' | 'room_seq'> | null }) {
+function RoomView({ roomId, onGone, focus, live = 'off' }: { roomId: string; onGone: () => void; focus: Pick<Mention, 'message_id' | 'room_seq'> | null; live?: 'live' | 'off' }) {
   const { client, session } = useAuth();
   const sender = useSelfEndpoint();
   const membersQuery = useMembers(roomId);
@@ -70,7 +70,7 @@ function RoomView({ roomId, onGone, focus }: { roomId: string; onGone: () => voi
       <StatusLine roomId={roomId} onGone={onGone} />
       <div className="room-body">
         <div className="room-main">
-          <Timeline roomId={roomId} pending={pending} onVisibleSeq={reportSeq} onGone={onGone} seenThreadRoots={seenRoots} onOpenThread={openThreadRoot} nameFor={nameFor} loginFor={loginFor} ownerNameFor={ownerNameFor} members={membersQuery.data ?? []} focus={focus} inspectingId={inspectingEnvelope?.message_id ?? null} onInspect={toggleEnvelope} />
+          <Timeline roomId={roomId} pending={pending} onVisibleSeq={reportSeq} onGone={onGone} seenThreadRoots={seenRoots} onOpenThread={openThreadRoot} nameFor={nameFor} loginFor={loginFor} ownerNameFor={ownerNameFor} members={membersQuery.data ?? []} focus={focus} inspectingId={inspectingEnvelope?.message_id ?? null} onInspect={toggleEnvelope} live={live} />
           <div className="notices">
             {pending
               .filter((row) => row.status === 'failed' && row.retryable !== false)
@@ -209,7 +209,7 @@ function Shell({ theme, onThemeChange }: { theme: string; onThemeChange: (next: 
           </aside>
           {drawerOpen ? <button type="button" className="scrim" aria-label="Close rooms" onClick={() => setDrawerOpen(false)} /> : null}
           <section className="pane">
-            {roomId ? <RoomView key={roomId} roomId={roomId} onGone={onGone} focus={focus} /> : <p className="empty">Pick a room.</p>}
+            {roomId ? <RoomView key={roomId} roomId={roomId} onGone={onGone} focus={focus} live={live} /> : <p className="empty">Pick a room.</p>}
           </section>
         </div>
       )}

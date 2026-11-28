@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ApiError } from '../api/client';
+import type { RoomApproval } from '../api/client';
 import type { HistoryItem, Member, Mention, RoomSearchItem } from '../api/types';
 import { ErrorBanner } from '../errors/ErrorBanner';
 import { useAuth, useSelfEndpoint } from '../auth/AuthContext';
@@ -13,6 +14,8 @@ import { useFailedVerifications } from './useFailedVerifications';
 import { ackWatermark, isTopLevel, lastActivitySeq, latestReplies, replyCounts, rowsById, threadRootOf } from './threads';
 import { historyKey } from './historyQuery';
 import { useHistory } from './useHistory';
+import { ApprovalCard, UnplacedApprovalCard, useNow } from './ApprovalCard';
+import { indexHolds, isHoldEvent, isPendingHold, type HoldState } from './holds';
 import type { LoginFor, NameFor, OwnerNameFor } from './useContacts';
 
 const NO_ROOTS: ReadonlySet<string> = new Set();
@@ -44,6 +47,7 @@ export function Timeline({
   focus = null,
   inspectingId = null,
   onInspect,
+  live = 'off',
 }: {
   roomId: string;
   pending: PendingMessage[];
@@ -58,6 +62,8 @@ export function Timeline({
   focus?: Pick<Mention, 'message_id' | 'room_seq'> | null;
   inspectingId?: string | null;
   onInspect?: (item: HistoryItem) => void;
+  // The socket's state. While live, approvals frames refresh the holds and the poll is a slow fallback.
+  live?: 'live' | 'off';
 }) {
   const { items, isLoading, error, hasOlder, hasNewer, atLatest, loadOlder, loadNewer, goToLatest, goToSequence } = useHistory(roomId);
   const [focusedSeq, setFocusedSeq] = useState<string | null>(null);
@@ -67,7 +73,7 @@ export function Timeline({
   const { data: approvals = [] } = useQuery({
     queryKey: ['room', roomId, 'approvals'],
     queryFn: () => client.listApprovals(roomId),
-    refetchInterval: 5_000,
+    refetchInterval: live === 'live' ? 30_000 : 5_000,
   });
   // 409 NOTHING_TO_CONTINUE means another click or client already resumed the thread; the refetch shows it.
   const resume = useMutation({
@@ -88,6 +94,19 @@ export function Timeline({
     () => mergeRows(items.filter((item) => isTopLevel(item, byId) || String(item.room_seq) === focusedSeq), pending.filter((message) => !message.threadRootId), activity),
     [items, byId, pending, activity, focusedSeq],
   );
+  // Last approvals item seen per held message, so a hold that has just left the list keeps its
+  // countdown until its outcome event loads.
+  const lastSeenApproval = useRef(new Map<string, RoomApproval>());
+  const holds = useMemo(() => {
+    for (const approval of approvals) if (approval.message_id) lastSeenApproval.current.set(approval.message_id, approval);
+    return indexHolds(items, approvals, lastSeenApproval.current);
+  }, [items, approvals]);
+  const counting = holds.unplaced.length > 0 || [...holds.byEvent.values()].some((state) => !state.outcome);
+  const now = useNow(counting);
+  const pendingHolds = useMemo(() => [...holds.byEvent.values()].filter((state) => isPendingHold(state, now)), [holds, now]);
+  const holdName = (state: Pick<HoldState, 'senderEndpointId' | 'approval'>) => state.senderEndpointId
+    ? senderName(state.senderEndpointId, state.approval?.sender_name, members, nameFor, loginFor)
+    : state.approval?.sender_name || 'An agent';
   const watermark = useMemo(() => ackWatermark(items, seenThreadRoots, byId), [items, seenThreadRoots, byId]);
   const savedWatermark = useMemo(() => readWatermark(roomId), [roomId]);
   const entries = useMemo(() => {
@@ -122,8 +141,24 @@ export function Timeline({
     {
       isFailed: (id) => failedSignatures.has(id),
       isForcedOpen: (id) => id === focus?.message_id || id === inspectingId || (focusedSeq !== null && String(byId.get(id)?.room_seq) === focusedSeq),
+      // A folded exchange never hides a hold: the run holds the hold's card, or the held agent
+      // posted in the run and the run reaches the hold's start.
+      isHeld: (ids) => {
+        if (ids.some((id) => pendingHolds.some((state) => state.eventId === id))) return true;
+        const last = byId.get(ids[ids.length - 1] ?? '');
+        const runEnd = last ? Date.parse(last.envelope.created_at) : NaN;
+        const holders = [
+          ...pendingHolds.map((state) => ({ sender: state.senderEndpointId, at: state.approval?.created_at ?? byId.get(state.eventId)?.envelope.created_at })),
+          ...holds.unplaced.map((approval) => ({ sender: approval.sender_endpoint_id, at: approval.created_at })),
+        ];
+        return holders.some(({ sender: heldSender, at }) => {
+          const start = at ? Date.parse(at) : NaN;
+          return !!heldSender && !Number.isNaN(start) && runEnd >= start
+            && ids.some((id) => byId.get(id)?.envelope.sender.endpoint_id === heldSender);
+        });
+      },
     },
-  ), [entries, members, failedSignatures, focus, inspectingId, focusedSeq, byId]);
+  ), [entries, members, failedSignatures, focus, inspectingId, focusedSeq, byId, pendingHolds, holds]);
   const entryName = (entry: TimelineEntry) => {
     const item = entry.kind === 'row' ? entry.row.item : null;
     return item ? senderName(item.envelope.sender.endpoint_id, item.display_name, members, nameFor, loginFor) : '';
@@ -354,6 +389,11 @@ export function Timeline({
           <li className="timeline-day" key={entry.key}><time>{entry.label}</time></li>
         ) : entry.kind === 'new' ? (
           <li className="timeline-divider" key="new" ref={newDivider}><span>New messages · this browser</span></li>
+        ) : entry.row.item && isHoldEvent(entry.row.item) ? (
+          holds.folded.has(entry.row.item.message_id) ? null : (() => {
+            const state = holds.byEvent.get(entry.row.item.message_id) ?? holds.orphanOutcomes.get(entry.row.item.message_id);
+            return state ? <ApprovalCard key={entry.row.key} state={state} senderName={holdName(state)} now={now} roomSeq={String(entry.row.item.room_seq)} /> : null;
+          })()
         ) : (
           <RowView
             key={entry.row.key}
@@ -374,12 +414,13 @@ export function Timeline({
             focused={!!focus && entry.row.item?.message_id === focus.message_id}
           />
         )} />
-        {approvals.map(({ approver_name, approval_url }, index) => (
-          <li key={approval_url ?? index} data-trust="held">
-            <strong>Approval required</strong>
-            <span>Waiting for {approver_name}</span>
-            {approval_url && <a href={approval_url} target="_blank" rel="noreferrer">Open approval page (opens in a new tab)</a>}
-          </li>
+        {holds.unplaced.map((approval, index) => (
+          <UnplacedApprovalCard
+            key={approval.message_id ?? approval.approval_url ?? index}
+            approval={approval}
+            senderName={holdName({ senderEndpointId: approval.sender_endpoint_id ?? '', approval })}
+            now={now}
+          />
         ))}
       </ul>
     </section>

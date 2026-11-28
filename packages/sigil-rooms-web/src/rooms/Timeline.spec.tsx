@@ -2,7 +2,8 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../api/client';
-import type { HistoryItem } from '../api/types';
+import type { RoomApproval } from '../api/client';
+import type { HistoryItem, Member } from '../api/types';
 import { renderWithClient } from '../testUtils';
 import { Timeline } from './Timeline';
 
@@ -13,10 +14,30 @@ function msg(seq: number, id: string, text: string, type = 'room.message', creat
   };
 }
 
+const holdMembers: Member[] = [
+  { endpoint_id: 'ep_claude', role: 'member', response_mode: 'joins', added_at: 't', invokable_by: 'members', owner_id: 'usr_chris', display_name: 'Claude' },
+  { endpoint_id: 'ep_codex', role: 'member', response_mode: 'joins', added_at: 't', invokable_by: 'members', owner_id: 'usr_chris', display_name: 'Codex' },
+  { endpoint_id: 'ep_web', role: 'owner', response_mode: null, added_at: 't', invokable_by: 'owner', owner_id: 'usr_chris', display_name: 'Chris' },
+];
+function said(seq: number, sender: string, text: string, createdAt = '2026-11-28T12:00:00.000Z'): HistoryItem {
+  const id = `m${seq}`;
+  return { room_seq: String(seq), message_id: id, canonical_bytes: 'b', envelope: { message_id: id, message_type: 'room.message', sender: { endpoint_id: sender, owner_id: 'usr_chris' }, body: { text }, created_at: createdAt } };
+}
+function holdEvent(seq: number, kind: string, held = 'msg_held', createdAt = '2026-11-28T12:00:00.000Z'): HistoryItem {
+  const id = `e${seq}`;
+  return { room_seq: String(seq), message_id: id, canonical_bytes: 'b', envelope: { message_id: id, message_type: 'room.event', sender: { endpoint_id: 'ep_relay_system', owner_id: 'relay_system' }, body: { kind, endpoint_ids: ['ep_claude'], held_message_id: held, reason: 'payments.send' }, created_at: createdAt } };
+}
+function pendingHold(extra: Partial<RoomApproval> = {}): RoomApproval {
+  return {
+    approver_name: 'Chris', approval_url: null, challenge_id: null, message_id: 'msg_held', sender_endpoint_id: 'ep_claude', sender_name: 'Claude',
+    capabilities: ['payments.send'], created_at: '2026-11-28T12:00:00.000Z', expires_at: new Date(Date.now() + 300_000).toISOString(), ...extra,
+  };
+}
+
 describe('Timeline', () => {
   beforeEach(() => localStorage.clear());
 
-  it('shows the named approver and relay ceremony link without acknowledging it as a room row', async () => {
+  it('shows a hold from a relay that predates #269, with its approver and link, without acknowledging it as a room row', async () => {
     const history = vi.fn(async () => ({ code: 'OK', items: [], next_after_seq: '0' }));
     const onVisibleSeq = vi.fn();
     renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={onVisibleSeq} onGone={() => {}} />, {
@@ -25,7 +46,7 @@ describe('Timeline', () => {
     });
     expect(await screen.findByText('Waiting for Ada')).toBeInTheDocument();
     expect(screen.getByText('Waiting for Ada').closest('li')).toHaveAttribute('data-trust', 'held');
-    expect(screen.getByRole('link', { name: /Open approval page/ })).toHaveAttribute('href', 'http://relay.test/approve?challenge=ch_1');
+    expect(screen.getByRole('link', { name: /Approve on the relay page/ })).toHaveAttribute('href', 'http://relay.test/approve?challenge=ch_1');
     expect(onVisibleSeq).not.toHaveBeenCalledWith('0');
   });
 
@@ -362,5 +383,89 @@ describe('Timeline threads', () => {
     renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} onOpenThread={onOpenThread} focus={{ message_id: 'r2', room_seq: '2' }} />, { history });
     await waitFor(() => expect(onOpenThread).toHaveBeenCalledWith('m1'));
     expect(onOpenThread).toHaveBeenCalledTimes(1);
+  });
+  describe('hold cards (#269)', () => {
+    it('renders a pending hold once, as its own row in time order, with no link for a non-approver', async () => {
+      const history = vi.fn(async () => ({ code: 'OK', items: [said(1, 'ep_web', 'before'), holdEvent(2, 'approval_requested'), said(3, 'ep_web', 'after')], next_after_seq: '3' }));
+      const { container } = renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} members={holdMembers} />, { history, listApprovals: async () => [pendingHold()] });
+      const card = (await screen.findByText('Waiting for Chris', { exact: false })).closest('li')!;
+      expect(card).toHaveAttribute('data-trust', 'held');
+      expect(card).toHaveTextContent('Claude needs approval');
+      expect(card).toHaveTextContent('payments.send');
+      expect(card).toHaveTextContent(/Expires in [45]:\d\d/);
+      expect(card.querySelector('a')).toBeNull();
+      const order = [...container.querySelectorAll('.timeline li')].map((li) => li.textContent ?? '');
+      expect(order.findIndex((text) => text.includes('before'))).toBeLessThan(order.findIndex((text) => text.includes('needs approval')));
+      expect(order.findIndex((text) => text.includes('needs approval'))).toBeLessThan(order.findIndex((text) => text.includes('after')));
+      expect(screen.getAllByText(/needs approval/)).toHaveLength(1);
+      expect(screen.queryByText('approval_requested', { exact: false })).toBeNull();
+    });
+
+    it('gives the approver the relay page link', async () => {
+      const history = vi.fn(async () => ({ code: 'OK', items: [holdEvent(1, 'approval_requested')], next_after_seq: '1' }));
+      renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} members={holdMembers} />, {
+        history, listApprovals: async () => [pendingHold({ challenge_id: 'ch_1', approval_url: 'http://relay.test/approve?challenge=ch_1' })],
+      });
+      expect(await screen.findByRole('link', { name: /Approve on the relay page/ })).toHaveAttribute('href', 'http://relay.test/approve?challenge=ch_1');
+    });
+
+    it('flips the card to Expired at expires_at without a refetch', async () => {
+      const history = vi.fn(async () => ({ code: 'OK', items: [holdEvent(1, 'approval_requested')], next_after_seq: '1' }));
+      const listApprovals = vi.fn(async () => [pendingHold({ expires_at: new Date(Date.now() + 1_200).toISOString() })]);
+      renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} members={holdMembers} />, { history, listApprovals });
+      expect(await screen.findByText('Claude needs approval')).toBeInTheDocument();
+      expect(await screen.findByText(/held message: Expired/, {}, { timeout: 3_000 })).toBeInTheDocument();
+      expect(screen.queryByText('Claude needs approval')).toBeNull();
+      expect(listApprovals).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows the signed outcome on the hold row, once, and links an approved hold to its message', async () => {
+      const history = vi.fn(async () => ({ code: 'OK', items: [holdEvent(1, 'approval_requested'), holdEvent(2, 'approval_granted')], next_after_seq: '2' }));
+      renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} members={holdMembers} />, { history, listApprovals: async () => [] });
+      const line = await screen.findByText(/held message: Approved/);
+      expect(screen.getAllByText(/held message:/)).toHaveLength(1);
+      expect(line.closest('li')).toHaveAttribute('data-hold', 'granted');
+      expect(screen.getByRole('link', { name: 'View message' })).toHaveAttribute('href', '#message-msg_held');
+      expect(screen.queryByText('approval_granted', { exact: false })).toBeNull();
+    });
+
+    it('keeps a folded agent exchange open while a hold is pending, also when the card trails its body', async () => {
+      const items = [said(1, 'ep_claude', 'one'), said(2, 'ep_codex', 'two'), said(3, 'ep_claude', 'three'), holdEvent(4, 'approval_requested')];
+      const history = vi.fn(async () => ({ code: 'OK', items, next_after_seq: '4' }));
+      renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} members={holdMembers} />, { history, listApprovals: async () => [pendingHold()] });
+      expect(await screen.findByText('Claude needs approval')).toBeInTheDocument();
+      expect(screen.getByRole('note')).toHaveTextContent('an approval is pending');
+      expect(screen.getByText('one')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Show 3 messages/ })).toBeNull();
+    });
+
+    it('keeps the held agent\'s exchange open when the hold card is outside the loaded window', async () => {
+      const items = [said(1, 'ep_claude', 'one'), said(2, 'ep_codex', 'two'), said(3, 'ep_claude', 'three')];
+      const history = vi.fn(async () => ({ code: 'OK', items, next_after_seq: '3' }));
+      renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} members={holdMembers} />, {
+        history, listApprovals: async () => [pendingHold({ created_at: '2026-11-28T11:59:00.000Z' })],
+      });
+      expect(await screen.findByText('Claude needs approval')).toBeInTheDocument();
+      expect(screen.getByRole('note')).toHaveTextContent('an approval is pending');
+    });
+
+    it('folds the exchange once the hold has ended', async () => {
+      const items = [said(1, 'ep_claude', 'one'), said(2, 'ep_codex', 'two'), said(3, 'ep_claude', 'three'), holdEvent(4, 'approval_requested'), holdEvent(5, 'approval_cancelled')];
+      const history = vi.fn(async () => ({ code: 'OK', items, next_after_seq: '5' }));
+      renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} members={holdMembers} />, { history, listApprovals: async () => [] });
+      expect(await screen.findByRole('button', { name: /Show 3 messages/ })).toBeInTheDocument();
+      expect(screen.getByText(/held message: Cancelled/)).toBeInTheDocument();
+    });
+
+    it('polls the approvals every 30 seconds while live and every 5 while off', async () => {
+      const history = vi.fn(async () => ({ code: 'OK', items: [], next_after_seq: '0' }));
+      const interval = (queryClient: import('@tanstack/react-query').QueryClient) =>
+        (queryClient.getQueryCache().find({ queryKey: ['room', 'room_1', 'approvals'] })?.observers[0]?.options as { refetchInterval?: number } | undefined)?.refetchInterval;
+      const live = renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} live="live" />, { history });
+      await waitFor(() => expect(interval(live.queryClient)).toBe(30_000));
+      live.unmount();
+      const off = renderWithClient(<Timeline roomId="room_1" pending={[]} onVisibleSeq={() => {}} onGone={() => {}} live="off" />, { history });
+      await waitFor(() => expect(interval(off.queryClient)).toBe(5_000));
+    });
   });
 });

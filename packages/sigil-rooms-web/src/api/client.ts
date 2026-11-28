@@ -23,9 +23,19 @@ export interface ClientOptions {
   fetchImpl?: typeof fetch;
 }
 
+// One pending hold on a room envelope (#269). The held body is never sent. challenge_id and
+// approval_url are null for everyone but the approving human. The other fields are optional so a
+// client still renders against a relay that predates them.
 export interface RoomApproval {
   approver_name: string;
   approval_url: string | null;
+  challenge_id?: string | null;
+  message_id?: string;
+  sender_endpoint_id?: string;
+  sender_name?: string;
+  capabilities?: string[];
+  created_at?: string | null;
+  expires_at?: string | null;
 }
 
 export interface ApiClient {

@@ -79,6 +79,15 @@ describe('useLive', () => {
     expect(spy).not.toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'messages'] });
   });
 
+  it('refetches only the room approvals on an approvals frame (#269)', async () => {
+    const { spy } = setup();
+    await waitFor(() => expect(sockets.length).toBe(1));
+    sockets[0]!.onFrame({ type: 'room.updated', room_id: 'room_1', changed: 'approvals' });
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'approvals'] });
+    expect(spy).not.toHaveBeenCalledWith({ queryKey: ['room', 'room_1', 'messages'] });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
   it('invalidates only the room list on a room frame', async () => {
     const { spy } = setup();
     await waitFor(() => expect(sockets.length).toBe(1));

@@ -83,4 +83,13 @@ describe('groupAgentStretches', () => {
     expect(shape(group(rows, { isFailed: (id: string) => id === failedId }))).toEqual(['stretch(3:failed)']);
     expect(shape(group(rows, { isForcedOpen: (id: string) => id === failedId }))).toEqual(['stretch(3:focus)']);
   });
+  it('keeps a stretch open when a pending hold belongs to it, its trailing event rows included (#269)', () => {
+    const rows = [agent(1), agent(2), agent(1), event('approval_requested')];
+    const cardId = rows[3]!.item!.message_id;
+    const seen: string[][] = [];
+    const isHeld = (ids: readonly string[]) => { seen.push([...ids]); return ids.includes(cardId); };
+    expect(shape(group(rows, { isHeld }))).toEqual(['stretch(3:held)', 'single']);
+    expect(seen[0]).toContain(cardId);
+    expect(shape(group(rows, { isHeld: () => false }))).toEqual(['stretch(3)', 'single']);
+  });
 });

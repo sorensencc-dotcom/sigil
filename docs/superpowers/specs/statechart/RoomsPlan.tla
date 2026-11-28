@@ -37,9 +37,12 @@ AgentReplies ==
 AgentWakesAgent ==
   /\ inv = "replied" /\ inv' = "queued"
   /\ UNCHANGED <<turns, cardShown, fold, capPosted, rows, relayAck, shown, localMark, divider, staleNew, relayKey, sigBy, pinned, mark>>
+\* #269 fold rule: a stretch that a delivered hold belongs to renders open, so a hold that
+\* arrives while the stretch is folded unfolds it.
 AgentNeedsApproval ==
   /\ inv = "running" /\ inv' = "held" /\ cardShown' = HoldDelivered
-  /\ UNCHANGED <<turns, fold, capPosted, rows, relayAck, shown, localMark, divider, staleNew, relayKey, sigBy, pinned, mark>>
+  /\ fold' = IF HoldDelivered THEN "open" ELSE fold
+  /\ UNCHANGED <<turns, capPosted, rows, relayAck, shown, localMark, divider, staleNew, relayKey, sigBy, pinned, mark>>
 OwnerApproves ==
   /\ inv = "held" /\ inv' = "running" /\ cardShown' = FALSE
   /\ UNCHANGED <<turns, fold, capPosted, rows, relayAck, shown, localMark, divider, staleNew, relayKey, sigBy, pinned, mark>>

@@ -5,6 +5,7 @@ const NOTICE: Partial<Record<StretchFlag, string>> = {
   cap: 'the agent turn cap was reached',
   halted: 'the room was halted',
   failed: 'a signature check failed',
+  held: 'an approval is pending',
 };
 
 export function CollapsedExchange({
@@ -38,7 +39,7 @@ export function CollapsedExchange({
   );
 }
 
-// Renders grouped parts. A flagged stretch (cap, halt, failed signature, or a focused row) stays
+// Renders grouped parts. A flagged stretch (cap, halt, failed signature, pending hold, or a focused row) stays
 // unfolded with a note above it, so a fold never hides that state or the cap row's Continue button.
 export function FoldedRows<T>({
   parts,
