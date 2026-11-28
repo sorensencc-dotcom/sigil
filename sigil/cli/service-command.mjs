@@ -11,6 +11,7 @@ import {
 } from './service-config.mjs';
 import { executeWindowsSupervisor } from './windows-supervisor.mjs';
 import { executeSystemdSupervisor } from './systemd-supervisor.mjs';
+import { executeLaunchdSupervisor } from './launchd-supervisor.mjs';
 
 const SERVICE_SUBCOMMANDS = ['install', 'start', 'stop', 'status', 'uninstall', 'run'];
 
@@ -46,7 +47,13 @@ async function defaultRunComponent({ component, cwd }) {
   await runSupervisedComponent({ component, cwd, log, logStreams: { out, err }, signal: controller.signal });
 }
 
-export async function cmdService(argv, { supervisorExecFn, platform, runComponentFn = defaultRunComponent } = {}) {
+export async function cmdService(argv, {
+  supervisorExecFn,
+  platform,
+  runComponentFn = defaultRunComponent,
+  launchdAgentsDir,
+  launchdUid,
+} = {}) {
   const [subcommand, ...rest] = argv;
 
   if (!subcommand || subcommand === '--help' || subcommand === '-h') {
@@ -208,6 +215,54 @@ export async function cmdService(argv, { supervisorExecFn, platform, runComponen
       const errSuffix = item.Error ? ` (error: ${item.Error})` : '';
       console.log(`  - ${item.Component} (${item.UnitName}): ${item.Status}${errSuffix}`);
     }
+    return;
+  }
+
+  if (!isDryRun && plan.platform === 'darwin') {
+    let results;
+    try {
+      results = executeLaunchdSupervisor(subcommand, plan, {
+        dryRun: false,
+        execFn: supervisorExecFn,
+        projectRoot,
+        nodePath: process.execPath,
+        agentsDir: launchdAgentsDir,
+        uid: launchdUid,
+      });
+    } catch (err) {
+      console.error(`sigil service ${subcommand} failed: ${err.message}`);
+      process.exitCode = 1;
+      return;
+    }
+
+    if (isJson) {
+      console.log(JSON.stringify({ action: subcommand, platform: 'darwin', results }, null, 2));
+      return;
+    }
+
+    if (subcommand === 'status') {
+      console.log('Sigil service status (launchd agents):');
+      for (const item of results) {
+        console.log(`  - ${item.Component}:`);
+        console.log(`      Job state: ${item.JobState}`);
+        console.log(`      Healthy: ${item.Healthy}`);
+        console.log(`      Listening ports: ${item.ListeningPorts && item.ListeningPorts.length ? item.ListeningPorts.join(', ') : 'none'}`);
+        console.log(`      PIDs: ${item.Pids && item.Pids.length ? item.Pids.join(', ') : 'none'}`);
+        if (item.Runs !== null && item.Runs !== undefined) console.log(`      Runs since load: ${item.Runs}`);
+        if (item.LastExitCode) console.log(`      Last exit code: ${item.LastExitCode}`);
+        if (item.LastError) {
+          console.log(`      Last error: ${item.LastError}`);
+        }
+      }
+      return;
+    }
+
+    console.log(`sigil service ${subcommand}: executed successfully.`);
+    for (const item of results) {
+      const errSuffix = item.Error ? ` (error: ${item.Error})` : '';
+      console.log(`  - ${item.Component} (${item.Label}): ${item.Status}${errSuffix}`);
+    }
+    if (results.some((r) => /Failed$/.test(r.Status))) process.exitCode = 1;
     return;
   }
 

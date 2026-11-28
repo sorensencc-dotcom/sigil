@@ -176,9 +176,19 @@ The `sigil service` command accepts six subcommands:
 3. `stop`: Stops the units. On Windows it also kills each runner's process tree, so agents that listen on no port do not survive as orphans.
 4. `status`: Reports task state, listening ports, and PIDs. A component is healthy only when its task is `Running` and every expected port is bound.
 5. `uninstall`: Removes the units.
-6. `run <component>`: What each Windows task executes. It loads `secrets`, waits until the component's dependency ports accept connections (agents wait for the relay HTTP and stream ports; rooms-web waits for the relay), starts the component, appends its output to `.sigil/logs/<component>.out.log` and `.err.log`, and restarts it with exponential backoff (1 s doubling to 300 s, reset after 60 s of uptime). Task Scheduler's own restart setting fires only when a task fails to launch, not when the program exits non-zero, so the restart loop lives in the runner.
+6. `run <component>`: What each Windows task and macOS launchd agent executes. It loads `secrets`, waits until the component's dependency ports accept connections (agents wait for the relay HTTP and stream ports; rooms-web waits for the relay), starts the component, appends its output to `.sigil/logs/<component>.out.log` and `.err.log`, and restarts it with exponential backoff (1 s doubling to 300 s, reset after 60 s of uptime). Task Scheduler's own restart setting fires only when a task fails to launch, not when the program exits non-zero, so the restart loop lives in the runner.
 
 Each Windows task runs `node <repo>\sigil\cli\sigil.mjs service run <component> --service-config <path>` with the project root as its working directory.
+
+On macOS, `install` writes one launchd agent per component to `~/Library/LaunchAgents/com.sorensencc.sigil.<component>.plist`. Each agent runs the same `node <repo>/sigil/cli/sigil.mjs service run <component> --service-config <path>` from the project root, with `RunAtLoad` and `KeepAlive` set and a 5 s `ThrottleInterval`, so launchd restarts the runner if it ever exits and starts it again at login. Anything printed before the runner opens its logs goes to `.sigil/logs/<component>.launchd.log`.
+
+- `install` writes the plists and log directory and starts nothing. Running it again with no change reports `Unchanged`. A changed plist for an agent that is loaded reports `UpdatedRestartRequired`: run `stop` then `start` to load the new definition.
+- `start` loads each agent into your `gui/<uid>` domain with `launchctl bootstrap`, or `launchctl kickstart` for one already loaded, which leaves a running agent alone.
+- `stop` unloads each agent with `launchctl bootout`, because `KeepAlive` would restart a killed one. The plist stays, so the agent starts again at your next login, as a stopped but enabled systemd unit does. Use `uninstall` to keep it off.
+- `status` reads `launchctl print` (state, PID, runs since load, last exit code) and checks listening ports with `lsof`.
+- `uninstall` unloads each agent and deletes its plist.
+
+Secrets referenced as `cred:<target>` are read from the login Keychain.
 
 Flags:
 - `--service-config <path>`: Points to a specific service configuration file.

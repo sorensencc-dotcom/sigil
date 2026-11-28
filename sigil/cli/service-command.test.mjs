@@ -296,3 +296,46 @@ test('cmdService help states that --dry-run is off by default', async () => {
   const out = await captureOutput(() => cmdService(['--help']));
   assert.ok(out.logs.join('\n').includes('--dry-run                 Print the plan without touching the host OS supervisor (default: false)'));
 });
+
+test('cmdService executes macOS launchd operations when dry-run is false', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sigil-svc-darwin-live-'));
+  try {
+    const configPath = path.join(tempDir, 'service.json');
+    fs.writeFileSync(configPath, JSON.stringify({ version: 1, relay: { port: 8791 } }));
+    const agentsDir = path.join(tempDir, 'LaunchAgents');
+
+    let loaded = false;
+    const calls = [];
+    const mockSupervisorExec = (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (cmd === 'launchctl' && args[0] === 'print') {
+        return loaded ? { status: 0, stdout: '\tstate = running\n\tpid = 4242\n\truns = 1\n' } : { status: 113, stdout: '', stderr: 'not found' };
+      }
+      if (cmd === 'launchctl' && args[0] === 'bootstrap') loaded = true;
+      if (cmd === 'launchctl' && args[0] === 'bootout') loaded = false;
+      return { status: 0, stdout: '', stderr: '' };
+    };
+    const opts = { supervisorExecFn: mockSupervisorExec, platform: 'darwin', launchdAgentsDir: agentsDir, launchdUid: 501 };
+
+    const outInst = await captureOutput(() => cmdService(['install', '--service-config', configPath], opts));
+    assert.equal(outInst.exitCode, 0, outInst.errors.join('\n'));
+    assert.ok(fs.existsSync(path.join(agentsDir, 'com.sorensencc.sigil.relay.plist')));
+
+    const outStart = await captureOutput(() => cmdService(['start', '--service-config', configPath], opts));
+    assert.equal(outStart.exitCode, 0, outStart.errors.join('\n'));
+    assert.ok(calls.some((c) => c[1] === 'bootstrap' && c[2] === 'gui/501'));
+
+    const outStat = await captureOutput(() => cmdService(['status', '--service-config', configPath, '--json'], opts));
+    assert.equal(outStat.exitCode, 0);
+    const parsed = JSON.parse(outStat.logs.join('\n'));
+    assert.equal(parsed.platform, 'darwin');
+    assert.equal(parsed.results[0].JobState, 'running');
+    assert.deepEqual(parsed.results[0].Pids, [4242]);
+
+    const outUninst = await captureOutput(() => cmdService(['uninstall', '--service-config', configPath], opts));
+    assert.equal(outUninst.exitCode, 0);
+    assert.ok(!fs.existsSync(path.join(agentsDir, 'com.sorensencc.sigil.relay.plist')));
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
