@@ -10,11 +10,12 @@ import path from 'node:path';
 import { planSetup } from './phase7-setup-policy.mjs';
 import {
   applySetup, applyPhrase, botPhrase, botAddArgs, botAddEnv, renderApplyResult, APPLY_STATUSES, BOT_RESULTS,
+  databaseNameFromUrl,
 } from './phase7-setup-apply.mjs';
 
 const DOMAIN = 'fixture.example';
 const DB_LABEL = 'fixture';
-const FAKE_DB_URL = 'postgres://fixture.invalid/sigil_fixture_test';
+const FAKE_DB_URL = 'postgres://fixture.invalid/fixture';
 const FAKE_WRAP = 'FAKE_WRAP_KEY_NOT_A_SECRET';
 const BOT = { botId: 'bot_test', endpointId: `ep_test_bot@${DOMAIN}`, displayName: 'Test Bot', role: 'reply', roleConfirmed: true, identityPath: '/fixture/secrets/bots/bot_test.identity.json' };
 const OTHER = { botId: 'bot_test_other', endpointId: `ep_test_other@${DOMAIN}`, displayName: 'Test Other', role: 'reply', roleConfirmed: true, identityPath: '/fixture/secrets/bots/bot_test_other.identity.json' };
@@ -101,6 +102,31 @@ test('no --apply, no TTY or a declined phrase has zero effects', async () => {
     assert.equal(result.status, 'declined', JSON.stringify(answer));
     assert.deepEqual(h.log, ['confirm'], 'only the one phrase prompt');
     assert.equal(h.spawns.length, 0);
+  }
+});
+
+test('a dbLabel that is not the database in the URL blocks before any prompt', async () => {
+  for (const url of ['postgres://fixture.invalid/other_db', 'postgres://fixture.invalid/FIXTURE', 'postgres:///other_db?host=/var/run/postgresql']) {
+    const h = harness({ answers: [applyPhrase(DB_LABEL)] });
+    const result = await run(h, { env: { ...env(), FIXTURE_DATABASE_ENV: url } });
+    assert.equal(result.status, 'blocked', url);
+    assert.deepEqual([...result.blockers], ['db-label-mismatch']);
+    assert.deepEqual(h.log, [], 'nothing was prompted, inspected, checkpointed or spawned');
+  }
+  // A URL that names no database cannot be compared; the target line shows it.
+  const h = harness({ answers: [applyPhrase(DB_LABEL)] });
+  const result = await run(h, { env: { ...env(), FIXTURE_DATABASE_ENV: 'postgres://fixture.invalid' } });
+  assert.notEqual(result.status, 'blocked');
+});
+
+test('databaseNameFromUrl reads the path or dbname, and nothing else', () => {
+  assert.equal(databaseNameFromUrl('postgres://h.invalid/sigil'), 'sigil');
+  assert.equal(databaseNameFromUrl('postgresql://h.invalid:5432/sigil_test?sslmode=require'), 'sigil_test');
+  assert.equal(databaseNameFromUrl('postgres:///sigil?host=/var/run/postgresql'), 'sigil');
+  assert.equal(databaseNameFromUrl('postgres://h.invalid/?dbname=sigil'), 'sigil');
+  assert.equal(databaseNameFromUrl('postgres://h.invalid/my%2Ddb'), 'my-db');
+  for (const url of [undefined, '', 'postgres://h.invalid', 'mysql://h.invalid/sigil', 'host=h dbname=sigil', 'postgres://h.invalid/bad%E0']) {
+    assert.equal(databaseNameFromUrl(url), null, String(url));
   }
 });
 

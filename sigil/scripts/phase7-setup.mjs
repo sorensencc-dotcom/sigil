@@ -247,6 +247,7 @@ export async function main(argv, deps) {
   const pre = plan.create.length ? applyPrechecks(config, plan, deps.env) : [];
   if (pre.length) {
     out(`apply: refused until these are fixed: ${pre.map(safeText).join(', ')}; nothing was changed`);
+    if (pre.includes('db-label-mismatch')) out(`apply: dbLabel in setup.json must be the database name in ${safeText(config.databaseEnv)}; ${describeDatabaseTarget(deps.env?.[config.databaseEnv])}`);
     return EXIT.INCOMPLETE;
   }
   out(describeWrites(config, plan, deps.env));

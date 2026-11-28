@@ -141,6 +141,21 @@ const failReason = (outcome) => (outcome.kind === 'exit' ? 'bot-add-failed' : `b
 
 // What `bot add` needs before any bot can be created. Exported so the entry
 // point can check it before it writes anything, routine inputs included.
+// The database name in a postgres:// URL, or null when the URL names none or
+// cannot be read. `dbLabel` is typed in the apply phrase, so it must be this
+// name: a label that names one database while the URL points at another would
+// let the phrase approve the wrong one.
+export function databaseNameFromUrl(url) {
+  if (typeof url !== 'string' || url === '') return null;
+  let parsed;
+  try { parsed = new URL(url); } catch { return null; }
+  if (parsed.protocol !== 'postgres:' && parsed.protocol !== 'postgresql:') return null;
+  let name;
+  try { name = decodeURIComponent(parsed.pathname.replace(/^\//, '')); } catch { return null; }
+  if (!name) name = parsed.searchParams.get('dbname') ?? '';
+  return name === '' ? null : name;
+}
+
 export function applyPrechecks(config, plan, env) {
   const byId = new Map((config?.bots ?? []).map((b) => [b.botId, b]));
   const pre = [];
@@ -153,6 +168,10 @@ export function applyPrechecks(config, plan, env) {
   }
   const childEnv = botAddEnv(config ?? {}, env);
   if (childEnv.blocker) pre.push(childEnv.blocker);
+  else {
+    const dbName = databaseNameFromUrl(childEnv.env.SIGIL_DATABASE_URL);
+    if (dbName !== null && dbName !== config?.dbLabel) pre.push('db-label-mismatch');
+  }
   return pre;
 }
 

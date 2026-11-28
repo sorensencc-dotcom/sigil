@@ -84,7 +84,7 @@ Exit code `0` means no blockers remain; exit code `2` lists missing prerequisite
 node sigil/scripts/phase7-setup.mjs --config "$env:USERPROFILE\.sigil-secrets\phase7\setup.json" --apply
 ```
 
-2. Review the planned writes and type `APPLY PHASE7 <dbLabel>` to authorize secret storage and bot creation. `dbLabel` is only a label from `setup.json`, so first check the `database target` line above the prompt: it shows the host, port and database name from the URL in `databaseEnv` (never the user or password). If they are not the database you mean, type anything else to stop. If a `registry_refresh warning` line is shown, the relay did not confirm automatic refresh; see Dry-run above.
+2. Review the planned writes and type `APPLY PHASE7 <dbLabel>` to authorize secret storage and bot creation. `dbLabel` in `setup.json` must be the database name in the URL held by `databaseEnv`: when bots are to be created and the two differ, apply stops before the phrase with `db-label-mismatch` and changes nothing. The `database target` line above the prompt shows the host, port and database name from that URL (never the user or password); check the host too, since the name alone can match on the wrong server. If they are not the database you mean, type anything else to stop. If a `registry_refresh warning` line is shown, the relay did not confirm automatic refresh; see Dry-run above.
 3. For each bot to create, type `CREATE <endpointId>` when prompted. Typing anything else declines that bot, leaves remaining bots untouched, and exits with code `4` (`partial apply`).
 
 The live smoke run is separate: after `--apply` finishes, run the live Grok smoke check separately against the running relay.
